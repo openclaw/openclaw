@@ -10,6 +10,7 @@ import {
 import { readCodexAuthoredConfigValue } from "./config-layer-policy.js";
 import type { CodexConfigReadResponse } from "./protocol-control-plane.js";
 import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
+import { hasAuthoredCodexBaseInstructions } from "./thread-prompt.js";
 
 /**
  * Codex records its base instructions and AGENTS.md injection only in its own rollout;
@@ -42,11 +43,18 @@ export async function readCodexNativeModelContext(
         signal,
       ),
     );
-    // session_meta keeps the creation-time text, while a thread Codex loads runs with its
-    // config override when one is set (codex-rs/core/src/session/mod.rs: config
-    // base_instructions before session_meta); OpenClaw sends none on thread/resume. A thread
-    // started or forked this attempt recorded its live text, so only resumes can differ.
     const config = thread.preparedEffectiveConfig;
+    // Without an authored base, OpenClaw sends its own base as `baseInstructions` on
+    // thread/start and thread/resume, and the report already counts it with OpenClaw's
+    // instructions; session_meta holds a copy of that same text.
+    if (!hasAuthoredCodexBaseInstructions({ nativeConfig: config })) {
+      const { baseInstructions: _sentByOpenClaw, ...native } = recorded;
+      return native;
+    }
+    // With an authored base OpenClaw sends none. session_meta keeps the creation-time text,
+    // while a thread Codex loads runs with its config override (codex-rs/core/src/session/
+    // mod.rs: config base_instructions before session_meta). A thread started or forked
+    // this attempt recorded its live text, so only resumes can differ.
     return thread.lifecycle.action === "resumed" && config
       ? await withConfiguredBaseInstructions(recorded, config, thread.threadId, signal)
       : recorded;

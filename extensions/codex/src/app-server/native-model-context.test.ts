@@ -23,7 +23,7 @@ vi.mock("./client-runtime.js", async (importOriginal) => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const line = (type: string, payload: unknown) => `${JSON.stringify({ type, payload })}\n`;
 
-async function nativeReport(action: "resumed" | "started", instructionsFile?: string) {
+async function nativeReport(action: "resumed" | "started", instructionsFile?: string | null) {
   const home = tempDirs.make("codex-native-base-");
   const rolloutPath = path.join(home, "sessions", "rollout.jsonl");
   await fs.mkdir(path.dirname(rolloutPath));
@@ -43,10 +43,14 @@ async function nativeReport(action: "resumed" | "started", instructionsFile?: st
         threadId: "thread",
         rolloutPath,
         lifecycle: { action },
-        preparedEffectiveConfig: {
-          config: { model_instructions_file: file },
-          origins: { model_instructions_file: { name: { type: "user" }, version: "1" } },
-        },
+        // null: no authored base, so OpenClaw sent its own base on start and resume.
+        preparedEffectiveConfig:
+          instructionsFile === null
+            ? { config: {}, origins: {} }
+            : {
+                config: { model_instructions_file: file },
+                origins: { model_instructions_file: { name: { type: "user" }, version: "1" } },
+              },
       },
     },
     prompt: {
@@ -79,5 +83,12 @@ describe("readCodexNativeModelContext", () => {
       baseInstructions: "Creation-time base.",
       agentsMd: "Tabs.",
     });
+  });
+
+  it("leaves out session_meta's copy of the base OpenClaw sent itself", async () => {
+    // The report already counts OpenClaw's base with its instructions.
+    for (const action of ["started", "resumed"] as const) {
+      await expect(nativeReport(action, null)).resolves.toEqual({ agentsMd: "Tabs." });
+    }
   });
 });
