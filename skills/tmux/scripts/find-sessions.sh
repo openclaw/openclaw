@@ -86,9 +86,9 @@ if [[ "$scan_all" == true ]]; then
     exit 1
   fi
 
-  shopt -s nullglob
+  shopt -s nullglob dotglob
   sockets=("$socket_dir"/*)
-  shopt -u nullglob
+  shopt -u nullglob dotglob
 
   if [[ "${#sockets[@]}" -eq 0 ]]; then
     echo "No sockets found under $socket_dir" >&2
