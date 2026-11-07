@@ -56,6 +56,20 @@ approval, content, and readback checks. Known enclosing evidence is budgeted bef
 fanout, but later job/attempt growth can still exceed the unchanged final artifact
 limit and fail sealing; evidence is not truncated to fit.
 
+## OpenClaw 2026.9.37 performance exception
+
+The stable/full 2026.9.37 qualification may explicitly record product performance
+as `not-run` under its versioned qualification exemption. Admission authenticates
+the exact historical failed performance receipt and its immutable artifact before
+emitting the workflow skip decision. The historical failure remains a failure; it
+is authorization evidence, not a passing measurement or a reusable performance
+result. Missing, changed, or unauthenticated evidence blocks admission.
+
+Keep the exemption in the sealed execution plan, parent manifest, and final
+qualification decision. Every other selected child remains required. The fresh
+qualification must use the repaired Code SHA and matching qualification workflow
+ref while preserving the admitted publication identity.
+
 ## Workflow files
 
 - `.github/workflows/full-release-validation.yml`

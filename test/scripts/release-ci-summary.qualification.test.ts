@@ -10,12 +10,16 @@ import {
   buildReleaseExecutionPlanArtifact,
   validateReleaseExecutionPlanArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { releaseQualificationExemptions } from "../../scripts/lib/release-validation-waivers.mjs";
 import {
   downloadFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
   verifyNpmPreflightPublicationLineage,
 } from "../../scripts/npm-preflight-tooling-identity.mjs";
-import { validateReleaseRunEvidence } from "../../scripts/release-ci-summary.mjs";
+import {
+  validateParentManifest,
+  validateReleaseRunEvidence,
+} from "../../scripts/release-ci-summary.mjs";
 import { authenticateFullReleaseValidationEvidence } from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
@@ -53,6 +57,38 @@ function consumers(
 }
 
 describe("candidate-owned publish consumer chain", () => {
+  it.each([false, true])(
+    "rejects a candidate-invented not-run exemption at both strict consumers (recorded=%s)",
+    async (recorded) => {
+      const f = candidatePublicationFixture();
+      const [exemption] = releaseQualificationExemptions("2026.9.37", "stable");
+      Object.assign(f.manifest.qualificationCoverage, { exemptions: [exemption] });
+      if (recorded) {
+        Object.assign(f.manifest.childRuns, {
+          productPerformance: {
+            disposition: "waived-not-run",
+            runId: "",
+            supportingEvidence: exemption!.supportingEvidence,
+          },
+        });
+      }
+      if (recorded) {
+        expect(() => validateParentManifest(f.manifest, { runId: f.runId })).not.toThrow();
+        Object.assign(f.manifest.childEvidence, { productPerformance: {} });
+        expect(() => validateParentManifest(f.manifest, { runId: f.runId })).toThrow(
+          /not candidate evidence/,
+        );
+        delete f.manifest.childEvidence.productPerformance;
+      } else {
+        expect(() => validateParentManifest(f.manifest, { runId: f.runId })).toThrow(
+          /must be recorded/,
+        );
+      }
+      await expect(consumers(f).npm()).rejects.toThrow();
+      await expect(consumers(f).docker()).rejects.toThrow();
+    },
+  );
+
   it.each(["main-qualification", "diagnostic"] as const)(
     "never promotes authenticated %s evidence to publication",
     async (purpose) => {

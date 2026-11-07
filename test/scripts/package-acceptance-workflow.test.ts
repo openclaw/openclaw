@@ -15133,6 +15133,7 @@ describe("package artifact reuse", () => {
     for (const source of [
       "scripts/release-ci-summary.mjs",
       "scripts/lib/release-evidence-identity.mjs",
+      "scripts/lib/release-validation-waivers.mjs",
       "scripts/release-qualification-admission.mjs",
       "scripts/lib/qualification-admission-baselines.mjs",
       "scripts/release-qualification-coverage.mjs",
