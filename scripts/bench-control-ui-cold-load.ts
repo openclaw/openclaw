@@ -1146,12 +1146,13 @@ try {
       port: await freeProofPort(),
       directory: path.join(artifactDir, "paint-holding-calibration"),
     });
-  } else
+  } else {
     browser = await chromium.launch({
       executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
       headless: true,
       args: chromiumArgs,
     });
+  }
   const context = await browser.newContext({
     viewport,
     isMobile: viewportName === "mobile",
@@ -1169,6 +1170,7 @@ try {
       }
       performance.setResourceTimingBufferSize(4096);
       const milestones = {
+        stopped: false,
         firstPaintMs: null as number | null,
         firstContentfulPaintMs: null as number | null,
         firstStaticShellMs: null as number | null,
@@ -1283,6 +1285,9 @@ try {
           }),
         );
       const sample = () => {
+        if (milestones.stopped) {
+          return;
+        }
         const route = location.pathname.split("/")[1] || measuredRoute;
         const readySelector =
           route === "new"
@@ -2514,7 +2519,7 @@ try {
         page,
         reloadStorage!,
         layoutCell && reloadStorage,
-        values["paint-holding"],
+        values["paint-holding"] ? cdp : undefined,
       );
       await selectComparisonBundle(bundleIndex, page);
     }
@@ -2527,6 +2532,14 @@ try {
       throw new Error(
         "Paint-holding capture requires the complete old application, not the reset document",
       );
+    }
+    if (values["paint-holding"]) {
+      // Only the new document's probes belong in the measured navigation.
+      await page.evaluate(() => {
+        Reflect.get(window, "__coldLoadPresentation").stopped = true;
+        Reflect.get(window, "__warmReloadProof").stopped = true;
+        Reflect.get(window, "__warmReload").read();
+      });
     }
     const surfaceDirectory = path.join(artifactDir, `run-${run + 1}.surfaces`);
     const finishSurfaces = values["paint-holding"]
@@ -3105,7 +3118,7 @@ try {
       : undefined;
     if (finishSurfaces && warmReloadPerformance) {
       const probe = await page.evaluate((selectors) => {
-        const probe: NonNullable<ReturnType<typeof installWarmReloadBrowserProbe>> = Reflect.get(
+        const state: NonNullable<ReturnType<typeof installWarmReloadBrowserProbe>> = Reflect.get(
           window,
           "__warmReloadProof",
         );
@@ -3116,10 +3129,10 @@ try {
               ? [{ name, x: rect.x, y: rect.y, width: rect.width, height: rect.height }]
               : [];
           }),
-          masks: probe.masks,
-          animationSamples: probe.animationSamples,
+          masks: state.masks,
+          animationSamples: state.animationSamples,
           paints: performance.getEntriesByType("paint").map((entry) => entry.toJSON()),
-          firstDetailsPaintMs: probe.firstDetailsPaintMs,
+          firstDetailsPaintMs: state.firstDetailsPaintMs,
         };
       }, proofRegions);
       const frames = await finishSurfaces(warmReloadPerformance.timeOrigin);

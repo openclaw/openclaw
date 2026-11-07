@@ -99,7 +99,7 @@ export async function startWarmReloadSurfaceCapture(cdp: CDPSession, directory: 
     const timestamp = event.metadata.timestamp;
     invalidClock ||= timestamp === undefined || !Number.isFinite(timestamp);
     const file = path.join(directory, `frame-${String(frames.length).padStart(5, "0")}.png`);
-    frames.push({ file, epochMs: (timestamp ?? NaN) * 1000 });
+    frames.push({ file, epochMs: (timestamp ?? Number.NaN) * 1000 });
     writes.push(writeFile(file, Buffer.from(event.data, "base64")));
     writes.push(cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).then(() => {}));
     first.resolve();
@@ -127,7 +127,9 @@ export async function startWarmReloadSurfaceCapture(cdp: CDPSession, directory: 
     }
     const old = frames.findLast((frame) => frame.epochMs < timeOrigin);
     const current = frames.filter((frame) => frame.epochMs >= timeOrigin);
-    if (!old || !current.length) throw new Error("Missing old/new compositor surfaces");
+    if (!old || !current.length) {
+      throw new Error("Missing old/new compositor surfaces");
+    }
     await writeFile(path.join(directory, "frames.json"), JSON.stringify({ frames, timeOrigin }));
     return [
       { file: old.file, atMs: 0 },

@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { CDPSession, Page } from "playwright";
 import type { ChatDetailsSnapshot } from "../../ui/src/pages/chat/session-details-snapshot-schema.ts";
 // Only these structural ports cross Playwright's serialized browser boundary.
 type ChatSessionSnapshot = {
@@ -283,9 +283,8 @@ export async function restoreColdLoadWarmState(
   page: Page,
   storage: Awaited<ReturnType<typeof persistColdLoadWarmState>>["storage"],
   leavingStorage?: typeof storage,
-  preserveSurface = false,
+  cdp?: CDPSession,
 ) {
-  const cdp = preserveSurface ? await page.context().newCDPSession(page) : undefined;
   if (cdp) {
     // Drain exit writers before replacing frozen inputs, retaining the real old-page DOM.
     await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
@@ -376,7 +375,6 @@ export async function restoreColdLoadWarmState(
   } finally {
     if (cdp) {
       await cdp.send("Page.setWebLifecycleState", { state: "active" });
-      await cdp.detach();
     }
   }
 }

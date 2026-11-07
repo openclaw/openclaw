@@ -457,6 +457,11 @@ metrics before using this report to reject a small change.
 
 ## Warm visibility join qualification
 
+The Team-scale benchmark's `--paint-holding` mode retains the real old surface,
+stops its measurement samplers before navigation, and reuses the capture session
+for frozen input restoration. Its synthetic pagehide drains exit writers before
+measurement; compare a natural reload before attributing exit cost to the app.
+
 A warm visibility join must qualify on current main before changing presentation:
 calibrate 300 ms old → complete and 900 ms old → blank → complete, then inspect
 four unprofiled reloads each of native archived chat, active chat, dashboard,
