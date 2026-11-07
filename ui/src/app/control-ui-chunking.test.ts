@@ -9,6 +9,20 @@ import {
 
 const modulePath = (relative: string) => new URL(relative, import.meta.url).pathname;
 
+function importClosure(importsFor: (file: string) => readonly string[]) {
+  return (fileName: string) => {
+    const visited = new Set<string>();
+    const visit = (file: string) => {
+      if (!visited.has(file)) {
+        visited.add(file);
+        importsFor(file).forEach(visit);
+      }
+    };
+    visit(fileName);
+    return visited;
+  };
+}
+
 function buildFixture(
   entry: string,
   sources: Map<string, string>,
@@ -110,15 +124,9 @@ describe("Control UI build chunking", () => {
     }
     const chunks = result.output.filter((asset) => asset.type === "chunk");
     const chunkFor = (id: string) => chunks.find((chunk) => id in chunk.modules)!;
-    const reachable = (fileName: string, visited = new Set<string>()): Set<string> => {
-      if (!visited.has(fileName)) {
-        visited.add(fileName);
-        for (const imported of chunks.find((chunk) => chunk.fileName === fileName)!.imports) {
-          reachable(imported, visited);
-        }
-      }
-      return visited;
-    };
+    const reachable = importClosure(
+      (file) => chunks.find((chunk) => chunk.fileName === file)!.imports,
+    );
     const analysisChunk = chunkFor(analyze);
     const utilsChunk = chunkFor(utils);
     const controlsChunk = chunkFor(controls);
@@ -202,13 +210,11 @@ describe("Control UI build chunking", () => {
       throw new Error("Expected one in-memory build");
     }
     const chunks = result.output.filter((asset) => asset.type === "chunk");
-    const modulesFrom = (fileName: string, visited = new Set<string>()): Set<string> => {
-      if (!visited.has(fileName)) {
-        visited.add(fileName);
-        for (const imported of chunks.find((chunk) => chunk.fileName === fileName)?.imports ?? []) {
-          modulesFrom(imported, visited);
-        }
-      }
+    const reachable = importClosure(
+      (file) => chunks.find((chunk) => chunk.fileName === file)?.imports ?? [],
+    );
+    const modulesFrom = (fileName: string): Set<string> => {
+      const visited = reachable(fileName);
       return new Set(
         chunks
           .filter((chunk) => visited.has(chunk.fileName))
@@ -264,15 +270,9 @@ describe("Control UI build chunking", () => {
     const cold = chunks.find((chunk) => flow in chunk.modules)!;
     expect(cold.fileName).toContain("template-creator-runtime");
     expect(copy in cold.modules).toBe(true);
-    const reachable = new Set<string>();
-    const visit = (file: string) => {
-      if (reachable.has(file)) {
-        return;
-      }
-      reachable.add(file);
-      chunks.find((chunk) => chunk.fileName === file)?.imports.forEach(visit);
-    };
-    visit(chunks.find((chunk) => chunk.isEntry)!.fileName);
+    const reachable = importClosure(
+      (file) => chunks.find((chunk) => chunk.fileName === file)?.imports ?? [],
+    )(chunks.find((chunk) => chunk.isEntry)!.fileName);
     expect(reachable.has(cold.fileName)).toBe(false);
     expect(
       chunks
@@ -315,15 +315,9 @@ describe("Control UI build chunking", () => {
     const chunks = result.output.filter((asset) => asset.type === "chunk");
     const entryChunk = chunks.find((chunk) => chunk.isEntry)!;
     const parserChunk = chunks.find((chunk) => json5 in chunk.modules)!;
-    const dependencies = new Set<string>();
-    const visit = (file: string) => {
-      if (dependencies.has(file)) {
-        return;
-      }
-      dependencies.add(file);
-      chunks.find((chunk) => chunk.fileName === file)?.imports.forEach(visit);
-    };
-    visit(entryChunk.fileName);
+    const dependencies = importClosure(
+      (file) => chunks.find((chunk) => chunk.fileName === file)?.imports ?? [],
+    )(entryChunk.fileName);
     expect(dependencies.has(parserChunk.fileName)).toBe(false);
     expect(entryChunk.dynamicImports).toContain(parserChunk.fileName);
     const signerChunk = chunks.find((chunk) => signer in chunk.modules)!;
@@ -381,7 +375,6 @@ describe("Control UI build chunking", () => {
     const modelRefs = modulePath(
       "../../../packages/model-catalog-core/src/configured-model-refs.ts",
     );
-    const transcriptPages = modulePath("../pages/chat/chat-transcript-pages.ts");
     const cronStyle = modulePath("../styles/cron.css");
     const cronPagination = modulePath("../components/cron-jobs-pagination.tsx");
     const agents = modulePath("../pages/agents/agents-page.tsx");
@@ -415,6 +408,16 @@ describe("Control UI build chunking", () => {
     const settingsSelect = modulePath("../components/solid/settings-select.tsx");
     const routeSubtitles = modulePath("../i18n/locales/en-route-subtitles.ts");
     const talk = modulePath("../pages/talk/talk-page.tsx");
+    const channels = modulePath("../pages/channels/channels-page.tsx");
+    const checkbox = modulePath("../components/solid/checkbox.tsx");
+    const terminal = modulePath("../pages/terminal/terminal-page.tsx");
+    const terminalRailStyle = modulePath("../styles/session-panel-rail.css");
+    const terminalHelpers = [
+      "../components/terminal/terminal-controller-lifecycle.ts",
+      "../components/terminal/terminal-pending-actions.ts",
+      "../components/terminal/terminal-session-storage.ts",
+      "../components/terminal/terminal-tab-readiness.ts",
+    ].map(modulePath);
     const skeleton = modulePath("../components/solid/panel-loading-skeleton.tsx");
     const skeletonStyle = `${modulePath("../styles/panel-loading-skeleton.css")}?inline`;
     const sharedUi = modulePath("../components/select-picker-view.tsx");
@@ -539,7 +542,7 @@ describe("Control UI build chunking", () => {
       ],
       [
         cronView,
-        `import ${JSON.stringify(cronStyle)}; import { runLink } from ${JSON.stringify(cronRunLink)}; import { state } from ${JSON.stringify(cronDomain)}; import { models } from ${JSON.stringify(cronModels)}; import { pages } from ${JSON.stringify(transcriptPages)}; import { pagination } from ${JSON.stringify(cronPagination)}; export function view() { return "overview" + runLink + state + models + pages + pagination; } export const detail = () => import(${JSON.stringify(cronDetail)});`,
+        `import ${JSON.stringify(cronStyle)}; import { runLink } from ${JSON.stringify(cronRunLink)}; import { state } from ${JSON.stringify(cronDomain)}; import { models } from ${JSON.stringify(cronModels)}; import { pagination } from ${JSON.stringify(cronPagination)}; export function view() { return "overview" + runLink + state + models + pagination; } export const detail = () => import(${JSON.stringify(cronDetail)});`,
       ],
       [
         cronDomain,
@@ -555,7 +558,6 @@ describe("Control UI build chunking", () => {
         `import { refs } from ${JSON.stringify(modelRefs)}; export const models = refs;`,
       ],
       [modelRefs, 'export const refs = "refs";'],
-      [transcriptPages, 'export const pages = "pages";'],
       [cronStyle, ".cron-fixture { color: maroon; }"],
       [cronPagination, 'export const pagination = "pagination";'],
       [validator, 'export const validate = "validate";'],
@@ -592,18 +594,27 @@ describe("Control UI build chunking", () => {
       modulePath,
     );
     const helperPage = "\0helper-only-route";
-    const helperImports = sharedHelpers
-      .map((id, index) => `export { helper as helper${index} } from ${JSON.stringify(id)};`)
-      .join("\n");
-    for (const id of sharedHelpers) {
-      sources.set(id, "export const helper = 'shared';");
+    for (const [page, helpers, prefix, name, value] of [
+      [helperPage, sharedHelpers, "helper", "helpers", "shared"],
+      [channels, [checkbox], "checkbox", "channels", "checkbox"],
+      [terminal, terminalHelpers, "terminal", "terminal", "terminal-owner"],
+    ] as const) {
+      const imports = helpers
+        .map((id, index) => `export { helper as ${prefix}${index} } from ${JSON.stringify(id)};`)
+        .join("\n");
+      for (const id of helpers) {
+        sources.set(id, `export const helper = '${value}';`);
+      }
+      sources.set(page, imports);
+      sources.set(chat, sources.get(chat)! + imports);
+      sources.set(
+        entry,
+        sources.get(entry)! + `export const ${name} = () => import(${JSON.stringify(page)});`,
+      );
     }
-    sources.set(helperPage, helperImports);
-    sources.set(chat, sources.get(chat)! + helperImports);
-    sources.set(
-      entry,
-      sources.get(entry)! + `export const helpers = () => import(${JSON.stringify(helperPage)});`,
-    );
+    sources.set(terminalRailStyle, ".terminal-rail-fixture { color: cyan; }");
+    sources.set(terminal, `import ${JSON.stringify(terminalRailStyle)}; ${sources.get(terminal)}`);
+    sources.set(chat, sources.get(chat)! + `import ${JSON.stringify(terminalRailStyle)};`);
     const result = await buildFixture(entry, sources, {
       ...controlUiCodeSplitting,
       // A stale capture must not pull a lazy page into the shared boot chunk.
@@ -612,7 +623,9 @@ describe("Control UI build chunking", () => {
         // Exercise grouping below the production chunk-size floor.
         minSize: 0,
         ...(group.name === "control-ui-boot-chat"
-          ? { test: (id: string) => sharedHelpers.includes(id) || group.test(id) }
+          ? {
+              test: (id: string) => id === checkbox || sharedHelpers.includes(id) || group.test(id),
+            }
           : {}),
         ...(group.name === "control-ui-boot-shared"
           ? {
@@ -645,130 +658,112 @@ describe("Control UI build chunking", () => {
       .filter((asset) => asset.fileName.endsWith(".css"));
     expect(styles).toHaveLength(5);
     const sharedStyles = styles.find((style) => String(style.source).includes(".shared-fixture"));
-    expect(sharedStyles).toMatchObject({ source: expect.stringContaining(".sidebar-fixture") });
-    expect(sharedStyles).toMatchObject({ source: expect.stringContaining(".transcript-fixture") });
+    for (const selector of ["sidebar", "transcript", "terminal-rail"]) {
+      expect(sharedStyles).toMatchObject({
+        source: expect.stringContaining(`.${selector}-fixture`),
+      });
+    }
     expect(sharedStyles?.source).not.toContain(".optional-fixture");
     expect(sharedStyles?.source).not.toContain(".tabs-fixture");
     const routeStyles = styles.find((style) => String(style.source).includes(".settings-fixture"));
     expect(routeStyles?.source).toContain(".hub-fixture");
     expect(routeStyles?.source).not.toContain(".tabs-fixture");
     const chunks = result.output.filter((asset) => asset.type === "chunk");
-    const chatChunk = chunks.find((chunk) => chat in chunk.modules)!;
-    const newSessionChunk = chunks.find((chunk) => newSession in chunk.modules)!;
-    const staticImports = (fileName: string, visited = new Set<string>()): Set<string> => {
-      if (!visited.has(fileName)) {
-        visited.add(fileName);
-        for (const imported of chunks.find((chunk) => chunk.fileName === fileName)!.imports) {
-          staticImports(imported, visited);
-        }
-      }
-      return visited;
-    };
+    const chunkFor = (id: string) => chunks.find((chunk) => id in chunk.modules)!;
+    const entryChunk = chunks.find((chunk) => chunk.isEntry)!;
+    const chatChunk = chunkFor(chat);
+    const newSessionChunk = chunkFor(newSession);
+    const staticImports = importClosure(
+      (file) => chunks.find((chunk) => chunk.fileName === file)!.imports,
+    );
     expect(staticImports(chatChunk.fileName)).not.toContain(newSessionChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(chatChunk.fileName);
-    const markdownChunk = chunks.find((chunk) => markdownTables in chunk.modules)!;
-    const meetingsChunk = chunks.find((chunk) => meetings in chunk.modules)!;
+    const markdownChunk = chunkFor(markdownTables);
+    const meetingsChunk = chunkFor(meetings);
     expect(staticImports(markdownChunk.fileName)).not.toContain(chatChunk.fileName);
     expect(staticImports(meetingsChunk.fileName)).toContain(markdownChunk.fileName);
     expect(staticImports(meetingsChunk.fileName)).not.toContain(chatChunk.fileName);
-    expect(staticImports(chunks.find((chunk) => chunk.isEntry)!.fileName)).not.toContain(
-      markdownChunk.fileName,
-    );
-    const startup = staticImports(chunks.find((chunk) => chunk.isEntry)!.fileName);
-    const displayChunk = chunks.find((chunk) => markdownLinkDisplay in chunk.modules)!;
+    expect(staticImports(entryChunk.fileName)).not.toContain(markdownChunk.fileName);
+    const startup = staticImports(entryChunk.fileName);
+    const displayChunk = chunkFor(markdownLinkDisplay);
     expect(staticImports(meetingsChunk.fileName)).toContain(displayChunk.fileName);
     expect(startup).not.toContain(displayChunk.fileName);
     for (const [page, helpers] of [
       [templates, [creatorPublication]],
       [security, [coreToolFacts, automationsName]],
+      [helperPage, sharedHelpers],
+      [channels, [checkbox]],
+      [terminal, terminalHelpers],
     ] as const) {
-      const pageChunk = chunks.find((chunk) => page in chunk.modules)!;
+      const pageChunk = chunkFor(page);
       const imports = staticImports(pageChunk.fileName);
       expect(imports).not.toContain(chatChunk.fileName);
       expect(imports).not.toContain(newSessionChunk.fileName);
       expect(startup).not.toContain(pageChunk.fileName);
       for (const helper of helpers) {
-        const chunk = chunks.find((candidate) => helper in candidate.modules)!;
+        const chunk = chunkFor(helper);
         expect(imports).toContain(chunk.fileName);
         expect(startup).not.toContain(chunk.fileName);
       }
     }
-    const helperPageChunk = chunks.find((chunk) => helperPage in chunk.modules)!;
-    const helperClosure = staticImports(helperPageChunk.fileName);
-    expect(helperClosure).not.toContain(chatChunk.fileName);
-    expect(helperClosure).not.toContain(newSessionChunk.fileName);
-    for (const helper of sharedHelpers) {
-      const helperChunk = chunks.find((chunk) => helper in chunk.modules)!;
-      expect(helperClosure).toContain(helperChunk.fileName);
-      expect(startup).not.toContain(helperChunk.fileName);
-    }
-    const sessionsChunk = chunks.find((chunk) => sessions in chunk.modules)!;
+    const sessionsChunk = chunkFor(sessions);
     expect(staticImports(sessionsChunk.fileName)).not.toContain(chatChunk.fileName);
     expect(staticImports(sessionsChunk.fileName)).not.toContain(newSessionChunk.fileName);
-    const runChunk = chunks.find((chunk) => runFrame in chunk.modules)!;
+    const runChunk = chunkFor(runFrame);
     expect([runStream, sourcePreviews].every((id) => id in runChunk.modules)).toBe(true);
     expect(staticImports(chatChunk.fileName)).toContain(runChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(runChunk.fileName);
-    const previewChunk = chunks.find((chunk) => sourcePreviewView in chunk.modules)!;
+    const previewChunk = chunkFor(sourcePreviewView);
     expect(staticImports(chatChunk.fileName)).not.toContain(previewChunk.fileName);
     expect(runChunk.dynamicImports).toContain(previewChunk.fileName);
-    const visibleChunk = chunks.find((chunk) => permissionCard in chunk.modules)!;
+    const visibleChunk = chunkFor(permissionCard);
     expect([permissionLabels, processRow].every((id) => id in visibleChunk.modules)).toBe(true);
     expect(staticImports(chatChunk.fileName)).toContain(visibleChunk.fileName);
     expect(staticImports(visibleChunk.fileName)).not.toContain(runChunk.fileName);
-    const pluginChunk = chunks.find((chunk) => pluginLoader in chunk.modules)!;
-    const usageChunk = chunks.find((chunk) => usage in chunk.modules)!;
-    const formatChunk = chunks.find((chunk) => reactiveFormat in chunk.modules)!;
+    const pluginChunk = chunkFor(pluginLoader);
+    const usageChunk = chunkFor(usage);
+    const formatChunk = chunkFor(reactiveFormat);
     expect([permissionError, permissionCopy].every((id) => id in formatChunk.modules)).toBe(true);
     expect(staticImports(usageChunk.fileName)).toContain(formatChunk.fileName);
     expect(staticImports(usageChunk.fileName)).not.toContain(chatChunk.fileName);
-    const actionChunk = chunks.find((chunk) => pluginActions in chunk.modules)!;
-    const sharedChunk = chunks.find((chunk) => sharedUi in chunk.modules)!;
+    const actionChunk = chunkFor(pluginActions);
+    const sharedChunk = chunkFor(sharedUi);
     expect(actionChunk.fileName).toBe(sharedChunk.fileName);
     expect(staticImports(pluginChunk.fileName)).toContain(actionChunk.fileName);
     expect(staticImports(pluginChunk.fileName)).not.toContain(chatChunk.fileName);
-    const entryChunk = chunks.find((chunk) => chunk.isEntry)!;
-    const portalsChunk = chunks.find((chunk) => portals in chunk.modules)!;
-    const pollChunk = chunks.find((chunk) => visiblePoll in chunk.modules)!;
+    const portalsChunk = chunkFor(portals);
+    const pollChunk = chunkFor(visiblePoll);
     expect(pollChunk.fileName).toBe(sharedChunk.fileName);
     expect(staticImports(portalsChunk.fileName)).toContain(pollChunk.fileName);
-    expect(staticImports(portalsChunk.fileName)).not.toContain(
-      chunks.find((chunk) => skeleton in chunk.modules)!.fileName,
-    );
+    expect(staticImports(portalsChunk.fileName)).not.toContain(chunkFor(skeleton).fileName);
     expect(staticImports(entryChunk.fileName)).not.toContain(pollChunk.fileName);
-    const cronChunk = chunks.find((chunk) => cron in chunk.modules)!;
-    const cronDetailChunk = chunks.find((chunk) => cronDetail in chunk.modules)!;
+    const cronChunk = chunkFor(cron);
+    const cronDetailChunk = chunkFor(cronDetail);
     expect(cronView in cronChunk.modules).toBe(true);
     expect(cronRunLink in cronChunk.modules).toBe(true);
-    expect([cronModels, modelRefs, transcriptPages].every((id) => id in cronChunk.modules)).toBe(
-      true,
-    );
-    const domainChunk = chunks.find((chunk) => cronDomain in chunk.modules)!;
+    expect([cronModels, modelRefs].every((id) => id in cronChunk.modules)).toBe(true);
+    const domainChunk = chunkFor(cronDomain);
     expect(domainChunk.fileName).toContain("cron-domain");
     expect([cronForm, cronSchedule].every((id) => id in domainChunk.modules)).toBe(true);
     expect(staticImports(cronChunk.fileName)).toContain(domainChunk.fileName);
     expect(staticImports(entryChunk.fileName)).not.toContain(domainChunk.fileName);
-    const agentsChunk = chunks.find((chunk) => agents in chunk.modules)!;
+    const agentsChunk = chunkFor(agents);
     expect(staticImports(agentsChunk.fileName)).toContain(domainChunk.fileName);
     expect(staticImports(agentsChunk.fileName)).not.toContain(cronChunk.fileName);
-    const paginationChunk = chunks.find((chunk) => cronPagination in chunk.modules)!;
+    const paginationChunk = chunkFor(cronPagination);
     expect(staticImports(agentsChunk.fileName)).not.toContain(paginationChunk.fileName);
-    expect(staticImports(chunks.find((chunk) => agentsCron in chunk.modules)!.fileName)).toContain(
-      paginationChunk.fileName,
-    );
+    expect(staticImports(chunkFor(agentsCron).fileName)).toContain(paginationChunk.fileName);
     expect(cronDetailChunk.fileName).not.toBe(cronChunk.fileName);
     expect(staticImports(cronChunk.fileName)).not.toContain(cronDetailChunk.fileName);
     expect(cronChunk.dynamicImports).toContain(cronDetailChunk.fileName);
     expect(staticImports(entryChunk.fileName)).not.toContain(cronChunk.fileName);
     expect(staticImports(chatChunk.fileName)).not.toContain(cronChunk.fileName);
-    const chromeChunk = chunks.find((chunk) => hubHeader in chunk.modules)!;
-    const styleOnlyChunk = chunks.find((chunk) => styleOnly in chunk.modules)!;
+    const chromeChunk = chunkFor(hubHeader);
+    const styleOnlyChunk = chunkFor(styleOnly);
     expect(staticImports(styleOnlyChunk.fileName)).not.toContain(chromeChunk.fileName);
-    expect(staticImports(styleOnlyChunk.fileName)).not.toContain(
-      chunks.find((chunk) => hubTabs in chunk.modules)!.fileName,
-    );
+    expect(staticImports(styleOnlyChunk.fileName)).not.toContain(chunkFor(hubTabs).fileName);
     expect([settingsWorkspace, settingsSelect].every((id) => id in chromeChunk.modules)).toBe(true);
-    const tabsChunk = chunks.find((chunk) => tabs in chunk.modules)!;
+    const tabsChunk = chunkFor(tabs);
     expect([tabState, shadowStyles, inlineTabsStyle].every((id) => id in tabsChunk.modules)).toBe(
       true,
     );
@@ -777,7 +772,7 @@ describe("Control UI build chunking", () => {
       expect(staticImports(initial.fileName)).not.toContain(tabsChunk.fileName);
     }
     for (const route of [sessions, cron]) {
-      const routeChunk = chunks.find((chunk) => route in chunk.modules)!;
+      const routeChunk = chunkFor(route);
       expect(staticImports(routeChunk.fileName)).toContain(chromeChunk.fileName);
       expect(staticImports(entryChunk.fileName)).not.toContain(routeChunk.fileName);
       expect(routeChunk.fileName).not.toBe(chromeChunk.fileName);
@@ -786,17 +781,17 @@ describe("Control UI build chunking", () => {
     expect(staticImports(chatChunk.fileName)).not.toContain(chromeChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(chromeChunk.fileName);
     expect(staticImports(entryChunk.fileName)).not.toContain(actionChunk.fileName);
-    const mutationChunk = chunks.find((chunk) => mutations in chunk.modules)!;
+    const mutationChunk = chunkFor(mutations);
     expect(staticImports(entryChunk.fileName)).not.toContain(mutationChunk.fileName);
     expect(staticImports(mutationChunk.fileName)).not.toContain(chatChunk.fileName);
     expect(staticImports(mutationChunk.fileName)).not.toContain(sharedChunk.fileName);
-    const devicesChunk = chunks.find((chunk) => devices in chunk.modules)!;
-    const talkChunk = chunks.find((chunk) => talk in chunk.modules)!;
+    const devicesChunk = chunkFor(devices);
+    const talkChunk = chunkFor(talk);
     expect(staticImports(talkChunk.fileName)).not.toContain(chatChunk.fileName);
     expect(staticImports(talkChunk.fileName)).not.toContain(newSessionChunk.fileName);
     expect(staticImports(chatChunk.fileName)).not.toContain(devicesChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(devicesChunk.fileName);
-    const deferred = chunks.find((chunk) => optional in chunk.modules)!;
+    const deferred = chunkFor(optional);
     expect(deferred).toBeDefined();
     expect(staticImports(deferred.fileName)).not.toContain(chromeChunk.fileName);
     expect(chunks.filter((chunk) => chunk.imports.includes(deferred.fileName))).toHaveLength(0);

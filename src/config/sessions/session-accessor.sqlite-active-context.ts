@@ -18,8 +18,8 @@ import type {
 import { iterateUnindexedActiveTranscriptNavigation } from "./session-accessor.sqlite-history-navigation.js";
 import {
   getActiveTranscriptKysely,
-  selectActiveTranscriptEventRows,
   selectActiveTranscriptIdentityRows,
+  selectActiveTranscriptMetadataRows,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
@@ -40,7 +40,7 @@ import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js"
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   readTranscriptPayload,
-  transcriptEventModelNavigationSql,
+  transcriptEventDependencyNavigationSql,
   transcriptEventResetNavigationSql,
   transcriptPredicateSql,
 } from "./transcript-payload.js";
@@ -343,19 +343,14 @@ export function readSessionTranscriptBoundedActiveContextCore(
       window?.boundaryType === "compaction"
         ? (window.firstKeptActivePosition ?? window.boundaryActivePosition)
         : window?.boundaryActivePosition;
+    const activeMetadata = selectActiveTranscriptMetadataRows(projection.database);
     const metadata = covered
       ? covered.rows
           .filter((row) => !fence || row.event_seq < fence.beforeRawSeq)
           .slice(0, limits ? limits.maxEvents + 1 : undefined)
       : iterateSqliteQuerySync(
           projection.database.db,
-          selectActiveTranscriptEventRows(projection.database)
-            .select([
-              "active.event_seq",
-              "active.active_position",
-              /* kysely-allow-raw: active-context byte caps exclude rows before fetching or parsing. */
-              sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
-            ])
+          activeMetadata
             .where("active.session_id", "=", projection.resolved.sessionId)
             .$if(fence !== undefined, (query) =>
               query.where("active.event_seq", "<", fence!.beforeRawSeq),
@@ -460,18 +455,6 @@ export function readSessionTranscriptBoundedActiveContextCore(
         truncated = true;
       }
     }
-    const dependencyType = transcriptPredicateSql(
-      projection.database.db,
-      "navigation_type",
-      "event",
-    );
-    const dependencyRole = transcriptPredicateSql(projection.database.db, "message_role", "event");
-    // CASE fences payload projection: an ordinary old row may be outside this bounded read.
-    const dependencyNavigation = /* kysely-allow-raw: recorded event classifications gate model navigation before any payload parser can run. */ sql<string>`CASE
-      WHEN ${dependencyType} IN ('custom', 'reset') OR ${dependencyType} IS NULL
-        OR (${dependencyType} = 'message' AND active.context_eligible = 0 AND ${dependencyRole} = 'assistant')
-      THEN ${transcriptEventModelNavigationSql(projection.database.db, "event")}
-      ELSE '{}' END`;
     const dependencyField = <T = string | null>(path: string) =>
       jsonPathValue<T>(
         projection.database.db,
@@ -487,19 +470,20 @@ export function readSessionTranscriptBoundedActiveContextCore(
           .with(
             (cte) => cte("dependency").materialized(),
             () =>
-              db
-                .selectFrom("session_transcript_active_events as active")
-                // SQLite must filter active metadata before exact payload lookups.
-                .crossJoin("transcript_events as event")
-                .whereRef("event.session_id", "=", "active.session_id")
-                .whereRef("event.seq", "=", "active.event_seq")
-                .select([
-                  "active.event_seq",
-                  "active.active_position",
+              activeMetadata
+                .select((eb) => [
                   "active.context_eligible",
-                  dependencyNavigation.as("navigation_json"),
-                  /* kysely-allow-raw: dependency sizes are admitted before fetching accepted result bodies. */
-                  sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
+                  /* kysely-allow-raw: covered facts never read payload navigation; legacy rows retain the exact guarded projection. */
+                  sql<string>`CASE WHEN facts.seq IS NOT NULL THEN facts.dependency_navigation_json ELSE ${eb
+                    .selectFrom("transcript_events as event")
+                    .select(
+                      transcriptEventDependencyNavigationSql(
+                        projection.database.db,
+                        eb.ref("active.context_eligible"),
+                      ).as("navigation_json"),
+                    )
+                    .whereRef("event.session_id", "=", "active.session_id")
+                    .whereRef("event.seq", "=", "active.event_seq")} END`.as("navigation_json"),
                 ])
                 .where("active.session_id", "=", projection.resolved.sessionId)
                 // Exclude known ordinary identities as a set before reading payloads. Joining

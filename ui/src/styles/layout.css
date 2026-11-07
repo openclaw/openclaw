@@ -1,6 +1,5 @@
 @import "./session-menu.css";
 
-.context-usage__title,
 .palette-session-settings__title,
 .palette-session-settings__machine {
   color: var(--muted);
@@ -885,34 +884,23 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
      both values share --sidebar-pad-x so they cannot drift. */
   margin-right: calc(-1 * var(--sidebar-pad-x));
   padding-right: var(--sidebar-pad-x);
-  scrollbar-color: color-mix(in srgb, var(--muted) 10%, transparent) transparent;
 }
 
-.sidebar-shell:hover .sidebar-shell__body {
-  scrollbar-color: color-mix(in srgb, var(--muted) 16%, transparent) transparent;
-}
-
+/* The whole sidebar counts as the scroller's hover zone, header and footer included. */
 @supports selector(::-webkit-scrollbar) {
-  .sidebar-shell__body {
-    /* Native scrollbar colors override the separate thumb-hover treatment. */
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
-  .sidebar-shell:hover .sidebar-shell__body {
-    scrollbar-color: auto;
-  }
-
-  .sidebar-shell__body::-webkit-scrollbar-thumb {
-    background-color: color-mix(in srgb, var(--muted) 10%, transparent);
-  }
-
   .sidebar-shell:hover .sidebar-shell__body::-webkit-scrollbar-thumb {
-    background-color: color-mix(in srgb, var(--muted) 16%, transparent);
+    background-color: var(--scrollbar-thumb-near);
   }
 
-  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:hover {
+  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:hover,
+  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:active {
     background-color: var(--scrollbar-thumb-hover);
+  }
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .sidebar-shell:hover .sidebar-shell__body {
+    scrollbar-color: var(--scrollbar-thumb-near) transparent;
   }
 }
 
@@ -1515,6 +1503,16 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   overflow-anchor: none;
 }
 
+/* While an archived row fades out (app-sidebar-archive-exit.ts), the rows below
+   and the sections after the list glide into its slot; 60 + 180 ms matches it. */
+.sidebar-session-window[data-sidebar-archive-exiting] {
+  transition: height 180ms cubic-bezier(0.2, 0, 0, 1) 60ms;
+}
+
+.sidebar-session-window[data-sidebar-archive-exiting] > .sidebar-session-tree {
+  transition: transform 180ms cubic-bezier(0.2, 0, 0, 1) 60ms;
+}
+
 .sidebar-recent-sessions__list {
   min-height: 12px;
 }
@@ -1840,12 +1838,16 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   :hover,
   :focus-within,
   .sidebar-recent-session--active,
-  .sidebar-recent-session--selected
+  .sidebar-recent-session--selected,
+  .sidebar-recent-session--menu-open
 ) {
   --session-row-muted: var(--text);
 }
 
-.sidebar-recent-session:hover {
+/* An open row menu moves the pointer off the row; keep its hover fill so the
+   menu's target stays identifiable. */
+.sidebar-recent-session:hover,
+.sidebar-recent-session.sidebar-recent-session--menu-open {
   --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
 
   color: var(--text);
@@ -2532,8 +2534,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   bottom: -2px;
 }
 
+/* Rows keep their intrinsic height; capped menus scroll instead of squeezing multiline labels. */
 .sidebar-customize-menu__item {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 6px;
   width: 100%;
@@ -2770,7 +2774,8 @@ a:is(
   }
 }
 
-.sidebar-zone-entry .sidebar-recent-session:hover {
+.sidebar-zone-entry .sidebar-recent-session:hover,
+.sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--menu-open {
   --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
 
   color: var(--text);
@@ -2782,7 +2787,8 @@ a:is(
   color: var(--text-strong);
 }
 
-.sidebar-recent-session.sidebar-recent-session--active:hover {
+.sidebar-recent-session.sidebar-recent-session--active:hover,
+.sidebar-recent-session.sidebar-recent-session--active.sidebar-recent-session--menu-open {
   --session-row-bg: var(--surface-selected-hover);
 }
 
@@ -2804,7 +2810,10 @@ a:is(
   ),
 .sidebar-recent-session--colored.sidebar-recent-session--active:not(
     .sidebar-recent-session--selected
-  ):hover {
+  ):hover,
+.sidebar-recent-session--colored.sidebar-recent-session--active.sidebar-recent-session--menu-open:not(
+    .sidebar-recent-session--selected
+  ) {
   --session-row-bg: color-mix(
     in srgb,
     var(--session-color) calc(var(--session-color-tint) * 2.4),
@@ -3588,6 +3597,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   margin-top: 14px;
 }
 
+.content--chat > openclaw-router-outlet,
 .content--workboard > openclaw-router-outlet,
 .content--custodian > openclaw-router-outlet,
 .content.content--systems > openclaw-router-outlet {
@@ -3613,7 +3623,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   margin-top: 0;
 }
 
-.content--chat > openclaw-router-outlet,
 .content.content--plugin-embed > openclaw-router-outlet {
   display: flex;
   flex: 1 1 0;
@@ -3824,12 +3833,6 @@ html.openclaw-native-web-chrome
 
 .page-subtitle .learn-more-link {
   white-space: nowrap;
-}
-
-.page-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .grid {
@@ -4096,4 +4099,373 @@ html.openclaw-native-web-chrome
   to {
     opacity: 1;
   }
+}
+
+/* Connection feedback belongs inside the application canvas, not a second app shell. */
+.gateway-connection-view {
+  position: relative;
+  min-height: 100%;
+}
+/* Every status page shares one anatomy: the OpenClaw mascot stands on its ground above a
+   centred title, and the title holds a fixed height a little above centre, so nothing
+   jumps between states. */
+.gateway-connection-view__body {
+  position: absolute;
+  top: 38%;
+  left: 50%;
+  width: min(460px, calc(100% - 48px));
+  transform: translateX(-50%);
+  text-align: center;
+}
+.gateway-connection-view h1 {
+  position: relative;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 22px;
+  line-height: 28px;
+  letter-spacing: -0.01em;
+  font-weight: 600;
+  text-wrap: balance;
+}
+.gateway-connection-view__description {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 21px;
+  text-wrap: pretty;
+}
+.gateway-connection-view__actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
+}
+.gateway-connection-view__actions:empty {
+  display: none;
+}
+.gateway-connection-view__actions .btn {
+  height: 32px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* The mascot sits 24px above the title; its own animation is the busy indicator. */
+.gateway-mascot {
+  --gateway-mascot-size: 88px;
+  --gateway-mascot-ground: radial-gradient(
+    closest-side,
+    rgb(0 0 0 / 0.42),
+    rgb(0 0 0 / 0.16) 60%,
+    transparent
+  );
+  --gateway-mascot-gaze-x: 0px;
+  --gateway-mascot-gaze-y: 0px;
+  position: absolute;
+  top: calc(-24px - var(--gateway-mascot-size));
+  left: 50%;
+  width: var(--gateway-mascot-size);
+  height: var(--gateway-mascot-size);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+:root[data-theme-mode="light"] .gateway-mascot {
+  --gateway-mascot-ground: radial-gradient(
+    closest-side,
+    rgb(32 32 32 / 0.16),
+    rgb(32 32 32 / 0.06) 60%,
+    transparent
+  );
+}
+.gateway-mascot__ground {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 62px;
+  height: 9px;
+  margin-left: -31px;
+  border-radius: 50%;
+  background: var(--gateway-mascot-ground);
+}
+.gateway-mascot__figure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 124 / 112;
+  overflow: visible;
+}
+.gateway-mascot__eyes {
+  transform: translate(var(--gateway-mascot-gaze-x), var(--gateway-mascot-gaze-y));
+  transition: transform 0.5s cubic-bezier(0.3, 0, 0.2, 1);
+}
+.gateway-mascot__lids {
+  transform-origin: 60px 35px;
+}
+.gateway-mascot__claw--left {
+  transform-origin: 28px 52px;
+}
+.gateway-mascot__claw--right {
+  transform-origin: 92px 52px;
+}
+/* Settled, it looks down toward the button, or up at the update with one blink. */
+.gateway-mascot[data-pose="error"] {
+  --gateway-mascot-gaze-y: 2.8px;
+}
+.gateway-mascot[data-pose="updated"] {
+  --gateway-mascot-gaze-y: -1px;
+}
+.gateway-mascot[data-pose="updated"] .gateway-mascot__lids {
+  animation: gateway-mascot-blink-once 0.9s 0.5s linear 1 both;
+}
+/* Busy, it bobs 5px while the ground shadow shrinks, the claws open and the eyes scan. */
+.gateway-mascot[data-pose="busy"] .gateway-mascot__figure {
+  animation: gateway-mascot-bob 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+.gateway-mascot[data-pose="busy"] .gateway-mascot__ground {
+  animation: gateway-mascot-ground 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+.gateway-mascot[data-pose="busy"] .gateway-mascot__claw--left {
+  animation: gateway-mascot-pinch-left 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+.gateway-mascot[data-pose="busy"] .gateway-mascot__claw--right {
+  animation: gateway-mascot-pinch-right 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+.gateway-mascot[data-pose="busy"] .gateway-mascot__eyes {
+  animation: gateway-mascot-gaze 4.8s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+}
+.gateway-mascot[data-pose="busy"] .gateway-mascot__lids {
+  animation: gateway-mascot-blink 4.8s linear infinite;
+}
+@keyframes gateway-mascot-bob {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-5px);
+  }
+}
+@keyframes gateway-mascot-ground {
+  from {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+  to {
+    transform: scaleX(0.82);
+    opacity: 0.7;
+  }
+}
+@keyframes gateway-mascot-pinch-left {
+  from {
+    transform: rotate(0);
+  }
+  to {
+    transform: rotate(-7deg);
+  }
+}
+@keyframes gateway-mascot-pinch-right {
+  from {
+    transform: rotate(0);
+  }
+  to {
+    transform: rotate(7deg);
+  }
+}
+@keyframes gateway-mascot-gaze {
+  0%,
+  8%,
+  82%,
+  100% {
+    transform: translate(0, 0);
+  }
+  18%,
+  40% {
+    transform: translate(-3.2px, 0.6px);
+  }
+  50%,
+  72% {
+    transform: translate(3.2px, 0.6px);
+  }
+}
+@keyframes gateway-mascot-blink {
+  0%,
+  90%,
+  96%,
+  100% {
+    transform: scaleY(1);
+  }
+  93% {
+    transform: scaleY(0.12);
+  }
+}
+@keyframes gateway-mascot-blink-once {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(0.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gateway-mascot[data-pose="busy"] .gateway-mascot__eyes {
+    animation-duration: 12s;
+  }
+  .gateway-mascot[data-pose] .gateway-mascot__figure,
+  .gateway-mascot[data-pose] .gateway-mascot__ground,
+  .gateway-mascot[data-pose] .gateway-mascot__claw,
+  .gateway-mascot[data-pose] .gateway-mascot__lids {
+    animation: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .gateway-connection-view__actions .btn {
+    height: 36px;
+    padding: 0 16px;
+    font-size: 14px;
+  }
+}
+
+@media (max-width: 768px) {
+  .gateway-connection-view__body {
+    top: 36%;
+    right: 24px;
+    left: 24px;
+    width: auto;
+    transform: none;
+  }
+  .gateway-connection-view h1 {
+    font-size: 20px;
+    line-height: 26px;
+  }
+  .gateway-mascot {
+    --gateway-mascot-size: 80px;
+  }
+}
+
+.content--connecting > openclaw-router-outlet {
+  display: none;
+}
+
+.gateway-identity-placeholder {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--muted) 16%, transparent);
+}
+
+/* The agent slot marks where the avatar lands, a step stronger than the other placeholders. */
+.gateway-identity-placeholder[data-kind="agent"] {
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+}
+
+.sidebar-agent-card__avatar > .gateway-identity-placeholder {
+  width: 100%;
+  height: 100%;
+}
+
+.sidebar-workspace-header__mark > .gateway-identity-placeholder {
+  width: 26px;
+  height: 26px;
+}
+
+/* While connecting, the rail's create and current controls step back to placeholders. */
+.sidebar:has(.sidebar-connection-skeleton) .sidebar-rail__create .sidebar-new-session {
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  color: var(--sidebar-rail-control-color);
+  opacity: 1;
+}
+
+.sidebar:has(.sidebar-connection-skeleton)
+  .sidebar-rail__button:is([aria-current="page"], [aria-pressed="true"], .nav-item--active) {
+  background: color-mix(in srgb, var(--sidebar-rail-selected-surface) 50%, transparent);
+  color: color-mix(in srgb, var(--text-strong) 60%, transparent);
+}
+
+/* Session-row metrics (.sidebar-shell): 32px rows, 18px avatar centered 24px in, title at 42px.
+   The wordmark's mascot sits on that avatar column. */
+.sidebar-connection-skeleton {
+  padding-top: 10.3px;
+  pointer-events: none;
+}
+.sidebar-connection-skeleton__brand img {
+  width: auto;
+  height: 25.35px;
+  margin-inline-start: 0.5px;
+}
+.sidebar-connection-skeleton__brand-dark,
+:root[data-theme-mode="light"] .sidebar-connection-skeleton__brand-light {
+  display: block;
+}
+.sidebar-connection-skeleton__brand-light,
+:root[data-theme-mode="light"] .sidebar-connection-skeleton__brand-dark {
+  display: none;
+}
+.sidebar-connection-skeleton__rows {
+  display: grid;
+  margin-top: 12.35px;
+}
+.sidebar-connection-skeleton__row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 32px;
+  padding-inline: 5px 8px;
+}
+.sidebar-connection-skeleton__row > :first-child {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+}
+.sidebar-connection-skeleton__row > :last-child {
+  width: 68%;
+  height: 10px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--muted) 10%, transparent);
+}
+.sidebar-connection-skeleton__row:nth-child(2) > :last-child {
+  width: 50%;
+}
+.sidebar-connection-skeleton__row:nth-child(3) > :last-child {
+  width: 78%;
+}
+.sidebar-connection-skeleton__row:nth-child(4) > :last-child {
+  width: 58%;
+}
+
+/* Keep the header geometry still; reveal its controls once they can act. */
+.topbar--navigation-locked .topbar-nav-toggle,
+.topbar--navigation-locked .topnav-shell__actions {
+  visibility: hidden;
+}
+
+.topbar-connection-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.topbar-connection-brand svg {
+  width: 101px;
+  height: 32px;
+}
+
+.topbar-connection-brand__light,
+:root[data-theme-mode="light"] .topbar-connection-brand__dark {
+  display: none;
+}
+
+:root[data-theme-mode="light"] .topbar-connection-brand__light {
+  display: block;
 }

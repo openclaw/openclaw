@@ -63,7 +63,7 @@ describe("i18n", () => {
     expect(documentElement).toEqual({ lang: locale, dir });
     expect(localStorage.getItem("openclaw.i18n.locale")).toBe(saved);
     expect(await loadLazyLocaleTranslation(fresh.i18n.getLocale())).toMatchObject({
-      common: { health: fresh.t("common.health") },
+      common: { loading: fresh.t("common.loading") },
     });
   });
 

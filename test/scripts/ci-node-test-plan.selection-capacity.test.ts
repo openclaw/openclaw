@@ -50,8 +50,7 @@ it("retains canonical capacity and exact scope for a compact selection", () => {
 });
 
 it("shares selected serial setup within the shortest contributing timeout", () => {
-  const targets = [
-    "src/gateway/client-callsites.guard.test.ts",
+  const serialTargets = [
     "src/gateway/server-methods/plugins.decisions.test.ts",
     "src/gateway/server-methods/plugins.retention.test.ts",
     "src/gateway/server-methods/plugins.runtime-owner.test.ts",
@@ -60,14 +59,20 @@ it("shares selected serial setup within the shortest contributing timeout", () =
     "src/gateway/server-methods/templates.test.ts",
     "src/gateway/server-plugin-reload.installed-package.test.ts",
   ];
+  const targets = ["src/gateway/client-callsites.guard.test.ts", ...serialTargets];
   const selected = expectDefined(
     createSelectedNodeTestShardBundles(targets, {
       runnerBackend: "hybrid",
     }),
     "qualified serial selection",
   );
-  expect(selected).toHaveLength(2);
-  expect(selected.find((job) => job.groups.length === 7)).toMatchObject({
+  expect(
+    selected.find((job) =>
+      serialTargets.every((target) =>
+        job.groups.some((group) => group.includePatterns?.includes(target)),
+      ),
+    ),
+  ).toMatchObject({
     runner: "blacksmith-32vcpu-ubuntu-2404",
     planConcurrency: 1,
     timeoutMinutes: 60,

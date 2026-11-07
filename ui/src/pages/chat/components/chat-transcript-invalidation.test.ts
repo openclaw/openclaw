@@ -31,6 +31,7 @@ import {
 } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
+import { settleChatMount } from "../test-helpers/chat-mount-frames.ts";
 import {
   render,
   renderChatThread,
@@ -796,25 +797,27 @@ describe("chat transcript invalidation", () => {
     applyToken("test-auth-token");
     const messages = [msg("assistant", [{ type: "image", url: source }])];
     const mediaOwner = {};
-    const view = mountSolid(
-      () => {
-        const gateway = projectOwner(
-          pane.context.gateway,
-          (owner) => owner.snapshot.hello,
-          Object.is,
-        );
-        return createComponent(ChatThread, {
-          get props() {
-            return {
-              ...threadProps("pane-gateway-media-auth", state.sessionKey, messages),
-              assistantAttachmentAuthToken: resolveControlUiAuthToken({ hello: gateway.read() }),
-              mediaOwner,
-            };
-          },
-          transcript,
-        });
-      },
-      { container },
+    const view = settleChatMount(() =>
+      mountSolid(
+        () => {
+          const gateway = projectOwner(
+            pane.context.gateway,
+            (owner) => owner.snapshot.hello,
+            Object.is,
+          );
+          return createComponent(ChatThread, {
+            get props() {
+              return {
+                ...threadProps("pane-gateway-media-auth", state.sessionKey, messages),
+                assistantAttachmentAuthToken: resolveControlUiAuthToken({ hello: gateway.read() }),
+                mediaOwner,
+              };
+            },
+            transcript,
+          });
+        },
+        { container },
+      ),
     );
     onTestFinished(view.unmount);
     transcript.start();

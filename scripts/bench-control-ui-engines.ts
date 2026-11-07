@@ -23,9 +23,9 @@ import { waitForControlUiInitialRoster } from "../ui/src/test-helpers/control-ui
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
-  installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import {
   mapControlUiAllocationProfile,
@@ -103,6 +103,7 @@ import {
   type ControlUiMutationAudit,
 } from "./lib/control-ui-mutation-audit.ts";
 import { summarizeControlUiNativeTrace } from "./lib/control-ui-native-trace.ts";
+import { createControlUiObservationWriter } from "./lib/control-ui-observation-output.ts";
 import {
   finishControlUiPageObserver,
   installControlUiPageObserver,
@@ -144,6 +145,7 @@ const { values } = parseArgs({
     "mutation-audit": { type: "boolean", default: false },
     "cpu-throttle": { type: "string", default: "1" },
     "idle-warmup-ms": { type: "string" },
+    "idle-duration-ms": { type: "string", default: "30000" },
     "memory-soak-rounds": { type: "string", default: "10" },
   },
 });
@@ -169,6 +171,10 @@ const engines: ControlUiEngine[] = values.engines.split(",").map((name) => {
   return name;
 });
 const cpuThrottle = Number(values["cpu-throttle"]);
+const idleDurationMs = Number(values["idle-duration-ms"]);
+if (!Number.isInteger(idleDurationMs) || idleDurationMs <= 0) {
+  throw new Error("idle-duration-ms must be a positive integer");
+}
 const idleWarmupOverrideMs =
   values["idle-warmup-ms"] === undefined ? undefined : Number(values["idle-warmup-ms"]);
 if (
@@ -400,6 +406,7 @@ type Observation = {
   artifactPrefix: string;
 };
 const observations: Observation[] = [];
+const observationWriter = createControlUiObservationWriter(artifactDir);
 const cpuCensus = createControlUiCpuCensus();
 const writeJson = (name: string, value: unknown) =>
   writeFile(path.join(artifactDir, name), JSON.stringify(value, null, 2));
@@ -436,8 +443,8 @@ try {
     ...createEngineBootScenarios(servers[0]!.server.baseUrl),
     ...createEngineActionScenarios(),
     ...createEngineCompletedRunScenarios(servers[0]!.server.baseUrl),
-    ...createEngineIdleScenarios(),
-    ...createEngineIdleControls(),
+    ...createEngineIdleScenarios(idleDurationMs),
+    ...createEngineIdleControls(idleDurationMs),
     ...createChatComposerScenarios(),
     ...createChatMessageScenarios(),
     ...createChatPanelScenarios().map((scenario) =>
@@ -447,7 +454,7 @@ try {
     ...createEngineMemoryScenarios(memorySoakRounds),
     ...createEnginePluginMemoryScenarios(),
     ...createEngineStreamingScenarios(),
-    ...createEnginePageScenarios(0, pageOrigin),
+    ...createEnginePageScenarios(0, pageOrigin, servers[0]!.server.baseUrl),
     ...interactionScenarios.filter(
       (scenario) =>
         requestedIds?.includes(scenario.id) ||
@@ -586,6 +593,7 @@ try {
     cpuProfile: values["cpu-profile"],
     nativeAudit: values["native-audit"],
     idleWarmupOverrideMs: idleWarmupOverrideMs ?? null,
+    idleDurationMs,
     allocations: values.allocations,
     mutationAudit: values["mutation-audit"],
     cpuThrottle,
@@ -613,8 +621,7 @@ try {
       "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request and every incoming mock Gateway frame (including the connect challenge); RPC replies thus include a simulated round trip, with no added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
     memoryContract:
       "Opt-in memory-* scenes retain one document, drain 4.1 s retirement timers, clear synthetic request history, then force two collections at each named checkpoint. Compare warm and late checkpoints; heap/native categories/RSS and DOM wrapper/native counts have different engine-specific meanings. Memory-scene elapsed times include forced GC and snapshots and are not latency evidence.",
-    idleContract:
-      "Idle CPU spans a Node-side 30-second wait. Hidden idle defaults to 60000 ms of warmup after native visibility settles; visible idle defaults to 0 ms. An explicit idle-warmup-ms overrides either default; 0 measures the initial transition, which can include background memory reclamation. Each idle scenario records its resolved warmup. Counter/request endpoints also include measurement instrumentation setup/draining; reveal and clock recovery occur afterward. Blank/static controls retain shared observation instrumentation without loading the app or Gateway.",
+    idleContract: `Idle CPU spans a Node-side ${idleDurationMs} ms wait. Hidden idle defaults to 60000 ms of warmup after native visibility settles; visible idle defaults to 0 ms. An explicit idle-warmup-ms overrides either default; 0 measures the initial transition, which can include background memory reclamation. Each idle scenario records its resolved warmup. Counter/request endpoints also include measurement instrumentation setup/draining; reveal and clock recovery occur afterward. Blank/static controls retain shared observation instrumentation without loading the app or Gateway.`,
     scenarios: scenarios.map((scenario) => ({
       id: scenario.id,
       route: scenario.route,
@@ -657,9 +664,11 @@ try {
                 ({ id }) => id === item.id,
               ) ??
               (item.id.startsWith("page-")
-                ? createEnginePageScenarios(networkProfile.gatewayLatencyMs, pageOrigin).find(
-                    ({ id }) => id === item.id,
-                  )
+                ? createEnginePageScenarios(
+                    networkProfile.gatewayLatencyMs,
+                    pageOrigin,
+                    slot.server.baseUrl,
+                  ).find(({ id }) => id === item.id)
                 : undefined) ??
               item;
             const idleControl = isEngineIdleControl(scenario);
@@ -683,16 +692,14 @@ try {
               observation.status = "skipped";
               observation.skipReason = "This control is unavailable at this viewport.";
               observations.push(observation);
-              await writeJson(`${artifactPrefix}.json`, observation);
-              await writeJson("observations.json", observations);
+              await observationWriter.record(observation);
               continue;
             }
             if (scenario.visibility === "hidden" && engine !== "chromium") {
               observation.status = "skipped";
               observation.skipReason = `${engine} has no supported native headless hiding API; no simulated visibility proof.`;
               observations.push(observation);
-              await writeJson(`${artifactPrefix}.json`, observation);
-              await writeJson("observations.json", observations);
+              await observationWriter.record(observation);
               continue;
             }
             if (scenario.memory || !browsers.get(engine)!.isConnected()) {
@@ -755,6 +762,9 @@ try {
                   deviceScaleFactor: configuration.deviceScaleFactor,
                   mobile: viewport.name === "mobile",
                 });
+                if (viewport.name === "mobile") {
+                  await throttle.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+                }
                 await throttle.send("Emulation.setLocaleOverride", {
                   locale: configuration.locale,
                 });
@@ -883,10 +893,11 @@ try {
               };
               const gateway = idleControl
                 ? undefined
-                : await installMockGateway(
+                : await installNativePluginMockGateway(
                     page,
                     { ...fixture, awaitInitialRoster: false },
                     {
+                      nativeAssetLatencyMs: networkProfile.httpLatencyMs,
                       requestHandlers: {
                         ...defaults,
                         ...scenario.createRequestHandlers?.(defaults),
@@ -944,7 +955,8 @@ try {
                 await installChatActionObservation(
                   page,
                   values.trace,
-                  scenario.id === "chat-actions-fork",
+                  scenario.id === "chat-actions-fork" ||
+                    scenario.id.startsWith("chat-actions-split-"),
                 );
               }
               const actionTiming =
@@ -1346,8 +1358,7 @@ try {
                 await writeJson("cpu-census.json", cpuCensus.report());
               }
               observations.push(observation);
-              await writeJson(`${artifactPrefix}.json`, observation);
-              await writeJson("observations.json", observations);
+              await observationWriter.record(observation);
               console.log(
                 JSON.stringify(
                   observation.memory
@@ -1362,11 +1373,15 @@ try {
     }
   }
 } finally {
-  for (const browser of browsers.values()) {
-    await browser.close();
-  }
-  for (const { server } of servers) {
-    await server.close();
+  try {
+    for (const browser of browsers.values()) {
+      await browser.close();
+    }
+    for (const { server } of servers) {
+      await server.close();
+    }
+  } finally {
+    await observationWriter.finish(observations);
   }
 }
 function distribution(samples: number[]) {

@@ -312,6 +312,7 @@ export function createModelProviders(
       ensureInitialData();
     }
     if (loaderChanged && !pending) {
+      ensureInitialData();
       supplemental.resume();
     }
     notify();

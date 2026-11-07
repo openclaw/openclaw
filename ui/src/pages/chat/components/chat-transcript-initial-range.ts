@@ -63,6 +63,7 @@ export class TranscriptInitialRange {
     ) => number,
     private readonly afterCommit: (effect: () => void) => void,
     private readonly measureRows: () => boolean,
+    private readonly rowsMeasured: (indexes: readonly number[]) => boolean,
     private readonly prewarmRow?: (index: number, mode: MarkdownPrewarmMode) => boolean | undefined,
     private readonly invalidatePreparation: () => void = invalidate,
   ) {
@@ -210,18 +211,31 @@ export class TranscriptInitialRange {
     }
     const virtualizer = this.virtualizer();
     const height = virtualizer.scrollRect?.height ?? 0;
-    const indexes: number[] = [];
-    let covered = 0;
-    for (let index = this.rows.length - 1; index >= 0 && covered < height; index--) {
-      indexes.push(index);
-      covered +=
-        (virtualizer.itemSizeCache.get(this.rows[index]!.key) ??
-          virtualizer.options.estimateSize(index)) + virtualizer.options.gap;
+    if (height <= 0 || !this.rows.length) {
+      return [];
     }
-    return indexes;
+    const end =
+      virtualizer.getTotalSize() +
+      virtualizer.options.scrollMargin -
+      virtualizer.options.paddingEnd;
+    const first = virtualizer.getVirtualItemForOffset(end - height);
+    if (!first) {
+      return [];
+    }
+    return this.normalIndexes({
+      startIndex: first.index,
+      endIndex: this.rows.length - 1,
+      count: this.rows.length,
+      overscan: virtualizer.options.overscan,
+      lanes: virtualizer.options.lanes,
+    });
   }
 
-  readonly prepareEnd = (ready: () => void, isCurrent: () => boolean): void => {
+  readonly prepareEnd = (ready: () => void, isCurrent: () => boolean, native: boolean): void => {
+    if (native && this.pending) {
+      ready();
+      return;
+    }
     cancelLayout(this);
     this.preparingEnd = true;
     this.refresh();
@@ -230,7 +244,11 @@ export class TranscriptInitialRange {
       if (!this.preparingEnd || !this.canPrepare() || !isCurrent()) {
         return;
       }
-      if (this.measureRows()) {
+      // Native sizes can expand the destination window without moving the current range.
+      if (native) {
+        this.refresh();
+      }
+      if (native ? !this.rowsMeasured(this.endIndexes()) : this.measureRows()) {
         this.invalidate();
         // A measurement can mount another row. Let the browser present before
         // its next pass instead of draining every correction in one task.
