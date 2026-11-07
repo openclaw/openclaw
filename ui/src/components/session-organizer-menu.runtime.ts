@@ -169,20 +169,11 @@ async function runDialog(
   }
 }
 
-export async function createSessionGroup(
+export function createSessionGroup(
   organizer: SessionOrganizer,
   sessions: readonly SidebarRecentSession[] = [],
 ): Promise<void> {
-  const scope = organizer.deps.sessionData.beginSessionMutation();
-  if (!scope) {
-    return;
-  }
-  const signal = organizer.deps.sessionData.sessionDraftSignal;
-  await runDialog(organizer, scope, async () => {
-    const { createSessionGroupDialog } =
-      await import("./session-organizer-group-dialogs.runtime.ts");
-    await createSessionGroupDialog(organizer.deps, scope, signal, sessions, organizer.notify);
-  });
+  return organizer.createSessionGroup(sessions);
 }
 
 export async function renameSessionGroupFromMenu(

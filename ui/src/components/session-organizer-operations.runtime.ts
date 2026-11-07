@@ -13,10 +13,11 @@ import {
   formatPreservedWorktreesNotice,
 } from "../lib/sessions/worktree-preservation.ts";
 import { showToast } from "../lib/toast.ts";
-import type {
-  SidebarRecentSession,
-  SidebarSessionMutationResult,
-  SidebarSessionMutationScope,
+import {
+  storeSidebarSessionsGrouping,
+  type SidebarRecentSession,
+  type SidebarSessionMutationResult,
+  type SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
 import { requestCloudWorkerStop } from "./cloud-worker-stop.runtime.ts";
 import { showConfirmDialog, type ConfirmDialogSkipPreference } from "./confirm-dialog.ts";
@@ -427,6 +428,11 @@ export async function createSessionGroup(
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
+  // An explicitly created folder must be visible even in a flat or filtered list.
+  deps.releaseSidebarSnapshot();
+  deps.sessionsGrouping = "category";
+  storeSidebarSessionsGrouping("category");
+  deps.setSessionsEmptyGroupsMode("never");
   return "completed";
 }
 

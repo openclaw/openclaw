@@ -82,6 +82,21 @@ export class SessionOrganizer {
     }
   }
 
+  async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
+    const scope = this.deps.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const signal = this.deps.sessionData.sessionDraftSignal;
+    try {
+      const { createSessionGroupDialog } =
+        await import("./session-organizer-group-dialogs.runtime.ts");
+      await createSessionGroupDialog(this.deps, scope, signal, sessions, this.notify);
+    } catch (error) {
+      this.deps.sessionData.publishSessionMutationError(scope, error);
+    }
+  }
+
   readonly patchSession = async (
     session: SidebarRecentSession,
     patch: SidebarSessionPatch,

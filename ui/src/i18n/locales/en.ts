@@ -258,6 +258,7 @@ type EnglishCatalog = TranslationMap & {
   };
   sessionsView: TranslationMap &
     Record<
+      | "newGroupTitle"
       | "pullRequestCount"
       | "subagentPrefix"
       | "automationPrefix"
@@ -689,6 +690,7 @@ const startupEnglish = {
       "Could not load this dashboard: {error}. Check the Gateway connection and try again.",
   },
   sessionsView: {
+    newGroupTitle: "New group",
     pullRequestCount: "{count} pull requests",
     subagentPrefix: "Subagent:",
     automationPrefix: "Automation:",
