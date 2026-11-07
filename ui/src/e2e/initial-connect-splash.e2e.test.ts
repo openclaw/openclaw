@@ -220,9 +220,9 @@ suite.define(() => {
     const artifactDir = createControlUiE2eArtifactDir("boot-placeholder-parity");
     const placeholderFrame = async (root: Locator, phase: string) => {
       const skeleton = root.locator(".loading-skeleton");
-      const label = root.locator(".connect-splash__status");
-      expect(await label.textContent()).toBe("Loading…");
-      const png = await takeControlUiElementScreenshot(page, skeleton, [skeleton, label]);
+      // The skeleton alone signals loading; no generic label sits above the composer.
+      expect(await root.locator(".connect-splash__status").count()).toBe(0);
+      const png = await takeControlUiElementScreenshot(page, skeleton, [skeleton]);
       await writeFile(path.join(artifactDir, `${phase}.png`), png);
       // The live composer remains part of the frame without placeholder decoration.
       const geometry = await skeleton.evaluate((element) =>
@@ -233,7 +233,7 @@ suite.define(() => {
           },
         ),
       );
-      return { png: decodeProofPng(png), geometry, label: await label.boundingBox() };
+      return { png: decodeProofPng(png), geometry };
     };
 
     try {
@@ -255,7 +255,7 @@ suite.define(() => {
       await loadingState.waitFor();
       expect(await loadingState.getAttribute("role")).toBe("status");
       expect(await loadingState.getAttribute("aria-label")).toBe("Loading…");
-      expect((await loadingState.textContent())?.trim()).toBe("Loading…");
+      expect((await loadingState.textContent())?.trim()).toBe("");
       expect(await page.getByText("Loading panel", { exact: true }).count()).toBe(0);
 
       const skeleton = loadingState.locator(".loading-skeleton");
@@ -265,7 +265,6 @@ suite.define(() => {
       const routeLoading = await placeholderFrame(loadingState, "route");
       expect(await shell!.evaluate((element) => element.isConnected)).toBe(true);
       expect(routeLoading.geometry).toEqual(initial.geometry);
-      expect(routeLoading.label).toEqual(initial.label);
       expect(
         Buffer.from(routeLoading.png.data).equals(Buffer.from(initial.png.data)),
         "route loading preserves the document placeholder pixels",
