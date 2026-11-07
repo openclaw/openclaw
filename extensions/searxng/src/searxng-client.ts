@@ -23,7 +23,10 @@ import {
   isPrivateIpAddress,
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asOptionalObjectRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const SEARXNG_BASE_URL_ENV_VAR = "SEARXNG_BASE_URL";
 const SEARXNG_BASE_URL_PATH = "plugins.entries.searxng.config.webSearch.baseUrl";
@@ -38,7 +41,9 @@ function readUnresponsiveEngines(parsed: unknown): string[] {
     if (typeof engine !== "string" || engine.length === 0) {
       continue;
     }
-    engines.push(typeof reason === "string" && reason.length > 0 ? `${engine} (${reason})` : engine);
+    engines.push(
+      typeof reason === "string" && reason.length > 0 ? `${engine} (${reason})` : engine,
+    );
   }
   return engines;
 }

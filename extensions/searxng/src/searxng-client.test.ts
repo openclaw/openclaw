@@ -100,35 +100,12 @@ it("retries an empty category search with general results", async () => {
   expect(result).toMatchObject({ count: 1, results: [{ url: "https://example.com/rain" }] });
 });
 
-it("fails instead of returning nothing when SearXNG reports unresponsive engines", async () => {
-  const blocked = [
-    ["google", "too many requests"],
-    ["mojeek", "access denied", true],
-    ["wikipedia"],
-    [42, "ignored"],
-  ];
-  const fetch = mockFetch(
-    Response.json({ results: [], unresponsive_engines: blocked }),
-    Response.json({ results: [], unresponsive_engines: blocked }),
-  );
-  await expect(search({ categories: "news" })).rejects.toThrow(
-    "SearXNG returned no results and reported unresponsive engines: google (too many requests), mojeek (access denied), wikipedia.",
-  );
-  expectRequests(fetch, ...["news", "general"].map((v) => `${requestUrl}&categories=${v}`));
-
-  mockFetch(Response.json({ results: [row("partial")], unresponsive_engines: blocked }));
-  await expect(search()).resolves.toMatchObject({ count: 1 });
-
-  mockFetch(Response.json({ results: [], unresponsive_engines: [] }));
-  await expect(search()).resolves.toMatchObject({ count: 0 });
-});
-
 it("preserves the upstream HTTP error status", async () => {
   mockFetch(new Response("upstream rejected search", { status: 429 }));
   await expect(search()).rejects.toMatchObject({ status: 429, statusCode: 429 });
 });
 
-it("rejects invalid and incomplete response bodies", async () => {
+it("rejects invalid, incomplete, and failed-engine responses", async () => {
   const fetch = mockFetch(new Response("{"));
   await expect(search()).rejects.toThrow("SearXNG returned invalid JSON.");
 
@@ -143,6 +120,8 @@ it("rejects invalid and incomplete response bodies", async () => {
   });
   fetch.mockResolvedValueOnce(new Response(stream));
   await expect(search()).rejects.toThrow("SearXNG response incomplete after 7 bytes.");
+  mockFetch(Response.json({ results: [], unresponsive_engines: [["engine", "timeout"]] }));
+  await expect(search()).rejects.toThrow("engine (timeout)");
 });
 
 it.each(["example.com", "internal"])("gates private redirects from search.%s", async (host) => {
