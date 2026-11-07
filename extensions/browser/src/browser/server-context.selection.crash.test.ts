@@ -12,11 +12,11 @@ const tab = (targetId: string): BrowserTab => ({
   type: "page",
 });
 
-function selection(cdpUrl: string, tabs: BrowserTab[]) {
+function selection(cdpUrl: string, tabs: BrowserTab[], lastTargetId: string | null = null) {
   const profile = makeBrowserProfile({ cdpUrl });
   return createProfileSelectionOps({
     profile,
-    runtime: { profile, running: null, lastTargetId: null },
+    runtime: { profile, running: null, lastTargetId },
     getCdpControlPolicy: () => undefined,
     listTabs: async () => tabs,
     openTab: async () => tabs[0] ?? tab("OPENED"),
@@ -38,5 +38,14 @@ it("still resolves an explicit crash-observed target to its own error path", asy
 
   await expect(ops.ensureTabAvailable("CRASHED")).resolves.toMatchObject({
     targetId: "CRASHED",
+  });
+});
+
+it("falls back to a healthy tab when the sticky target was observed crashed", async () => {
+  const ops = selection("http://127.0.0.1:19106", [tab("CRASHED"), tab("HEALTHY")], "CRASHED");
+  markBrowserTargetCrashed("http://127.0.0.1:19106", "CRASHED");
+
+  await expect(ops.ensureTabAvailable(undefined)).resolves.toMatchObject({
+    targetId: "HEALTHY",
   });
 });

@@ -74,7 +74,7 @@ export async function assertCdpTargetResponsive(opts: {
     if (err instanceof CdpSocketError && err.kind === "timeout") {
       throw new BrowserTargetCrashedError();
     }
-    throw err;
+    // A failed handshake is not crash evidence; let the action report its own error.
   }
 }
 

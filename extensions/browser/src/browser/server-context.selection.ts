@@ -180,11 +180,15 @@ export function createProfileSelectionOps({
 
     const stickyTargetId = runtime.lastTargetId ?? undefined;
     // Sticky selection is an identity promise: a missing target requires a fresh
-    // explicit choice. Without one, prefer page tabs over background targets.
+    // explicit choice. A crash-observed sticky target instead falls back to a
+    // healthy page so the dead tab cannot wedge implicit selection.
     const chosen = targetId
       ? resolveBrowserTabOrThrow(targetId, candidates)
       : stickyTargetId
-        ? candidates.find((tab) => tab.targetId === stickyTargetId)
+        ? (candidates.find((tab) => tab.targetId === stickyTargetId) ??
+          (isBrowserTargetCrashed(profile.cdpUrl, stickyTargetId)
+            ? (candidates.find((tab) => (tab.type ?? "page") === "page") ?? candidates.at(0))
+            : undefined))
         : (candidates.find((tab) => (tab.type ?? "page") === "page") ?? candidates.at(0));
 
     if (!chosen) {

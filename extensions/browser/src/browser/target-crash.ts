@@ -3,7 +3,9 @@
 // probe. Keep the observed crash evidence here; target ids are per-page and not
 // reused by a running browser.
 const MAX_TRACKED_CRASHED_TARGETS = 64;
-const crashedTargets = new Set<string>();
+// Expire observations so a transiently blocked page is not permanently demoted.
+const CRASHED_TARGET_TTL_MS = 5 * 60_000;
+const crashedTargets = new Map<string, number>();
 
 function targetKey(cdpUrl: string | undefined, targetId: string): string | null {
   const base = cdpUrl?.replace(/\/+$/, "");
@@ -44,9 +46,9 @@ export function markBrowserTargetCrashed(cdpUrl: string, targetId: string): void
     return;
   }
   crashedTargets.delete(key);
-  crashedTargets.add(key);
+  crashedTargets.set(key, Date.now());
   while (crashedTargets.size > MAX_TRACKED_CRASHED_TARGETS) {
-    const oldest = crashedTargets.values().next().value;
+    const oldest = crashedTargets.keys().next().value;
     if (oldest === undefined) {
       break;
     }
@@ -54,7 +56,25 @@ export function markBrowserTargetCrashed(cdpUrl: string, targetId: string): void
   }
 }
 
+export function clearBrowserTargetCrashed(cdpUrl: string, targetId: string): void {
+  const key = targetKey(cdpUrl, targetId);
+  if (key) {
+    crashedTargets.delete(key);
+  }
+}
+
 export function isBrowserTargetCrashed(cdpUrl: string, targetId: string): boolean {
   const key = targetKey(cdpUrl, targetId);
-  return key ? crashedTargets.has(key) : false;
+  if (!key) {
+    return false;
+  }
+  const markedAt = crashedTargets.get(key);
+  if (markedAt === undefined) {
+    return false;
+  }
+  if (Date.now() - markedAt > CRASHED_TARGET_TTL_MS) {
+    crashedTargets.delete(key);
+    return false;
+  }
+  return true;
 }

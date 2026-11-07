@@ -23,6 +23,18 @@ describe("browser target crash state", () => {
     expect(isBrowserTargetCrashed("http://127.0.0.1:19101", "T2")).toBe(false);
   });
 
+  it("expires crash observations", () => {
+    vi.useFakeTimers();
+    try {
+      markBrowserTargetCrashed("http://127.0.0.1:19107", "T1");
+      expect(isBrowserTargetCrashed("http://127.0.0.1:19107", "T1")).toBe(true);
+      vi.advanceTimersByTime(5 * 60_000 + 1);
+      expect(isBrowserTargetCrashed("http://127.0.0.1:19107", "T1")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("maps Playwright crash wording onto the tab-scoped error", () => {
     expect(toBrowserTargetCrashedError(new Error("page.screenshot: Target crashed"))).toMatchObject(
       {

@@ -1,5 +1,9 @@
 import { assertCdpTargetResponsive } from "../cdp.js";
-import { BrowserTargetCrashedError, markBrowserTargetCrashed } from "../target-crash.js";
+import {
+  BrowserTargetCrashedError,
+  clearBrowserTargetCrashed,
+  markBrowserTargetCrashed,
+} from "../target-crash.js";
 
 type SnapshotTab = {
   targetId: string;
@@ -22,6 +26,7 @@ export async function assertSnapshotTabResponsive(opts: {
       ...(opts.tab.wsLookup ? { lookup: opts.tab.wsLookup } : {}),
       signal: opts.signal,
     });
+    clearBrowserTargetCrashed(opts.profileCtx.profile.cdpUrl, opts.tab.targetId);
   } catch (err) {
     if (err instanceof BrowserTargetCrashedError) {
       markBrowserTargetCrashed(opts.profileCtx.profile.cdpUrl, opts.tab.targetId);

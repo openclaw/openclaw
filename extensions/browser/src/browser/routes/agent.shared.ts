@@ -39,6 +39,8 @@ export function handleRouteError(
   if (isProfileRestartRequiredError(err)) {
     throw err;
   }
+  // Snapshot probes record the crash on the tab; action routes only carry the
+  // tab-scoped guidance because no target id reaches this boundary.
   const crashed = toBrowserTargetCrashedError(err);
   if (crashed) {
     return jsonError(res, 409, crashed.message);

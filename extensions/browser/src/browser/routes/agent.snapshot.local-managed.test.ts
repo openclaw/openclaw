@@ -1,7 +1,11 @@
 import "./agent.snapshot-mocks.test-support.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserRouteContext } from "../server-context.js";
-import { BrowserTargetCrashedError, isBrowserTargetCrashed } from "../target-crash.js";
+import {
+  BrowserTargetCrashedError,
+  isBrowserTargetCrashed,
+  markBrowserTargetCrashed,
+} from "../target-crash.js";
 import { expectResponse, expectResponseContaining, runRoute } from "./agent-route.test-support.js";
 import {
   captureBrowserOperationTarget,
@@ -205,6 +209,16 @@ describe("local-managed browser snapshot routes", () => {
     expect(isBrowserTargetCrashed("http://127.0.0.1:18800", "7")).toBe(true);
     expect(cdp.getDocumentIdentitiesViaCdp).not.toHaveBeenCalled();
     expect(cdp.snapshotRoleViaCdp).not.toHaveBeenCalled();
+  });
+
+  it("clears an earlier crash observation when the target answers again", async () => {
+    markBrowserTargetCrashed("http://127.0.0.1:18800", "7");
+
+    const response = await snapshot(roleQuery);
+
+    expect(response.statusCode).toBe(200);
+    expect(cdp.assertCdpTargetResponsive).toHaveBeenCalled();
+    expect(isBrowserTargetCrashed("http://127.0.0.1:18800", "7")).toBe(false);
   });
 
   it("uses CDP first for unscoped managed role snapshots and publishes its refs", async () => {

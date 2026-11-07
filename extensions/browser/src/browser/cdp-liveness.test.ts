@@ -27,6 +27,15 @@ describe("assertCdpTargetResponsive", () => {
     await expect(assertCdpTargetResponsive({ wsUrl, timeoutMs: 1_000 })).resolves.toBeUndefined();
   });
 
+  it("leaves a non-timeout connection failure to the action itself", async () => {
+    await expect(
+      assertCdpTargetResponsive({
+        wsUrl: "ws://127.0.0.1:1/devtools/page/missing",
+        timeoutMs: 250,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("reports a crashed target without waiting for the action budget", async () => {
     // A crashed renderer keeps the target listed but never answers page commands.
     const { wsUrl } = await startCdp(() => undefined);
