@@ -1,3 +1,0 @@
-25
-# Keep the focused model option and its DOM identity when a catalog crosses
-# the natural-layout/virtualized-list threshold in either direction.

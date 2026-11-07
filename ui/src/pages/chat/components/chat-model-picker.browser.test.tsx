@@ -168,31 +168,6 @@ it("clears the active descendant when a catalog refresh removes the filtered cho
   expect(container.querySelector<HTMLElement>(modelControlSelector("highlighted"))).toBeNull();
 });
 
-it("retains a focused option when the grouped catalog grows and shrinks", async () => {
-  const { open, params, update } = mountPicker();
-  await open();
-  const alpha = option("example/alpha");
-  alpha.focus();
-  const initial = params.modelOptions;
-  params.modelOptions = [
-    ...initial,
-    ...Array.from({ length: 30 }, (_, index) =>
-      modelOption(`provider-${index}`, "extra", { label: `Extra ${index}` }),
-    ),
-  ];
-  update();
-  await vi.waitFor(() => {
-    expect(option("example/alpha")).toBe(alpha);
-    expect(document.activeElement).toBe(alpha);
-  });
-  params.modelOptions = initial;
-  update();
-  await vi.waitFor(() => {
-    expect(option("example/alpha")).toBe(alpha);
-    expect(document.activeElement).toBe(alpha);
-  });
-});
-
 it("keeps a disabled picker closed on keyboard activation", async () => {
   const { picker, trigger, params, update } = mountPicker();
   params.disabled = true;

@@ -290,8 +290,6 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
         ?.selectable()
         .slice(0, 9)
         .map(({ row }) => row.key) ?? [],
-    // Search ranks can cross provider groups; positioned rows retain that order.
-    () => !searchView?.filtering(),
   );
   const renderRow = window.renderRow;
   const mounted = (entries: readonly ModelPickerOption[]) => {
@@ -636,7 +634,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
               <div ref={window.bind} class="chat-controls__model-options" data-chat-model-window>
                 <div
                   class="chat-controls__model-virtual-content"
-                  style={{ height: window.height() }}
+                  style={{ height: `${window.height()}px` }}
                 >
                   <For each={state().orderedProviderGroups} keyed={(group) => group[0]}>
                     {(group) => (
