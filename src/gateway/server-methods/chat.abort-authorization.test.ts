@@ -231,8 +231,14 @@ describe("chat.abort authorization", () => {
     expect(reserved.input.abortSignal.aborted).toBe(false);
     expect(runStopped).not.toHaveBeenCalled();
 
+    // The notice precedes the commit: the source's own abort listeners already see it.
+    const noticesAtAbort: number[] = [];
+    reserved.input.abortSignal.addEventListener("abort", () =>
+      noticesAtAbort.push(runStopped.mock.calls.length),
+    );
     expectResult(await abortAsOwner({ context, runId: request.runId }), [request.runId]);
     expect(reserved.input.abortSignal.aborted).toBe(true);
+    expect(noticesAtAbort).toEqual([1]);
     expect(runStopped.mock.calls).toEqual([stoppedEvent("main", "main", [request.runId])]);
   });
 
