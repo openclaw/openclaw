@@ -200,7 +200,7 @@ suite.define(() => {
           await (failAssets && (asset || retry) ? route.abort("failed") : route.continue());
         });
         await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-        const title = page.getByRole("heading", { name: "Control UI did not start", exact: true });
+        const title = page.getByRole("heading", { name: "Control UI didn’t start", exact: true });
         await expect.poll(() => title.isVisible(), { timeout: 15_000 }).toBe(true);
         if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
           const frame = await takeControlUiScreenshotFrame(
@@ -217,8 +217,7 @@ suite.define(() => {
         expect(await page.locator("#openclaw-mount-fallback-summary").textContent()).not.toMatch(
           /restart|updat/i,
         );
-        expect(await page.locator("#openclaw-mount-retry").isVisible()).toBe(false);
-        expect(await page.locator("#openclaw-mount-wait").isVisible()).toBe(false);
+        expect(await page.getByRole("button").count()).toBe(0);
         failAssets = false;
         await expect
           .poll(() => page.locator("#openclaw-mount-fallback").isVisible(), { timeout: 30_000 })
