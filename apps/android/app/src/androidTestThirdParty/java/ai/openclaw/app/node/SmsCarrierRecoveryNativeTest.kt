@@ -52,8 +52,8 @@ class SmsCarrierRecoveryNativeTest {
 
   private suspend fun submitMessages() {
     val recipient = requireNotNull(args.getString("recipientPort")).toInt()
-    // Emulator 37's modem simulator routes only these modem endpoints, not console ports.
-    require(recipient in 6520..6527)
+    // The legacy backend uses even console ports; ModemSimulator uses its own endpoint range.
+    require((recipient in 5554..5682 && recipient % 2 == 0) || recipient in 6520..6527)
     val handler = SmsHandler(SmsManager(context))
     for (message in messages()) {
       val result =
