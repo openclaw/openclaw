@@ -1,4 +1,5 @@
 import type { ApplicationContext } from "../../app/context.ts";
+import { formatChatSelectionQuote } from "../../lib/chat/chat-selection-quote.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
@@ -6,7 +7,6 @@ import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import { attachmentBatchRejection } from "../chat/components/chat-attachment-admission.ts";
-import { formatChatSelectionQuote } from "../chat/components/chat-selection-attachment.ts";
 import { prepareBackgroundSessionCompletion } from "./background-session-notice.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";

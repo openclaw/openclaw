@@ -136,7 +136,7 @@ describe("chat selection popup", () => {
       "Ask in side chat",
       "New session",
     ]);
-    buttons[1].click();
+    buttons[1]!.click();
     expect(onAskNewSessionSpy).toHaveBeenCalledWith({
       text: "route",
       start: 0,

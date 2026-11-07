@@ -623,6 +623,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("ui/src/i18n/locales/en-session-people.ts");
                 // Placement and delivery share retries without importing either route's bundle.
                 modules.add("ui/src/pages/chat/chat-outbox-retry.ts");
+                // Chat sends and New Session creation quote selections identically.
+                modules.add("ui/src/lib/chat/chat-selection-quote.ts");
                 // Creation still uses the catalog; Chat constructs its capability owner on demand.
                 modules.add("ui/src/pages/chat/composer-capability-catalog.ts");
                 modules.add("ui/src/lib/config/mcp-servers.ts");
