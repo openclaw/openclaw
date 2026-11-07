@@ -1,0 +1,2 @@
+# Extend Gateway-backed CLI coverage for unique equivalent names and existing ambiguity protection.
+10

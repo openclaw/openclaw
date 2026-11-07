@@ -386,9 +386,9 @@ it.each(["job-200", "JOB-200"])("prefers ID %s with raw JSON", async (id) => {
 it.each([true, false])("protects ambiguous choices in JSON=%s or legacy text", async (json) => {
   const legacy = !json;
   const control = "\u001B]0;name\u0007\r\njob";
-  const first = `backup${control}`;
-  const last = `BACKUP${control}`;
-  const query = `bAcKuP${control}`;
+  const first = `backupCafé${control}`;
+  const last = `BACKUPCAFE\u0301${control}`;
+  const query = `bAcKuPcAfÉ${control}`;
   const longId = `backup-${"0123456789".repeat(5)}`;
   const jobs = createJobs(202);
   jobs[0] = createJob(0, {
@@ -443,7 +443,7 @@ it.each([true, false])("protects ambiguous choices in JSON=%s or legacy text", a
     expectIncludes(
       text,
       "Matching automations:",
-      `${longId}  backup\\r\\njob`,
+      `${longId}  backupCafé\\r\\njob`,
       "job-200",
       "job-201",
       "every 1m; enabled: yes; status: idle",
@@ -454,6 +454,16 @@ it.each([true, false])("protects ambiguous choices in JSON=%s or legacy text", a
     expect(runtime.writeJson).not.toHaveBeenCalled();
   }
   expect(runtime.log).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["Café", "Cafe\u0301"],
+  ["Re\u0301sume\u0301", "Résumé"],
+])("shows automation %s by a canonically equivalent name", async (name, query) => {
+  const job = createJob(0, { name });
+  installGateway([job]);
+  await runCron(["show", query, "--json"]);
+  expect(readJson()).toMatchObject({ id: job.id, name });
 });
 
 it("does not scan after transport errors", async () => {

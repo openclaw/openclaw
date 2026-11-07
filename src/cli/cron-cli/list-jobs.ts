@@ -238,8 +238,9 @@ export async function findCronJobByIdOrName(
     (candidate) => normalizeLowercaseStringOrEmpty(candidate.id) === needle,
   );
   if (!job) {
+    const name = needle.normalize("NFC");
     const matches = inventory.jobs.filter(
-      (candidate) => normalizeLowercaseStringOrEmpty(candidate.name) === needle,
+      (candidate) => normalizeLowercaseStringOrEmpty(candidate.name).normalize("NFC") === name,
     );
     if (matches.length > 1) {
       throw createCronAmbiguousNameError(matches);
