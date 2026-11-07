@@ -2,9 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
-import { tryReadJsonSync } from "@openclaw/fs-safe/json";
+import { tryReadJsonSync, writeJsonSync } from "@openclaw/fs-safe/json";
 import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
-import { writeJsonSync } from "./json-files.js";
 
 function resolveJsonSaveTarget(pathname: string): string {
   if (!fs.lstatSync(pathname, { throwIfNoEntry: false })?.isSymbolicLink()) {
