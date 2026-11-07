@@ -380,8 +380,10 @@ export function projectionOperations(
         }
         if (
           checkpoint &&
-          (snapshot.baseManifestRef !== checkpoint.baseManifestRef ||
-            snapshot.currentManifestRef !== checkpoint.currentManifestRef)
+          ((checkpoint.baseManifestRef !== undefined &&
+            snapshot.baseManifestRef !== checkpoint.baseManifestRef) ||
+            (checkpoint.currentManifestRef !== undefined &&
+              snapshot.currentManifestRef !== checkpoint.currentManifestRef))
         ) {
           throw new Error("Local workspace checkpoint payload changed");
         }
@@ -397,6 +399,7 @@ export function projectionOperations(
           acknowledgedPaths: checkpoint?.acknowledgedPaths
             ? new Set(checkpoint.acknowledgedPaths)
             : undefined,
+          resolvedPaths: checkpoint?.resolvedPaths ? new Set(checkpoint.resolvedPaths) : undefined,
           journal: {
             load: async () => undefined,
             begin: async (journal) => {
@@ -424,6 +427,8 @@ export function projectionOperations(
                   target,
                   worktreePath: owner.worktree.path,
                   projectionPath: current().projection_path,
+                  baselineRef: selected.baseline_ref,
+                  assertCurrent,
                   update,
                   replaceBaseline,
                 });

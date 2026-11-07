@@ -18,7 +18,10 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
+import {
+  acknowledgeLocalWorkspaceConflict,
+  withLocalWorkspaceProjection,
+} from "./local-workspace-projection.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
@@ -41,6 +44,12 @@ const writeText = (directory: string, relative: string, data: string) =>
 async function expectText(directory: string, relative: string, expected: string) {
   expect(await readText(directory, relative)).toBe(expected);
 }
+const acknowledge = (filePath: string) =>
+  acknowledgeLocalWorkspaceConflict({
+    cwd: canonical,
+    worktreeId: owner.worktree.id,
+    path: filePath,
+  });
 
 const suiteDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -67,11 +76,12 @@ beforeEach(async () => {
   await git(repo, "config", "user.name", "Test");
   await git(repo, "config", "user.email", "test@example.invalid");
   await writeText(repo, "source.txt", "original\n");
+  await writeText(repo, "other.txt", "original other\n");
   await writeText(repo, ".gitignore", ".env.local\n");
   await git(repo, "add", ".");
   await git(repo, "commit", "--quiet", "-m", "base");
   await git(repo, "worktree", "add", "--quiet", "-b", "openclaw/guest", canonical);
-  await writeText(canonical, ".env.local", "host-only-secret");
+  await writeText(canonical, ".env.local", "host-only-secret\n");
   const sessionKey = `agent:main:dashboard:guest-${randomUUID()}`;
   owner = {
     agentId: "main",
@@ -122,8 +132,14 @@ it("admits a reconciled third version combining human and guest edits after a co
   await expectText(canonical, "source.txt", "human contribution\n");
   await expectText(projection, "source.txt", "guest contribution\n");
 
-  // Administrator writes a third merged version combining human and guest edits
+  // An unacknowledged ordinary disk change must not silently discard the guest contribution (Finding 3)
+  await writeText(canonical, "source.txt", "unacknowledged background edit\n");
+  await expect(settleProjection()).rejects.toThrow("conflict");
+  expect((await readProjection())?.pending_ref).toBeTruthy();
+
+  // Administrator writes a third merged version and explicitly acknowledges resolution
   await writeText(canonical, "source.txt", "merged human and guest contribution\n");
+  await acknowledge("source.txt");
   await settleProjection();
   expect((await readProjection())?.pending_ref).toBeNull();
   await prepare();
@@ -143,11 +159,117 @@ it("recovers a retained conflict across restart and admits a merged resolution",
   await expect(settleProjection()).rejects.toThrow("conflict");
   expect((await readProjection())?.pending_ref).toBeTruthy();
 
-  // Reconciled third version combining work
+  // Reconciled third version combining work with explicit acknowledgement
   await writeText(canonical, "source.txt", "coordinator instructions + guest task work\n");
+  await acknowledge("source.txt");
   await settleProjection();
   expect((await readProjection())?.pending_ref).toBeNull();
   await prepare();
   await expectText(canonical, "source.txt", "coordinator instructions + guest task work\n");
   await expectText(projection, "source.txt", "coordinator instructions + guest task work\n");
+});
+
+it("retains completed partial resolutions while other conflicts remain across retries (Finding 4)", async () => {
+  const projection = await prepare();
+  await writeText(projection, "source.txt", "guest source\n");
+  await writeText(canonical, "source.txt", "human source\n");
+  await writeText(projection, "other.txt", "guest other\n");
+  await writeText(canonical, "other.txt", "human other\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+  expect((await readProjection())?.pending_ref).toBeTruthy();
+
+  // Partially resolve only source.txt; other.txt remains conflicted
+  await writeText(canonical, "source.txt", "merged source\n");
+  await acknowledge("source.txt");
+
+  // Settle must synchronize source.txt but still reject because other.txt is conflicted
+  await expect(settleProjection()).rejects.toThrow("conflict");
+  await expectText(projection, "source.txt", "merged source\n");
+  await expectText(canonical, "source.txt", "merged source\n");
+
+  // On next retry, source.txt must NOT re-conflict (partial resolution preserved)
+  await expect(settleProjection()).rejects.toThrow("conflict");
+
+  // Now resolve other.txt
+  await writeText(canonical, "other.txt", "merged other\n");
+  await acknowledge("other.txt");
+  await settleProjection();
+  expect((await readProjection())?.pending_ref).toBeNull();
+  await prepare();
+  await expectText(canonical, "source.txt", "merged source\n");
+  await expectText(projection, "source.txt", "merged source\n");
+  await expectText(canonical, "other.txt", "merged other\n");
+  await expectText(projection, "other.txt", "merged other\n");
+});
+
+it("preserves checkpoint format for receipts without initial checkpoint_json (Finding 5)", async () => {
+  const projection = await prepare();
+  await writeText(projection, "source.txt", "guest work\n");
+  await writeText(canonical, "source.txt", "human work\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+
+  // Strip checkpoint_json to simulate legacy / base-refresh receipt
+  await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
+    const row = store.get();
+    if (row) {
+      await store.update(row, { checkpoint_json: null });
+    }
+  });
+
+  // Reconcile source.txt with acknowledgement
+  await writeText(canonical, "source.txt", "resolved work\n");
+  await acknowledge("source.txt");
+
+  // Settlement must not throw "Local workspace checkpoint no longer matches its baseline"
+  await settleProjection();
+  expect((await readProjection())?.pending_ref).toBeNull();
+  await prepare();
+  await expectText(canonical, "source.txt", "resolved work\n");
+  await expectText(projection, "source.txt", "resolved work\n");
+});
+
+it("excludes unadmitted host-only files (.env.local) from entering the projection (Finding 1)", async () => {
+  const projection = await prepare();
+  await writeText(projection, "source.txt", "guest edit\n");
+  await writeText(canonical, "source.txt", "human edit\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+
+  // Save changes to host-only ignored file .env.local during active conflict
+  await writeText(canonical, ".env.local", "MUTATED_SECRET=value\n");
+  await acknowledge(".env.local");
+
+  // Resolve the actual admitted conflict
+  await writeText(canonical, "source.txt", "resolved edit\n");
+  await acknowledge("source.txt");
+  await settleProjection();
+
+  // .env.local must NOT have been imported into the guest projection
+  const projectionEnvExists = await fs
+    .stat(path.join(projection, ".env.local"))
+    .then(() => true)
+    .catch(() => false);
+  expect(projectionEnvExists).toBe(false);
+  await expectText(canonical, ".env.local", "MUTATED_SECRET=value\n");
+});
+
+it("replaces projection symlinks safely without following destination links (Finding 2)", async () => {
+  const projection = await prepare();
+  await writeText(projection, "target.txt", "target content\n");
+  // Guest creates a symlink in projection
+  await fs.unlink(path.join(projection, "source.txt"));
+  await fs.symlink("target.txt", path.join(projection, "source.txt"));
+  await writeText(canonical, "source.txt", "human canonical content\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+
+  // Administrator resolves source.txt
+  await writeText(canonical, "source.txt", "resolved regular file\n");
+  await acknowledge("source.txt");
+  await settleProjection();
+
+  // Destination symlink in projection must be replaced by the regular file, not follow it
+  const projectionSourceStat = await fs.lstat(path.join(projection, "source.txt"));
+  expect(projectionSourceStat.isSymbolicLink()).toBe(false);
+  expect(projectionSourceStat.isFile()).toBe(true);
+  await expectText(projection, "source.txt", "resolved regular file\n");
+  await expectText(projection, "target.txt", "target content\n");
 });

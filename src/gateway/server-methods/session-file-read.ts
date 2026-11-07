@@ -1,5 +1,8 @@
 import path from "node:path";
-import { resolveSandboxPathMapping } from "../../agents/path-policy.js";
+import {
+  relativePathInsideSandboxRoot,
+  resolveSandboxPathMapping,
+} from "../../agents/path-policy.js";
 import { resolveToCwd } from "../../agents/sessions/tools/path-utils.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { resolveAbsolutePathForRead, root as fsSafeRoot } from "../../infra/fs-safe.js";
@@ -25,7 +28,7 @@ export async function prepareSessionFileReadPath(
     assertCurrent: () => void;
     assertReadCurrent: () => void;
   },
-): Promise<{ path: string | null | undefined; assertCurrent?: () => void }> {
+): Promise<{ path: string | null | undefined; root?: string; assertCurrent?: () => void }> {
   const sandbox = params.sandboxWorkspace;
   const absolute =
     params.filePath && params.root
@@ -46,6 +49,7 @@ export async function prepareSessionFileReadPath(
   }
   let runtimeWorkspaceDir: string | undefined = sandbox?.runtimeWorkspaceDir;
   let backingRoot = sandbox?.hostRoot;
+  let isWorktreeProjection = false;
   if (params.worktreeId && params.root && !params.historical) {
     const { checkpointLocalWorkspacePath, withSettledLocalWorkspacePath } =
       await import("../worker-environments/local-workspace-projection.js");
@@ -59,6 +63,7 @@ export async function prepareSessionFileReadPath(
           custody && custody.worktreeId === params.worktreeId ? custody.projectionPath : undefined,
       );
       backingRoot = runtimeWorkspaceDir;
+      isWorktreeProjection = Boolean(runtimeWorkspaceDir);
     } else {
       try {
         await checkpointLocalWorkspacePath(request);
@@ -73,12 +78,28 @@ export async function prepareSessionFileReadPath(
   if (!mapped || !sandbox || !absolute) {
     return { path: params.filePath };
   }
-  if (
+  let targetReadRoot: string | undefined;
+  let targetReadPath = mapped.hostPath;
+  if (isWorktreeProjection && runtimeWorkspaceDir) {
+    const relative = relativePathInsideSandboxRoot(sandbox.containerRoot, absolute);
+    if (!relative) {
+      return { path: null };
+    }
+    const separator = sandbox.containerRoot.startsWith("/") ? "/" : "\\";
+    targetReadRoot = runtimeWorkspaceDir;
+    targetReadPath = path.resolve(targetReadRoot, ...relative.split(separator));
+    if (!isPathInside(targetReadRoot, targetReadPath)) {
+      return { path: null };
+    }
+  } else if (
     !params.root ||
     !isPathInside(params.root, mapped.hostPath) ||
     !runtimeWorkspaceDir ||
     !backingRoot
   ) {
+    return { path: null };
+  }
+  if (!backingRoot) {
     return { path: null };
   }
   try {
@@ -93,7 +114,11 @@ export async function prepareSessionFileReadPath(
       assertCurrent,
     });
     assertBackingCurrent();
-    return { path: mapped.hostPath, assertCurrent: assertBackingCurrent };
+    return {
+      path: targetReadPath,
+      root: targetReadRoot,
+      assertCurrent: assertBackingCurrent,
+    };
   } catch {
     params.assertReadCurrent();
     // An unavailable or shadowed alias is never retried as a host filesystem grant.

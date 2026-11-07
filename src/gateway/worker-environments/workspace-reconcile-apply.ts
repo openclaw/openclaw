@@ -51,6 +51,7 @@ export async function applyStagedWorkerWorkspace(params: {
     { sha256?: string; size?: number; type?: string; target?: string }
   >;
   acknowledgedPaths?: ReadonlySet<string>;
+  resolvedPaths?: ReadonlySet<string>;
   acceptance:
     | {
         kind: "reconcile";
@@ -138,6 +139,7 @@ export async function applyStagedWorkerWorkspace(params: {
         ...preflightInput,
         priorConflicts: params.priorConflicts,
         acknowledgedPaths: params.acknowledgedPaths ? [...params.acknowledgedPaths] : undefined,
+        resolvedPaths: params.resolvedPaths ? [...params.resolvedPaths] : undefined,
       });
     const preflight = await inspectPaths();
     const acceptReconciled = async (
@@ -162,12 +164,19 @@ export async function applyStagedWorkerWorkspace(params: {
       });
       await verifyLocalStable();
       const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
+      const admittedPaths = new Set(actual.manifest.entries.map((entry) => entry.path));
       const candidatePaths = new Set<string>([
-        ...(params.priorConflicts ? Object.keys(params.priorConflicts) : []),
-        ...(params.acknowledgedPaths ? params.acknowledgedPaths : []),
+        ...(params.priorConflicts
+          ? Object.keys(params.priorConflicts)
+          : (params.acknowledgedPaths ?? [])),
+        ...(params.resolvedPaths ? params.resolvedPaths : []),
       ]);
       const resolvedCanonicalPaths = [...candidatePaths].filter(
-        (p) => !conflictPaths.includes(p) && !preflight.applyPaths.has(p),
+        (p) =>
+          admittedPaths.has(p) &&
+          (params.acknowledgedPaths?.has(p) || params.resolvedPaths?.has(p)) &&
+          !conflictPaths.includes(p) &&
+          !preflight.applyPaths.has(p),
       );
       params.assertCurrent?.();
       await reconcile.publish?.({ ...actual, conflictPaths, resolvedCanonicalPaths });

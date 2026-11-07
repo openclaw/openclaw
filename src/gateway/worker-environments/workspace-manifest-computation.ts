@@ -79,6 +79,7 @@ export type WorkspaceManifestValueInputs = {
       { sha256?: string; size?: number; type?: string; target?: string }
     >;
     acknowledgedPaths?: string[];
+    resolvedPaths?: string[];
   };
 };
 

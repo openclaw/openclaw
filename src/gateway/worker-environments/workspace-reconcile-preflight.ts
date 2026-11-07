@@ -210,32 +210,24 @@ export async function preflightWorkspaceApplyImpl(
         applyPaths.add(entryPath);
       }
     } else if (!sameEntry(local, currentNodes.get(entryPath))) {
-      const priorCollision = params.priorConflicts?.[entryPath];
-      const isAcknowledged = params.acknowledgedPaths?.includes(entryPath);
+      const isPriorConflict =
+        params.priorConflicts !== undefined
+          ? params.priorConflicts[entryPath] !== undefined ||
+            params.resolvedPaths?.includes(entryPath)
+          : true;
+      const isExplicitlyAccepted =
+        Boolean(isPriorConflict) &&
+        Boolean(
+          params.acknowledgedPaths?.includes(entryPath) ||
+          params.resolvedPaths?.includes(entryPath),
+        );
       let isResolved = false;
-      if (isAcknowledged) {
-        isResolved = true;
-      } else if (priorCollision !== undefined) {
-        if (priorCollision.type === "missing") {
-          isResolved = local !== undefined;
-        } else if (local === undefined) {
+      if (isExplicitlyAccepted) {
+        if (local?.type === "file") {
+          isResolved = !(await fileHasConflictMarkers(params.root, entryPath));
+        } else {
           isResolved = true;
-        } else if (local.type !== priorCollision.type) {
-          isResolved = true;
-        } else if (local.type === "file") {
-          if (local.sha256 !== priorCollision.sha256 || local.size !== priorCollision.size) {
-            isResolved = true;
-          }
-        } else if (local.type === "symlink") {
-          isResolved = local.target !== priorCollision.target;
         }
-      }
-      if (
-        isResolved &&
-        local?.type === "file" &&
-        (await fileHasConflictMarkers(params.root, entryPath))
-      ) {
-        isResolved = false;
       }
       if (!isResolved) {
         conflicts.add(entryPath);
