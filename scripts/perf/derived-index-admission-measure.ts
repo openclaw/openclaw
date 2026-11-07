@@ -1,6 +1,11 @@
 /**
  * Synthetic native agent-open benchmark. No Team data or Gateway/model readiness claim.
  * nice -n 19 node --expose-gc --import ./scripts/tsx.mjs scripts/perf/derived-index-admission-measure.ts --state-dir .local/index-admission --baseline-source /absolute/prior-agent-database-startup-integrity.ts
+ * Stale-lease samples run inside a native worker; thread CPU includes synchronous SQLite.
+ * Stale-lease alternative: --scenario stale-lease --baseline-dir /absolute/baseline-source-tree.
+ * Its real child opens an alias, commits a row, begins another write, then receives SIGKILL.
+ * The admitted parent reopens the canonical file; the old lease path forces baseline FULL.
+ * --mode resume reuses an explicitly prepared synthetic seed. Workspaces are not read by this owner.
  * Default: 300k transcript events at 36 KiB, 10k sessions, 12,497 completions, 14 deliveries.
  * --rows 100 --payload-bytes 512 --samples 1 is a setup smoke. Use a fresh state directory.
  * A synthetic prior-catalog seal preserves a real seed close's proof and changes its schema
@@ -12,9 +17,10 @@
  * including imports, validation, close and integrity children. Native allocations are excluded. No btrfs/fragmentation or cold-cache claim.
  */
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { fork, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
+import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
@@ -22,6 +28,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { isMainThread, Worker } from "node:worker_threads";
 import { transformSync } from "esbuild";
 import type { OpenClawAgentDatabase } from "../../src/state/openclaw-agent-db-contract.js";
 import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
@@ -31,17 +38,39 @@ const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
     "baseline-source": { type: "string" },
+    "baseline-dir": { type: "string" },
+    scenario: { type: "string", default: "derived-index" },
     mode: { type: "string", default: "run" },
     arm: { type: "string", default: "candidate" },
     rows: { type: "string", default: "300000" },
     "payload-bytes": { type: "string", default: "36864" },
     samples: { type: "string", default: "5" },
     allocation: { type: "boolean", default: false },
+    profile: { type: "boolean", default: false },
   },
 });
 assert(values["state-dir"], "--state-dir is required");
 assert(global.gc, "Run with --expose-gc");
 const root = path.resolve(values["state-dir"]);
+const staleLease = values.scenario === "stale-lease";
+assert(staleLease || values.scenario === "derived-index", "Unknown scenario");
+const baselineSources = new Map<string, string>();
+if (staleLease && (values.arm === "baseline" || ["run", "resume"].includes(values.mode))) {
+  assert(values["baseline-dir"], "Stale-lease comparison requires --baseline-dir");
+  for (const filename of [
+    "src/state/openclaw-agent-db.ts",
+    "src/state/openclaw-agent-db-lease.ts",
+    "src/state/openclaw-agent-db-lease-provenance.ts",
+    "src/state/openclaw-agent-db-schema.ts",
+    "src/state/agent-database-startup-integrity.ts",
+    "src/infra/sqlite-integrity.ts",
+  ]) {
+    baselineSources.set(
+      new URL(`../../${filename}`, import.meta.url).href,
+      readFileSync(path.resolve(values["baseline-dir"], filename), "utf8"),
+    );
+  }
+}
 const number = (key: "rows" | "payload-bytes" | "samples") =>
   parseStrictIntegerOption({ raw: values[key], label: key, min: 1, fallback: 1 });
 const indexes = [
@@ -79,19 +108,20 @@ function replaceOnce(source: string, before: string, after: string): string {
 }
 registerHooks({
   load(url, context, nextLoad) {
-    let source: string | undefined;
-    if (url === startupUrl && values.arm === "baseline") {
+    let source = values.arm === "baseline" ? baselineSources.get(url) : undefined;
+    if (!staleLease && url === startupUrl && values.arm === "baseline") {
       assert(values["baseline-source"], "Baseline needs --baseline-source");
       source = readFileSync(values["baseline-source"], "utf8");
-    } else if (url === openerUrl) {
+    }
+    if (url === openerUrl) {
       source = replaceOnce(
-        readFileSync(fileURLToPath(url), "utf8"),
+        source ?? readFileSync(fileURLToPath(url), "utf8"),
         "const diagnostics: SqliteIntegrityDiagnostics = {};",
         "const diagnostics: SqliteIntegrityDiagnostics = {}; globalThis.__indexAdmissionMeasure.diagnostics = diagnostics;",
       );
     } else if (url === integrityUrl) {
       source = replaceOnce(
-        readFileSync(fileURLToPath(url), "utf8"),
+        source ?? readFileSync(fileURLToPath(url), "utf8"),
         "runCheck(step.value);",
         "if (step.value.check === 'full') globalThis.__indexAdmissionMeasure.fullChecks++; runCheck(step.value);",
       );
@@ -105,10 +135,15 @@ registerHooks({
         };
   },
 });
-if (values.mode === "run") {
-  assert(!existsSync(root), "Use a fresh directory; existing data is never replaced");
-  mkdirSync(root, { recursive: true });
-  writeFileSync(options.env.OPENCLAW_CONFIG_PATH, "{}\n");
+if (values.mode === "run" || values.mode === "resume") {
+  if (values.mode === "run") {
+    assert(!existsSync(root), "Use a fresh directory; existing data is never replaced");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(options.env.OPENCLAW_CONFIG_PATH, "{}\n");
+  } else {
+    assert(existsSync(path.join(root, "census.json")), "Resume requires a synthetic seed census");
+    assert(existsSync(path.join(root, "seed-proof.json")), "Resume requires a completed seed");
+  }
   const outputs: unknown[] = [];
   const child = (mode: string, arm = "candidate", allocation = false) => {
     const args = [
@@ -122,6 +157,8 @@ if (values.mode === "run") {
       mode,
       "--arm",
       arm,
+      "--scenario",
+      values.scenario,
       "--rows",
       String(number("rows")),
       "--payload-bytes",
@@ -129,6 +166,9 @@ if (values.mode === "run") {
     ];
     if (values["baseline-source"]) {
       args.push("--baseline-source", path.resolve(values["baseline-source"]));
+    }
+    if (values["baseline-dir"]) {
+      args.push("--baseline-dir", path.resolve(values["baseline-dir"]));
     }
     if (allocation) {
       args.push("--allocation");
@@ -152,19 +192,38 @@ if (values.mode === "run") {
     outputs.push(row);
     writeFileSync(path.join(root, "measurements.json"), JSON.stringify(outputs, null, 2) + "\n");
   };
-  child("seed");
+  if (values.mode === "run") {
+    child("seed");
+  }
   for (let control = 0; control < 2; control++) {
-    child("prepare");
+    if (!staleLease) {
+      child("prepare");
+    }
     child("sample", "control");
   }
   for (const allocation of [false, true]) {
+    if (staleLease && allocation) {
+      child("sample", "control", true);
+      child("sample", "control", true);
+    }
     for (let sample = 0; sample < number("samples"); sample++) {
       for (const arm of sample % 2 ? ["candidate", "baseline"] : ["baseline", "candidate"]) {
-        child("prepare");
+        if (!staleLease) {
+          child("prepare");
+        }
         child("sample", arm, allocation);
       }
     }
   }
+} else if (staleLease && values.mode === "sample" && isMainThread) {
+  // Match the runtime worker: synchronous SQLite CPU belongs to this measured isolate.
+  const worker = new Worker(new URL(import.meta.url), {
+    argv: process.argv.slice(2),
+    execArgv: ["--import", fileURLToPath(new URL("../tsx.mjs", import.meta.url))],
+    name: "stale-lease-admission",
+  });
+  const [code] = await once(worker, "exit");
+  assert.equal(code, 0, "Measurement worker failed");
 } else {
   const { readSqliteCleanCloseSeal, writeSqliteCleanCloseSeal } =
     await import("../../src/infra/sqlite-clean-close-seal.js");
@@ -301,6 +360,16 @@ if (values.mode === "run") {
         );
       }
     }
+    if (staleLease) {
+      const workspacePayload = "Synthetic workspace fixture.\n".repeat(700).slice(0, 18000);
+      for (let i = 0; i < 62000; i++) {
+        const folder = path.join(root, "workspace", `group-${Math.floor(i / 1000)}`);
+        if (i % 1000 === 0) {
+          mkdirSync(folder, { recursive: true });
+        }
+        writeFileSync(path.join(folder, `file-${i}.txt`), workspacePayload);
+      }
+    }
     writeFileSync(path.join(root, "census.json"), JSON.stringify(census(db)));
     await closeOpenClawAgentDatabasesAsync();
     const proof = readSqliteCleanCloseSeal(options.path, statSync(options.path, { bigint: true }));
@@ -313,10 +382,56 @@ if (values.mode === "run") {
       sessions: 10000,
       completions: 12497,
       deliveries: 14,
+      workspaceFiles: staleLease ? 62000 : 0,
+      workspaceBytes: staleLease ? 62000 * 18000 : 0,
       node: process.version,
       seedMs: performance.now() - started,
     });
+  } else if (values.mode === "hold") {
+    const { db } = openOpenClawAgentDatabase({ ...options, path: `${options.path}.alias` });
+    db.exec("INSERT OR REPLACE INTO auth_profile_state VALUES ('crash-committed', '{}', 1)");
+    db.exec(
+      "BEGIN IMMEDIATE; INSERT INTO auth_profile_state VALUES ('crash-uncommitted', '{}', 1)",
+    );
+    process.send?.("writing");
+    await new Promise(() => {});
   } else {
+    if (staleLease) {
+      // A surviving process already admitted this physical file. The alias gives the
+      // dead peer a real, nonmatching lease path: baseline cannot downgrade to QUICK.
+      openOpenClawAgentDatabase(options);
+      if (!existsSync(`${options.path}.alias`)) {
+        symlinkSync(options.path, `${options.path}.alias`);
+      }
+      const holder = fork(
+        fileURLToPath(import.meta.url),
+        ["--state-dir", root, "--mode", "hold", "--scenario", "stale-lease"],
+        {
+          execArgv: [
+            "--expose-gc",
+            "--import",
+            fileURLToPath(new URL("../tsx.mjs", import.meta.url)),
+          ],
+          stdio: ["ignore", "ignore", "inherit", "ipc"],
+        },
+      );
+      try {
+        const [message] = await Promise.race([
+          once(holder, "message"),
+          once(holder, "exit").then(() => {
+            throw new Error("Holder exited before writing");
+          }),
+        ]);
+        assert.equal(message, "writing");
+      } finally {
+        if (holder.exitCode === null && holder.signalCode === null) {
+          const exited = once(holder, "exit");
+          holder.kill("SIGKILL");
+          await exited;
+        }
+      }
+      await closeOpenClawAgentDatabasesAsync();
+    }
     const inspector = new Session();
     inspector.connect();
     global.gc();
@@ -326,6 +441,10 @@ if (values.mode === "run") {
         includeObjectsCollectedByMajorGC: true,
         includeObjectsCollectedByMinorGC: true,
       });
+    }
+    if (values.profile) {
+      await inspector.post("Profiler.enable");
+      await inspector.post("Profiler.start");
     }
     const load = loadavg();
     const cpuBefore = process.cpuUsage();
@@ -339,7 +458,22 @@ if (values.mode === "run") {
     const cpu = process.cpuUsage(cpuBefore);
     const thread = process.threadCpuUsage(threadBefore);
     const heap = values.allocation ? await inspector.post("HeapProfiler.stopSampling") : undefined;
+    if (values.profile) {
+      const { profile } = await inspector.post("Profiler.stop");
+      writeFileSync(path.join(root, `${values.arm}.cpuprofile`), JSON.stringify(profile));
+    }
     inspector.disconnect();
+    if (staleLease) {
+      assert.deepEqual(
+        opened.db
+          .prepare(
+            "SELECT state_key FROM auth_profile_state WHERE state_key LIKE 'crash-%' ORDER BY state_key",
+          )
+          .all()
+          .map((row) => row.state_key),
+        ["crash-committed"],
+      );
+    }
     assert.equal(
       opened.db
         .prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='index' AND name IN (?,?)")
@@ -356,6 +490,7 @@ if (values.mode === "run") {
       diagnostics: observation.diagnostics,
       phase: values.allocation ? "allocation" : "timing",
       arm: values.arm,
+      scenario: values.scenario,
       wallMs,
       cpuMs: (cpu.user + cpu.system) / 1000,
       threadCpuMs: (thread.user + thread.system) / 1000,

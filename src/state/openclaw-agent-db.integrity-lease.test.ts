@@ -291,9 +291,12 @@ it.each(["forced cleanup", "stale admission"])(
     }
     const diagnostics = observeIntegrity();
     const reopened = openOpenClawAgentDatabase({ agentId: "integrity-lease", env: owner.env });
-    const full = recovery === "forced cleanup" || process.platform !== "linux";
-    expect(diagnostics()?.integrityGateOutcome).toBe("healthy");
-    expect(diagnostics()?.integrityGateMode).toBe(full ? "full" : "quick");
+    expect(diagnostics()?.integrityGateOutcome).toBe(
+      recovery === "forced cleanup" ? "pending" : "cached",
+    );
+    expect(diagnostics()?.integrityGateMode).toBe(
+      recovery === "forced cleanup" ? "deferred" : undefined,
+    );
     expect(
       reopened.db
         .prepare("SELECT state_key FROM auth_profile_state WHERE state_key='killed-write'")
@@ -306,7 +309,7 @@ it.each(["forced cleanup", "stale admission"])(
         .all(child.pid!),
     ).toEqual([]);
     closeOpenClawAgentDatabaseByPath(owner.database.path);
-    expect(owner.cleanClose()).toBe(true);
+    expect(owner.cleanClose()).toBe(recovery !== "forced cleanup");
   },
 );
 

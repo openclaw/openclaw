@@ -89,7 +89,6 @@ it("excludes cleaned stale claims while retaining unknown peers until their rele
   const { params, state } = createLeaseOwner();
   claimOpenClawAgentDatabaseLease(params, "dead");
   claimOpenClawAgentDatabaseLease(params, "unknown-peer");
-  recordOpenClawAgentDatabaseAdmission("dead", params, "full-required");
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       db.prepare("UPDATE agent_database_leases SET owner_pid = -1 WHERE lease_id = ?").run("dead");
@@ -103,12 +102,7 @@ it("excludes cleaned stale claims while retaining unknown peers until their rele
 
   claimOpenClawAgentDatabaseLease(params, "first", verification);
 
-  expect(verification).toHaveBeenLastCalledWith(
-    false,
-    true,
-    "predecessor-full-required",
-    undefined,
-  );
+  expect(verification).toHaveBeenLastCalledWith(false, undefined);
   expectRows(state.db, "SELECT lease_id FROM agent_database_leases ORDER BY lease_id", [
     { lease_id: "first" },
     { lease_id: "unknown-peer" },
@@ -118,7 +112,7 @@ it("excludes cleaned stale claims while retaining unknown peers until their rele
   releaseOpenClawAgentDatabaseLease("first", { env: params.env }, "read-only");
   claimOpenClawAgentDatabaseLease(params, "second", verification);
 
-  expect(verification).toHaveBeenLastCalledWith(true, false, undefined, undefined);
+  expect(verification).toHaveBeenLastCalledWith(true, undefined);
   expectRows(state.db, "SELECT lease_id FROM agent_database_leases", [{ lease_id: "second" }]);
   releaseOpenClawAgentDatabaseLease("second", { env: params.env }, "read-only");
 });
@@ -147,12 +141,7 @@ it.each([
 
   claimOpenClawAgentDatabaseLease(params, "borrower", verification);
 
-  expect(verification).toHaveBeenCalledWith(
-    false,
-    false,
-    "live-or-unknown-owner",
-    lends ? "process-v1:same" : undefined,
-  );
+  expect(verification).toHaveBeenCalledWith(false, lends ? "process-v1:same" : undefined);
 });
 
 it("records admission on its held claim and refuses to resurrect a released claim", () => {
@@ -163,8 +152,6 @@ it("records admission on its held claim and refuses to resurrect a released clai
   const openedAt = () =>
     state.db.prepare("SELECT opened_at FROM agent_database_leases WHERE lease_id = ?").get(leaseId);
 
-  recordOpenClawAgentDatabaseAdmission(leaseId, params, "full-required");
-  expect(openedAt()).toEqual({ opened_at: -1 });
   recordOpenClawAgentDatabaseAdmission(leaseId, params);
 
   expect(controls).not.toHaveBeenCalled();

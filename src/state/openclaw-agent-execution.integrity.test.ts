@@ -79,6 +79,7 @@ import {
 } from "./openclaw-agent-execution.js";
 import { registerRestartRecoveryAdmissionTests } from "./openclaw-agent-restart-recovery.test-support.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -253,6 +254,9 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
           preparationReady: Promise.resolve(),
           captureReadAdmission: ({ assertCurrent }) => assertCurrent,
           openAgent: ({ assertCurrent, signal: openingSignal }) => {
+            // Read snapshots are admitted; missing uniqueness still requires full writer admission.
+            using pendingSchema = openNodeSqliteDatabase(pathname);
+            pendingSchema.exec("DROP INDEX idx_agent_conversations_identity");
             phases.push("open");
             return prepareOpenClawAgentDatabaseExecution(scope, assertCurrent, openingSignal);
           },
@@ -381,6 +385,8 @@ it.for(["before-promotion", "revoked", "aborted"] as const)(
     openOpenClawStateDatabase({ env })
       .db.prepare("UPDATE agent_database_leases SET owner_start_time = -1 WHERE lease_id = ?")
       .run(stale);
+    // A noncanonical unique index, rather than owner death, still requires full admission.
+    database.db.exec("DROP INDEX idx_agent_conversations_identity");
     closeAgent(database.path);
     invalidateValidation(database.path);
     revokeSqliteDatabaseAdmissionsForPath(database.path);
@@ -487,6 +493,7 @@ it.for(["warm", "cold", "peer"] as const)(
     const env = makeEnv("agent-preparation-isolation-");
     const databases = ["slow", "ready", "next"].map((agentId) => openAgent({ agentId, env }));
     const integrity = holdIntegrity(databases[0]!.path);
+    databases[0]!.db.exec("DROP INDEX idx_agent_conversations_identity");
     invalidateValidation(databases[0]!.path);
     const executions = databases.map((database) =>
       capture({ agentId: database.agentId, path: database.path, env }),
@@ -652,19 +659,19 @@ it.each([
   ["verified", 0],
   ["two-leases", 0],
   ["two-leases-missing-metadata", 0],
-  ["two-leases-stale", 1],
+  ["two-leases-stale", 0],
   ["two-leases-unknown-owner", 1],
-  ["two-leases-unclean", 1],
+  ["two-leases-unclean", 0],
   ["prepared-existing", 0],
-  ["invalidated", 1],
+  ["invalidated", 0],
   ["failed", 0],
-  ["revoked-before-grant", 1],
-  ["revoked-after-verification-admission", 1],
-  ["missing-metadata", 1],
+  ["revoked-before-grant", 0],
+  ["revoked-after-verification-admission", 0],
+  ["missing-metadata", 0],
   ["closed-host", 0],
   ["closed-host-blocked", 0],
   ["closed-host-blocked-last", 0],
-  ["closed-host-revoked", 1],
+  ["closed-host-revoked", 0],
   ["closed-host-replaced", 0],
   ["closed-host-no-receipt", 0],
   ["closed-host-no-receipt-rollback", 0],
@@ -794,141 +801,137 @@ it.each([
   },
 );
 
-it.runIf(process.platform === "linux")(
-  "keeps lease-less crash verification owed while fully checking untrusted killed-owner recovery",
-  async () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-process-death-") };
-    const cases = [
-      "same-boot",
-      "checkpointed-wal",
-      "foreign-boot",
-      "legacy-lease",
-      "pid-reused",
-      "lease-less-unclean",
-      "corrupt-page",
-      "interrupted-admission",
-    ];
-    const childUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.agentDatabaseCrash);
-    const child = fork(fileURLToPath(childUrl), cases, {
-      execArgv: resolveRuntimeWorkerArgv(childUrl).slice(0, -1),
-      env: { ...process.env, ...env },
-      silent: true,
-    });
-    let stderr = "";
-    child.stderr?.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    type Fixture = { agentId: string; path: string; corruptionOffset: number };
-    let fixtures: Fixture[];
-    try {
-      fixtures = await new Promise<Fixture[]>((resolve, reject) => {
-        const failed = () => reject(new Error(`Crash fixture exited before opening: ${stderr}`));
-        child.once("error", reject);
-        child.once("exit", failed);
-        child.once("message", (message) => {
-          child.off("exit", failed);
-          resolve(message as Fixture[]);
-        });
+it("recovers killed owners without scans and leaves corruption verification to explicit maintenance", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-process-death-") };
+  const cases = [
+    "same-boot",
+    "checkpointed-wal",
+    "foreign-boot",
+    "legacy-lease",
+    "pid-reused",
+    "lease-less-unclean",
+    "corrupt-page",
+    "interrupted-admission",
+  ];
+  const childUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.agentDatabaseCrash);
+  const child = fork(fileURLToPath(childUrl), cases, {
+    execArgv: resolveRuntimeWorkerArgv(childUrl).slice(0, -1),
+    env: { ...process.env, ...env },
+    silent: true,
+  });
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+  type Fixture = { agentId: string; path: string; corruptionOffset: number };
+  let fixtures: Fixture[];
+  try {
+    fixtures = await new Promise<Fixture[]>((resolve, reject) => {
+      const failed = () => reject(new Error(`Crash fixture exited before opening: ${stderr}`));
+      child.once("error", reject);
+      child.once("exit", failed);
+      child.once("message", (message) => {
+        child.off("exit", failed);
+        resolve(message as Fixture[]);
       });
-    } finally {
-      await stopChildProcess(child, 5_000, { force: true });
+    });
+  } finally {
+    await stopChildProcess(child, 5_000, { force: true });
+  }
+  expect(child.signalCode).toBe("SIGKILL");
+  expect(fixtures.map((fixture) => fixture.agentId)).toEqual(cases);
+  const shared = openOpenClawStateDatabase({ env });
+  for (const fixture of fixtures) {
+    const { agentId, path: pathname } = fixture;
+    const held = shared.db
+      .prepare("SELECT * FROM agent_database_leases WHERE path=?")
+      .get(pathname);
+    expect(held).toMatchObject({ owner_pid: child.pid, owner_start_time: expect.any(Number) });
+    if (agentId === "interrupted-admission") {
+      expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
+    } else {
+      expect(readSqliteDatabaseCleanClose(pathname)).toBe(false);
     }
-    expect(child.signalCode).toBe("SIGKILL");
-    expect(fixtures.map((fixture) => fixture.agentId)).toEqual(cases);
-    const shared = openOpenClawStateDatabase({ env });
-    for (const fixture of fixtures) {
-      const { agentId, path: pathname } = fixture;
-      const held = shared.db
-        .prepare("SELECT * FROM agent_database_leases WHERE path=?")
-        .get(pathname);
-      expect(held).toMatchObject({ owner_pid: child.pid, owner_start_time: expect.any(Number) });
-      if (agentId === "interrupted-admission") {
-        expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
-      } else {
-        expect(readSqliteDatabaseCleanClose(pathname)).toBe(false);
+    if (agentId === "checkpointed-wal") {
+      expect(fs.statSync(`${pathname}-wal`).size).toBe(0);
+    } else {
+      expect(fs.statSync(`${pathname}-wal`).size).toBeGreaterThan(32);
+    }
+    if (agentId === "foreign-boot") {
+      shared.db
+        .prepare("UPDATE agent_database_leases SET provenance=? WHERE path=?")
+        .run(`process-v1:${"0".repeat(64)}`, pathname);
+    } else if (agentId === "legacy-lease") {
+      shared.db
+        .prepare("UPDATE agent_database_leases SET provenance=NULL WHERE path=?")
+        .run(pathname);
+    } else if (agentId === "pid-reused") {
+      shared.db
+        .prepare("UPDATE agent_database_leases SET owner_pid=?, owner_start_time=-1 WHERE path=?")
+        .run(process.pid, pathname);
+    } else if (agentId === "lease-less-unclean") {
+      shared.db.prepare("DELETE FROM agent_database_leases WHERE path=?").run(pathname);
+    }
+    if (agentId === "corrupt-page") {
+      const file = fs.openSync(pathname, "r+");
+      try {
+        // This checkpointed table has no newer WAL image to hide the invalid btree page.
+        fs.writeSync(file, Buffer.from([0]), 0, 1, fixture.corruptionOffset);
+      } finally {
+        fs.closeSync(file);
       }
-      if (agentId === "checkpointed-wal") {
-        expect(fs.statSync(`${pathname}-wal`).size).toBe(0);
-      } else {
-        expect(fs.statSync(`${pathname}-wal`).size).toBeGreaterThan(32);
-      }
-      if (agentId === "foreign-boot") {
-        shared.db
-          .prepare("UPDATE agent_database_leases SET provenance=? WHERE path=?")
-          .run(`process-v1:${"0".repeat(64)}`, pathname);
-      } else if (agentId === "legacy-lease") {
-        shared.db
-          .prepare("UPDATE agent_database_leases SET provenance=NULL WHERE path=?")
-          .run(pathname);
-      } else if (agentId === "pid-reused") {
-        shared.db
-          .prepare("UPDATE agent_database_leases SET owner_pid=?, owner_start_time=-1 WHERE path=?")
-          .run(process.pid, pathname);
-      } else if (agentId === "lease-less-unclean") {
-        shared.db.prepare("DELETE FROM agent_database_leases WHERE path=?").run(pathname);
-      }
-      if (agentId === "corrupt-page") {
-        const file = fs.openSync(pathname, "r+");
-        try {
-          // This checkpointed table has no newer WAL image to hide the invalid btree page.
-          fs.writeSync(file, Buffer.from([0]), 0, 1, fixture.corruptionOffset);
-        } finally {
-          fs.closeSync(file);
-        }
-      }
+    }
 
-      counter.path = pathname;
-      counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
-      const context = workerContext({ env });
-      const assertCurrent = () => {
-        context.admission.assertCurrent();
-        assertAgentDatabaseAdmitted(agentId, { env });
-      };
-      const source = sourceFor(assertCurrent);
-      await using generation = nativeGeneration(fixture, context, assertCurrent, () =>
-        context.admission.assertCurrent(),
-      );
-      if (agentId === "corrupt-page") {
-        await expect(generation.run(source, async () => "opened")).rejects.toThrow(
+    if (agentId === "corrupt-page") {
+      const maintenance = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+      try {
+        expect(() => maintenance.run(() => openAgent({ agentId, path: pathname, env }))).toThrow(
           /integrity|malformed|corrupt/i,
         );
-        expect(Atomics.load(new Int32Array(counter.checks), 0)).toBeGreaterThan(0);
-        continue;
+      } finally {
+        await maintenance.close();
       }
-      const bounded = agentId === "lease-less-unclean";
-      const full =
-        !bounded && !["same-boot", "checkpointed-wal", "interrupted-admission"].includes(agentId);
-      const expectedChecks = [Number(full), Number(!bounded)];
-      const sessionKey = `agent:${agentId}:after-crash`;
-      await expect(
-        generation.run(source, (scope) => {
-          expect(checks(), agentId).toEqual(expectedChecks);
-          return initialized(scope, "after-crash", agentId);
-        }),
-      ).resolves.toMatchObject({ kind: "session-transcript-initialized", sessionKey });
-      await generation.close();
-      if (bounded) {
-        expect(readSqliteDatabaseIntegrityVerification(pathname)?.verifiedAt).toBeUndefined();
-        expect(fs.existsSync(`${pathname}.seal`)).toBe(false);
-      }
-      clearOpenClawAgentDatabaseValidationCache(pathname);
-      retireSqliteDatabaseAdmissionForPath(pathname);
-      await using restart = nativeGeneration(fixture, context, assertCurrent);
-      await expect(restart.run(source, async () => "reopened")).resolves.toBe("reopened");
-      expect(checks(), agentId).toEqual(expectedChecks);
-      await restart.close();
-      expect(Boolean(readSqliteDatabaseIntegrityVerification(pathname))).toBe(full);
-      expect(readSqliteDatabaseCleanClose(pathname)).toBe(!bounded);
-      using reopened = openNodeSqliteDatabase(pathname, { readOnly: true });
-      expect(reopened.prepare("SELECT store_json FROM auth_profile_store").all()).toEqual([
-        { store_json: '{"ok":true}' },
-      ]);
-      expect(reopened.prepare("SELECT state_key FROM auth_profile_state").all()).toEqual([
-        { state_key: "committed-wal" },
-      ]);
+      continue;
     }
-  },
-);
+    counter.path = pathname;
+    counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+    const context = workerContext({ env });
+    const assertCurrent = () => {
+      context.admission.assertCurrent();
+      assertAgentDatabaseAdmitted(agentId, { env });
+    };
+    const source = sourceFor(assertCurrent);
+    await using generation = nativeGeneration(fixture, context, assertCurrent, () =>
+      context.admission.assertCurrent(),
+    );
+    const expectedChecks = [0, 0];
+    const sessionKey = `agent:${agentId}:after-crash`;
+    await expect(
+      generation.run(source, (scope) => {
+        expect(checks(), agentId).toEqual(expectedChecks);
+        return initialized(scope, "after-crash", agentId);
+      }),
+    ).resolves.toMatchObject({ kind: "session-transcript-initialized", sessionKey });
+    await generation.close();
+    expect(readSqliteDatabaseIntegrityVerification(pathname)?.verifiedAt).toBeUndefined();
+    expect(fs.existsSync(`${pathname}.seal`)).toBe(false);
+    clearOpenClawAgentDatabaseValidationCache(pathname);
+    retireSqliteDatabaseAdmissionForPath(pathname);
+    await using restart = nativeGeneration(fixture, context, assertCurrent);
+    await expect(restart.run(source, async () => "reopened")).resolves.toBe("reopened");
+    expect(checks(), agentId).toEqual(expectedChecks);
+    await restart.close();
+    expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
+    expect(readSqliteDatabaseCleanClose(pathname)).toBe(false);
+    using reopened = openNodeSqliteDatabase(pathname, { readOnly: true });
+    expect(reopened.prepare("SELECT store_json FROM auth_profile_store").all()).toEqual([
+      { store_json: '{"ok":true}' },
+    ]);
+    expect(reopened.prepare("SELECT state_key FROM auth_profile_state").all()).toEqual([
+      { state_key: "committed-wal" },
+    ]);
+  }
+});
 
 it("settles peer native leases when close revokes a shared worker's opening executor", async () => {
   const options = Array.from({ length: 5 }, () => ({

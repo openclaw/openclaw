@@ -178,16 +178,6 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     integrityCheck,
   );
   const startedAt = performance.now();
-  if (diagnostics?.integrityGateReason === "stale-lease-full" && diagnostics.because) {
-    agentDbLog.info(
-      `agent database integrityGateReason=stale-lease-full because=${diagnostics.because}`,
-      {
-        agentId,
-        path: pathname,
-        ...diagnostics,
-      },
-    );
-  }
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     if (
       !verification &&

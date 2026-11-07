@@ -66,7 +66,7 @@ function prepareAgentDatabaseStartupIntegrity(pathname: string, agentId: string)
   };
 }
 
-/** Bounded admission repairs derived indexes; migrations retain their full gate. */
+/** Lifecycle revocation is not corruption; migrations and explicit verification keep their gate. */
 export function admitAgentDatabaseStartupStructure(
   database: DatabaseSync,
   pathname: string,
@@ -77,6 +77,7 @@ export function admitAgentDatabaseStartupStructure(
   if (
     diagnostics?.integrityGateReason !== "no-proof" &&
     diagnostics?.integrityGateReason !== "schema-mismatch" &&
+    diagnostics?.integrityGateReason !== "revoked" &&
     (!policy || Atomics.load(new Int32Array(policy.valid), 0) !== 1)
   ) {
     return false;

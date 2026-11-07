@@ -58,30 +58,24 @@ recorded PID and start time, and carry the same lease provenance (host, boot,
 platform, build, and file inode; Linux also binds its PID namespace), so a file replaced at that path is checked again.
 Outside the bounded admission policy described below, aliases, live
 unfinished admissions, and platforms without lease provenance still
-run the full check. A dead owner with matching provenance, including an interrupted
-admission without a known FULL requirement, takes a quick check plus foreign-key
-and canonical schema/index checks.
-SQLite WAL recovery preserves committed writes without a full index scan on the
-admission path. Previously revoked validation, mismatched provenance or a replaced
-file, and recorded corruption retain full verification or refusal. An unclean close
-without a surviving lease is `no-proof`: it takes bounded admission and leaves full
-verification owed to the next Gateway's background check. A failed crash-recovery quick check also runs
-the full check before admission. Crash-recovery quick admission records a distinct
-quick receipt. After successful checkpoint and final native close, the existing
-owner can seal that receipt so the next ordinary restart also skips the full scan.
-It never supplies a full-integrity receipt; Doctor and explicit verification retain
-their policy. Ordinary maintenance QUICK checks do not mint this recovery receipt.
-Known validation, file, or seal refusals and explicit FULL policy are recorded in
-the existing lease admission status before verification, so another process death
-cannot downgrade that requirement. Successful admission replaces the pending status.
-The borrowing process never checked the file
-itself, so if it closes last it leaves the next opener to verify instead of writing
-a seal.
+run the full check. Dead leases are reclaimed without revoking this process's
+admitted physical-file facts: SQLite WAL recovery handles interrupted writes.
+A cold open without a matching seal uses bounded header/schema admission and
+leaves full verification to Gateway startup or explicit Doctor verification.
+Missing or mismatched dead-owner provenance does not establish corruption.
 
-macOS boot identity uses `kern.bootsessionuuid`; Windows uses the operating system's
-`LastBootUpTime`. Unavailable boot identity remains unknown provenance and requires
-full verification. Existing leases without provenance retain that requirement once;
-they are never upgraded by guessing their boot.
+Native worker loss still revokes its generation and authority. Reopening an
+unchanged database after lifecycle revocation uses the same bounded admission;
+it does not run a whole-file quick or full check and does not mint a verification
+receipt or clean-close seal. Recorded corruption still refuses admission, and
+migrations, noncanonical schema changes, and explicit FULL verification retain
+their checks. Older crash-recovery quick receipts remain readable until their
+existing expiry; new crash admissions do not create them.
+
+The borrowing process never checked the file itself, so if it closes last it
+leaves the next opener to verify instead of writing a seal. Live-peer provenance
+still binds macOS `kern.bootsessionuuid` or Windows `LastBootUpTime`; unknown
+provenance cannot lend a live peer's admission.
 
 Shared-state fast-path admission on Linux, macOS, and Windows trusts a live Gateway that owns the
 exact file: after startup admission and listening, its owner lease publishes
@@ -216,14 +210,13 @@ runtime scan or a new timer. Already admitted physical databases do not queue
 another post-ready integrity scan; Doctor and explicit verification remain available.
 
 Doctor, update, and other ordinary agent-database callers also use bounded
-admission for a current schema when the reason is `no-proof` or `schema-mismatch`:
+admission for a current schema when the reason is `no-proof`, `schema-mismatch`, or lifecycle `revoked`:
 a missing or outdated schema seal alone is not corruption evidence. Canonical
 non-unique indexes can be repaired under this admission. Their default QUICK maintenance policy
 does not add a whole-file scan on reopen. Admission records `deferred` / `pending`,
 without a full-verification receipt or seal, so the next Gateway startup still
-owes background verification. Explicit FULL checks, process-death recovery,
-stale-lease-full, revoked validation, and other rejected seals retain their required
-verification. Required scans from synchronous agent openers run in the integrity
+owes background verification. Explicit FULL checks and other rejected seals retain
+their required verification. Required scans from synchronous agent openers run in the integrity
 child; diagnostics report worker time rather than `integrityCheckSyncMs`.
 
 Bounded admission is not a full integrity verdict and cannot publish a
@@ -404,7 +397,8 @@ This proof does not require the persisted clean-close seal. Peer leases
 with matching process ID and start time do not consume or block publication of
 that seal; each handle retains its own lease until cleanup finishes.
 Explicit invalidation revokes shared runtime proof as well as durable metadata,
-including stale admission and unsettled Worker cleanup. A successful native close
+including unsettled Worker cleanup. Reclaiming a dead lease alone does not revoke
+these facts. A successful native close
 with a reader-blocked checkpoint keeps verification unsealed and preserves live
 runtime proof. A later last writer can certify that verification after a completed
 checkpoint and native close; failed close or uncertain storage errors revoke both.

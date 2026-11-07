@@ -9,7 +9,7 @@ import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 
-it("closes agent databases after a settled supervisor failure without process-death recovery", async () => {
+it("closes agent databases after a settled supervisor failure without rescanning on reopen", async () => {
   const fixture = await createGatewayMetadataCloseFixture("gateway-supervisor-failure-close");
   try {
     const { server } = await fixture.startServer();
@@ -40,7 +40,7 @@ it("closes agent databases after a settled supervisor failure without process-de
     resetGatewayWorkAdmission();
     expect(openOpenClawAgentDatabase(options).db.isOpen).toBe(true);
     expect(diagnostics).toBeDefined();
-    expect(diagnostics?.integrityGateReason).not.toBe("process-death");
+    expect(diagnostics?.integrityGateMode).toBeUndefined();
   } finally {
     vi.restoreAllMocks();
     await fixture.cleanup();

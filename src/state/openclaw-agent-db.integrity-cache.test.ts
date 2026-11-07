@@ -532,7 +532,7 @@ it("checks once across writes and physical admitted reopens, including after lif
   expect(checks).toEqual(["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"]);
 });
 
-it("refuses an orphan allocated page before admitting a dirty database", async () => {
+it("explicit full maintenance refuses an orphan allocated page before admission", async () => {
   const expected = /never used/iu;
   const options = {
     agentId: "integrity-pages",
@@ -572,13 +572,24 @@ it("refuses an orphan allocated page before admitting a dirty database", async (
   }
 
   const admitted = vi.fn();
-  await expect(
-    withOpenClawAgentDatabaseAdmission(options, (run) => Promise.resolve(run(() => {})), admitted),
-  ).rejects.toMatchObject({
-    name: "SqliteIntegrityError",
-    message: expect.stringMatching(expected),
-  });
-  expect(admitted).not.toHaveBeenCalled();
+  const maintenance = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+  try {
+    await expect(
+      maintenance.run(() =>
+        withOpenClawAgentDatabaseAdmission(
+          options,
+          (run) => Promise.resolve(run(() => {})),
+          admitted,
+        ),
+      ),
+    ).rejects.toMatchObject({
+      name: "SqliteIntegrityError",
+      message: expect.stringMatching(expected),
+    });
+    expect(admitted).not.toHaveBeenCalled();
+  } finally {
+    await maintenance.close();
+  }
 });
 
 it("does not lend remembered integrity to another file at the same path", () => {
