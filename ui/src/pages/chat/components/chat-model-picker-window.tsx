@@ -32,8 +32,7 @@ export function createModelPickerWindow(
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLDivElement>({
     count: 0,
     getScrollElement: () => viewport,
-    // Composer choices have a 40px floor plus 2px row spacing.
-    estimateSize: () => 42,
+    estimateSize: () => 32,
     observeElementRect,
     observeElementOffset,
     scrollToFn: elementScroll,
