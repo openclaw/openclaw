@@ -4879,7 +4879,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/e2e/lobster-pet.e2e.test.ts",
   "ui/src/e2e/logs-autofollow.e2e.test.ts",
   "ui/src/e2e/managed-image-actions.e2e.test.ts",
-  "ui/src/e2e/mantis-chat-proof.e2e.test.ts",
   "ui/src/e2e/memory-settings-defaults.e2e.test.ts",
   "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
   "ui/src/e2e/model-providers-help.e2e.test.ts",
