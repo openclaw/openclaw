@@ -444,13 +444,13 @@ const HEADING_LINKS = `
 const headingMarkup = [`<div class="chat-text">`, `<div class="sidebar-markdown">`]
   .map(
     (open) =>
-      `${open}<h2 class="in-heading">${HEADING_LINKS}</h2><p class="in-body">${HEADING_LINKS}</p></div>`,
+      `${open}<h2 class="in-heading">${HEADING_LINKS}</h2><h3 class="in-body">${HEADING_LINKS}</h3><p class="in-body">${HEADING_LINKS}</p></div>`,
   )
   .join("");
 
 fixture.describe("chat heading link presentation", () => {
   it.each(["light", "dark"] as const)(
-    "paints link marks in body text but not in headings in %s",
+    "paints link marks in body text and small headings but not in h1/h2 in %s",
     async (themeMode) => {
       await fixture.withPage(
         `heading-${themeMode}`,
@@ -479,10 +479,12 @@ fixture.describe("chat heading link presentation", () => {
             // No icon reserve: plain links sit flush; chips keep symmetric padding.
             expect(link.paddingLeft).toBe(link.paddingRight);
           }
-          // Body links are untouched: every decorated anchor still paints its mark
-          // (GitHub marks are bubble-only, so the Detail Panel paints file and session marks).
-          expect(inBody.filter((link) => link.markPainted)).toHaveLength(6);
-          expect(inBody.filter((link) => link.faviconShown)).toHaveLength(2);
+          // h3 and body links are untouched: every decorated anchor still paints its
+          // mark (GitHub marks are bubble-only, so the Detail Panel paints file and
+          // session marks): 4 + 2 per block, two blocks per renderer.
+          expect(inBody).toHaveLength(20);
+          expect(inBody.filter((link) => link.markPainted)).toHaveLength(12);
+          expect(inBody.filter((link) => link.faviconShown)).toHaveLength(4);
         },
       );
     },
