@@ -78,7 +78,6 @@ const enModelControls = {
       usageWeek: "Week",
       runsOn: "Runs on",
       cooldown: "Cooldown {time}",
-      addProvider: "Add provider",
       configureModels: "Configure models",
       selectionScopeSessionLabel: "This session",
       selectionScopeAgentLabel: "Agent default",
