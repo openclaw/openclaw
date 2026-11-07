@@ -3,6 +3,7 @@ import { gitMaintenanceEnvironmentExpression } from "../../infra/git-maintenance
 import type { WorkerProvider } from "../../plugins/capability-provider.types.js";
 import type { EnvironmentRecipe, LifecycleCommand } from "./environment-recipe.js";
 import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH } from "./node-toolchain.js";
+import { NORMALIZE_PROJECT_SNAPSHOT_CACHES_JS } from "./project-snapshot-caches.js";
 import { PREPARE_REPOSITORY_NODE_JS } from "./repository-node-toolchain.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -109,7 +110,7 @@ const path = require("node:path");
 const os = require("node:os");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
-const manifestScript = ${JSON.stringify(REMOTE_WORKSPACE_MANIFEST_JS)};
+const manifestScript = (inspectOnly ? 'process.argv[3] += "-read-only";' : "") + ${JSON.stringify(REMOTE_WORKSPACE_MANIFEST_JS)};
 process.umask(0o077);
 const machineHome = fs.realpathSync(os.homedir());
 let setupPath = process.env.PATH;
@@ -236,7 +237,17 @@ const runSetup = (command, workspaceDir, homeDir) => {
     if (verified === undefined && manifest(workspaceDir, baseCommit, [preparedManifestRef, sourceManifestRef], homeDir) !== preparedManifestRef) throw new Error("Prepared project completed workspace changed");
     phase("retainedManifest");
     previous = { workspaceDir, homeDir, sourceManifestRef, preparedManifestRef, baseCommit, sourceBytes, preparedBytes, completedManifest, completionDirectory, manifestRoot };
-    if (inspectOnly) { phase("inspection"); return { workspaceDir, homeDir, sourceManifestRef, preparedManifestRef, baseCommit, recipePreparation: { source: input.recipe?.source ?? (input.setupRecipe ? "script" : "none"), phaseDurationsMs } }; }
+    if (inspectOnly) {
+      if (input.snapshot) {
+        readManifest(path.join(workerRoot, "manifests", sourceManifestRef.slice(7) + ".json"), sourceManifestRef);
+        // The preparation owner verified its canonical manifest pair above.
+        (${NORMALIZE_PROJECT_SNAPSHOT_CACHES_JS})(workerRoot, input, sourceManifestRef, preparedManifestRef, (seed) => {
+          if (git(seed, ["rev-parse", "HEAD"]) !== input.baseCommit || git(seed, ["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("Project snapshot seed changed");
+        }, readManifest);
+      }
+      phase("inspection");
+      return { workspaceDir, homeDir, sourceManifestRef, preparedManifestRef, baseCommit, recipePreparation: { source: input.recipe?.source ?? (input.setupRecipe ? "script" : "none"), phaseDurationsMs } };
+    }
   }
   phase("inspection");
   const seeds = ownedDirectory(ownedDirectory(workerRoot, "git-seeds"), input.namespace);
@@ -385,6 +396,7 @@ export function createProjectSetupScript(
     timeoutMs?: number;
     setupEnv?: Record<string, string>;
     verifiedRetained?: PreparedProjectVerification | null;
+    snapshot?: true;
   },
   inspectOnly = false,
 ): string {
@@ -402,7 +414,10 @@ node <<'PROJECT_SETUP_SCRIPT'
   .then((result) => {
     process.stdout.write(JSON.stringify(result ?? null));
   })
-  .catch((error) => { console.error(error.message); process.exitCode = 1; });
+  .catch((error) => {
+    console.error(${input.snapshot ? 'JSON.stringify(error.snapshotDiagnostic ?? { schema: "openclaw.project-snapshot-diagnostic.v1", cacheCheck: "verification", cacheKind: "project" })' : "error.message"});
+    process.exitCode = 1;
+  });
 PROJECT_SETUP_SCRIPT`;
 }
 

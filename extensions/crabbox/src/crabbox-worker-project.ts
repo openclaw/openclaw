@@ -1,5 +1,6 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import type { SecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";
+import { measureCrabboxProvisionPhase } from "./crabbox-provision-timing.js";
 import { crabboxCommandOutput, leaseRunArgs, runCrabboxCommand } from "./crabbox-worker-command.js";
 import type { createCrabboxWorkerLeaseLifecycle } from "./crabbox-worker-lease-lifecycle.js";
 import { createCrabboxNodeRuntimeSetup } from "./crabbox-worker-node-enrollment.js";
@@ -8,6 +9,7 @@ import {
   runProvisionSetup,
 } from "./crabbox-worker-provision-commands.js";
 import { runCrabboxSetupEgress } from "./crabbox-worker-setup-egress.js";
+import { crabboxProjectSnapshotFailure } from "./crabbox-worker-snapshot-verifier.js";
 import {
   CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS,
   CRABBOX_SETUP_TIMEOUT_MS,
@@ -50,6 +52,7 @@ export async function prepareCrabboxWorkerRuntime(params: {
   context: Omit<Parameters<typeof runProvisionSetup>[0], "phase" | "setup">;
   prepareNodeRuntime: NonNullable<Parameters<WorkerProvider["provision"]>[2]>["prepareNodeRuntime"];
   leaseId: string;
+  project?: ProjectPreparation;
   preparationSignal?: AbortSignal;
   assertCurrent: () => void;
   onSetupFailure: () => void;
@@ -68,7 +71,8 @@ export async function prepareCrabboxWorkerRuntime(params: {
   });
   const timeoutMs = resolveCrabboxNodeEnrollmentTimeoutMs(runtime.bootstrapTimeoutMs);
   return {
-    timeoutMs,
+    // Capture lifetime must also cover the prepared project's post-scrub verification.
+    timeoutMs: timeoutMs + (params.project?.preparation ? CRABBOX_SETUP_TIMEOUT_MS : 0),
     async run(scrubScript?: string) {
       params.context.signal?.throwIfAborted();
       runtime.signal?.throwIfAborted();
@@ -93,6 +97,18 @@ export async function prepareCrabboxWorkerRuntime(params: {
         params.onSetupFailure();
         throw error;
       }
+      if (scrubScript && params.project) {
+        await prepareCrabboxProjectFiles({
+          ...params.context,
+          id: params.leaseId,
+          project: params.project,
+          snapshot: true,
+          signal: params.preparationSignal,
+          assertCurrent: params.assertCurrent,
+          timeoutMs: () =>
+            remainingProvisionTimeout(params.context.deadline, CRABBOX_SETUP_TIMEOUT_MS),
+        });
+      }
     },
   };
 }
@@ -106,6 +122,7 @@ export async function prepareCrabboxProjectFiles(params: {
   timeoutMs: () => number;
   signal?: AbortSignal;
   inspectPrepared?: true;
+  snapshot?: true;
   recordRecipePreparation?: (metadata: RecipePreparation) => Promise<void>;
   setupSecrets?: Readonly<Record<string, SecretRef>>;
   assertCurrent?: () => void;
@@ -143,8 +160,23 @@ export async function prepareCrabboxProjectFiles(params: {
             assertCurrent,
           });
     assertCurrent();
+    if (params.snapshot && (result.termination !== "exit" || result.code !== 0)) {
+      throw crabboxProjectSnapshotFailure(result.stderr);
+    }
     return crabboxCommandOutput("project preparation", result);
   };
+  if (params.snapshot) {
+    const prepareSnapshot = params.project.prepareSnapshot;
+    if (params.project.preparation && !prepareSnapshot) {
+      throw new Error("Prepared project has no snapshot verification owner");
+    }
+    await measureCrabboxProvisionPhase("snapshot.verification", async () => {
+      await prepareSnapshot?.({
+        runScript: (input, signal) => run(leaseRunArgs(params), signal, () => input),
+      });
+    });
+    return undefined;
+  }
   if (params.inspectPrepared) {
     if (!params.project.inspectPreparedWorkspace) {
       throw new Error("Enrolled project cannot verify its completed workspace");
@@ -155,25 +187,28 @@ export async function prepareCrabboxProjectFiles(params: {
     });
     return undefined;
   }
-  return await params.project.prepare({
-    ...(params.recordRecipePreparation
-      ? { recordRecipePreparation: params.recordRecipePreparation }
-      : {}),
-    runScript: (input, signal) => run(leaseRunArgs(params), signal, () => input),
-    runScriptWithBudget: (createScript, signal) => run(leaseRunArgs(params), signal, createScript),
-    upload: async (localPath, remotePath, signal) => {
-      await run(
-        [
-          "cp",
-          "--provider",
-          params.provider,
-          "--id",
-          params.id,
-          localPath,
-          `SANDBOX:${remotePath}`,
-        ],
-        signal,
-      );
-    },
-  });
+  return await measureCrabboxProvisionPhase("project.preparation", () =>
+    params.project.prepare({
+      ...(params.recordRecipePreparation
+        ? { recordRecipePreparation: params.recordRecipePreparation }
+        : {}),
+      runScript: (input, signal) => run(leaseRunArgs(params), signal, () => input),
+      runScriptWithBudget: (createScript, signal) =>
+        run(leaseRunArgs(params), signal, createScript),
+      upload: async (localPath, remotePath, signal) => {
+        await run(
+          [
+            "cp",
+            "--provider",
+            params.provider,
+            "--id",
+            params.id,
+            localPath,
+            `SANDBOX:${remotePath}`,
+          ],
+          signal,
+        );
+      },
+    }),
+  );
 }

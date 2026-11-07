@@ -531,3 +531,34 @@ process.kill = function(pid, signal) {
     expect(manifest.entries.some((entry) => entry.path === "src/old.txt")).toBe(false);
   });
 });
+
+it("verifies changed eligible content without publishing or compacting cached artifacts", async () => {
+  const f = await fixture("openclaw-manifest-verify-only-");
+  await writeFiles(f.workspace, { "input.txt": "A\n" });
+  const baseCommit = await initializeScriptGitWorkspace(f.workspace, "input.txt");
+  const initial = await f.capture(baseCommit, "eligible");
+  const before = new Map(
+    await Promise.all(
+      (await fs.readdir(f.manifestRoot)).map(
+        async (name) => [name, await fs.readFile(path.join(f.manifestRoot, name))] as const,
+      ),
+    ),
+  );
+  await fs.writeFile(path.join(f.workspace, "input.txt"), "changed content B\n");
+  const runVerify = workspaceScriptRunner(REMOTE_WORKSPACE_MANIFEST_JS, f.workspace, f.env);
+  const verify = (args: string[]) =>
+    runVerify([args[0]!, `${args[1]}-read-only`, ...args.slice(2)]);
+  const verified = await verify([baseCommit, "eligible", initial.digest]);
+  for (const mode of ["publish", "resolve"]) {
+    expect((await verify([baseCommit, mode, initial.digest])).code).not.toBe(0);
+  }
+  expect(verified.code, verified.stderr).toBe(0);
+  expect(verified.stdout.trim()).not.toBe(initial.ref);
+  expect((await fs.readdir(f.manifestRoot)).toSorted()).toEqual([...before.keys()].toSorted());
+  for (const [name, bytes] of before) {
+    expect(await fs.readFile(path.join(f.manifestRoot, name))).toEqual(bytes);
+  }
+  expect((await f.capture(baseCommit, "eligible", initial.digest)).ref).toBe(
+    verified.stdout.trim(),
+  );
+});

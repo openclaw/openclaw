@@ -568,3 +568,9 @@ This capability is host-local and is never a wire environment override.
 streams. It preserves incomplete lines and leaves CR handling to the consumer.
 Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
 the runtime's existing dispatch and delivery authority.
+
+The host supplies `project.prepareSnapshot({ runScript })` for prepared projects in
+`WorkerProvider.provision` options. The host binds this capability to the current
+project preparation. Crabbox requires it for prepared-project capture. Providers call it only for their claimed disposable source,
+after runtime preparation and scrubbing, before native image capture. It verifies
+and normalizes that project's caches; `inspectPreparedWorkspace` remains read-only.
