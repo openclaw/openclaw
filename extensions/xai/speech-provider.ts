@@ -3,6 +3,7 @@ import {
   isProviderAuthProfileConfiguredAsync,
 } from "openclaw/plugin-sdk/provider-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type {
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
@@ -35,7 +36,7 @@ async function resolveXaiSpeechSynthesisRequest(
     await import("openclaw/plugin-sdk/media-generation-runtime");
   return {
     text: req.text,
-    apiKey: await resolveXaiAudioApiKey(config.apiKey, req.cfg),
+    apiKey: await resolveXaiAudioApiKey(config.apiKey, req.cfg, config.profileId),
     baseUrl: config.baseUrl,
     voiceId: overrides.voiceId ?? config.voiceId,
     language: overrides.language ?? config.language,
@@ -52,11 +53,14 @@ export function buildXaiSpeechProvider() {
     ...createXaiSpeechProviderMetadata({
       isProviderAuthProfileConfigured,
       isProviderAuthProfileConfiguredAsync,
+      resolveApiKeyForProvider,
     }),
     listVoices: async (req) => {
       const config = readXaiSpeechProviderConfig(req.providerConfig ?? {});
-      const directApiKey = normalizeOptionalString(req.apiKey) ?? config.apiKey;
-      const apiKey = await resolveOptionalXaiAudioApiKey(directApiKey, req.cfg);
+      const directApiKey = config.profileId
+        ? undefined
+        : (normalizeOptionalString(req.apiKey) ?? config.apiKey);
+      const apiKey = await resolveOptionalXaiAudioApiKey(directApiKey, req.cfg, config.profileId);
       if (!apiKey) {
         return XAI_TTS_FALLBACK_VOICES.map((voice) => ({ id: voice, name: voice }));
       }
@@ -99,24 +103,33 @@ export function buildXaiSpeechProvider() {
 async function resolveOptionalXaiAudioApiKey(
   configApiKey: string | undefined,
   cfg?: OpenClawConfig,
+  profileId?: string,
 ): Promise<string | undefined> {
-  const direct = resolveDirectXaiAudioApiKey(configApiKey);
-  if (direct) {
-    return direct;
+  if (!profileId) {
+    const direct = resolveDirectXaiAudioApiKey(configApiKey);
+    if (direct) {
+      return direct;
+    }
+    if (!cfg) {
+      return undefined;
+    }
   }
-  if (!cfg) {
-    return undefined;
-  }
-  const { resolveApiKeyForProvider } = await import("openclaw/plugin-sdk/provider-auth-runtime");
-  const auth = await resolveApiKeyForProvider({ provider: "xai", cfg });
+  const { resolveApiKeyForProvider: resolveProviderApiKey } =
+    await import("openclaw/plugin-sdk/provider-auth-runtime");
+  const auth = await resolveProviderApiKey({
+    provider: "xai",
+    cfg,
+    ...(profileId ? { profileId, lockedProfile: true } : {}),
+  });
   return normalizeOptionalString(auth?.apiKey);
 }
 
 async function resolveXaiAudioApiKey(
   configApiKey: string | undefined,
   cfg: OpenClawConfig,
+  profileId?: string,
 ): Promise<string> {
-  const apiKey = await resolveOptionalXaiAudioApiKey(configApiKey, cfg);
+  const apiKey = await resolveOptionalXaiAudioApiKey(configApiKey, cfg, profileId);
   if (apiKey) {
     return apiKey;
   }

@@ -992,7 +992,6 @@
 ["extensions/xai/lazy-capability-providers.test-support.ts","openclaw/plugin-sdk/agent-runtime","ea55eddaacf3b2e1a69b0c2567d35e326d94123009e16dd5ae36ce19fe7286bd",1]
 ["extensions/xai/realtime-voice-outgoing-response.test.ts","./ws-runtime.js","a3ef73f4059685e1ee3edee255b25a7e3e31c455ba4304f206b48c4a83fdc2ed",1]
 ["extensions/xai/realtime-voice-provider.test.ts","./ws-runtime.js","a1062c85c99816523ac2b72a13d734d775317b678d5417141ab98e7ca6fd65a9",1]
-["extensions/xai/realtime-voice-provider.test.ts","openclaw/plugin-sdk/provider-auth-runtime","eb5c37bf125f5fa367efe98a452d35bf05f27f507d2580cdc66ca9fab4f8a891",1]
 ["extensions/xai/realtime-voice.optional-capture.test.ts","./ws-runtime.js","a3ef73f4059685e1ee3edee255b25a7e3e31c455ba4304f206b48c4a83fdc2ed",1]
 ["extensions/xai/src/xai-user-agent.test.ts","openclaw/plugin-sdk/agent-harness-runtime","6bcb96a557728793a071549417018c9ba7c313f943c13943b3c79c73c7b27135",1]
 ["extensions/xai/web-search.test.ts","openclaw/plugin-sdk/agent-runtime","121fc863e40d06a3ba24501c7b46a09f6c8818554b916932c0347b0672787d12",1]

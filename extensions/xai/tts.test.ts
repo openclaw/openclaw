@@ -230,29 +230,32 @@ describe("xai tts", () => {
       expect(await capturedRequest().json()).not.toHaveProperty("speed");
     });
 
-    it("treats blank direct credentials as absent across readiness and requests", async () => {
-      vi.stubEnv("XAI_API_KEY", "   ");
-      audioResponse();
-      const providerConfig = { apiKey: "   " };
+    it("does not fall back when a pinned auth profile is unavailable", async () => {
+      vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+      const providerConfig = { apiKey: "xai-inline", profileId: "xai:missing" };
       expect(
         await provider.isConfiguredAsync?.({ cfg: {}, providerConfig, timeoutMs: 5_000 }),
       ).toBe(false);
-      await expect(provider.listVoices?.({ apiKey: "   ", providerConfig })).resolves.toEqual(
-        ["ara", "eve", "leo", "rex", "sal"].map((voice) => ({ id: voice, name: voice })),
-      );
-      await expect(provider.synthesize(request({ providerConfig }))).rejects.toThrow(
-        "xAI credentials missing for TTS",
-      );
+      const synthesis = provider.synthesize(request({ cfg: {}, providerConfig }));
+      await expect(synthesis).rejects.toThrow("xAI credentials missing for TTS");
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("uses cfg-scoped profile auth for synthesis", async () => {
-      resolveKey.mockResolvedValue({ apiKey: "oauth-bearer" });
+    it("locks synthesis to a pinned profile ahead of direct credentials", async () => {
+      vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+      resolveKey.mockResolvedValue({ apiKey: "profile-bearer" });
       const cfg = { agents: { defaults: {} } };
       audioResponse();
-      await provider.synthesize(request({ cfg, providerConfig: {}, target: "voice-note" }));
-      expect(resolveKey).toHaveBeenCalledWith({ provider: "xai", cfg });
-      expect(capturedRequest().headers.get("authorization")).toBe("Bearer oauth-bearer");
+      await provider.synthesize(
+        request({ cfg, providerConfig: { apiKey: "xai-inline", profileId: "xai:subscription" } }),
+      );
+      expect(resolveKey).toHaveBeenCalledWith({
+        provider: "xai",
+        cfg,
+        profileId: "xai:subscription",
+        lockedProfile: true,
+      });
+      expect(capturedRequest().headers.get("authorization")).toBe("Bearer profile-bearer");
     });
   });
 

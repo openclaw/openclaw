@@ -246,7 +246,10 @@ const XAI_REALTIME_AUDIO_FORMAT_PCM16_24KHZ = {
 export function createXaiRealtimeVoiceProviderMetadata(
   context: Pick<
     PluginCapabilityCatalogHostContext,
-    "isProviderAuthProfileConfigured" | "isProviderAuthProfileConfiguredAsync" | "resolveAgentDir"
+    | "isProviderAuthProfileConfigured"
+    | "isProviderAuthProfileConfiguredAsync"
+    | "resolveApiKeyForProvider"
+    | "resolveAgentDir"
   >,
 ) {
   return {
@@ -274,13 +277,16 @@ export function createXaiRealtimeVoiceProviderMetadata(
     // Retained for synchronous SDK consumers through 2026-12-31.
     resolveConfig: ({ rawConfig }) => normalizeXaiRealtimeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig, cfg, agentId }) => {
-      const configApiKey = normalizeXaiRealtimeProviderConfig(providerConfig).apiKey;
+      const config = normalizeXaiRealtimeProviderConfig(providerConfig);
       const { isProviderAuthProfileConfigured, resolveAgentDir } = context;
       if (
-        normalizeOptionalString(configApiKey) ||
-        normalizeOptionalString(process.env.XAI_API_KEY)
+        !config.profileId &&
+        (normalizeOptionalString(config.apiKey) || normalizeOptionalString(process.env.XAI_API_KEY))
       ) {
         return true;
+      }
+      if (config.profileId) {
+        return false;
       }
       return isProviderAuthProfileConfigured({
         provider: "xai",
@@ -290,18 +296,31 @@ export function createXaiRealtimeVoiceProviderMetadata(
     },
     resolveConfigAsync: async ({ rawConfig }) => normalizeXaiRealtimeProviderConfig(rawConfig),
     isConfiguredAsync: ({ providerConfig, cfg, agentId }) => {
-      const configApiKey = normalizeXaiRealtimeProviderConfig(providerConfig).apiKey;
+      const config = normalizeXaiRealtimeProviderConfig(providerConfig);
+      const profileId = config.profileId;
       const { isProviderAuthProfileConfiguredAsync, resolveAgentDir } = context;
       if (
-        normalizeOptionalString(configApiKey) ||
-        normalizeOptionalString(process.env.XAI_API_KEY)
+        !profileId &&
+        (normalizeOptionalString(config.apiKey) || normalizeOptionalString(process.env.XAI_API_KEY))
       ) {
         return Promise.resolve(true);
+      }
+      const agentDir = cfg && agentId ? resolveAgentDir(cfg, agentId) : undefined;
+      if (profileId) {
+        return context
+          .resolveApiKeyForProvider({
+            provider: "xai",
+            cfg,
+            ...(agentDir ? { agentDir } : {}),
+            profileId,
+            lockedProfile: true,
+          })
+          .then((auth) => Boolean(auth?.apiKey));
       }
       return isProviderAuthProfileConfiguredAsync({
         provider: "xai",
         cfg,
-        ...(cfg && agentId ? { agentDir: resolveAgentDir(cfg, agentId) } : {}),
+        ...(agentDir ? { agentDir } : {}),
       });
     },
   } satisfies Omit<RealtimeVoiceProviderPlugin, "createBridge" | "createBrowserSession">;
