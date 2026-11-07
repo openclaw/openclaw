@@ -26,7 +26,10 @@ import {
   type SqliteIntegrityOperation,
 } from "../infra/sqlite-integrity.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
-import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import {
+  isSqliteSchemaVersionError,
+  readSqliteWriterAppVersion,
+} from "../infra/sqlite-user-version.js";
 import { prepareSqliteDatabaseDirectory } from "../infra/sqlite-wal-filesystem.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import {
@@ -38,6 +41,7 @@ import { SqliteWorkerOpenRefusedError } from "../infra/sqlite-worker-contract.js
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { VERSION } from "../version.js";
 import {
   assertAgentCreationClaimCurrent,
   registerAgentCreationClaimHandle,
@@ -461,7 +465,11 @@ function* openOpenClawAgentDatabaseSteps(
         openedWalMaintenance = walMaintenance;
         finishPhase("configuration");
         assertCurrent(validationDatabase);
-        if (!isValidatedReopen) {
+        if (
+          !existingSchema ||
+          requiresCurrentVersionConvergence ||
+          (!isValidatedReopen && readSqliteWriterAppVersion(db) !== VERSION)
+        ) {
           ensureOpenClawAgentSchema(
             db,
             agentId,

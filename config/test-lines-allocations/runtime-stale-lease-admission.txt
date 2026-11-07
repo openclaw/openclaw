@@ -1,2 +1,3 @@
 # Preserve admission corruption, authority, FIFO, and retained-worker runtime/startup proof with explicit verification and schema-repair fixtures.
-34
+# Includes the exact 10-line comparison-base debt reconciled by maintainer request.
+61
