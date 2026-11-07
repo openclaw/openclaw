@@ -454,3 +454,21 @@ original frame sequence before judging a subtle transition. The visible-change
 census is a reported animation-collapse heuristic; unmasked pixels and explicit
 animation provenance remain available as controls. An A/A run qualifies noisy
 metrics before using this report to reject a small change.
+
+## Warm visibility join qualification
+
+A warm visibility join must qualify on current main before changing presentation:
+calibrate 300 ms old → complete and 900 ms old → blank → complete, then inspect
+four unprofiled reloads each of native archived chat, active chat, dashboard,
+and Team-scale active and archived chat. Stop if the Team complete cached frame
+is not reliably below approximately 480 ms (report median and IQR).
+
+Compare a candidate with twelve alternating-order pairs and an identical-build
+A/A control on one quiet AWS c7a.4xlarge. Inspect the masked visual census:
+Team chat must show old → complete as its first new-document state in at least
+ten of twelve reloads; native routes must never expose blank/background-only
+frames or exceed main's median unique-state count. First painted rows may cost
+at most one frame (17 ms), using each order's median candidate delta minus its
+A/A median, then averaging the two orders. Report raw deltas and both spreads.
+Hello, first post-hello RPC, final rows, LoAF, CLS, Details co-framing, stable
+Details section geometry, and zero transcript backtracking remain required.
