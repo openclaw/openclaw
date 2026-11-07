@@ -4,20 +4,44 @@ Tests for model_usage helpers.
 """
 
 import argparse
+import io
+import json
 from datetime import date, timedelta
 from unittest import TestCase, main
+from unittest.mock import patch
 
 from model_usage import (
     aggregate_costs,
     coerce_finite_cost,
     filter_by_days,
     latest_day_cost,
+    load_payload,
     pick_current_model,
     positive_int,
 )
 
 
 class TestModelUsage(TestCase):
+    def test_load_payload_respects_explicit_provider(self):
+        for provider, other in (("codex", "claude"), ("claude", "codex")):
+            matching = {"provider": provider, "daily": []}
+            mismatched = {"provider": other, "daily": []}
+            for payload, accepted in (
+                (matching, True),
+                ({"daily": []}, True),
+                ([mismatched, matching], True),
+                (mismatched, False),
+                ([mismatched], False),
+            ):
+                with self.subTest(provider=provider, payload=payload):
+                    with patch("sys.stdin", io.StringIO(json.dumps(payload))):
+                        if accepted:
+                            expected = matching if isinstance(payload, list) else payload
+                            self.assertEqual(load_payload("-", provider), expected)
+                        else:
+                            with self.assertRaisesRegex(RuntimeError, f"Provider '{provider}'"):
+                                load_payload("-", provider)
+
     def test_positive_int_accepts_valid_numbers(self):
         self.assertEqual(positive_int("1"), 1)
         self.assertEqual(positive_int("7"), 7)
