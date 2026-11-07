@@ -21,10 +21,7 @@ export async function startDisposableGatewayIngress(port: number) {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
   };
-  const html = renderControlUiUnavailableDocument(
-    "Server is temporarily unavailable",
-    "The server is not reachable right now.",
-  );
+  const html = renderControlUiUnavailableDocument("Server is temporarily unavailable");
   const csp = buildControlUiCspHeader({ inlineScriptHashes: computeInlineScriptHashes(html) });
   const directAgent = new Agent({ keepAlive: false });
   const createUpstream = (req: IncomingMessage) => {
