@@ -1,0 +1,2 @@
+# Companion coverage for stale quarantine hashing and doctor cleanup. Credit equals the added test-line delta versus the upstream merge base.
+175
