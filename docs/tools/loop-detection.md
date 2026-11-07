@@ -72,6 +72,15 @@ Per-agent override (optional, at `agents.entries.*.tools.loopDetection`):
 
 The per-agent setting overrides the global setting.
 
+The runaway-loop limit also counts stable repeated outcomes across different
+tools in the current run. Rotating through three tools, including Code Mode
+`exec` and its nested calls, cannot evade it by dividing the rolling history.
+Changed results reset this shared no-progress tail; pending calls and first-time
+outcomes do not establish repetition. Single-tool argument churn retains its
+warning-only behavior.
+A new tool or new arguments remain available for the existing recovery
+opportunity; continuing a confirmed loop still triggers critical detection.
+
 You can also enable the global rolling-history detectors in **Settings → Agent Defaults → Tools** in the Control UI. Reset the setting to its default to disable the rolling detectors while keeping the post-compaction guard; explicitly turning it off disables both.
 
 ### Field behavior
