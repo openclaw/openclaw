@@ -1,0 +1,2 @@
+# Isolate cleanup retry fake timers and reset the blocked attachment mock after assertion failure.
+3

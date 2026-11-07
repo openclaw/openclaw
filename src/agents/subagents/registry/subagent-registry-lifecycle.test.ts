@@ -1240,6 +1240,8 @@ describe("subagent registry lifecycle hardening", () => {
   });
 
   it("drops a failed-cleanup retry after a newer cleanup generation starts", async () => {
+    // Retire native idle maintenance before this policy fixture takes over the clock.
+    await getOpenClawStateWorkerOwner().close();
     vi.useFakeTimers();
     const entry = createRunEntry({
       endedAt: 4_000,
@@ -1274,6 +1276,7 @@ describe("subagent registry lifecycle hardening", () => {
       );
     } finally {
       releaseNewCleanup?.();
+      helperMocks.safeRemoveAttachmentsDir.mockReset().mockResolvedValue(undefined);
       controller.clearRuntimeState();
       vi.useRealTimers();
     }
