@@ -27,7 +27,7 @@ struct ServeCommand: CLICommand {
         var cfg: SwabbleConfig
         do {
             cfg = try ConfigLoader.load(at: self.configURL)
-        } catch {
+        } catch ConfigError.missingConfig {
             cfg = SwabbleConfig()
             try ConfigLoader.save(cfg, at: self.configURL)
         }
