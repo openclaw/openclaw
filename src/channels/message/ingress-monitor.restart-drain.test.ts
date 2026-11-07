@@ -189,6 +189,51 @@ it("rearms queued ingress after a restart signal rolls back without an idle obse
   });
 });
 
+it("does not claim queued ingress when restart fences its pending snapshot", async () => {
+  await withQueue(async (queue) => {
+    const raw: RawEvent = { id: "restart-snapshot", lane: "a", text: "deliver after rollback" };
+    await queue.enqueue(
+      raw.id,
+      { version: 1, rawEvent: JSON.stringify(raw) },
+      { laneKey: "lane:a" },
+    );
+    const admission: { signal: ReturnType<typeof beginGatewayRestartSignalAdmission> } = {
+      signal: null,
+    };
+    const listUnsettled = queue.listUnsettled!.bind(queue);
+    const snapshot = vi.spyOn(queue, "listUnsettled").mockImplementationOnce(async (...args) => {
+      const rows = await listUnsettled(...args);
+      admission.signal = beginGatewayRestartSignalAdmission();
+      expect(admission.signal).not.toBeNull();
+      return rows;
+    });
+    const claim = vi.spyOn(queue, "claim");
+    const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+      await lifecycle.onAdopted();
+    });
+    const monitor = createMonitor(queue, deliver);
+    try {
+      monitor.start();
+      await monitor.waitForPumpIdle();
+      expect(claim).not.toHaveBeenCalled();
+      expect(deliver).not.toHaveBeenCalled();
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending()).toEqual([
+        expect.objectContaining({ id: raw.id, attempts: 0 }),
+      ]);
+      expect(admission.signal?.rollback()).toBe(true);
+      await monitor.waitForIdle();
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(await queue.listClaims()).toEqual([]);
+    } finally {
+      admission.signal?.rollback();
+      await monitor.stop();
+      snapshot.mockRestore();
+      claim.mockRestore();
+    }
+  });
+});
+
 it("holds queued ingress until host suspension reopens admission", async () => {
   await withQueue(async (queue) => {
     const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {

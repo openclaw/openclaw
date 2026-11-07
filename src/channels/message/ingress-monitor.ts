@@ -490,13 +490,16 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           return activeDrain.drainOnce({
             recoverStaleClaims,
             shouldStop: () =>
-              !running ||
-              isAborted() ||
-              getGatewaySuspendAdmissionPhase() !== "accepting" ||
+              shouldStopDispatch() ||
               activeDeliveries.size + activeInspections.size - deferredStartCapacity >= startLimit,
           });
         });
         observe("drain-returned", { started });
+        if (isGatewayRestartDraining() || getGatewayRestartDrainSignal().aborted) {
+          // A fence can close during the snapshot; retain the existing rollback wake.
+          requestDrain();
+          break;
+        }
         if (waitForDeliveryIdleBeforeRepump) {
           await waitForActiveDeliveries();
           await activeDrain.waitForIdle();

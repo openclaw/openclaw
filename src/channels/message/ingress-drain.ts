@@ -635,35 +635,48 @@ export function createChannelIngressDrainOwner<
   };
   const recoverStaleClaims = async (): Promise<number> => {
     const activeLanes = new Set(laneOwnerByKey.keys());
-    return await queue.recoverStaleClaims({
+    const recovery = { candidates: 0, active: 0, localOwner: 0, remoteOwner: 0 };
+    const recovered = await queue.recoverStaleClaims({
       staleMs: 0,
       now: now(),
       shouldRecover: (claim) => {
+        recovery.candidates += 1;
         if (activeByClaim.has(activeClaimKey(claim))) {
+          recovery.active += 1;
           return false;
         }
         // Same-PID multi-drain: only recover when the owner instance is not live.
         if (isLiveLocalIngressDrainOwner(claim.claim.ownerId)) {
+          recovery.localOwner += 1;
           return false;
         }
-        return !isIngressClaimOwnedByOtherLiveProcess(claim, {
+        const remoteOwner = isIngressClaimOwnedByOtherLiveProcess(claim, {
           maxAgeMs: claimLeaseMs,
           now: now(),
         });
+        recovery.remoteOwner += Number(remoteOwner);
+        return !remoteOwner;
       },
       shouldRecoverCorrupt: (claim) => {
+        recovery.candidates += 1;
         if (claim.laneKey && activeLanes.has(claim.laneKey)) {
+          recovery.active += 1;
           return false;
         }
         if (isLiveLocalIngressDrainOwner(claim.claim.ownerId)) {
+          recovery.localOwner += 1;
           return false;
         }
-        return !isIngressCorruptClaimOwnedByOtherLiveProcess(claim, {
+        const remoteOwner = isIngressCorruptClaimOwnedByOtherLiveProcess(claim, {
           maxAgeMs: claimLeaseMs,
           now: now(),
         });
+        recovery.remoteOwner += Number(remoteOwner);
+        return !remoteOwner;
       },
     });
+    observe("recovery-returned", { ...recovery, recovered });
+    return recovered;
   };
 
   const drainOnce = async (drainOptions?: {

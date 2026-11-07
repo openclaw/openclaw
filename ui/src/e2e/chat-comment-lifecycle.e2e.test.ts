@@ -116,6 +116,16 @@ suite.define(() => {
       const reread = createDeferred();
       let reads = 0;
       let tickets = 0;
+      let metadataCompleted = 0;
+      let failedReads = 0;
+      page.on("requestfailed", (request) => {
+        if (
+          request.url().includes("/assistant-media?") &&
+          !new URL(request.url()).searchParams.has("meta")
+        ) {
+          failedReads += 1;
+        }
+      });
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         if (new URL(route.request().url()).searchParams.has("meta")) {
           const now = await page.evaluate(() => Date.now());
@@ -125,16 +135,13 @@ suite.define(() => {
               mediaTicketExpiresAt: new Date(now + 60_000).toISOString(),
             },
           });
+          metadataCompleted += 1;
           return;
         }
         await (++reads === 1 ? canonicalBody.promise : reread.promise);
         await route.fulfill({ contentType: "text/plain", body: sent.attachment });
       });
-      const canonicalRead = page.waitForResponse(
-        (response) =>
-          response.url().includes("/assistant-media?") &&
-          !new URL(response.url()).searchParams.has("meta"),
-      );
+      let canonicalRead: ReturnType<typeof page.waitForResponse> | undefined;
       const canonicalId = `mock-user:${sent.idempotencyKey}`;
       const canonicalSeq = history.length + 1;
       const canonical = {
@@ -169,13 +176,27 @@ suite.define(() => {
           message: canonical,
         });
         await page.locator(`[data-entry-id="${canonicalId}"]`).waitFor();
+        try {
+          await expect.poll(() => reads, { timeout: 30_000 }).toBe(1);
+        } catch (error) {
+          throw new Error(
+            "Canonical attachment read did not start: " +
+              JSON.stringify({ tickets, metadataCompleted, reads, failedReads }),
+            { cause: error },
+          );
+        }
+        canonicalRead = page.waitForResponse(
+          (response) =>
+            response.url().includes("/assistant-media?") &&
+            !new URL(response.url()).searchParams.has("meta"),
+        );
         expect(await quote.isVisible()).toBe(true);
         expect(await inline.textContent()).toContain(comment);
         expect((await inline.boundingBox())?.height).toBe(before!.height);
       } finally {
         canonicalBody.resolve();
       }
-      await (await canonicalRead).finished();
+      await (await canonicalRead!).finished();
       await quote.waitFor();
       await waitForChatScrollIdle(page);
       expect(await inline.textContent()).toContain(comment);
