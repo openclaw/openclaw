@@ -8,6 +8,43 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
+  it("hides speed controls for a standard-only routed Anthropic model", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const id = "anthropic/claude-fixture";
+      await installMockGateway(page, {
+        agentModel: `clawrouter/${id}`,
+        models: [
+          {
+            id,
+            name: "Claude fixture via ClawRouter",
+            provider: "clawrouter",
+            reasoning: true,
+            thinkingLevels: ["low", "medium", "high", "xhigh", "max"].map((level) => ({
+              id: level,
+              label: level,
+            })),
+            supportsFastMode: false,
+            serviceTiers: ["default"],
+          },
+        ],
+        sessionInfo: { model: id, modelProvider: "clawrouter", thinkingLevel: "medium" },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__input").first();
+      await composer.locator('[data-chat-thinking-select="true"]').click();
+      await composer.locator("[data-chat-thinking-slider]").waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          composer
+            .locator(".chat-controls__effort-menu")
+            .evaluate((node) => getComputedStyle(node).opacity),
+        )
+        .toBe("1");
+      await page.screenshot({ path: `${suite.artifactDir}/standard-only-routed-model.png` });
+      expect(await composer.locator(".chat-controls__speed-panel").count()).toBe(0);
+    });
+  });
+
   it("hides the ClawRouter suffix without changing the selected model route", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const id = "anthropic/claude-opus-5-5";
