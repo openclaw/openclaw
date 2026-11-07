@@ -70,6 +70,7 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
       ? {}
       : { repositoryWorkspaceId: entry.repositoryWorkspaceId }),
     visibility: entry.visibility,
+    ...(entry.publicShare === undefined ? {} : { publicShare: entry.publicShare }),
     incognito: entry.incognito,
     createdActor: entry.createdActor,
     owner: entry.owner ? { ...entry.owner, assignedBy: entry.owner.assignedBy } : undefined,

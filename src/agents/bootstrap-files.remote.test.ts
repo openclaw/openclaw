@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearInternalHooks, registerInternalHook } from "../hooks/internal-hooks.js";
 import type { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveBootstrapFilesForRun } from "./bootstrap-files.js";
@@ -72,24 +72,55 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
   afterEach(async () => {
     release?.();
     clearInternalHooks();
-    closeOpenClawStateDatabaseForTest();
     resetLegacyWorkspaceStateCheckForTest();
     await testState?.cleanup();
     testState = undefined;
   });
 
   it("selects personal files from the bound workspace and rejects remote profile aliases", async () => {
+    classify.mockImplementation(
+      async ({ relativePaths }: Parameters<typeof classifyActiveMemoryWorkspacePaths>[0]) => ({
+        status: "classified",
+        classifications: relativePaths.map((relativePath) => ({
+          relativePath,
+          originClass: "agent",
+        })),
+      }),
+    );
     const alice = ensureProfileForEmail("alice@example.test");
     const bob = ensureProfileForEmail("bob@example.test");
     await write(profileDir(workspaceDir, alice.id), "USER.md", "Local decoy");
     await write(profileDir(remoteDir, alice.id), "USER.md", "Remote Alice");
     await fs.symlink(profileDir(remoteDir, alice.id), profileDir(remoteDir, bob.id), "junction");
     bindRemote();
-    const files = await resolveFiles({ bootstrapUserProfileId: alice.id });
+    const sessionKey = "agent:main:remote-personal";
+    const storePath = testState!.statePath("sessions.sqlite");
+    const scope = { agentId: "main", sessionKey, storePath };
+    const entry = {
+      sessionId: "remote-personal",
+      updatedAt: 1,
+      visibility: "draft" as const,
+      createdActor: { type: "human" as const, source: "profile" as const, id: alice.id },
+    };
+    await replaceSessionEntry(scope, entry);
+    const session = { sessionKey, config: { session: { store: storePath } } };
+    const files = await resolveFiles({ ...session, bootstrapUserProfileId: alice.id });
     expect(files.filter((file) => file.name === "USER.md").map((file) => file.content)).toEqual([
       "Remote Alice",
     ]);
-    const aliased = await resolveFiles({ bootstrapUserProfileId: bob.id });
+    const bobSessionKey = "agent:main:remote-bob";
+    await replaceSessionEntry(
+      { ...scope, sessionKey: bobSessionKey },
+      {
+        ...entry,
+        createdActor: { ...entry.createdActor, id: bob.id },
+      },
+    );
+    const aliased = await resolveFiles({
+      ...session,
+      sessionKey: bobSessionKey,
+      bootstrapUserProfileId: bob.id,
+    });
     expect(aliased.some((file) => file.content === "Remote Alice")).toBe(false);
   });
 

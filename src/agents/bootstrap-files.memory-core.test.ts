@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { recordMemoryArtifactWriteProvenance } from "../memory/memory-artifact-provenance.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
@@ -49,11 +50,21 @@ it("loads personal files and quarantines an untrusted tool write", () =>
     await fs.mkdir(path.dirname(personalFile), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared preferences");
     await fs.writeFile(personalFile, "Personal preferences");
+    const storePath = state.statePath("sessions.sqlite");
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:person", storePath },
+      {
+        sessionId: "personal-memory",
+        updatedAt: 1,
+        visibility: "draft",
+        createdActor: { type: "human", source: "profile", id: profile.id },
+      },
+    );
     const warnings: string[] = [];
     const load = async () => {
       const { contextFiles } = await resolveBootstrapContextForRun({
         workspaceDir,
-        config: {},
+        config: { session: { store: storePath } },
         agentId: "main",
         sessionKey: "agent:main:person",
         bootstrapUserProfileId: profile.id,

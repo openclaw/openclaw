@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import {
   withGatewayToolCallerIdentity,
   withGatewayPersonalToolUser,
@@ -11,6 +12,8 @@ import {
 import { createPersonalInstructionsTool } from "../../agents/tools/personal-instructions-tool.js";
 import { loadPersonalUserBootstrapFile } from "../../agents/workspace-personal-bootstrap.js";
 import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -19,6 +22,10 @@ import type {
   UserProfileDisplay,
   UserProfileIdentity,
 } from "../../state/user-profiles.types.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
@@ -37,6 +44,7 @@ const state = vi.hoisted(() => ({
   profileHolds: 0,
   rootCalls: 0,
   beforeRoot: undefined as (() => Promise<void>) | undefined,
+  beforeWrite: undefined as (() => Promise<void>) | undefined,
 }));
 // mock-isolation: exercise profile revocation without opening shared profile storage.
 vi.mock("../../state/user-profile-list.js", () => ({
@@ -113,18 +121,25 @@ vi.mock("../../infra/fs-safe.js", async (importOriginal) => {
       state.rootCalls += 1;
       await state.beforeRoot?.();
       const [dir, defaults] = args;
-      return original.root(dir, {
+      const handle = await original.root(dir, {
         ...defaults,
         assertBeforeMutation: () => {
           state.beforeMutation?.();
           defaults?.assertBeforeMutation?.();
         },
       });
+      const write = handle.write.bind(handle);
+      handle.write = async (...params) => {
+        await state.beforeWrite?.();
+        return write(...params);
+      };
+      return handle;
     },
   };
 });
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+let testState: OpenClawTestState;
 let workspace: string;
 let client: GatewayClient;
 let connected: boolean;
@@ -132,6 +147,7 @@ let config: OpenClawConfig;
 let controller: AbortController;
 
 beforeEach(async () => {
+  testState = await createOpenClawTestState({ layout: "state-only" });
   workspace = await fs.realpath(dirs.make("personal-file-"));
   state.canonical = "alice";
   state.multipleProfiles = true;
@@ -143,9 +159,13 @@ beforeEach(async () => {
   state.profileHolds = 0;
   state.rootCalls = 0;
   state.beforeRoot = undefined;
+  state.beforeWrite = undefined;
   connected = true;
   controller = new AbortController();
-  config = { agents: { defaults: { workspace } } };
+  config = {
+    agents: { defaults: { workspace } },
+    session: { store: testState.statePath("sessions.sqlite") },
+  };
   client = {
     connId: "alice-connection",
     connect: gatewayConnect(["operator.read"]),
@@ -179,10 +199,30 @@ const save = (content: string, expectedHash: string | null = null) =>
   rpc("set", { content, expectedHash });
 const personalPath = () => path.join(workspace, "users", "alice", "USER.md");
 
+afterEach(async () => {
+  await testState.cleanup();
+});
+
+async function toolSession(sessionKey: string, changes: Partial<InternalSessionEntry> = {}) {
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey, storePath: testState.statePath("sessions.sqlite") },
+    {
+      sessionId: "personal-tool",
+      updatedAt: 1,
+      visibility: "draft",
+      createdActor: { type: "human", source: "profile", id: "alice" },
+      ...changes,
+    },
+  );
+}
+
 describe("personal USER.md self-service", () => {
-  function toolTurn(scopes = ["operator.read"]) {
+  async function toolTurn(scopes = ["operator.read"], creator = "alice") {
     client.connect.scopes = scopes;
-    const sessionKey = "agent:main:dashboard:someone-elses-project";
+    const sessionKey = "agent:main:dashboard:personal-" + creator;
+    await toolSession(sessionKey, {
+      createdActor: { type: "human", source: "profile", id: creator },
+    });
     let active = true;
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "alice-alias",
@@ -230,9 +270,9 @@ describe("personal USER.md self-service", () => {
   }
 
   it.each(["operator.read", "operator.sessions.read"])(
-    "routes the %s requester's chat tool from a foreign session to their canonical file",
+    "routes the %s requester's chat tool to their canonical file, not the synthetic client profile",
     async (scope) => {
-      const { identity } = toolTurn([scope]);
+      const { identity } = await toolTurn([scope]);
       const tool = createPersonalInstructionsTool("main");
       const execute = (params: Record<string, unknown>) =>
         withGatewayToolCallerIdentity(identity, () =>
@@ -262,11 +302,154 @@ describe("personal USER.md self-service", () => {
     },
   );
 
-  function withRequesterTurn(test: Parameters<typeof withPersonalToolTurn>[1]) {
-    const { identity } = toolTurn();
+  it.each(["get", "set"] as const)(
+    "keeps personal %s out of group and channel tool results without touching either file",
+    async (action) => {
+      const { identity } = await toolTurn(["operator.sessions.read"]);
+      const tool = createPersonalInstructionsTool("main");
+      const original = "Alice private instructions";
+      const peer = path.join(workspace, "users", "bob", "USER.md");
+      await fs.mkdir(path.dirname(personalPath()), { recursive: true });
+      await fs.mkdir(path.dirname(peer), { recursive: true });
+      await fs.writeFile(personalPath(), original);
+      await fs.writeFile(peer, "Bob private instructions");
+      const before = await withGatewayToolCallerIdentity(identity, () =>
+        tool.execute("personal-read", { action: "get" }),
+      );
+      const hash = (before.details as { hash: string }).hash;
+      const groupKey = "agent:main:discord:group:room";
+      const channelKey = "agent:main:discord:channel:room";
+      for (const [sessionKey, sourceKey, chatType] of [
+        [identity.sessionKey, "agent:main:opaque", "group"],
+        [identity.sessionKey, "agent:main:opaque", "channel"],
+        [identity.sessionKey, groupKey, undefined],
+        [identity.sessionKey, channelKey, undefined],
+        [groupKey, undefined, undefined],
+        [channelKey, undefined, undefined],
+        [groupKey, "agent:main:private-source", "direct"],
+      ] as const) {
+        const beforeRoots = state.rootCalls;
+        const caller = {
+          ...identity,
+          sessionKey,
+          requesterOrigin: sourceKey
+            ? captureRequesterOrigin({ sessionKey: sourceKey, chatType })
+            : undefined,
+        };
+        await expect(
+          withGatewayToolCallerIdentity(caller, () =>
+            tool.execute("personal-shared", {
+              action,
+              ...(action === "set" ? { content: "Must not save", expectedHash: hash } : {}),
+            }),
+          ),
+        ).rejects.toThrow(/Settings.*Profile.*Personal instructions/);
+        expect(state.rootCalls).toBe(beforeRoots);
+        expect(await fs.readFile(personalPath(), "utf8")).toBe(original);
+        expect(await fs.readFile(peer, "utf8")).toBe("Bob private instructions");
+        expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
+      }
+      // A host-resolved direct label also needs creator-private session facts.
+      await toolSession(groupKey);
+      const direct = await withGatewayToolCallerIdentity(
+        {
+          ...identity,
+          sessionKey: groupKey,
+          requesterOrigin: captureRequesterOrigin({
+            sessionKey: groupKey,
+            chatType: "direct",
+          }),
+        },
+        () => tool.execute("personal-direct", { action: "get" }),
+      );
+      expect(direct.details).toMatchObject({ profileId: "alice", content: original });
+    },
+  );
+
+  it.each(["get", "set"] as const)(
+    "withholds personal %s from non-private web audiences",
+    async (action) => {
+      const { identity } = await toolTurn();
+      const tool = createPersonalInstructionsTool("main");
+      const call = () =>
+        withGatewayToolCallerIdentity(identity, () =>
+          tool.execute("web-audience", {
+            action,
+            ...(action === "set" ? { content: "Must not save", expectedHash: null } : {}),
+          }),
+        );
+      for (const changes of [
+        { visibility: "shared" },
+        { visibility: "read-only" },
+        { visibility: "suggest" },
+        { publicShare: { id: "c".repeat(48), sessionId: "personal-tool", createdAt: 1 } },
+      ] satisfies Partial<InternalSessionEntry>[]) {
+        await toolSession(identity.sessionKey, changes);
+        const roots = state.rootCalls;
+        await expect(call()).rejects.toThrow(/Settings.*Profile.*Personal instructions/);
+        expect(state.rootCalls).toBe(roots);
+        expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
+      }
+      // A private execution target does not hide a shared origin's transcript audience.
+      await toolSession(identity.sessionKey, { publicShare: undefined });
+      const originKey = "agent:main:dashboard:shared-source";
+      await toolSession(originKey, { visibility: "shared" });
+      await expect(
+        withGatewayToolCallerIdentity(
+          {
+            ...identity,
+            requesterOrigin: captureRequesterOrigin({ sessionKey: originKey, chatType: "direct" }),
+          },
+          () =>
+            tool.execute("delegated-web", {
+              action,
+              ...(action === "set" ? { content: "Must not save", expectedHash: null } : {}),
+            }),
+        ),
+      ).rejects.toThrow(/Settings.*Profile.*Personal instructions/);
+    },
+  );
+
+  it.each(["get", "set"] as const)(
+    "rechecks web audience before personal %s release or mutation",
+    async (action) => {
+      const { identity } = await toolTurn();
+      const change = () => toolSession(identity.sessionKey, { visibility: "shared" });
+      if (action === "get") {
+        state.beforeRoot = change;
+      } else {
+        state.beforeWrite = change;
+      }
+      const tool = createPersonalInstructionsTool("main");
+      await expect(
+        withGatewayToolCallerIdentity(identity, () =>
+          tool.execute("audience-change", {
+            action,
+            ...(action === "set" ? { content: "Must not save", expectedHash: null } : {}),
+          }),
+        ),
+      ).rejects.toThrow();
+      expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
+    },
+  );
+
+  it("does not disclose an authenticated editor's file into another person's private draft", async () => {
+    const { identity } = await toolTurn(["operator.read"], "bob");
+    await expect(
+      withGatewayToolCallerIdentity(identity, () =>
+        createPersonalInstructionsTool("main").execute("foreign-draft", { action: "get" }),
+      ),
+    ).rejects.toThrow(/Settings.*Profile.*Personal instructions/);
+    expect(state.rootCalls).toBe(0);
+  });
+
+  async function withRequesterTurn(test: Parameters<typeof withPersonalToolTurn>[1]) {
+    const { identity } = await toolTurn();
     return withPersonalToolTurn(
       {
         owner: { profileId: "alice-alias", senderId: "alice", name: "Alice" },
+        sessionKey: identity.sessionKey,
+        config,
         allowCollaborativeSteering: true,
       },
       (turn) =>
@@ -336,7 +519,7 @@ describe("personal USER.md self-service", () => {
   ] as const)(
     "carries authenticated $kind owner ingress through the chat tool: $boundary",
     async ({ kind, boundary }) => {
-      const { identity } = toolTurn();
+      const { identity } = await toolTurn(["operator.read"], GATEWAY_OWNER_PROFILE_ID);
       const entered = createDeferredCore();
       const resume = createDeferredCore();
       const connection = new AbortController();
@@ -433,7 +616,7 @@ describe("personal USER.md self-service", () => {
   it.each(["unattested", "synthetic", "agent-tool", "unprofiled", "node", "invalidated"])(
     "does not create owner authority for %s work",
     async (kind) => {
-      const { identity } = toolTurn();
+      const { identity } = await toolTurn();
       const ingress: GatewayClient = {
         ...client,
         connId: "owner-source",
@@ -473,7 +656,7 @@ describe("personal USER.md self-service", () => {
   it.each(["different source", "unadmitted", "missing source"])(
     "rejects copied requester authority with %s",
     async (kind) => {
-      const { identity } = toolTurn();
+      const { identity } = await toolTurn();
       if (kind === "different source") {
         client.internal!.operatorRunAuthority = createAdmittedRunOperatorAuthority({
           profileId: identity.operatorAuthority.profileId,
@@ -496,7 +679,7 @@ describe("personal USER.md self-service", () => {
   it.each(["source", "run", "commit"])(
     "rechecks delegated %s authority before filesystem mutation",
     async (boundary) => {
-      const turn = toolTurn();
+      const turn = await toolTurn();
       if (boundary === "commit") {
         let current = true;
         state.commitGuard = () => {

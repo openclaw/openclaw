@@ -34,9 +34,15 @@ their implied write/admin scopes); broader Gateway read access, administrator
 access, and general write access are not required. The editor always uses the signed-in person, not the owner of
 the currently open chat. It cannot edit another person’s file or shared defaults.
 
-You can also ask an agent in any authenticated Gateway chat session to update
-your personal instructions, including sessions backed by a project worktree or
-owned by someone else. The `personal_instructions` tool reads or updates the
+You can also ask an agent in an authenticated Gateway chat session to update
+your personal instructions from your own creator-private Draft, including a
+project worktree, provided it has no public share. Shared, group/channel,
+unverified, or another person’s conversations must use
+**Settings → Profile → Personal instructions** instead, so the file contents do
+not enter shared tool results. This also applies when a group request delegates
+the operation into another session or a private request runs in a known group.
+Both the current execution session and a distinct delegated origin must qualify.
+The authenticated Settings editor is unchanged. The `personal_instructions` tool reads or updates the
 **requesting person’s** file in the selected agent’s configured workspace; the
 session owner, task directory, and model-supplied profile IDs never choose the
 write target. It reads the current file before saving with its content hash.
@@ -65,10 +71,26 @@ ownership and creation records; no schema or configuration change is needed.
 Each session selects **one personal `USER.md`**: the assigned human owner's file
 first, otherwise the authenticated human creator's file. An agent or system
 assignment does not prevent that creator fallback. For eligible external chat
-turns, OpenClaw loads the shared file first and the selected personal file second.
+turns in an existing creator-private Draft without a public share, OpenClaw loads
+the shared file first and the selected personal file second, only if the canonical
+creator matches the selected profile. A human assignment to someone other than
+the creator preserves selection but withholds its personal overlay.
 The personal file supplements, rather than replaces, the shared file, overriding
 conflicting shared user preferences, not project rules or security policy. The
 workspace-root `USER.md` remains shared regardless of the workspace directory's name.
+
+Group and channel bootstrap contexts omit the selected personal overlay and do
+not open its file. Cron and subagent bootstrap contexts also omit personal
+profiles; their existing shared-file allowlists still apply. Host-resolved chat
+type takes precedence over session-key fallback classification. Withholding the
+overlay does not reassign the session or change which person can edit a file.
+Committed sharing facts also withhold personal overlays in shared, read-only,
+suggest, public-link, and unverified sessions, even with a direct chat label.
+Admission is checked before opening the file and after bootstrap hooks. Chat
+get/set operations check before accessing the file and again at response/write.
+This proposed narrowing does not revoke previously delivered context: sharing an
+already-used conversation, enabled filesystem tools, and retained native/history
+carriers remain outside this draft’s privacy guarantee.
 
 Codex connections without a managed inference relay use shared workspace
 preferences only: they omit the selected personal overlay because native thread
@@ -102,9 +124,12 @@ suppression still applies: for example, the embedded runner's
 `contextInjection: "never"` and `continuation-skip` settings, and lightweight
 bootstrap modes. Use the default `always` mode to refresh session-selected
 personal instructions on later turns.
-This selection is supported by the local embedded, generic CLI, and native Codex
-bootstrap paths. ACP agents, realtime sessions, and remote worker execution do
-not gain per-person selection from this feature.
+Selection remains wired into the local embedded, generic CLI, and native Codex
+bootstrap paths. The new admission requires host-owned session facts; a standalone
+or unverifiable context receives shared defaults only. A common-loader test is
+not native-thread or provider-lifetime qualification. ACP agents, realtime
+sessions, and remote worker execution do not gain per-person isolation from this
+feature.
 
 This is **prompt selection, not filesystem secrecy**. Workspace tools, trusted
 plugins, shared transcripts, and previously generated responses can expose other

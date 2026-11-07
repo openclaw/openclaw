@@ -1,7 +1,7 @@
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionExactEntriesWorkerResult } from "../config/sessions/session-entry-read.types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentDatabaseRegistryChange } from "../state/openclaw-agent-db-contract.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
@@ -9,7 +9,7 @@ import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 export type SessionSharingTarget = {
   agentId: string;
   canonicalKey: string;
-  entry: SessionEntry;
+  entry: SessionEntry & Pick<InternalSessionEntry, "publicShare">;
   storeKey: string;
   storeKeys: string[];
   storePath: string;

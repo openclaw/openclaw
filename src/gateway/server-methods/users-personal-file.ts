@@ -18,6 +18,8 @@ import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError } from "../../infra/fs-safe.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
   hasMultipleResidentSessionSharingIdentities,
@@ -25,6 +27,7 @@ import {
   readResidentUserProfileIdentity,
 } from "../../state/user-profile-list.js";
 import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
+import { prepareSessionPersonalContext } from "../session-personal-context.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
 import { respondError } from "./response.js";
@@ -95,6 +98,21 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       assertAdmittedRunOperatorAuthority(requesterAuthority);
       assertToolCurrent();
       operatorAuthority.assertCurrent();
+      // Tool results enter conversation history. A private edit request does not
+      // authorize returning the whole profile to a group, including delegated work.
+      const origin = toolCaller?.requesterOrigin;
+      const sourceChatType =
+        origin?.chatType ??
+        deriveSessionChatTypeFromKey(origin?.sessionKey ?? toolCaller?.sessionKey);
+      const targetChatType =
+        origin?.sessionKey === toolCaller?.sessionKey
+          ? sourceChatType
+          : deriveSessionChatTypeFromKey(toolCaller?.sessionKey);
+      if ([sourceChatType, targetChatType].some((type) => type === "group" || type === "channel")) {
+        throw new PersonalFileAccessError(
+          "Personal instructions are unavailable in group or channel chats. Use Settings → Profile → Personal instructions instead.",
+        );
+      }
       id = operatorAuthority.profileId;
     } else {
       if (
@@ -179,19 +197,49 @@ async function runPersonalFile(
 ) {
   try {
     const target = preparePersonalFile(options, params.agentId);
+    const toolCaller = getGatewayToolCallerIdentity();
+    const isTool = Boolean(options.client?.internal?.operatorRunAuthority);
+    const contextRequest = {
+      getConfig: options.context.getRuntimeConfig,
+      agentId: toolCaller?.agentId ?? target.agentId,
+      sessionKey: toolCaller?.sessionKey,
+      profileId: target.profileId,
+    };
+    using audience = isTool ? await prepareSessionPersonalContext(contextRequest) : undefined;
+    const originKey = toolCaller?.requesterOrigin?.sessionKey;
+    const differentOrigin = Boolean(originKey && originKey !== toolCaller?.sessionKey);
+    using originAudience =
+      isTool && differentOrigin
+        ? await prepareSessionPersonalContext({
+            ...contextRequest,
+            sessionKey: originKey,
+            agentId: resolveAgentIdFromSessionKey(originKey ?? "") ?? contextRequest.agentId,
+          })
+        : undefined;
+    if (isTool && (!audience || (differentOrigin && !originAudience))) {
+      throw new PersonalFileAccessError(
+        "Personal instructions require a creator-private Draft conversation. Use Settings → Profile → Personal instructions instead.",
+      );
+    }
+    const assertCurrent = () => {
+      target.assertCurrent();
+      audience?.assertCurrent();
+      originAudience?.assertCurrent();
+    };
+    assertCurrent();
     const identity = { agentId: target.agentId, profileId: target.profileId };
     const fsRoot = await root(target.workspaceDir, {
       symlinks: "reject",
       mutationSymlinks: "reject",
       hardlinks: "reject",
       maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-      assertBeforeMutation: target.assertCurrent,
+      assertBeforeMutation: assertCurrent,
     });
     const read = async (): Promise<UsersPersonalFileGetResult> => {
-      target.assertCurrent();
+      assertCurrent();
       try {
         const loaded = await fsRoot.read(target.name);
-        target.assertCurrent();
+        assertCurrent();
         return {
           ...identity,
           missing: false,
@@ -199,7 +247,7 @@ async function runPersonalFile(
           hash: sha256Hex(loaded.buffer),
         };
       } catch (error) {
-        target.assertCurrent();
+        assertCurrent();
         if (!isMissingPathError(error)) {
           throw error;
         }
@@ -213,7 +261,7 @@ async function runPersonalFile(
     };
     if (!write) {
       const result = await read();
-      target.assertCurrent();
+      assertCurrent();
       options.respond(true, result);
       return;
     }
@@ -228,7 +276,7 @@ async function runPersonalFile(
     }
     await enqueueWorkspaceFileUpdate(async () => {
       const previous = await read();
-      target.assertCurrent();
+      assertCurrent();
       if (previous.hash !== write.expectedHash) {
         options.respond(
           false,
@@ -244,7 +292,7 @@ async function runPersonalFile(
       // Serializes Gateway saves, including create-if-missing. Independent shell writers
       // keep the existing workspace editor's best-effort conflict contract.
       await fsRoot.write(target.name, write.content, { mkdir: true, overwrite: !previous.missing });
-      target.assertCurrent();
+      assertCurrent();
       options.respond(true, {
         ...identity,
         missing: false,
