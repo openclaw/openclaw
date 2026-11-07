@@ -7486,7 +7486,7 @@ class ChatController internal constructor(
     val messages =
       array
         .mapNotNull { it.asObjectOrNull()?.let { message -> parseMessage(message) } }
-        .map { it.copy(activity = activity?.get(it.entryId)) }
+        .flatMap { it.copy(activity = activity?.get(it.entryId)).splitToolResultCarrier() }
 
     return ChatHistory(
       sessionKey = sessionKey,
@@ -7553,6 +7553,27 @@ class ChatController internal constructor(
       cost = parseChatMessageCost(obj),
       sourceTools = parseChatSourceTools(obj, role),
     )
+  }
+
+  /**
+   * Claude CLI history carries tool results on user rows. Split them into tool result rows
+   * before the timeline reads the row as a new user turn and fences off the pending calls.
+   */
+  private fun ChatMessage.splitToolResultCarrier(): List<ChatMessage> {
+    if (role != "user" || content.none { it.type == "toolResult" }) return listOf(this)
+    val (results, userContent) = content.partition { it.type == "toolResult" }
+    val resultRows =
+      results.mapIndexed { index, result ->
+        copy(
+          id = UUID.randomUUID().toString(),
+          role = "toolresult",
+          content = listOf(result),
+          idempotencyKey = null,
+          turnBoundary = turnBoundary && userContent.isEmpty() && index == 0,
+          isError = result.toolActivity?.isError == true,
+        )
+      }
+    return if (userContent.isEmpty()) resultRows else resultRows + copy(content = userContent)
   }
 
   private fun parseChatDeliveryMirror(element: JsonElement?): ChatDeliveryMirror? {
