@@ -130,7 +130,7 @@ struct ShareDraftComposerTests {
         let url = try #require(URL(string: "https://example.com/article"))
         #expect(SharePayloadNormalizer.distinctAttributedText(
             " Text: the quick brown fox ",
-            sharedText: "Text: the quick brown fox",
+            sharedText: "\tText: the quick brown fox\n",
             sharedURL: nil) == nil)
         #expect(SharePayloadNormalizer.distinctAttributedText(
             "https://example.com/article",
@@ -141,8 +141,8 @@ struct ShareDraftComposerTests {
     @Test func `preserves attributed content that differs from provider data`() throws {
         let url = try #require(URL(string: "https://example.com/article"))
         #expect(SharePayloadNormalizer.distinctAttributedText(
-            "Article summary",
+            "  Article summary\n",
             sharedText: "Article body",
-            sharedURL: url) == "Article summary")
+            sharedURL: url) == "  Article summary\n")
     }
 }
