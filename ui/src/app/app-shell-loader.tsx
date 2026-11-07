@@ -15,11 +15,12 @@ import {
 const LazyShell = lazy(
   async () => {
     const shell = await import("./app-host.tsx");
-    // Finish evaluating the shell graph in its own task before constructing its DOM.
-    if (!document.hidden) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
+    const browser = globalThis as typeof globalThis & {
+      scheduler?: { yield?: () => Promise<void> };
+    };
+    // Native continuation priority avoids delaying startup with a timer fallback.
+    if (!document.hidden && browser.scheduler?.yield) {
+      await browser.scheduler.yield();
     }
     return shell;
   },
