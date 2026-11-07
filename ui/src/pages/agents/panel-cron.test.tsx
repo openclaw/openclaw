@@ -100,6 +100,36 @@ function jobRow(container: HTMLElement, name: string) {
 }
 
 describe("Agent Cron native reads and actions", () => {
+  it("does not flash the empty state while the first jobs read is still pending", async () => {
+    const jobs = createDeferred<CronJobsListResult>();
+    const { container } = mount((method, params) => {
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      if (isRecord(params) && params.limit === 50) {
+        return jobs.promise;
+      }
+      return pageOf([]);
+    });
+    // The first read is in flight: no "No automations yet." until it settles.
+    await waitForSolid(() => expect(container.textContent).not.toContain("No automations yet."));
+    jobs.resolve(pageOf([job("first")]));
+    await waitForSolid(() => expect(container.textContent).toContain("Job first"));
+  });
+
+  it("shows the empty state only once the settled read confirms no jobs", async () => {
+    const { container } = mount((method, params) => {
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 0, nextWakeAtMs: null };
+      }
+      if (isRecord(params) && params.limit === 50) {
+        return pageOf([]);
+      }
+      return pageOf([]);
+    });
+    await waitForSolid(() => expect(container.textContent).toContain("No automations yet."));
+  });
+
   it("shows ready jobs independently, retries failed reads without replacing job rows", async () => {
     const status = createDeferred();
     let first = true;
