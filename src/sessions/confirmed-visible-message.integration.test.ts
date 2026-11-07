@@ -383,6 +383,47 @@ describe("confirmed visible message ownership", () => {
     expect(loadSessionEntryReadOnly({ sessionKey: route.sessionKey, storePath })).toBeUndefined();
   });
 
+  it("records a producer-less send under the agent its account binding selects (#194829)", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const dir = tempDirs.make("openclaw-visible-binding-");
+      const store = path.join(dir, "agents", "{agentId}", "sessions", "sessions.json");
+      const betaRoute: OutboundSessionRoute = {
+        sessionKey: "agent:beta:telegram:direct:example-chat",
+        baseSessionKey: "agent:beta:telegram:direct:example-chat",
+        recipientSessionExact: true,
+        peer: { kind: "direct", id: "example-chat" },
+        chatType: "direct",
+        from: "telegram:example-chat",
+        to: "example-chat",
+      };
+      // A transcript echo has no producing turn, and explicit ownership has no default agent.
+      const result = await commitConfirmedVisibleMessage({
+        config: {
+          session: { store },
+          agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+          bindings: [
+            { agentId: "alpha", match: { channel: "telegram", accountId: "account-alpha" } },
+            { agentId: "beta", match: { channel: "telegram", accountId: "account-beta" } },
+          ],
+        },
+        channel: "telegram",
+        to: betaRoute.to,
+        accountId: "account-beta",
+        route: betaRoute,
+        payload: { text: 'Transcript: "hello"' },
+        deliveryId: "transcript-echo",
+        payloadIndex: 0,
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      expect(result).not.toHaveProperty("skipped");
+      const storePath = path.join(dir, "agents", "beta", "sessions", "sessions.json");
+      expect(
+        loadSessionEntryReadOnly({ sessionKey: betaRoute.sessionKey, storePath }),
+      ).toBeDefined();
+    });
+  });
+
   it("warns without writing either agent's history for a cross-agent destination", async () => {
     const { params, storePath } = setup();
     const result = await commitConfirmedVisibleMessage({

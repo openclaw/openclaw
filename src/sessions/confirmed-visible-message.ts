@@ -1,6 +1,5 @@
 // Records a confirmed outbound send in the destination conversation's model history.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { resolveCurrentConversationByDelivery } from "../config/sessions/conversation-registry.js";
@@ -71,7 +70,16 @@ export async function commitConfirmedVisibleMessage(
   if (params.stateDir !== undefined && resolveStateDir(process.env) !== params.stateDir) {
     return skipped("state root changed after the delivery began");
   }
-  const agentId = params.producer?.agentId ?? resolveDefaultAgentId(params.config);
+  // Without a producer, the destination's channel/account binding owns the
+  // conversation; an unbound destination falls back to the default agent.
+  // Peer-level bindings are rechecked by belongsToAgent once the peer is known.
+  const agentId =
+    params.producer?.agentId ??
+    resolveAgentRoute({
+      cfg: params.config,
+      channel: params.channel,
+      accountId: params.accountId,
+    }).agentId;
   const storePath = resolveSessionStorePathCore(params.config.session?.store, { agentId });
   const toStoreKey = (requestKey: string) =>
     toAgentStoreSessionKey({ agentId, requestKey, mainKey: params.config.session?.mainKey });
