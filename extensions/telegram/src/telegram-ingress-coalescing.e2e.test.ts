@@ -109,6 +109,13 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
   resolveHumanDelayConfig: vi.fn(() => undefined),
 }));
 
+// Menu sync shares the plugin-state database with the ingress queue under test; its
+// fire-and-forget ledger writes are unrelated to coalescing and race the fake clock.
+vi.mock("./bot-native-command-menu.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bot-native-command-menu.js")>()),
+  syncTelegramMenuCommands: async () => {},
+}));
+
 // Preserve production initialization order before the fixture imports those modules.
 await import("./bot.js");
 await import("openclaw/plugin-sdk/reply-runtime");
@@ -437,6 +444,36 @@ describe("Telegram durable ingress coalescing", () => {
       ]);
       expect(downstreamTurns.mock.calls.map(([turn]) => turn.media?.length)).toEqual([2, 1]);
       await tombstones(1_301, 1_302, 1_303);
+      expect(runtimeErrors).toEqual([]);
+    } finally {
+      await monitor.stop();
+    }
+  });
+
+  it("keeps an album together when a starved sibling arrives about 1 s later", async () => {
+    // Production album window (no testTimings override): the transport can deliver
+    // members of one album about 1 s apart, so the quiet window must span that gap
+    // instead of flushing a lone member and starting a second turn for the sibling.
+    const { monitor } = await createMonitor({ useProductionAlbumWindow: true });
+    useIngressTimers();
+    monitor.start();
+    try {
+      const first = photoUpdate({ updateId: 1_501, messageId: 1, caption: "Delayed album" });
+      first.message.media_group_id = "album-delayed";
+      await monitor.admit(first);
+      await monitor.waitForIdle();
+      await vi.advanceTimersByTimeAsync(1_040);
+      const second = photoUpdate({ updateId: 1_502, messageId: 2 });
+      second.message.media_group_id = "album-delayed";
+      await monitor.admit(second);
+      await monitor.waitForIdle();
+      await vi.advanceTimersByTimeAsync(1_500);
+      await monitor.waitForDeferredClaims();
+      expect(downstreamTurns).toHaveBeenCalledOnce();
+      const [turn] = downstreamTurns.mock.calls[0] ?? [];
+      expect(turn?.RawBody).toContain("Delayed album");
+      expect(turn?.media?.length).toBe(2);
+      await tombstones(1_501, 1_502);
       expect(runtimeErrors).toEqual([]);
     } finally {
       await monitor.stop();
