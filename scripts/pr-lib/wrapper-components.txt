@@ -713,6 +713,7 @@ src/config/redact-snapshot.secret-ref.ts
 src/config/redact-snapshot.ts
 src/config/repository-branch-prefix.ts
 src/config/resolution-facts.ts
+src/config/retired-startup-keys.ts
 src/config/runtime-config-capture-state.ts
 src/config/runtime-config-publication.ts
 src/config/runtime-config-snapshot-match.ts
