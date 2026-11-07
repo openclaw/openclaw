@@ -485,6 +485,7 @@ export async function writeConfigFileFromContext(
         stateDirectory,
         targetPathProof: pathProof,
         includeGraph: { hashes: includeFileHashes, targets: includeFileTargets },
+        validateUtf8: options.allowDestructiveWrite !== true,
         onRootRemoved: () => {
           publication.phase = "removed";
         },

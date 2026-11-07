@@ -22,7 +22,22 @@ import type { ProviderPlugin } from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type { ProviderReplayPolicyContext, ProviderRuntimeModel } from "./plugin-entry.js";
 
+/** Native xAI tool wire policy, shared with explicitly selected proxy routes. */
+export const XAI_TOOL_MODEL_COMPAT = {
+  toolSchemaProfile: "xai",
+  unsupportedToolSchemaKeywords: ["minContains", "maxContains"],
+  toolCallArgumentsEncoding: "html-entities" as const,
+};
+
 export { matchesExactOrPrefix } from "../plugins/provider-model-id-match.js";
+
+// Shared by native Mistral and gateways serving its Chat Completions protocol.
+export const MISTRAL_MODEL_TRANSPORT_PATCH = {
+  supportsStore: false,
+  supportsPromptCacheKey: true,
+  supportsLongCacheRetention: false,
+  maxTokensField: "max_tokens",
+} as const;
 
 // Cold catalog completion consumes these results without runner normalization.
 // Keep its constructed-model contract separate from policy-free metadata construction.
@@ -194,7 +209,11 @@ export type {
   UnifiedModelCatalogProviderPlugin,
 } from "../plugins/types.js";
 
-export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+export {
+  DEFAULT_CONTEXT_TOKENS,
+  DEFAULT_MODEL_MAX_TOKENS,
+  resolveDefaultModelMaxTokens,
+} from "../agents/defaults.js";
 export {
   GPT5_BEHAVIOR_CONTRACT,
   GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY,
@@ -310,6 +329,7 @@ export function isProxyReasoningUnsupportedModelHint(
  * Shared replay-policy families reused by provider plugins with matching transcript semantics.
  */
 export type ProviderReplayFamily =
+  | "mistral"
   | "openai-compatible"
   | "anthropic-by-model"
   | "native-anthropic-by-model"
@@ -326,6 +346,7 @@ type ProviderReplayFamilyHooks = Pick<
 >;
 
 type BuildProviderReplayFamilyHooksOptions =
+  | { family: "mistral" }
   | {
       /** OpenAI-compatible transcript family using OpenAI-style tool calls. */
       family: "openai-compatible";
@@ -366,6 +387,10 @@ export function buildProviderReplayFamilyHooks(
   options: BuildProviderReplayFamilyHooksOptions,
 ): ProviderReplayFamilyHooks {
   switch (options.family) {
+    case "mistral":
+      return {
+        buildReplayPolicy: () => ({ sanitizeToolCallIds: true, toolCallIdMode: "strict9" }),
+      };
     case "openai-compatible": {
       const policyOptions = {
         sanitizeToolCallIds: options.sanitizeToolCallIds,

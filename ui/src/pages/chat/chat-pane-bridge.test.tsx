@@ -51,10 +51,9 @@ function mountPane(context: ApplicationContext, props: Partial<ChatPaneProps>) {
 
 const composerSelector = ".agent-chat__composer-combobox textarea";
 it("applies a route draft and its focus cue to an already mounted native pane", async () => {
-  const view = mountedFixture("bridge-draft").render({ active: true, presented: true });
-  const { pane } = view;
+  const { pane } = mountedFixture("bridge-draft").render({ active: true, presented: true });
   const textarea = await waitForSolid(() =>
-    expectDefined(view.container.querySelector<HTMLTextAreaElement>(composerSelector), "composer"),
+    expectDefined(pane.querySelector<HTMLTextAreaElement>(composerSelector), "composer"),
   );
   Object.assign(pane, { draft: "What can you do?", focusComposer: true });
   await pane.updateComplete;
@@ -113,8 +112,7 @@ it("replaces the command provider while document-hidden rendering is parked", as
   const first = createMockBoardProvider(sessionKey);
   const second = createMockBoardProvider(sessionKey);
   const subscribe = vi.spyOn(second.events, "subscribe");
-  const view = render({ boardProvider: first });
-  const { pane } = view;
+  const { pane } = render({ boardProvider: first });
   await pane.updateComplete;
   visibility = "hidden";
   document.dispatchEvent(new Event("visibilitychange"));
@@ -137,14 +135,16 @@ it("opens provider findings through the mounted pane's first rendered frame", as
     explanation: "The agent tried to modify a synthetic file outside the selected project.",
     continuationMessage: "Continue only inside the selected project.",
   };
-  const view = mountedFixture("bridge-provider-review", {
+  const { container, pane } = mountedFixture("bridge-provider-review", {
     agentId: "main",
     providerReview: review,
   }).render({ active: true });
-  const dialog = () => view.container.querySelector("openclaw-modal-dialog");
+  const dialog = () => container.querySelector("openclaw-modal-dialog");
+  await pane.updateComplete;
+  await vi.dynamicImportSettled();
   const reviewButton = await waitForSolid(() =>
     expectDefined(
-      view.container.querySelector<HTMLButtonElement>(".chat-provider-review button"),
+      container.querySelector<HTMLButtonElement>(".chat-provider-review button"),
       "provider review",
     ),
   );
@@ -155,7 +155,7 @@ it("opens provider findings through the mounted pane's first rendered frame", as
     expect(dialog()?.querySelector("blockquote")?.textContent).toBe(review.continuationMessage);
   });
   expectDefined(
-    view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions button"),
+    container.querySelector<HTMLButtonElement>("openclaw-modal-actions button"),
     "modal action",
   ).click();
   await waitForSolid(() => expect(dialog()).toBeNull());
@@ -171,8 +171,11 @@ it.each(["ready", "unavailable"] as const)(
     const bootComposer = document.createElement("textarea");
     bootComposer.id = "openclaw-boot-composer";
     bootComposer.value = "Keep the pending draft";
+    bootComposer.setAttribute("data-focused", "");
     document.documentElement.setAttribute("data-openclaw-boot-chat", "");
     document.body.append(bootComposer);
+    bootComposer.focus();
+    bootComposer.setSelectionRange(5, 8, "backward");
     adoptBootComposer(true);
     onTestFinished(() => {
       retireBootComposer();
@@ -259,6 +262,12 @@ it.each(["ready", "unavailable"] as const)(
       expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
       const composer = view.pane.querySelector<HTMLTextAreaElement>(composerSelector);
       expect(composer?.value).toBe("Keep the pending draft");
+      await view.pane.updateComplete;
+      expect([
+        composer?.selectionStart,
+        composer?.selectionEnd,
+        composer?.selectionDirection,
+      ]).toEqual([5, 8, "backward"]);
       expect(view.pane.querySelectorAll("textarea")).toHaveLength(1);
       read.resolve(undefined);
       await prepared;

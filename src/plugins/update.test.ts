@@ -2431,7 +2431,7 @@ describe("updateNpmInstalledPlugins", () => {
           allow: ["fish-audio"],
           deny: ["fish-audio"],
           slots: { memory: "fish-audio" },
-          entries: { "fish-audio": { enabled: false, hooks: { allowPromptInjection: false } } },
+          entries: { "fish-audio": { enabled: false, hooks: { allowPromptModification: false } } },
         },
       ),
       "fish-audio",
@@ -2445,7 +2445,7 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.config.plugins?.slots?.memory).toBe("fish-audio-speech");
     expect(result.config.plugins?.entries?.["fish-audio-speech"]).toEqual({
       enabled: false,
-      hooks: { allowPromptInjection: false },
+      hooks: { allowPromptModification: false },
     });
     expect(result.config.plugins?.entries?.["fish-audio"]).toBeUndefined();
     expectRecordFields(result.config.plugins?.installs?.["fish-audio-speech"], {

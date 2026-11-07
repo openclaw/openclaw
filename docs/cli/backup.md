@@ -106,6 +106,13 @@ restore and update-recovery behavior.
 
 ## Local companion checkpoints
 
+Activated Codex plugins omit the managed agent-home `codex-home/logs_2.sqlite`
+diagnostic store and its `-wal`, `-shm`, and `-journal` companions from these
+checkpoints. Codex recreates this log store; old diagnostic history is not
+restored. Codex state databases, credentials, and session rollouts remain
+included. Full archives and same-name files outside that declared managed home
+keep their existing behavior.
+
 Use `openclaw backup create --local-companion --verify` for a local restart
 checkpoint when all portable database families use PostgreSQL. It archives local
 files, fixed-local SQLite databases (including client credentials), and PostgreSQL
@@ -408,7 +415,7 @@ The repository contains one directory per committed snapshot. Each snapshot dire
 - `manifest.json`
 - `database.sqlite`
 
-Snapshot creation verifies the live database before reading it, uses SQLite's online backup API to capture committed WAL state without holding one long read transaction, closes the live database, compacts the private copy with `VACUUM`, verifies the generated database again, and publishes the completed directory without overwriting existing paths. Global snapshots remove every delivery queue row before compaction, including pending work, failed ownership fences, and completion receipts or records used to prevent duplicate sends, so neither payload detail nor ownership tombstones are published or retained in free pages. Restoring this sanitized, portable snapshot is therefore not an exactly-once delivery continuation boundary. This is an intentional privacy and no-replay portability tradeoff.
+Snapshot creation verifies the live database before reading it, uses SQLite's online backup API to capture committed WAL state without holding one long read transaction, closes the live database, compacts into a sibling file in the private staging directory with `VACUUM INTO`, verifies the generated database again, and publishes the completed directory without overwriting existing paths. Global snapshots remove every delivery queue row before compaction, including pending work, failed ownership fences, and completion receipts or records used to prevent duplicate sends, so neither payload detail nor ownership tombstones are published or retained in free pages. Restoring this sanitized, portable snapshot is therefore not an exactly-once delivery continuation boundary. This is an intentional privacy and no-replay portability tradeoff.
 
 Do not copy live `.sqlite`, `-wal`, `-shm`, or `-journal` files as a portability artifact. Copy only completed snapshot directories.
 
@@ -652,6 +659,11 @@ openclaw backup enable --repository ~/Backups/openclaw-git --every 24h --push
 ```
 
 The interval defaults to `24h` when `--every` is omitted. An explicitly empty or whitespace-only interval is rejected before a schedule is created or updated.
+
+Managed backup runs have a 24-hour execution budget. To apply it to an existing
+schedule, run `openclaw backup enable` again with the same mode and target.
+Re-enabling replaces the command payload, including any manual timeout or
+environment overrides set with `cron edit`; reapply those overrides afterwards.
 
 Offsite schedules accept `--namespace <name>`, `--claim-namespace`, `--no-include-workspace`, and
 `--keep-daily`, `--keep-weekly`, and `--keep-monthly`. They use the same archive,

@@ -26,12 +26,12 @@ import { listen } from "../../lib/reactive/listener.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
 import {
+  acceptSkillsReport,
   closeClawHubDetail,
   createSkillsChangeReloader,
   installFromClawHub,
   installSkill,
   loadClawHubDetail,
-  loadClawHubSecurityVerdicts,
   loadSkillCard,
   loadSkills,
   refreshSkills,
@@ -459,10 +459,11 @@ export function SkillsPage(props: SkillsPageProps) {
     routeDataEnabled = true;
     retireSkillsReads(data);
     data.skillsLoading = false;
-    data.skillsReport = route.report;
     data.skillsError = route.error;
     if (route.report) {
-      void loadClawHubSecurityVerdicts(data, route.report);
+      acceptSkillsReport(data, route.report);
+    } else {
+      data.skillsReport = null;
     }
     if (route.clawhubRef && route.clawhubRef !== data.clawhubDetailRef) {
       openClawHubDetail(route.clawhubRef);

@@ -33,7 +33,6 @@ import {
   githubPublicationApiArgs,
   githubPublicationPushArgs,
   githubPublicationUpdateRefArgs,
-  hasGitHubPublicationWorkflowChanges,
   hasGitHubPublicationMessageFooter,
   readGitHubPublicationCoauthorTrailers,
   readGitHubPublicationBaseSha,
@@ -57,7 +56,7 @@ import {
   prepareBoundGitHubPublication,
   prepareGitHubPublicationExecutionTarget,
 } from "./github-publication-target.js";
-import { prepareGitHubPublicationWorkflowGuard } from "./github-publication-workflows.js";
+import * as publicationWorkflows from "./github-publication-workflows.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 
@@ -400,18 +399,19 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       }
     }
     const existingPullRequest = await step(findPullRequest);
-    const assertWorkflowAuthority = await prepareGitHubPublicationWorkflowGuard(
-      params.assertWorkflowChangesAllowed,
-      () =>
-        hasGitHubPublicationWorkflowChanges({
-          cwd: worktree.path,
-          comparisonCommit: expectedRemoteHead || lineage.stdout.toString("utf8").trim(),
-          ancestryCommit: expectedRemoteHead || sourceHeadCommit,
-          targetCommit: remoteBaseSha,
-          workspaceTree,
-          run,
-        }),
-    );
+    const assertWorkflowAuthority =
+      await publicationWorkflows.prepareGitHubPublicationWorkflowGuard(
+        params.assertWorkflowChangesAllowed,
+        () =>
+          publicationWorkflows.hasGitHubPublicationWorkflowChanges({
+            cwd: worktree.path,
+            comparisonCommit: expectedRemoteHead || lineage.stdout.toString("utf8").trim(),
+            ancestryCommit: expectedRemoteHead || sourceHeadCommit,
+            targetCommit: remoteBaseSha,
+            accepted: { sourceCommit: sourceHeadCommit, tree: workspaceTree },
+            run,
+          }),
+      );
     const assertPublicationAction = () => {
       assertWorkflowAuthority();
       assertCurrent();

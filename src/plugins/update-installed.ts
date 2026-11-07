@@ -51,9 +51,8 @@ import {
   buildPluginUpdateVersionOutcome,
   formatClawHubInstallFailure,
   formatNpmInstallFailure,
-  readClawHubTrustErrorCode,
+  resolveClawHubTrustSkipCode,
   runPluginUpdateAttempt,
-  shouldSkipClawHubTrustFailureForExistingInstall,
   type ClawHubPluginUpdateSuccess,
   type GitPluginUpdateSuccess,
   type MarketplacePluginUpdateSuccess,
@@ -74,7 +73,6 @@ import {
   expectedIntegrityForNpmUpdate,
   isNpmMetadataCompatibleWithCurrentHost,
   isPluginInstallRecordUpdateSource,
-  isTrustedSourceLinkedOfficialNpmUpdate,
   resolveClawHubNpmUpdateFallback,
   resolveClawHubUpdateSpecs,
   resolveNpmUpdateTarget,
@@ -269,11 +267,10 @@ async function runInstalledPluginUpdate(
         : record.source === "clawhub"
           ? clawhubSpecs?.recordSpec
           : record.spec;
-    const trustedSourceLinkedOfficialInstall = isTrustedSourceLinkedOfficialNpmUpdate({
-      pluginId,
-      spec: effectiveSpec,
-      record,
-    });
+    const trustedSourceLinkedOfficialInstall = Boolean(
+      npmTarget?.officialPackageName &&
+      parseRegistryNpmSpec(effectiveSpec ?? "")?.name === npmTarget.officialPackageName,
+    );
     let expectedIntegrity =
       catalogExpectedIntegrity ??
       expectedIntegrityForNpmUpdate({
@@ -542,20 +539,15 @@ async function runInstalledPluginUpdate(
 
     const { result, activeClawHubInstallSpec, channelFallbackSuffix, npmFallbackSpec } = attempt;
     if (!result.ok) {
-      if (
-        record.source === "clawhub" &&
-        shouldSkipClawHubTrustFailureForExistingInstall({ result, currentVersion })
-      ) {
-        const code = readClawHubTrustErrorCode(result);
-        if (!code) {
-          continue;
-        }
+      const trustSkipCode =
+        record.source === "clawhub" && resolveClawHubTrustSkipCode({ result, currentVersion });
+      if (trustSkipCode) {
         outcomes.push(
           buildClawHubTrustSkippedOutcome({
             pluginId,
             phase: params.dryRun ? "check" : "update",
             error: result.error,
-            code,
+            code: trustSkipCode,
             ...("warning" in result && result.warning ? { warning: result.warning } : {}),
             ...(currentVersion ? { currentVersion } : {}),
           }),

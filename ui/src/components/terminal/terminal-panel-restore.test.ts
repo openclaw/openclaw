@@ -426,7 +426,7 @@ describe("restore", () => {
         first.reject(error);
       }
       await waitForFast(() =>
-        expect(panel.querySelector('.tp-error[role="alert"]')?.textContent).toMatch(/attach/i),
+        expect(panel.querySelector('.tp-error[role="alert"]')?.textContent).toMatch(/connect/i),
       );
       expect(savedIds()).toEqual(["session-a", "session-b"]);
       expect(gateway.attaches).toHaveLength(stage === "list" ? 0 : 1);

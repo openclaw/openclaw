@@ -13,9 +13,13 @@ const CORNER_CASES = [
   ...corners(
     "14px",
     "17.5px",
-    ".card, .option-card__choice, .exec-approval-card, .settings-group, .agent-chat__search-bar",
+    ".card, .option-card__choice, .exec-approval-card, .agent-chat__search-bar",
   ),
-  ...corners("20px", "25px", ".option-card, .agent-chat__input, .agent-chat__input .slash-menu"),
+  ...corners(
+    "20px",
+    "25px",
+    ".option-card, .settings-group, .agent-chat__input, .agent-chat__input .slash-menu",
+  ),
   // Menu rows share --menu-item-radius at both scales.
   ...corners("10px", "12.5px", ".slash-menu-item, .chat-reply-context-menu button"),
 ];

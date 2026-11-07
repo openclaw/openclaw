@@ -46,7 +46,7 @@ export function gatewayConnect(
 export function operatorRecoverySnapshotFixture(
   profileId: string,
   grantGeneration: string,
-  overrides: Partial<OperatorRunRecoverySnapshot> = {},
+  overrides: Partial<Exclude<OperatorRunRecoverySnapshot, { sourceIngress: "principal" }>> = {},
 ): OperatorRunRecoverySnapshot {
   return {
     profileId,

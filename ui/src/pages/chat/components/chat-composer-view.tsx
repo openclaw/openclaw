@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic } from "@solidjs/web";
 import { createMemo, createSignal, lazy, Show } from "solid-js";
 import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
@@ -52,6 +51,10 @@ const HumanMentionMenuView = lazy(() => import("./chat-composer-mention-menu.tsx
   export: "HumanMentionMenuView",
 });
 const EmojiMenu = lazy(() => import("./chat-composer-emoji.tsx"), { export: "EmojiMenu" });
+// The reply strip loads with the first reply, outside the chat boot bundle.
+const ReplyPreview = lazy(() => import("./chat-composer-reply-preview.tsx"), {
+  export: "ComposerReplyPreview",
+});
 const ChatGoal = lazy(() => import("./chat-composer-goal.tsx"), { export: "ChatGoal" });
 const ChatGoalRecoveryNotice = lazy(() => import("./chat-composer-goal.tsx"), {
   export: "ChatGoalRecoveryNotice",
@@ -217,6 +220,7 @@ export function renderChatComposerView(
         {props.realtimeTalkInputNotice ? (
           <ChatVoiceStatus
             status="error"
+            tone="warning"
             detail={props.realtimeTalkInputNotice}
             onDismissError={props.onDismissRealtimeTalkInputNotice}
           />
@@ -406,7 +410,7 @@ export function renderChatComposerView(
             ]}
             aria-busy={props.disabledReasonBusy ? "true" : "false"}
             data-composer-layout={mobileResting() ? "single-line" : undefined}
-            data-incognito={props.selectedSession?.incognito ? "true" : undefined}
+            data-incognito={props.incognito ? "true" : undefined}
             onOpenclaw-composer-dismiss-invocations={() => {
               context().state.slashMenu.reset();
               context().state.skillMenu.reset();
@@ -484,33 +488,13 @@ export function renderChatComposerView(
                 }}
                 avatarUrls={context().state.mentionMenu.selectedAvatarUrls}
               />
-              {props.replyTarget ? (
-                <div class="chat-reply-preview composer-context-strip">
-                  <span class="chat-reply-preview__label composer-context-strip__label">
-                    <span class="chat-reply-preview__icon composer-context-strip__icon">
-                      {<Icon name="messageSquare" />}
-                    </span>
-                    <span class="composer-context-strip__label-text">
-                      {t("chat.messages.replyingTo", {
-                        name: props.replyTarget.senderLabel ?? t("chat.messages.message"),
-                      })}
-                    </span>
-                  </span>
-                  <span class="chat-reply-preview__text composer-context-strip__text">
-                    {truncateUtf16Safe(props.replyTarget.text, 120)}
-                    {props.replyTarget.text.length > 120 ? "..." : ""}
-                  </span>
-                  <button
-                    type="button"
-                    class="chat-reply-preview__dismiss composer-context-strip__dismiss"
-                    onClick={() => props.onClearReply?.()}
-                    aria-label={t("chat.composer.cancelReply")}
-                    title={t("chat.composer.cancelReply")}
-                  >
-                    {<Icon name="x" />}
-                  </button>
-                </div>
-              ) : undefined}
+              <Show when={props.replyTarget}>
+                {(target) => (
+                  <ChatLazyBoundary>
+                    <ReplyPreview composer={props} target={target()} />
+                  </ChatLazyBoundary>
+                )}
+              </Show>
               {props.sessionAdmitted === false ? undefined : (
                 <McpAppContextStrip sessionKey={props.sessionKey} agentId={props.currentAgentId} />
               )}
@@ -666,6 +650,7 @@ export function renderChatComposerView(
                     session={props.selectedSession}
                     messages={props.messages}
                     providerUsage={props.providerUsage}
+                    accountSelection={props.composerControls?.model.accountSelection}
                     gateway={props.contextGateway}
                     agentId={props.currentAgentId}
                     onOpenContext={props.onOpenContext}

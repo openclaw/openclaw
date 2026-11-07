@@ -10578,7 +10578,6 @@ struct ChatViewModelTests {
         await finalRefresh?.value
         #expect(await mainHistoryCount.current() == 3)
 
-
         await send.value
         #expect(await MainActor.run {
             vm.sessionId == "sess-main-send-refresh" &&
@@ -10637,7 +10636,6 @@ struct ChatViewModelTests {
             vm.sessionId == "sess-main-terminal-empty-refresh" &&
                 vm.pendingRunCount == 0
         })
-
 
         await send.value
         #expect(await MainActor.run {
@@ -10704,7 +10702,6 @@ struct ChatViewModelTests {
                 }
         })
 
-
         await send.value
         #expect(await MainActor.run {
             vm.sessionId == "sess-main-terminal-user-only-refresh" &&
@@ -10760,7 +10757,6 @@ struct ChatViewModelTests {
         await sendRefreshGate.release()
         await vm.bootstrapTask?.value
         #expect(vm.sessionId == "sess-main-manual-user-only-refresh" && vm.pendingRunCount == 0)
-
 
         await send?.value
         #expect(vm.sessionId == "sess-main-manual-user-only-refresh")
@@ -10825,7 +10821,6 @@ struct ChatViewModelTests {
         #expect(vm.messages.contains { message in
             message.content.contains { $0.text == "older answer" }
         })
-
 
         await send?.value
         #expect(vm.sessionId == "sess-main-manual-older-complete-refresh")
@@ -10922,7 +10917,6 @@ struct ChatViewModelTests {
         #expect(await MainActor.run {
             vm.sessionId == "sess-main-manual-stale-complete-refresh"
         })
-
 
         await send.value
         #expect(await MainActor.run {

@@ -163,8 +163,22 @@ const cancelledLabel = "Dismiss unsent message: Rename the staging bucket";
 
 describe("cancelled pending input dismissal", () => {
   it("keeps individual dismissal available to a writer when sending is unavailable", async () => {
-    const writer = await setup(() => dismissed([]), { canSend: false });
+    const writer = await setup(() => dismissed([]), {
+      canSend: false,
+      noticeCount: 2,
+      retained: {
+        total: page.items.length + 1,
+        items: [
+          ...page.items,
+          {
+            ...retained("user-stopped", "cancelled", "Keep my stopped request", 104),
+            cancelledByUser: true,
+          },
+        ],
+      },
+    });
     expect(writer.dismissButtons()).toHaveLength(2);
+    expect(writer.text()).toContain("Keep my stopped request");
     expect(writer.named(firstLabel)).not.toBeNull();
     expect(writer.text()).not.toContain("Dismiss all");
     const viewer = await setup(() => dismissed([]), { canDismissPendingInputs: false });
@@ -178,7 +192,7 @@ describe("cancelled pending input dismissal", () => {
     view.rerender();
     expect(view.hasRow("first-input")).toBe(false);
     expect(view.hasRow("cancelled-input")).toBe(true);
-    view.expectDismiss(["first-input"]);
+    await vi.waitFor(() => view.expectDismiss(["first-input"]));
     reply.resolve(dismissed(["first-input"]));
     await view.refreshed();
     applyChatPendingInputs(view.historyState, page);
@@ -199,6 +213,8 @@ describe("cancelled pending input dismissal", () => {
     view.rowButton(cancelledLabel).click();
     view.rerender();
     expect(view.dismissButtons()).toHaveLength(0);
+    await vi.waitFor(() => view.expectDismiss(["first-input"]));
+    await vi.waitFor(() => view.expectDismiss(["cancelled-input"]));
     first.reject(new Error("Dismissal failed"));
     await vi.waitFor(() => {
       view.rerender();
@@ -215,10 +231,43 @@ describe("cancelled pending input dismissal", () => {
     const view = await setup(() => reply.promise);
     view.admitCopy("replacement-copy", "first-input-run");
     view.rowButton(firstLabel).click();
+    await vi.waitFor(() => view.expectDismiss(["first-input"]));
     view.historyState.client = createTestGatewayClient(view.historyState.request);
     reply.resolve(dismissed(["first-input"]));
     await vi.waitFor(() => expect(view.historyState.chatPendingInputs?.dismissing?.size).toBe(0));
     expect(view.outboxIds()).toEqual(["replacement-copy"]);
+  });
+
+  it("does not dispatch a dismissal after its connection changes while loading the action", async () => {
+    const view = await setup(() => dismissed(["first-input"]));
+    view.rowButton(firstLabel).click();
+    view.historyState.client = createTestGatewayClient(view.historyState.request);
+    await vi.waitFor(() => expect(view.historyState.chatPendingInputs?.dismissing?.size).toBe(0));
+    expect(
+      view.historyState.request.mock.calls.some(
+        ([method]) => method === "chat.pendingInputs.dismiss",
+      ),
+    ).toBe(false);
+    view.rerender();
+    expect(view.hasRow("first-input")).toBe(true);
+  });
+
+  it("restores the row and shows an action module loading failure", async () => {
+    // mock-isolation: fail the lazy import without evaluating the real request module.
+    vi.doMock("./chat-pending-inputs.runtime.ts", () => {
+      throw new Error("Could not load pending input actions");
+    });
+    try {
+      const view = await setup(() => dismissed(["first-input"]));
+      view.rowButton(firstLabel).click();
+      await vi.waitFor(() => {
+        view.rerender();
+        expect(view.text()).toContain("Could not load pending input actions");
+      });
+      expect(view.hasRow("first-input")).toBe(true);
+    } finally {
+      vi.doUnmock("./chat-pending-inputs.runtime.ts");
+    }
   });
 
   it("does not resend a copy after history confirms another client dismissed it", async () => {

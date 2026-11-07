@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { linkSourcePluginDependencies } from "./lib/bundled-plugin-dependency-links.mjs";
+import { ensureOpenClawExtensionAlias } from "./lib/bundled-plugin-sdk-alias.mjs";
 
 const app = fs.realpathSync(process.argv[2]);
 if (process.platform !== "linux" || process.arch !== "x64") {
@@ -43,6 +44,11 @@ const scripts = path.dirname(fileURLToPath(import.meta.url));
 execFileSync(process.execPath, [path.join(scripts, "prune-docker-plugin-dist.mjs")], {
   cwd: app,
   stdio: "inherit",
+});
+// Package archives omit checkout aliases; recreate them after lifecycle pruning.
+ensureOpenClawExtensionAlias({
+  repoRoot: app,
+  distExtensionsRoot: path.join(app, "dist/extensions"),
 });
 execFileSync(
   process.execPath,

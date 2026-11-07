@@ -16,7 +16,7 @@ describe("Control UI emitted module attribution", () => {
     fs.mkdirSync(assetsDir);
     const asset = (name: string, code: string, gzipBytes: number) => {
       fs.writeFileSync(path.join(assetsDir, name), code);
-      return { file: `assets/${name}`, type: "js", gzipBytes };
+      return { file: `assets/${name}`, type: "js", servedGzipBytes: gzipBytes };
     };
     const shared = asset("shared.js", "p;const a='é';x;const b=2;\n// tail\n", 90);
     const chat = asset("chat.js", "opaque chunk", 40);
@@ -47,7 +47,9 @@ describe("Control UI emitted module attribution", () => {
     );
 
     const result = collectControlUiModuleAttribution(dist, {
-      chat: { assets: [shared, chat, { file: "assets/style.css", type: "css", gzipBytes: 10 }] },
+      chat: {
+        assets: [shared, chat, { file: "assets/style.css", type: "css", servedGzipBytes: 10 }],
+      },
       new: { assets: [shared, newSession] },
     });
     expect(result.chat).toMatchObject({

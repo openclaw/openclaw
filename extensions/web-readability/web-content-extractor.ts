@@ -1,7 +1,6 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   htmlToMarkdown,
-  markdownToText,
   sanitizeHtml,
   stripInvisibleUnicode,
   type WebContentExtractorPlugin,
@@ -138,7 +137,6 @@ export function createReadabilityWebContentExtractor(): WebContentExtractorPlugi
         const [{ Readability }, { parseHTML }] = await loadReadabilityDeps();
         const { document } = parseHTML(cleanHtml, { location: { href: request.url } });
         resolveDocumentBase(document, request.url);
-        const textMode = request.extractMode === "text";
         const reader = new Readability(document);
         const parsed = reader.parse();
         if (!parsed) {
@@ -146,10 +144,8 @@ export function createReadabilityWebContentExtractor(): WebContentExtractorPlugi
         }
         const title = parsed.title || undefined;
         // Render the selected HTML because textContent joins adjacent block elements.
-        const rendered = htmlToMarkdown(parsed.content ?? "", { linksAsText: textMode });
-        const text = stripInvisibleUnicode(
-          textMode ? markdownToText(rendered.text) : rendered.text,
-        );
+        const rendered = htmlToMarkdown(parsed.content ?? "", { extractMode: request.extractMode });
+        const text = stripInvisibleUnicode(rendered.text);
         return text ? { text, title: title ?? rendered.title } : null;
       } catch {
         return null;

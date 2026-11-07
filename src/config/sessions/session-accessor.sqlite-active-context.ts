@@ -8,6 +8,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { currentSqliteOperationTiming } from "../../infra/sqlite-reader-lifecycle.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
   SessionTranscriptBoundedActiveContext,
@@ -17,8 +18,8 @@ import type {
 import { iterateUnindexedActiveTranscriptNavigation } from "./session-accessor.sqlite-history-navigation.js";
 import {
   getActiveTranscriptKysely,
-  selectActiveTranscriptEventRows,
   selectActiveTranscriptIdentityRows,
+  selectActiveTranscriptMetadataRows,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
@@ -39,7 +40,7 @@ import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js"
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   readTranscriptPayload,
-  transcriptEventModelNavigationSql,
+  transcriptEventDependencyNavigationSql,
   transcriptEventResetNavigationSql,
   transcriptPredicateSql,
 } from "./transcript-payload.js";
@@ -342,19 +343,14 @@ export function readSessionTranscriptBoundedActiveContextCore(
       window?.boundaryType === "compaction"
         ? (window.firstKeptActivePosition ?? window.boundaryActivePosition)
         : window?.boundaryActivePosition;
+    const activeMetadata = selectActiveTranscriptMetadataRows(projection.database);
     const metadata = covered
       ? covered.rows
           .filter((row) => !fence || row.event_seq < fence.beforeRawSeq)
           .slice(0, limits ? limits.maxEvents + 1 : undefined)
       : iterateSqliteQuerySync(
           projection.database.db,
-          selectActiveTranscriptEventRows(projection.database)
-            .select([
-              "active.event_seq",
-              "active.active_position",
-              /* kysely-allow-raw: active-context byte caps exclude rows before fetching or parsing. */
-              sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
-            ])
+          activeMetadata
             .where("active.session_id", "=", projection.resolved.sessionId)
             .$if(fence !== undefined, (query) =>
               query.where("active.event_seq", "<", fence!.beforeRawSeq),
@@ -382,6 +378,17 @@ export function readSessionTranscriptBoundedActiveContextCore(
         );
     const selection = selectBoundedContextRows(metadata, headerBytes, limits);
     const { selectedRows } = selection;
+    const timing = currentSqliteOperationTiming();
+    if (timing) {
+      timing.hydrationActiveEvents = projection.state.activeEventCount;
+      // Truncation consumed one rejected row; byte stops must not imply SQL exhaustion.
+      timing.hydrationMetadataRows = covered
+        ? undefined
+        : selectedRows.length + Number(selection.truncated);
+      timing.hydrationMetadataLimit = !covered && limits ? limits.maxEvents + 1 : undefined;
+      timing.hydrationExhausted = !covered && limits ? Number(!selection.truncated) : undefined;
+      timing.hydrationDependencyRows = undefined;
+    }
     let { serializedBytes, truncated } = selection;
     const contextSequences = selectedRows.map((row) => row.event_seq);
     let boundary = covered
@@ -448,60 +455,65 @@ export function readSessionTranscriptBoundedActiveContextCore(
         truncated = true;
       }
     }
-    const dependencyType = transcriptPredicateSql(
-      projection.database.db,
-      "navigation_type",
-      "event",
-    );
-    const dependencyRole = transcriptPredicateSql(projection.database.db, "message_role", "event");
-    // CASE fences payload projection: an ordinary old row may be outside this bounded read.
-    const dependencyNavigation = /* kysely-allow-raw: recorded event classifications gate model navigation before any payload parser can run. */ sql<string>`CASE
-      WHEN ${dependencyType} IN ('custom', 'reset') OR ${dependencyType} IS NULL
-        OR (${dependencyType} = 'message' AND active.context_eligible = 0 AND ${dependencyRole} = 'assistant')
-      THEN ${transcriptEventModelNavigationSql(projection.database.db, "event")}
-      ELSE '{}' END`;
-    const dependencyField = (path: string) =>
-      jsonPathValue(projection.database.db, dependencyNavigation, sql.val(path));
+    const dependencyField = <T = string | null>(path: string) =>
+      jsonPathValue<T>(
+        projection.database.db,
+        /* kysely-allow-raw: fixed materialized navigation column shared by dependency predicates. */
+        sql.ref("dependency.navigation_json"),
+        sql.val(path),
+      );
     const dependencyCandidates = Array.from(
       iterateSqliteQuerySync(
         projection.database.db,
-        selectActiveTranscriptEventRows(projection.database)
-          .select([
-            "active.event_seq",
-            dependencyNavigation.as("navigation_json"),
-            /* kysely-allow-raw: dependency sizes are admitted before fetching accepted result bodies. */
-            sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
-          ])
-          .where("active.session_id", "=", projection.resolved.sessionId)
-          // Exclude known ordinary identities as a set before reading payloads. Joining
-          // identities here can rescan the event-type index once per active event.
-          .where((eb) =>
-            eb.or([
-              eb("active.context_eligible", "=", 0),
-              eb(
-                "active.event_seq",
-                "not in",
-                db
-                  .selectFrom("transcript_event_identities")
-                  .select("seq")
-                  .where("session_id", "=", projection.resolved.sessionId)
-                  .where("event_type", "not in", ["custom", "reset", "branch_summary"]),
-              ),
-            ]),
+        db
+          // Reuse each guarded navigation projection across the dependency predicates.
+          .with(
+            (cte) => cte("dependency").materialized(),
+            () =>
+              activeMetadata
+                .select((eb) => [
+                  "active.context_eligible",
+                  /* kysely-allow-raw: covered facts never read payload navigation; legacy rows retain the exact guarded projection. */
+                  sql<string>`CASE WHEN facts.seq IS NOT NULL THEN facts.dependency_navigation_json ELSE ${eb
+                    .selectFrom("transcript_events as event")
+                    .select(
+                      transcriptEventDependencyNavigationSql(
+                        projection.database.db,
+                        eb.ref("active.context_eligible"),
+                      ).as("navigation_json"),
+                    )
+                    .whereRef("event.session_id", "=", "active.session_id")
+                    .whereRef("event.seq", "=", "active.event_seq")} END`.as("navigation_json"),
+                ])
+                .where("active.session_id", "=", projection.resolved.sessionId)
+                // Exclude known ordinary identities as a set before reading payloads. Joining
+                // identities here can rescan the event-type index once per active event.
+                .where((eb) =>
+                  eb.or([
+                    eb("active.context_eligible", "=", 0),
+                    eb(
+                      "active.event_seq",
+                      "not in",
+                      db
+                        .selectFrom("transcript_event_identities")
+                        .select("seq")
+                        .where("session_id", "=", projection.resolved.sessionId)
+                        .where("event_type", "not in", ["custom", "reset", "branch_summary"]),
+                    ),
+                  ]),
+                )
+                .$if(fence !== undefined, (query) =>
+                  query.where("active.event_seq", "<", fence!.beforeRawSeq),
+                ),
           )
-          .$if(fence !== undefined, (query) =>
-            query.where("active.event_seq", "<", fence!.beforeRawSeq),
-          )
+          .selectFrom("dependency")
+          .select(["event_seq", "navigation_json", "serialized_bytes"])
           .where((eb) =>
             eb.or([
               eb.and([
-                eb("active.context_eligible", "=", 0),
+                eb("context_eligible", "=", 0),
                 eb(
-                  jsonPathValue<string | number>(
-                    projection.database.db,
-                    dependencyNavigation,
-                    sql.val("$.message.excludeFromContext"),
-                  ),
+                  dependencyField<string | number>("$.message.excludeFromContext"),
                   "=",
                   jsonPathValue<string | number>(
                     projection.database.db,
@@ -522,21 +534,24 @@ export function readSessionTranscriptBoundedActiveContextCore(
               eb(dependencyField("$.type"), "in", ["reset", "branch_summary"]),
             ]),
           )
-          .orderBy("active.active_position", "asc"),
+          .orderBy("active_position", "asc"),
       ),
-      (row) => ({ ...row, event: JSON.parse(row.navigation_json) as unknown }),
+      (row) => ({
+        seq: row.event_seq,
+        serialized_bytes: row.serialized_bytes,
+        event: JSON.parse(row.navigation_json) as unknown,
+      }),
     );
     const selectedSizes = new Map(selectedRows.map((row) => [row.event_seq, row.serialized_bytes]));
+    if (timing) {
+      timing.hydrationDependencyRows = dependencyCandidates.length;
+    }
     if (boundary) {
       selectedSizes.set(boundary.seq, boundary.serialized_bytes);
     }
     const fitted = fitBackgroundResultDependencies(
       contextSequences.map((seq) => ({ seq, serialized_bytes: selectedSizes.get(seq)! })),
-      dependencyCandidates.map((row) => ({
-        seq: row.event_seq,
-        serialized_bytes: row.serialized_bytes,
-        event: row.event,
-      })),
+      dependencyCandidates,
       headerBytes,
       limits?.maxBytes,
     );
