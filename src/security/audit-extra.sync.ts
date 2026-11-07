@@ -25,11 +25,7 @@ import {
 import { listEffectiveGroupRouteBindings } from "../routing/resolve-route.js";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import { listAuditAgentToolContexts } from "./audit-agent-tool-contexts.js";
-import {
-  listConfiguredOpenInboundPolicies,
-  listConfiguredOpenInboundPolicyPaths,
-  resolveOpenInboundAgentIds,
-} from "./audit-open-inbound.js";
+import { listConfiguredOpenInboundPolicyPaths } from "./audit-open-inbound.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { GATEWAY_CONTROL_PLANE_TOOLS } from "./dangerous-tools.js";
 
@@ -827,9 +823,7 @@ export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): Secu
 export function collectExposureMatrixFindings(
   cfg: OpenClawConfig,
   openInboundPolicies = listConfiguredOpenInboundPolicyPaths(cfg),
-  options: { agentIds?: ReadonlySet<string> } = {
-    agentIds: resolveOpenInboundAgentIds(cfg, listConfiguredOpenInboundPolicies(cfg)),
-  },
+  options: { agentIds?: ReadonlySet<string> } = {},
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   if (openInboundPolicies.length === 0) {

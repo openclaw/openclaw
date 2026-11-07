@@ -693,6 +693,17 @@ type ChannelSecurityDmRouteContext<ResolvedAccount> = ChannelSecurityContext<Res
 };
 
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
+  /**
+   * Read-only upper bound of all channel-owned routes beyond core config bindings.
+   * Include live and durable overrides; return unknown when completeness cannot be
+   * established without starting runtime owners, connecting, or mutating state.
+   */
+  resolveAuditRouteTargets?: (ctx: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    env: NodeJS.ProcessEnv;
+    stateDir: string;
+  }) => Promise<{ kind: "complete"; additionalAgentIds: readonly string[] } | { kind: "unknown" }>;
   /** Resolve configured direct-conversation permissions once per new execution admission. */
   resolveDirectToolPolicy?: (
     ctx: ChannelDirectToolPolicyContext,

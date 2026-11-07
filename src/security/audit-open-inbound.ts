@@ -1,17 +1,22 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import {
   resolveChannelDmPolicy,
   type ChannelDmAllowFromMode,
 } from "../channels/plugins/dm-access.js";
+import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
+import type { AnyChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { listAcpBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
+import { normalizeOptionalAccountId } from "../routing/account-id.js";
+import { normalizeRouteBindingChannelId } from "../routing/binding-scope.js";
 import { listPotentialAgentIdsForRoute } from "../routing/resolve-route.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 type OpenInboundPolicy = {
   path: string;
   channel: string;
-  accountIds: string[];
+  accountIds?: string[];
   hasChannelAgentOverride?: boolean;
 };
 
@@ -36,7 +41,7 @@ export function listConfiguredOpenInboundPolicies(
     scope: string,
     mode: ChannelDmAllowFromMode,
     channel: string,
-    accountIds: string[],
+    accountIds?: string[],
   ) => {
     const record = asNullableRecord(value);
     if (!record) {
@@ -71,13 +76,7 @@ export function listConfiguredOpenInboundPolicies(
   };
   for (const [id, channel] of Object.entries(cfg.channels ?? {})) {
     if (id !== "modelByChannel" && id !== "tools") {
-      const section = asNullableRecord(channel);
-      const accountIds = [
-        DEFAULT_ACCOUNT_ID,
-        ...Object.keys(asNullableRecord(section?.accounts) ?? {}),
-        ...(typeof section?.defaultAccount === "string" ? [section.defaultAccount] : []),
-      ];
-      visit(channel, `channels.${id}`, modes.get(id) ?? "topOnly", id, accountIds);
+      visit(channel, `channels.${id}`, modes.get(id) ?? "topOnly", id);
     }
   }
   for (const policy of policies) {
@@ -96,24 +95,73 @@ export function listConfiguredOpenInboundPolicyPaths(
 }
 
 /** Unresolved ownership keeps the audit's conservative all-agent analysis. */
-export function resolveOpenInboundAgentIds(
+export async function resolveOpenInboundAgentIds(
   cfg: OpenClawConfig,
   policies: readonly OpenInboundPolicy[],
-): Set<string> | undefined {
+  context: { plugins: readonly AnyChannelPlugin[]; env: NodeJS.ProcessEnv; stateDir: string },
+): Promise<Set<string> | undefined> {
   const agentIds = new Set<string>();
+  const knownAgentIds = new Set(listAgentIds(cfg));
+  const inspectedAccounts = new Set<string>();
   for (const policy of policies) {
     // Core bindings cannot exhaust channel-owned routes such as Telegram topic overrides.
     if (policy.hasChannelAgentOverride) {
       return undefined;
     }
-    for (const accountId of policy.accountIds) {
-      const owners = listPotentialAgentIdsForRoute({ cfg, channel: policy.channel, accountId });
-      if (!owners) {
-        return undefined;
+    const plugin = context.plugins.find(
+      (entry) => entry.id === policy.channel || entry.meta.aliases?.includes(policy.channel),
+    );
+    const resolveTargets = plugin?.security?.resolveAuditRouteTargets;
+    if (!plugin || !resolveTargets) {
+      return undefined;
+    }
+    // Configured ACP routes are applied after ordinary bindings even when the
+    // channel disables live thread bindings. Their compiler owns conversation matching.
+    if (
+      listAcpBindings(cfg).some(
+        (binding) => normalizeRouteBindingChannelId(binding.match.channel) === plugin.id,
+      )
+    ) {
+      return undefined;
+    }
+    try {
+      const accountIds = policy.accountIds ?? [
+        resolveChannelDefaultAccountId({ plugin, cfg }),
+        ...plugin.config.listAccountIds(cfg),
+      ];
+      for (const rawAccountId of accountIds) {
+        const accountId = normalizeOptionalAccountId(rawAccountId);
+        if (!accountId) {
+          return undefined;
+        }
+        const key = `${plugin.id}:${accountId}`;
+        if (inspectedAccounts.has(key)) {
+          continue;
+        }
+        const owners = listPotentialAgentIdsForRoute({ cfg, channel: plugin.id, accountId });
+        if (!owners) {
+          return undefined;
+        }
+        const targets = await resolveTargets({
+          cfg,
+          accountId,
+          env: context.env,
+          stateDir: context.stateDir,
+        });
+        if (targets.kind !== "complete") {
+          return undefined;
+        }
+        for (const agentId of [...owners, ...targets.additionalAgentIds]) {
+          if (!knownAgentIds.has(agentId)) {
+            return undefined;
+          }
+          agentIds.add(agentId);
+        }
+        inspectedAccounts.add(key);
       }
-      for (const owner of owners) {
-        agentIds.add(owner);
-      }
+    } catch {
+      // An unavailable owner must never turn a partial route inventory into reassurance.
+      return undefined;
     }
   }
   return agentIds;

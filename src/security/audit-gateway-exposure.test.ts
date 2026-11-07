@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it } from "vitest";
+import { telegramSetupPlugin } from "../../extensions/telegram/api.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { resolveGatewayProbeAuthSafe } from "../gateway/probe-auth.js";
@@ -12,6 +13,10 @@ import {
 } from "./audit-extra.sync.js";
 import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
+import {
+  listConfiguredOpenInboundPolicies,
+  resolveOpenInboundAgentIds,
+} from "./audit-open-inbound.js";
 import { runSecurityAuditCore } from "./audit.js";
 
 const audit = (cfg: OpenClawConfig) => collectGatewayConfigFindings(cfg, cfg, {});
@@ -253,7 +258,7 @@ function absent(cfg: OpenClawConfig, ...ids: string[]) {
 }
 
 describe("security audit trust model findings", () => {
-  it("restricts open-account exposure to reachable agents and preserves privileged overrides", () => {
+  it("restricts open-account exposure to reachable agents and preserves privileged overrides", async () => {
     const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",
@@ -263,15 +268,37 @@ describe("security audit trust model findings", () => {
         },
       },
       channels: {
-        telegram: { dmPolicy: "allowlist", accounts: { work: { dmPolicy: "open" } } },
+        telegram: {
+          threadBindings: { enabled: false },
+          dmPolicy: "allowlist",
+          accounts: { work: { dmPolicy: "open" } },
+        },
       },
       bindings: [{ agentId: "mailroom", match: { channel: "telegram", accountId: "work" } }],
     };
-    expect(collectExposureMatrixFindings(cfg)).toEqual([]);
+    const auditRoutes = async (config: OpenClawConfig) =>
+      collectExposureMatrixFindings(config, undefined, {
+        agentIds: await resolveOpenInboundAgentIds(
+          config,
+          listConfiguredOpenInboundPolicies(config),
+          {
+            plugins: [telegramSetupPlugin],
+            env: {},
+            stateDir: "/unused-audit-state",
+          },
+        ),
+      });
+    // The synchronous collector cannot prove runtime route completeness on its own.
+    expect(collectExposureMatrixFindings(cfg)).toContainEqual(
+      expect.objectContaining({ checkId: runtime }),
+    );
+    expect(await auditRoutes(cfg)).toEqual([]);
     expect(
-      collectExposureMatrixFindings({
+      await auditRoutes({
         ...cfg,
-        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+        channels: {
+          telegram: { threadBindings: { enabled: false }, dmPolicy: "open", allowFrom: ["*"] },
+        },
         bindings: [{ agentId: "mailroom", match: { channel: "telegram" } }],
       }),
     ).toEqual([]);
@@ -281,7 +308,7 @@ describe("security audit trust model findings", () => {
       { teamId: "privileged-team" },
       { accountId: "*", peer: { kind: "direct" as const, id: "wildcard-operator" } },
     ]) {
-      const findings = collectExposureMatrixFindings({
+      const findings = await auditRoutes({
         ...cfg,
         bindings: [
           { agentId: "main", match: { channel: "telegram", accountId: "work", ...override } },
@@ -294,7 +321,7 @@ describe("security audit trust model findings", () => {
     }
     // An override on a closed sibling account must not expose the open account.
     expect(
-      collectExposureMatrixFindings({
+      await auditRoutes({
         ...cfg,
         bindings: [
           { agentId: "main", match: { channel: "telegram", accountId: "private" } },

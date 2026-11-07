@@ -976,7 +976,38 @@ export async function runSecurityAuditCore(
     : [];
   const openPolicies = listConfiguredOpenInboundPolicies(cfg, channelMetadata);
   const openInboundPolicies = openPolicies.map(({ path: policyPath }) => policyPath).toSorted();
-  const openInboundAgentIds = resolveOpenInboundAgentIds(cfg, openPolicies);
+  const channelDiscovery = {
+    config: cfg,
+    activationSourceConfig: context.sourceConfig,
+    workspaceDir: context.workspaceDir,
+    env,
+  };
+  let shouldAuditChannelSecurity: boolean;
+  if (context.plugins !== undefined) {
+    shouldAuditChannelSecurity = true;
+  } else {
+    const { hasConfiguredChannelsForReadOnlyScopeAsync, resolveConfiguredChannelPluginIdsAsync } =
+      await import("../plugins/channel-plugin-ids.js");
+    shouldAuditChannelSecurity =
+      (await hasConfiguredChannelsForReadOnlyScopeAsync(channelDiscovery)) ||
+      (await resolveConfiguredChannelPluginIdsAsync(channelDiscovery)).length > 0;
+  }
+  const channelPlugins = !shouldAuditChannelSecurity
+    ? []
+    : (context.plugins ??
+      (await (
+        await import("../channels/plugins/read-only.js")
+      ).listReadOnlyChannelPluginsForConfigAsync(cfg, {
+        ...channelDiscovery,
+        stateDir,
+        includePersistedAuthState: true,
+        includeSetupFallbackPlugins: true,
+      })));
+  const openInboundAgentIds = await resolveOpenInboundAgentIds(cfg, openPolicies, {
+    plugins: channelPlugins,
+    env,
+    stateDir,
+  });
 
   findings.push(...collectNodeRuntimeSecurityFindings());
 
@@ -1059,41 +1090,7 @@ export async function runSecurityAuditCore(
     );
   }
 
-  let shouldAuditChannelSecurity: boolean;
-  if (context.plugins !== undefined) {
-    shouldAuditChannelSecurity = true;
-  } else {
-    const { hasConfiguredChannelsForReadOnlyScopeAsync, resolveConfiguredChannelPluginIdsAsync } =
-      await import("../plugins/channel-plugin-ids.js");
-    shouldAuditChannelSecurity =
-      (await hasConfiguredChannelsForReadOnlyScopeAsync({
-        config: cfg,
-        activationSourceConfig: context.sourceConfig,
-        workspaceDir: context.workspaceDir,
-        env,
-      })) ||
-      (
-        await resolveConfiguredChannelPluginIdsAsync({
-          config: cfg,
-          activationSourceConfig: context.sourceConfig,
-          workspaceDir: context.workspaceDir,
-          env,
-        })
-      ).length > 0;
-  }
   if (shouldAuditChannelSecurity) {
-    const channelPlugins =
-      context.plugins ??
-      (await (
-        await import("../channels/plugins/read-only.js")
-      ).listReadOnlyChannelPluginsForConfigAsync(cfg, {
-        activationSourceConfig: context.sourceConfig,
-        workspaceDir: context.workspaceDir,
-        env,
-        stateDir,
-        includePersistedAuthState: true,
-        includeSetupFallbackPlugins: true,
-      }));
     const { collectChannelSecurityFindings } = await import("./audit-channel.collect.runtime.js");
     findings.push(
       ...(await collectChannelSecurityFindings({

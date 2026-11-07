@@ -5,6 +5,7 @@ import type { ResolvedTelegramAccount } from "./accounts.js";
 import { telegramConfigAdapter } from "./config-adapter.js";
 import { TelegramChannelConfigSchema } from "./config-schema.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
+import { resolveTelegramAuditRouteTargets } from "./security-route-targets.js";
 
 const TELEGRAM_CHANNEL = "telegram" as const;
 
@@ -55,6 +56,7 @@ export function createTelegramSetupPluginBase(params: {
       ],
     },
     configSchema: TelegramChannelConfigSchema,
+    security: { resolveAuditRouteTargets: resolveTelegramAuditRouteTargets },
     config: {
       ...telegramConfigAdapter,
       hasConfiguredState: ({ env }) =>

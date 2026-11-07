@@ -410,6 +410,20 @@ when initialization must finish before the child runs.
     Diagnostics never invent a peer ID. Keep both callbacks pure and
     import-safe because read-only diagnostics run without channel runtime.
 
+    To narrow open-ingress tool exposure checks, implement the optional
+    `security.resolveAuditRouteTargets({ cfg, accountId, env, stateDir })`.
+    Return `{ kind: "complete", additionalAgentIds: [...] }` only when the list
+    bounds **all** channel-owned agent targets beyond core config bindings for
+    that account, including live and persisted conversation overrides. Core
+    unions these targets with its configured routing candidates. An empty durable
+    store alone does not prove completeness if memory-only routes are possible.
+    Return `{ kind: "unknown" }` when a complete read-only view is unavailable.
+    The callback must not start managers, connect transports, refresh or prune
+    bindings, or write state. Missing callbacks, errors, unknown agents, and
+    incomplete facts retain all-agent exposure checks. Export the callback on
+    the read-only/setup plugin as well as the full channel plugin. Configured
+    channel `agentId` overrides and configured ACP bindings still retain conservative analysis.
+
     Channel-specific security diagnostics can use `security.collectWarnings`.
     Legacy string results are warning severity. Return the structured
     `SecurityAuditFinding` shape (`checkId`, `severity`, `title`, `detail`, and

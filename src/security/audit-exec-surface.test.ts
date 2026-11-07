@@ -5,8 +5,10 @@ import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { ChannelSecurityAdapter } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
 import { collectMinimalProfileOverrideFindings } from "./audit-extra.sync.js";
 import { collectPluginsTrustFindings } from "./audit-plugins-trust.js";
@@ -77,9 +79,18 @@ describe("security audit exec surface findings", () => {
     });
   });
 
-  it.each([false, true])(
-    "audits open route exposure with a topic override: %s",
-    async (topicOverride) => {
+  it.each([
+    ["missing", "none", true],
+    ["unknown", "none", true],
+    ["error", "none", true],
+    ["complete", "none", false],
+    ["privileged", "none", true],
+    ["unrecognized", "none", true],
+    ["complete", "topic", true],
+    ["complete", "acp", true],
+  ] as const)(
+    "audits open route exposure with %s owner and configured override=%s",
+    async (owner, override, exposed) => {
       const cfg: OpenClawConfig = {
         agents: {
           ownership: "explicit",
@@ -93,24 +104,65 @@ describe("security audit exec surface findings", () => {
             dmPolicy: "open",
             allowFrom: ["*"],
             groupPolicy: "open",
-            groups: topicOverride
-              ? { "-1001234567890": { topics: { "42": { agentId: "main" } } } }
-              : undefined,
+            groups:
+              override === "topic"
+                ? { "-1001234567890": { topics: { "42": { agentId: "main" } } } }
+                : undefined,
           },
         },
-        bindings: [{ agentId: "mailroom", match: { channel: "telegram", accountId: "default" } }],
+        bindings: [
+          { agentId: "mailroom", match: { channel: "telegram", accountId: "default" } },
+          ...(override === "acp"
+            ? [
+                {
+                  type: "acp" as const,
+                  agentId: "main",
+                  match: {
+                    channel: "telegram",
+                    accountId: "default",
+                    peer: { kind: "group" as const, id: "-1001234567890:topic:42" },
+                  },
+                },
+              ]
+            : []),
+        ],
       };
-      const findings = await collectSecurityAuditFindings(cfg);
+      const resolveTargets: ChannelSecurityAdapter["resolveAuditRouteTargets"] = async () => {
+        if (owner === "error") {
+          throw new Error("route owner unavailable");
+        }
+        return owner === "unknown"
+          ? { kind: "unknown" }
+          : {
+              kind: "complete",
+              additionalAgentIds:
+                owner === "privileged"
+                  ? ["main"]
+                  : owner === "unrecognized"
+                    ? ["missing-agent"]
+                    : [],
+            };
+      };
+      const findings = await collectSecurityAuditFindings(cfg, {
+        plugins: [
+          {
+            ...createChannelTestPluginBase({ id: "telegram" }),
+            security: {
+              resolveAuditRouteTargets: owner === "missing" ? undefined : resolveTargets,
+            },
+          },
+        ],
+      });
       for (const checkId of [
         "security.exposure.open_channels_with_exec",
         "security.exposure.open_groups_with_elevated",
         "security.exposure.open_groups_with_runtime_or_fs",
         "security.exposure.open_groups_with_control_plane_tools",
       ]) {
-        expect(findings.some((finding) => finding.checkId === checkId)).toBe(topicOverride);
+        expect(findings.some((finding) => finding.checkId === checkId)).toBe(exposed);
       }
       requireFinding(findings, "tools.exec.security_full_configured", {
-        severity: topicOverride ? "critical" : "warn",
+        severity: exposed ? "critical" : "warn",
       });
     },
   );

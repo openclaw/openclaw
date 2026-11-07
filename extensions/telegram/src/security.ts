@@ -13,6 +13,7 @@ import {
   resolveTelegramScopedGroupConfig,
 } from "./group-config-helpers.js";
 import { collectTelegramSecurityAuditFindings } from "./security-audit.js";
+import { resolveTelegramAuditRouteTargets } from "./security-route-targets.js";
 
 const resolveTelegramDmPolicy = createScopedDmSecurityResolver<ResolvedTelegramAccount>({
   channelKey: "telegram",
@@ -50,6 +51,7 @@ const collectTelegramOpenGroupFindings = createConditionalWarningCollector.findi
 });
 
 export const telegramSecurityAdapter = {
+  resolveAuditRouteTargets: resolveTelegramAuditRouteTargets,
   resolveDirectToolPolicy(params) {
     const accountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
     const account = mergeTelegramAccountConfig(params.cfg, accountId);
