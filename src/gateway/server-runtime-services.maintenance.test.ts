@@ -24,10 +24,6 @@ import {
 vi.mock("./server-startup-plugins.js", () => ({
   runGatewayPostReadyStartupMaintenance: vi.fn(async () => {}),
 }));
-// mock-isolation: Observe the post-ready handoff without starting database work.
-vi.mock("./server-startup-session-migration.js", () => ({
-  scheduleGatewaySessionFactsBackfill: vi.fn(),
-}));
 
 const { scheduleGatewayPostReadyMaintenance } = await import("./server-runtime-services.js");
 
@@ -47,14 +43,13 @@ describe("post-ready maintenance scheduling", () => {
     const startMaintenance = vi.fn(async () => null);
     const cron = { start: vi.fn(async () => undefined) };
     const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
-    const { scheduleGatewaySessionFactsBackfill: facts } =
-      await import("./server-startup-session-migration.js");
-    vi.mocked(facts).mockClear();
+    const facts = vi.fn();
     vi.mocked(runGatewayPostReadyStartupMaintenance).mockClear();
     scheduleGatewayPostReadyMaintenance(
       createPostReadyMaintenanceScheduleParams({
         scheduler,
         waitForPostReadyWork: () => ready.promise,
+        scheduleSessionFactsBackfill: facts,
         startMaintenance,
         cronState: createTestCronState(cron),
       }),

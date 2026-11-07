@@ -7,7 +7,6 @@ import {
   resolveConfiguredAgentDatabaseTargets,
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -19,6 +18,7 @@ import {
 } from "../state/agent-database-startup.js";
 import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import type { GatewaySessionFactsBackfillScheduler } from "./server-startup-session-migration.js";
 
 function assertAgentDatabaseConfiguration(
   cfg: OpenClawConfig,
@@ -38,7 +38,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
   context: GatewayRequestContext;
   preparationReady: Promise<void>;
   waitForPostReadyWork: () => Promise<void>;
-  scheduler: GatewayScheduler;
+  scheduleSessionFactsBackfill?: GatewaySessionFactsBackfillScheduler;
   getConfig: () => OpenClawConfig;
   getPluginRegistry: () => PluginRegistry;
   getPluginMetadataSnapshot: () => PluginMetadataSnapshot | undefined;
@@ -145,7 +145,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
           maintain: () =>
             runWithSpawnBroker(broker, async () => {
               await params.waitForPostReadyWork();
-              const { runGatewaySessionStartupMaintenance, scheduleGatewaySessionFactsBackfill } =
+              const { runGatewaySessionStartupMaintenance } =
                 await import("./server-startup-session-migration.js");
               await runGatewaySessionStartupMaintenance({
                 databases,
@@ -156,12 +156,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
                 log: params.log,
               });
               signal.throwIfAborted();
-              scheduleGatewaySessionFactsBackfill({
-                databases,
-                scheduler: params.scheduler,
-                signal,
-                log: params.log,
-              });
+              params.scheduleSessionFactsBackfill?.(databases);
             }),
         };
       }),
