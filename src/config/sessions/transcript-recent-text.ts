@@ -80,9 +80,10 @@ function extractRecentConversationText(
     deliveryMirror.kind === CRON_DIRECT_DELIVERY_CONTEXT_KIND;
   if (
     message.role === "assistant" &&
-    isTranscriptOnlyOpenClawAssistantMessage(message) &&
-    !includeCronDirectDeliveryContext &&
-    !(options.includeMessageToolSourceReplies && readTerminalSourceReplyDeliveryMirror(message))
+    (message.display === false ||
+      (isTranscriptOnlyOpenClawAssistantMessage(message) &&
+        !includeCronDirectDeliveryContext &&
+        !(options.includeMessageToolSourceReplies && readTerminalSourceReplyDeliveryMirror(message))))
   ) {
     return undefined;
   }

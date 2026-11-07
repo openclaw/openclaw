@@ -49,6 +49,16 @@ export function registerRecentTranscriptTextSnapshotTests(params: {
     ]);
   });
 
+  it("excludes undisplayed assistant messages with display false", async () => {
+    await writeTranscriptStore();
+    await persist([
+      { message: { role: "user", content: "hello", timestamp: 1_000 } },
+      { message: { role: "assistant", content: "private reply", display: false, timestamp: 2_000 } },
+    ]);
+    const turns = await read();
+    expect(turns).toEqual([expect.objectContaining({ role: "user", text: "hello" })]);
+  });
+
   it("reads recent context only from the active transcript branch", async () => {
     await writeTranscriptStore();
     const expected = [

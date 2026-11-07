@@ -97,6 +97,22 @@ describe("session transcript inbound context", () => {
     ]);
   });
 
+  it("restores message-tool source replies for session history when no live chat window survives", async () => {
+    readRecent.mockImplementation(async (params) =>
+      params.includeMessageToolSourceReplies
+        ? [{ id: "m-1", role: "assistant", text: "sent reply", timestamp: 2_000 }]
+        : [],
+    );
+    const ctx = await merged({ SessionTranscriptContext: { historyLimit: 3 } });
+    expect(readRecent.mock.calls[0]?.[0]).toMatchObject({
+      includeMessageToolSourceReplies: true,
+      includeCronDirectDeliveryContext: true,
+    });
+    expect(ctx.InboundHistory).toEqual([
+      expect.objectContaining({ body: "sent reply", sender: "Assistant" }),
+    ]);
+  });
+
   it("dedupes the canonical turn against the live window and merges chronologically", async () => {
     readRecent.mockResolvedValue(transcriptPair("cached user turn", "canonical reply"));
     const ctx = await merged({

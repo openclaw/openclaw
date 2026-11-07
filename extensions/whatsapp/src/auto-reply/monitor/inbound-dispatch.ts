@@ -283,6 +283,7 @@ export async function prepareWhatsAppInboundContext(params: {
         conversationKind === "group"
           ? (params.groupHistoryLimit ?? params.groupHistory?.length ?? 0)
           : 0,
+      historyKind: conversationKind === "group" ? "recent" : "pending",
     },
     access: mentions || commands ? { mentions, commands } : undefined,
     command: params.command,
