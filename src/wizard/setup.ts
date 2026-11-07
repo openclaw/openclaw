@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { gatewayCredentialScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOnboardingSetupTarget } from "../commands/onboard-agent-target.js";
 import * as firstAgentOnboarding from "../commands/onboard-first-agent.js";
@@ -106,7 +107,7 @@ async function runSetupWizardOnce(
     if (snapshot.issues.length > 0) {
       await prompter.note(
         [
-          ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
+          ...snapshot.issues.map((iss) => terminalText`- ${iss.path}: ${iss.message}`),
           "",
           "Docs: https://docs.openclaw.ai/gateway/configuration",
         ].join("\n"),

@@ -40,6 +40,7 @@ import {
   setClientProfile,
   useBrowserFollowupFixture,
 } from "./chat-send-pending-inputs.test-support.js";
+import { sessionAbortHandlers } from "./sessions-abort.js";
 import type { RespondFn } from "./types.js";
 
 installGatewayTestHooks();
@@ -48,8 +49,8 @@ const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 type FollowupFixture = Awaited<ReturnType<typeof createBrowserFollowupFixture>>;
 
-async function startInput() {
-  const fixture = await createBrowserFollowupFixture();
+async function startInput(storage: "durable" | "memory" = "durable") {
+  const fixture = await createBrowserFollowupFixture({ storage });
   const cleanup = async () => {
     clearFollowupQueue(fixture.scope.sessionKey);
     await fixture.cleanup();
@@ -120,6 +121,52 @@ async function discardInput(
 }
 
 describe("queued chat input withdrawal", () => {
+  it.each([
+    { storage: "durable", method: "chat.abort" },
+    { storage: "memory", method: "chat.abort" },
+    { storage: "durable", method: "sessions.abort" },
+  ] as const)(
+    "$method retains the explicit user Stop fact with unconsumed input ($storage)",
+    async ({ storage, method }) => {
+      await using fixture = await startInput(storage);
+      const { context, scope, active, runId } = fixture;
+      // Execution is paused by this fixture; cancellation releases that external I/O.
+      active.input.abortSignal.addEventListener("abort", fixture.releaseDispatch, { once: true });
+      const params = {
+        ...(method === "chat.abort"
+          ? { sessionKey: scope.sessionKey, runId }
+          : { key: scope.sessionKey, clearQueued: true }),
+        userInitiated: true,
+      };
+      const respond = vi.fn<RespondFn>();
+      const handler =
+        method === "chat.abort" ? handleChatAbortRequest : sessionAbortHandlers[method]!;
+      await handler({
+        params,
+        req: { type: "req", id: "user-stop", method, params },
+        client: fixture.client,
+        context,
+        respond,
+        isWebchatConnect: () => true,
+      });
+      expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
+      expect(respond.mock.calls[0]?.[1]).toMatchObject(
+        method === "chat.abort" ? { aborted: true } : { status: "aborted" },
+      );
+      await fixture.finishDispatch();
+      await fixture.recorder.waitForPendingInputSettlement?.();
+      const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 1000 });
+      expect(page.items).toMatchObject([
+        {
+          state: "cancelled",
+          cancelledByUser: true,
+          message: { content: fixture.approvedContent },
+        },
+      ]);
+      expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
+    },
+  );
+
   it("keeps refused browser input revoked after its session access returns", async () => {
     await using fixture = await createBrowserFollowupFixture({
       preserveContent: true,
@@ -149,7 +196,7 @@ describe("queued chat input withdrawal", () => {
     expect(recorder.getAdmissionReceipt()).toBeUndefined();
     expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
       total: 1,
-      items: [{ state: "interrupted" }],
+      items: [{ state: "cancelled" }],
     });
     expect(loadTranscriptEventsSync(fixture.scope)).not.toContainEqual(
       expect.objectContaining({
@@ -168,7 +215,7 @@ describe("queued chat input withdrawal", () => {
     ["consumed", "rpc", undefined, false],
     ["queued", "rpc", "rpc", true],
   ] as const)(
-    "settles %s input (%s, %s, discard: %s) without losing recovery",
+    "settles %s input (%s, %s, discard: %s) while preserving failed sends",
     async (target, stopReason, reason, discardPendingInput) => {
       await using fixture = await startInput();
       const { context, scope, active, recorder, runId } = fixture;
@@ -207,7 +254,7 @@ describe("queued chat input withdrawal", () => {
         }
       }
       await fixture.finishDispatch();
-      const disposition = reason === "restart" ? "interrupted" : "cancelled";
+      const disposition = "cancelled";
       const prefix = "chat pending input aborted:";
       const logs = vi
         .mocked(context.logGateway.info)
@@ -221,6 +268,7 @@ describe("queued chat input withdrawal", () => {
       if (reason) {
         const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 1000 });
         expect(page.items).toHaveLength(1);
+        expect(page.items[0]?.cancelledByUser).toBeUndefined();
         if (discardPendingInput) {
           expect(page.items[0]?.message).toMatchObject({ display: false, content: [] });
           expect(JSON.stringify(page)).not.toContain(fixture.approvedContent);
@@ -231,7 +279,7 @@ describe("queued chat input withdrawal", () => {
           {
             runId,
             state: "pending",
-            ...(disposition === "cancelled" ? { cancelled: true } : {}),
+            cancelled: true,
           },
         ]);
         expect(loadTranscriptEventsSync(scope)).toEqual(fixture.activeTranscript);

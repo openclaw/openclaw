@@ -11,6 +11,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { prepareDelegationCapability } from "../../delegation-capability.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
+import { resolveTurnCyberAccessProgram } from "../../model-catalog-access-programs.js";
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
 import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
@@ -27,6 +28,7 @@ import { createAttemptContinuationRetryCount } from "./attempt-continuation-retr
 import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
 import { resolveEmbeddedAttemptMemoryAudience } from "./attempt-memory-audience.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
+import { createPreparedSessionTargetAssertion } from "./attempt-session-target.js";
 import { EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE } from "./attempt-stage-timing.js";
 import { prepareAttemptSystemPromptAdditions } from "./attempt-system-prompt-additions.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";
@@ -105,8 +107,15 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
   });
   const attemptFastMode = resolveAttemptFastModeParam();
-  const existingSessionTarget = sessionPromptState.sessionTarget;
-  const selectedPromptTarget = { ...existingSessionTarget };
+  // Each candidate, including fallbacks and live switches, applies Access to its own provider.
+  const attemptAccessProgram = resolveTurnCyberAccessProgram({
+    program: params.cyberAccessProgram,
+    provider,
+    model: modelId,
+    noticeScope: `log:${resolvedSessionKey ?? params.sessionId}`,
+    notify: (notice) => log.info(notice),
+  });
+  const selectedPromptTarget = { ...sessionPromptState.sessionTarget };
   const resolvedSessionTarget = await resolveAttemptDispatchSessionTarget({
     agentId: workspaceResolution.agentId,
     config: params.config,
@@ -350,20 +359,14 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
             sessionKey: resolvedSessionTarget.sessionKey,
             storePath: resolvedSessionTarget.storePath,
           }),
-          assertCurrent: () => {
-            if (
-              !attemptControls.isCurrent() ||
-              sessionPromptState.sessionId !== sessionId ||
-              (["agentId", "sessionId", "sessionKey", "storePath", "threadId"] as const).some(
-                (field) =>
-                  sessionPromptState.sessionTarget?.[field] !== selectedPromptTarget[field],
-              )
-            ) {
-              throw new Error("Session target preparation outlived its attempt");
-            }
-            // Attempt controls check the source; retain its exact binding after that callback.
-            assertActiveRun.assertScopeCurrent();
-          },
+          assertCurrent: createPreparedSessionTargetAssertion({
+            runId: params.runId,
+            sessionId,
+            sessionPromptState,
+            selectedPromptTarget,
+            isAttemptCurrent: () => attemptControls.isAttemptCurrent(),
+            assertActiveRun,
+          }),
         }
       : undefined;
   const attemptParams: EmbeddedRunAttemptInternalParams & {
@@ -375,13 +378,14 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     bindWatchdogAttempt: attemptControls.bindWatchdogAttempt,
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
     awaitSessionDiffBaseline: params.awaitSessionDiffBaseline,
-    pluginRuntimeRefreshPending: pluginRefresh.isPending,
+    pluginRuntimeRefreshPending: pluginRefresh.stopAtStep,
     registerPluginRuntimeRefreshConsumer: (isCurrent) => {
       if (attemptControls.isCurrent()) {
         pluginRefresh.bindConsumer(() => attemptControls.isCurrent() && isCurrent());
       }
     },
     pluginRuntimeRefreshMessages: params.pluginRuntimeRefreshMessages,
+    pluginRuntimeRefreshUserPrompt: params.pluginRuntimeRefreshUserPrompt,
     continuation: sessionPromptState.continuation,
     runCleanupSettlement: params.runCleanupSettlement,
     joinObservation: params.joinObservation,
@@ -542,7 +546,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     agentId: workspaceResolution.agentId,
     thinkLevel: runtime.thinkLevel,
     thinkingExplicit: params.thinkingExplicit,
-    cyberAccessProgram: params.cyberAccessProgram,
+    cyberAccessProgram: attemptAccessProgram,
     onToolOutcome: input.observeToolOutcome,
     isTurnTainted: input.isTurnTainted,
     allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
@@ -610,7 +614,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
-    skillWorkshopReviewOf: params.skillWorkshopReviewOf,
     skillLibraryAuthoring: params.skillLibraryAuthoring,
     promptMode: params.promptMode,
     ownerNumbers: params.ownerNumbers,
@@ -637,10 +640,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     disableMessageTool: params.disableMessageTool,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
-    forceRestartSafeTools: params.forceRestartSafeTools,
-    forceCodeModeTools: params.forceCodeModeTools,
     codeModeOverride: params.codeModeOverride,
     disableToolSearch: params.disableToolSearch,
+    compactionForbidden: params.disableCompactionRecovery,
     sessionReadScopeKey: params.sessionReadScopeKey,
     blindPrompt: params.blindPrompt,
     forceMessageTool: params.forceMessageTool,

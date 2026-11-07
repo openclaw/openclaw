@@ -67,7 +67,7 @@ describe("Activity recap feedback", () => {
       flush();
       const container = recap();
       expect(container.textContent).toContain("Fixed the search. Tests passed.");
-      expect(container.textContent).toContain("Couldn’t refresh recap");
+      expect(container.textContent).toContain("Couldn’t refresh the recap. Try again.");
       expect(container.textContent).not.toContain("Recap unavailable");
       const button = container.querySelector<HTMLButtonElement>(
         ".activity-feed__note .activity-feed__note-action",

@@ -1,0 +1,2 @@
+# Regression for session patch persistence of explicit web-search booleans and unset/clear semantics.
+15

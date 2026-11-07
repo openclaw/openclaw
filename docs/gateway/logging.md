@@ -102,6 +102,11 @@ preparations, and model calls independently of log levels.
 Per-request GitHub API timing records also use `debug`, including fetches over
 500 ms. Transport failures and rate-limit errors retain their normal handling.
 
+Slow SQLite holds for `session.transcript.append-turn` include `context.messages`,
+the number of messages submitted to that write transaction. This count includes
+replays and messages later skipped by a predicate; it is not a transcript length
+or committed-message count. It contains no message content or identities.
+
 Plugin host cleanup failures during session reset or deletion emit one
 `plugins/cleanup` warning per failure, including the operation, plugin, hook, and
 error. Check the reported cleanup error before retrying. Successful cleanup
@@ -138,6 +143,25 @@ Failed SQLite session writes include a bounded, redacted `error` summary in
 their structured file-log record, with cause and error-code details when
 available. Long summaries are truncated. The record retains its write timing
 and store fields.
+
+### Slow SQLite transcript hydration
+
+Slow `sessions.transcript-hydration.*` read transactions and
+`session.lifecycle.delete` include native statement attribution on the existing
+slow-hold warning. `statementExecutionMs` sums native execution calls;
+`callbackOtherMs` is the remaining callback wall time, including JavaScript,
+statement preparation, GC, and scheduling. Neither is CPU time. Hydration also
+reports `callbackGcMs` from the current isolate's native GC sampler on Node;
+absence means unavailable, while zero means no observed collection. GC overlaps
+the statement/other wall times and must not be added to them or subtracted from
+both. It cannot locate a collection within a particular statement.
+
+The warning keeps thread identity before its bounded statement summary. The
+summary ranks five groups by total time from at most 32 retained SQL shapes plus
+an overflow group, reports omitted-group count, and identifies the globally
+slowest statement separately. Statement IDs hash normalized SQL; no SQL text or
+bindings are logged. `rows` counts returned rows (`get`/`all`) or consumed iterator
+rows, including early close; it is not the number of rows SQLite scanned.
 
 ### SQLite snapshot cleanup
 
@@ -335,6 +359,18 @@ including cache hits and worker queue/lock waits. Nested times overlap their par
 do not add them to the total. These are elapsed times, so event-loop stalls during
 awaited work also count. Unused or unreached sub-phases are absent.
 
+Profile preparation further reports `profileAccessIdentityMs` (Cloudflare Access
+verification or verified-assertion reuse), `profileGitHubMetadataMs` (GitHub public
+metadata lookup or reuse), `profileBindingReadMs` (the current local account/email
+or login binding), and `profileWriteMs` (canonical profile ensure/sync, which may
+be a no-op). `profileAuthorityMs` covers local authority acquisition;
+`profileProjectionMs` covers the resulting profile and recipient projection.
+These nested timings contain no identity, assertion, or profile contents. Warm
+account/email lookups use the existing profile catalog and its mutation settlement;
+standalone callers and login aliases retain worker reads. Expired external
+verification still blocks admission when roles or access policy require it.
+Optional avatar adoption remains after hello.
+
 The hello interval includes `snapshotMs` (presence, session defaults, update details,
 and cached health) and `helloDescriptorsMs` (method and event descriptors). These
 are nested wall times, not additional phases. Model catalog publication runs after
@@ -360,6 +396,22 @@ and cleanup work. Ordinary subscriptions prepare committed access facts without
 waiting for display-row refreshes; incognito reads retain their exact-row
 preparation. Approval subscriptions still prepare and validate the authoritative
 replay before acknowledging. Records contain no session keys or message content.
+
+With the same diagnostics and warning settings, `workboard.cards.list` requests
+taking at least one second emit `slow workboard cards list`. The router records
+`setup`, `projectionReadiness`, `accessFacts`, `admission`, `handlerPreparation`,
+`handler` (including response delivery), and `cleanup` in `phaseDurationsMs`.
+This includes authorization before the Workboard handler, so a fast card query
+does not hide a slow session-access preparation.
+
+Fixed `detail.sessionAuthority.*` timings distinguish profile preparation,
+target preparation, and policy checks. Within target preparation,
+`detail.sessionFacts.*` distinguishes inventory construction, storage readiness,
+discovery, row reads, publication settlement, and selection. These are nested
+wall times: do not add them to the outer phases. Failed calls retain the time
+spent in each phase before the failure. Records contain no request parameters,
+session or card IDs, paths, or error contents. Fast requests emit no warning; no additional logging
+configuration is required beyond the existing diagnostics settings.
 
 The `materialize` phase measures the wait for session-row projection readiness. In-flight
 catalog renewals no longer block lists or descriptions once a catalog is loaded:
@@ -442,6 +494,7 @@ These records do not contain message text or session identifiers. Nested phases
 can overlap; their sum is not the request duration. The
 [Prometheus exporter](/gateway/prometheus) records the same fixed phases for fast
 and slow sends when diagnostics are enabled.
+Message formatting is deferred until the one-second threshold is reached.
 
 Catalog lists additionally expose fixed request-stage observations through the
 existing diagnostic event stream and [Prometheus exporter](/gateway/prometheus#catalog-list-stages).

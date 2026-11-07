@@ -11,6 +11,7 @@ import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -94,13 +95,14 @@ export function prepareBackgroundSessionCompletion(params: {
       const row = context.sessions.state.result?.sessions.find((session) =>
         areUiSessionKeysEquivalent(session.key, key),
       );
+      // A finished run needs no label; any other outcome names itself in one muted word.
       const status =
         result.status === "ok"
-          ? t("sessionsView.statusDone")
+          ? undefined
           : result.status === "timeout"
             ? t("sessionsView.statusTimeout")
             : result.stopReason === "rpc"
-              ? t("sessionsView.statusKilled")
+              ? t("chat.handoffSessionStatus.stopped")
               : t("sessionsView.statusFailed");
       const nativeTarget = sessionNavigationTarget({
         face: "chat",
@@ -118,20 +120,37 @@ export function prepareBackgroundSessionCompletion(params: {
       ) ?? { id: agentId };
       const identity = context.agentIdentity.get(agentId);
       showToast({
-        fifo: true,
+        severity:
+          result.status === "ok"
+            ? "success"
+            : result.status === "timeout"
+              ? "error"
+              : result.stopReason === "rpc"
+                ? undefined
+                : "error",
+        placement: "top-right",
         avatar: {
           id: agentId,
           name: normalizeAgentTargetLabel(agent, identity),
           avatar: resolveAgentAvatarUrl(agent, identity),
           textAvatar: resolveAgentTextAvatar(agent, identity),
         },
-        message: `${resolveSessionDisplayName(key, row)}: ${status}`,
+        message: resolveSessionDisplayName(key, row),
+        description: status,
         actionLabel: t("sessionsView.openSession"),
-        onAction: () => {
+        actionHref: sessionNavigationTarget({ context, face: "chat", sessionKey: key, agentId })
+          .href,
+        onAction: (event) => {
           if (!isCurrentOwner()) {
+            event?.preventDefault();
             return;
           }
-          openSessionNoticeTarget(context, key, agentId);
+          const open = () => openSessionNoticeTarget(context, key, agentId);
+          if (!event) {
+            open();
+          } else if (event.type === "click") {
+            handleNavigationClick(event, open);
+          }
         },
       });
     })();

@@ -117,7 +117,7 @@ it.each([
   );
   const fixture = await remoteFixture(root, { url: gateway.url });
   const { stateDir } = fixture;
-  seedDeviceAuth(root, stateDir, gateway.url, storedToken);
+  await seedDeviceAuth(root, stateDir, gateway.url, storedToken);
   const before = await test.snapshot(stateDir);
   const result = await runIsolatedGatewayCli({ args: test.args, ...fixture });
   expect(expectCliResult(result)).toEqual(test.result);
@@ -139,7 +139,7 @@ it.each(process.platform === "win32" ? [true] : [true, false])(
     const fixture = await remoteFixture(root, { url: gateway.url, token });
     const { stateDir } = fixture;
     if (seeded) {
-      seedDeviceAuth(root, stateDir, gateway.url, token);
+      await seedDeviceAuth(root, stateDir, gateway.url, token);
     }
     const before = await snapshotSharedStateArtifacts(stateDir);
     expect(Object.keys(before).includes("openclaw.sqlite")).toBe(seeded);

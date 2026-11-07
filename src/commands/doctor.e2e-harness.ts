@@ -413,6 +413,12 @@ vi.mock("../flows/doctor-tool-schema-runtime.js", () => ({
   collectRuntimeToolSchemaFindings: vi.fn().mockResolvedValue([]),
 }));
 
+// Physical-store inspection has its own suites; these fixtures exercise command/config routing.
+vi.mock("./doctor-database-engine.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-database-engine.js")>()),
+  noteDatabaseEngines: vi.fn().mockResolvedValue([]),
+}));
+
 // mock-isolation: Doctor fixtures isolate host browser probes; the real browser owner has its production-path permission proof.
 vi.mock("./doctor-browser.js", () => ({
   collectBrowserReadinessFindings: vi.fn().mockResolvedValue([]),

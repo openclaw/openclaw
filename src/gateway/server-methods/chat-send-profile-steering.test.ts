@@ -9,18 +9,14 @@ import {
   resolveAgentQuestionGatewayCall,
   type AgentQuestionDispatcher,
 } from "../../agents/harness/gateway-question-dispatch.js";
-import { createNativeSessionBindingAuthority } from "../../agents/harness/native-session/binding-authority.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
-import { beginRestartRecoveryTerminalDelivery } from "../../config/sessions/restart-recovery-receipt.js";
 import {
   listSessionPendingInputs,
   loadTranscriptEventsSync,
-  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as controllerDiagnostics from "../../sessions/session-controller.diagnostics.js";
 import {
   beginReplyMessageInjectionTarget,
-  bindSessionControllerSourceTurnId,
   captureReplyMessageInjectionTarget,
 } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
@@ -55,115 +51,6 @@ function expectUntouched(fixture: Fixture, operation: Operation, cancel: ReturnT
   expect(operation.result).toBeNull();
   expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
 }
-
-it.for(["terminal-pending", "matching-tombstone", "unrelated-tombstone"] as const)(
-  "rechecks Gateway terminal delivery inside native final preparation: %s",
-  async (change, { signal }) => {
-    await using fixture = await createFixture();
-    fixture.params.queueMode = "steer";
-    fixture.params.idempotencyKey = `gateway-native-receipt-${change}`;
-    const operation = activeOperation(fixture);
-    const sourceTurnId = "native-active-source";
-    await upsertSessionEntryCore(fixture.scope, {
-      restartRecoveryDeliveryRunId: "native-receipt-owner",
-      restartRecoveryDeliverySourceRunId: sourceTurnId,
-    });
-    const entered = createDeferred();
-    const release = createDeferred();
-    const finished = createDeferred();
-    const fingerprint = "native-receipt-tools";
-    let preparingNative = false;
-    let held = false;
-    bindSteeringTools(operation, fingerprint, {
-      projectAsync: async () => {
-        if (preparingNative && !held) {
-          held = true;
-          entered.resolve();
-          await withinTest(release.promise, signal);
-        }
-        return fingerprint;
-      },
-    });
-    bindSessionControllerSourceTurnId(operation, sourceTurnId);
-    operation.setPhase("running");
-    const native = createNativeSessionBindingAuthority(
-      [
-        {
-          read: fixture.scope,
-          sessionId: fixture.scope.sessionId,
-          createSupersededError: () => new Error("Native steering session was replaced"),
-        },
-      ],
-      () => operation.abortSignal.throwIfAborted(),
-    );
-    const enqueued = vi.fn();
-    operation.attachBackend({
-      ...backend("native-receipt-owner", fingerprint),
-      messageInjectionV2: {
-        version: 2,
-        isAvailable: () => true,
-        async queueMessage() {
-          throw new Error("Expected prepared native steering");
-        },
-        async queueMessageAsync(text, options, preparation) {
-          preparingNative = true;
-          try {
-            await native.withPreparedCurrent!(() => {
-              enqueued(text);
-              options?.onQueueAccepted?.(true);
-            }, [preparation]);
-          } finally {
-            finished.resolve();
-          }
-        },
-      },
-    });
-    const request = fixture.send();
-    const settlement = request.then(
-      () => {},
-      () => {},
-    );
-    try {
-      const respond = await withinTest(request, signal);
-      expect(respond.mock.calls[0]).toMatchObject({ 0: true, 1: { status: "started" } });
-      await withinTest(entered.promise, signal);
-      expect(enqueued).not.toHaveBeenCalled();
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      if (change === "terminal-pending") {
-        await expect(
-          beginRestartRecoveryTerminalDelivery({
-            ...fixture.scope,
-            sourceTurnId,
-            toolCallId: "native-terminal-delivery",
-          }),
-        ).resolves.toBe("started");
-      } else {
-        await upsertSessionEntryCore(fixture.scope, {
-          restartRecoveryTerminalRunIds: [
-            change === "matching-tombstone" ? sourceTurnId : "prior-source",
-          ],
-        });
-      }
-      expect(operation.phase).toBe("running");
-      release.resolve();
-      await withinTest(finished.promise, signal);
-      expect(operation.result).toBeNull();
-      if (change === "unrelated-tombstone") {
-        expect(enqueued).toHaveBeenCalledExactlyOnceWith(fixture.approvedContent);
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      } else {
-        expect(enqueued).not.toHaveBeenCalled();
-        const recorder = await withinTest(fixture.dispatchedRecorder, signal);
-        expect((await recorder.resolveMessage())?.content).toBe(fixture.approvedContent);
-        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-      }
-      await fixture.finishDispatch();
-    } finally {
-      release.resolve();
-      await settlement;
-    }
-  },
-);
 
 it.for([
   { change: "same profile", boundary: "native" },

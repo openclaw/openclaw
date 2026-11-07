@@ -26,7 +26,10 @@ import { mapColdLoadCpuProfile, summarizeCpuProfile } from "./lib/control-ui-col
 import {
   createScenarioFixture,
   interactionScenarios,
+  installInteractionNavigationPreloadObserver,
+  settleInteractionNavigationPreloads,
   settleSidebarBackgroundWork,
+  type InteractionNavigationPreloads,
   type InteractionEvidence,
   type InteractionSandbox,
 } from "./lib/control-ui-interaction-scenarios.ts";
@@ -45,10 +48,17 @@ import {
   prepareProjectionFixture,
 } from "./lib/control-ui-projection-fixtures.ts";
 import {
+  measureRendererProcessMetrics,
+  readControlUiPerformanceMetrics as metrics,
+  readRendererProcessSnapshot as rendererProcesses,
+  type RendererProcessSnapshot,
+} from "./lib/control-ui-renderer-metrics.ts";
+import {
   installControlUiResourceCounts,
   readControlUiResourceCounts,
   type ControlUiResourceCounts,
 } from "./lib/control-ui-resource-counts.ts";
+import { captureRetention, installRetentionTimers } from "./lib/control-ui-retention.ts";
 import {
   createWorkboardResourceFixture,
   prepareWorkboardResourceSource,
@@ -67,10 +77,15 @@ const { values } = parseArgs({
     viewport: { type: "string", default: "both" },
     pairs: { type: "string", default: "1" },
     "cpu-throttle": { type: "string", default: "1" },
+    "low-memory": { type: "boolean", default: false },
     trace: { type: "boolean", default: false },
+    "profile-interval-us": { type: "string", default: "1000" },
+    "no-opt": { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
     theme: { type: "string", default: "light" },
     "thread-cpu-time": { type: "boolean", default: false },
+    "function-counts": { type: "boolean", default: false },
+    "graph-counts": { type: "boolean", default: false },
     "first-pair-screenshots": { type: "boolean", default: false },
     "invalidation-tracking": { type: "boolean", default: false },
     "resource-counts": { type: "boolean", default: false },
@@ -85,11 +100,17 @@ const { values } = parseArgs({
   },
 });
 const trace = values.trace || values["selector-stats"];
+if (values["graph-counts"] && (trace || values["function-counts"] || values["projection-counts"])) {
+  throw new Error("Run reactive graph counts separately from CPU/coverage instrumentation");
+}
 if (values["projection-counts"] && !values["projection-fixtures"]) {
   throw new Error("--projection-counts requires --projection-fixtures");
 }
 if (values["projection-counts"] && trace) {
   throw new Error("Run precise projection counts separately from CPU profiles/traces");
+}
+if (values["function-counts"] && trace) {
+  throw new Error("Run precise function counts separately from CPU profiles/traces");
 }
 if (values["projection-fixtures"] && values["resource-counts"]) {
   throw new Error("Run native resource counts separately from projection fixture measurements");
@@ -100,6 +121,10 @@ if (values.theme !== "light" && values.theme !== "dark") {
 const theme = values.theme;
 const pairs = Number(values.pairs);
 const cpuThrottle = Number(values["cpu-throttle"]);
+const profileIntervalUs = Number(values["profile-interval-us"]);
+if (!Number.isInteger(profileIntervalUs) || profileIntervalUs < 50) {
+  throw new Error("profile-interval-us must be an integer of at least 50");
+}
 const assetLatencyMs = Number(values["asset-latency-ms"]);
 if (!Number.isFinite(assetLatencyMs) || assetLatencyMs < 0) {
   throw new Error("asset-latency-ms must be nonnegative");
@@ -128,7 +153,7 @@ const scenarios = interactionScenarios.filter((step) => {
   }
   return selectedIds
     ? selectedIds.includes(step.id)
-    : !step.resourceOnly || values["resource-counts"];
+    : !step.explicitOnly && (!step.resourceOnly || values["resource-counts"]);
 });
 if (!scenarios.length || selectedIds?.some((id) => !scenarios.some((step) => step.id === id))) {
   throw new Error("Unknown or empty interaction steps");
@@ -151,54 +176,6 @@ async function settle(page: Page) {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       }),
   );
-}
-
-async function metrics(
-  cdp: CDPSession,
-): Promise<Record<string, number> & { JSHeapUsedSize: number }> {
-  const result: { metrics: Array<{ name: string; value: number }> } =
-    await cdp.send("Performance.getMetrics");
-  const measured = Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
-  const heapUsed = measured.JSHeapUsedSize;
-  if (heapUsed === undefined) {
-    throw new Error("Chromium did not report the required JS heap metric");
-  }
-  return { ...measured, JSHeapUsedSize: heapUsed };
-}
-
-type RendererProcessSnapshot = Array<{ id: number; cpuSeconds: number; rssBytes: number }>;
-
-async function rendererProcesses(cdp: CDPSession): Promise<RendererProcessSnapshot> {
-  const { processInfo }: { processInfo: Array<{ id: number; type: string; cpuTime: number }> } =
-    await cdp.send("SystemInfo.getProcessInfo");
-  const renderers = processInfo.filter(({ type }) => type === "renderer");
-  if (
-    !renderers.length ||
-    renderers.some(
-      ({ id, cpuTime }) => !Number.isSafeInteger(id) || id <= 0 || !Number.isFinite(cpuTime),
-    )
-  ) {
-    throw new Error("The owned browser did not provide valid renderer processes");
-  }
-  // Only CDP-reported PIDs from this benchmark-owned browser reach ps.
-  const rows = execFileSync(
-    "/bin/ps",
-    ["-o", "pid=,rss=", "-p", renderers.map(({ id }) => id).join(",")],
-    {
-      encoding: "utf8",
-      timeout: 10_000,
-    },
-  )
-    .trim()
-    .split("\n")
-    .map((line) => line.trim().split(/\s+/).map(Number));
-  return renderers.map(({ id, cpuTime }) => {
-    const rss = rows.find(([pid]) => pid === id)?.[1];
-    if (rss === undefined || !Number.isFinite(rss) || rss < 0) {
-      throw new Error(`Renderer ${id} did not supply a valid RSS snapshot`);
-    }
-    return { id, cpuSeconds: cpuTime, rssBytes: rss * 1024 };
-  });
 }
 
 function distribution(numbers: number[]) {
@@ -352,18 +329,29 @@ type Result = {
     error?: string;
   };
   durationBreakdownMs?: Record<string, number>;
-  retainedHeap?: { beforeBytes: number; afterBytes?: number; deltaBytes?: number };
+  retainedHeap?: {
+    beforeBytes: number;
+    afterBytes?: number;
+    deltaBytes?: number;
+    before: Awaited<ReturnType<typeof captureRetention>> & { artifact: string };
+    after?: Awaited<ReturnType<typeof captureRetention>> & { artifact: string };
+  };
   longTasks?: { count: number; totalMs: number; maxMs: number };
+  cls?: number;
   requests?: Record<string, number>;
   scenarioEvidence?: InteractionEvidence;
   domBefore?: { nodes: number; menuItems: number; namedAnchors: number };
   domAfter?: { nodes: number; menuItems: number; namedAnchors: number };
   rowIdentity?: { initial: number; created: number; retained: number; final: number };
+  navigationPreloads?: InteractionNavigationPreloads;
   resourcesBefore?: ControlUiResourceCounts;
   resourcesAfter?: ControlUiResourceCounts;
   processWakeups?: ProcessWakeups;
   projectionFixture?: ProjectionFixtureFacts;
   projectionCoverageArtifact?: string;
+  functionCoverageArtifact?: string;
+  functionCoveragePreparationArtifact?: string;
+  reactiveGraphArtifact?: string;
   projectionScreenshotArtifact?: string;
   measurementClass?:
     | "production-interaction"
@@ -422,8 +410,17 @@ if (values["process-wakeups"]) {
   }
 }
 const browserExecutable = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const memoryArgs = values["low-memory"] ? ["--enable-low-end-device-mode"] : [];
+const v8Flags = [
+  ...(values["low-memory"] ? ["--max-old-space-size=128"] : []),
+  ...(values["no-opt"] ? ["--no-opt"] : []),
+];
+if (v8Flags.length) {
+  memoryArgs.push(`--js-flags=${v8Flags.join(" ")}`);
+}
 const browser = await chromium.launch({
   executablePath: browserExecutable,
+  args: memoryArgs,
 });
 
 async function launchNativeVisibilityContext() {
@@ -439,6 +436,7 @@ async function launchNativeVisibilityContext() {
       "--use-mock-keychain",
       // Full Chrome headless still hides a natively minimized window; the headless shell does not.
       "--headless=new",
+      ...memoryArgs,
       "about:blank",
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
@@ -597,12 +595,22 @@ try {
           load: os.loadavg(),
         },
         collection: trace
-          ? "CDP trace + 1ms CPU profiler (overhead included)"
+          ? `CDP trace + ${profileIntervalUs}µs CPU profiler (overhead included)`
           : "untraced CDP metrics",
+        v8Optimization: values["no-opt"] ? "disabled for diagnostics" : "default",
         metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+        functionCounts: values["function-counts"]
+          ? "Precise coverage starts before navigation and resets after preparation; diagnostic overhead, not timing evidence."
+          : false,
+        reactiveGraphCounts: values["graph-counts"]
+          ? "Observe-only Solid build; diagnostic counts, not production timing evidence."
+          : false,
         cpuThrottle,
+        memoryProfile: values["low-memory"]
+          ? "Chromium low-end-device mode; 128 MiB V8 old-space limit, not an OS/RSS limit."
+          : "default",
         retainedHeap: values["retained-heap"]
-          ? "Separate GC-controlled proof: collect before tracing and after action metrics/tracing; not a timing comparison."
+          ? "Separate GC-controlled proof: full heap/DOM snapshots after preparation and after action metrics/tracing, including fixture request history; not a timing comparison."
           : false,
         pairOrder: values["control-bundle-dir"]
           ? values.counterbalance
@@ -732,6 +740,7 @@ try {
                   colorScheme: theme,
                   isMobile: viewport.name === "mobile",
                   hasTouch: viewport.name === "mobile",
+                  args: memoryArgs,
                 })
               : undefined;
           const ownedBrowserPid = nativeVisibility?.processId ?? observationBrowser?.processId;
@@ -764,6 +773,7 @@ try {
             // tsx preserves names in serialized fixture callbacks, as in the cold-load runner.
             await page.addInitScript("globalThis.__name = (fn) => fn");
             await page.addInitScript(() => performance.setResourceTimingBufferSize(2048));
+            await page.addInitScript(installInteractionNavigationPreloadObserver);
             // Random per-load pets can repaint continuously; measure the selected interaction.
             await page.addInitScript(
               ({ key, gatewayUrl }) => {
@@ -816,6 +826,12 @@ try {
           try {
             cdp = await context.newCDPSession(page);
             await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
+            if (values["function-counts"]) {
+              // Starting after warmup can miss calls in already optimized functions.
+              await cdp.send("Profiler.enable");
+              await cdp.send("Profiler.startPreciseCoverage", { callCount: true, detailed: true });
+              preciseCoverage = true;
+            }
             if (
               nativeVisibility &&
               (scenario.fixture?.boardFrameResources ||
@@ -873,6 +889,9 @@ try {
                 },
               },
             );
+            if (values["retained-heap"]) {
+              await installRetentionTimers(page);
+            }
             await scenario.setup?.(page);
             await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
             await waitForControlUiInitialRoster(page, 15_000 * cpuThrottle);
@@ -886,13 +905,17 @@ try {
               await cdp.send("Network.setBypassServiceWorker", { bypass: false });
               await cdp.send("Network.disable");
             }
-            result.measurementClass = scenario.diagnostic
-              ? "diagnostic"
-              : scenario.projectionFamily
-                ? values["projection-counts"]
-                  ? "projection-counter"
-                  : "projection-cpu"
-                : "production-interaction";
+            result.measurementClass =
+              scenario.diagnostic ||
+              values["function-counts"] ||
+              values["graph-counts"] ||
+              values["retained-heap"]
+                ? "diagnostic"
+                : scenario.projectionFamily
+                  ? values["projection-counts"]
+                    ? "projection-counter"
+                    : "projection-cpu"
+                  : "production-interaction";
             if (scenario.projectionFamily) {
               result.projectionFixture = await prepareProjectionFixture(
                 page,
@@ -904,6 +927,9 @@ try {
                 await page.waitForFunction(() => window.openclawControlUi !== undefined);
                 await settleSidebarBackgroundWork(page);
               }
+            }
+            if (scenario.route !== "/instance-resource-fixture.html") {
+              result.navigationPreloads = await settleInteractionNavigationPreloads(page);
             }
             // Slow CPUs can still be loading boot modules after the first ready frame.
             await page.waitForLoadState("networkidle");
@@ -920,12 +946,15 @@ try {
               timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
             });
             if (values["retained-heap"]) {
-              await cdp.send("HeapProfiler.collectGarbage");
-              const initial = await metrics(cdp);
-              if (initial.JSHeapUsedSize === undefined) {
-                throw new Error("Missing JSHeapUsedSize after initial garbage collection");
-              }
-              result.retainedHeap = { beforeBytes: initial.JSHeapUsedSize };
+              const artifact = `${artifactPrefix}.before.heapsnapshot`;
+              // Scenarios can retain request-count cursors from preparation.
+              const initial = await captureRetention(page, cdp, path.join(artifactDir, artifact), {
+                preserveFixtureRequests: true,
+              });
+              result.retainedHeap = {
+                beforeBytes: initial.heapUsedBytes,
+                before: { ...initial, artifact },
+              };
             }
             if (values["selector-stats"]) {
               cdp.on(
@@ -963,7 +992,7 @@ try {
               });
               tracing = true;
               await cdp.send("Profiler.enable");
-              await cdp.send("Profiler.setSamplingInterval", { interval: 1000 });
+              await cdp.send("Profiler.setSamplingInterval", { interval: profileIntervalUs });
               await cdp.send("Profiler.start");
               profiling = true;
             }
@@ -1076,15 +1105,83 @@ try {
                 durations.push(...list.getEntries().map((entry) => entry.duration));
               });
               observer.observe({ type: "longtask" });
-              return { durations, observer };
+              const shifts: Array<{ at: number; value: number }> = [];
+              const recordShifts = (entries: PerformanceEntry[]) => {
+                for (const entry of entries) {
+                  if (!Reflect.get(entry, "hadRecentInput")) {
+                    shifts.push({
+                      at: entry.startTime,
+                      value: Number(Reflect.get(entry, "value")),
+                    });
+                  }
+                }
+              };
+              const shiftObserver = PerformanceObserver.supportedEntryTypes.includes("layout-shift")
+                ? new PerformanceObserver((list) => recordShifts(list.getEntries()))
+                : undefined;
+              shiftObserver?.observe({ type: "layout-shift" });
+              return {
+                read() {
+                  durations.push(...observer.takeRecords().map((entry) => entry.duration));
+                  observer.disconnect();
+                  if (shiftObserver) {
+                    recordShifts(shiftObserver.takeRecords());
+                    shiftObserver.disconnect();
+                  }
+                  const start = performance.getEntriesByName("interaction:start").at(-1)!.startTime;
+                  const end = performance.getEntriesByName("interaction:end").at(-1)!.startTime;
+                  let cls = 0;
+                  let windowValue = 0;
+                  let windowStart = -Infinity;
+                  let previousShift = -Infinity;
+                  for (const shift of shifts) {
+                    if (shift.at < start || shift.at > end) {
+                      continue;
+                    }
+                    // CLS is the largest burst: less than 1s between shifts, at most 5s long.
+                    if (shift.at - previousShift < 1_000 && shift.at - windowStart < 5_000) {
+                      windowValue += shift.value;
+                    } else {
+                      windowStart = shift.at;
+                      windowValue = shift.value;
+                    }
+                    previousShift = shift.at;
+                    cls = Math.max(cls, windowValue);
+                  }
+                  return {
+                    longTasks: {
+                      count: durations.length,
+                      totalMs: durations.reduce((sum, duration) => sum + duration, 0),
+                      maxMs: Math.max(0, ...durations),
+                    },
+                    cls: shiftObserver ? cls : undefined,
+                  };
+                },
+              };
             });
             const before = await metrics(cdp);
-            if (scenario.projectionFamily && values["projection-counts"]) {
+            if (values["function-counts"]) {
+              const artifact = `${artifactPrefix}.preparation-function-coverage.json`;
+              await writeFile(
+                path.join(artifactDir, artifact),
+                JSON.stringify(await cdp.send("Profiler.takePreciseCoverage")),
+              );
+              result.functionCoveragePreparationArtifact = artifact;
+            } else if (scenario.projectionFamily && values["projection-counts"]) {
               await cdp.send("Profiler.enable");
               await cdp.send("Profiler.startPreciseCoverage", { callCount: true, detailed: true });
               preciseCoverage = true;
             }
             await page.evaluate(() => performance.mark("interaction:start"));
+            if (values["graph-counts"]) {
+              await page.evaluate((label) => {
+                const graph = Reflect.get(window, "__openclawReactiveGraph");
+                if (!graph) {
+                  throw new Error("--graph-counts requires the explicit reactive graph build");
+                }
+                graph.start(label);
+              }, scenario.id);
+            }
             const start = performance.now();
             result.scenarioEvidence = (await scenario.run(page, gateway)) ?? undefined;
             if (scenario.visibility !== "hidden") {
@@ -1092,13 +1189,28 @@ try {
             }
             result.wallMs = performance.now() - start;
             await page.evaluate(() => performance.mark("interaction:end"));
+            if (values["graph-counts"]) {
+              const graph = await page.evaluate(() =>
+                Reflect.get(window, "__openclawReactiveGraph").stop(),
+              );
+              const artifact = `${artifactPrefix}.reactive-graph.json`;
+              await writeFile(path.join(artifactDir, artifact), JSON.stringify(graph, null, 2));
+              result.reactiveGraphArtifact = artifact;
+            }
             if (preciseCoverage) {
               const coverage = await cdp.send("Profiler.takePreciseCoverage");
               await cdp.send("Profiler.stopPreciseCoverage");
               preciseCoverage = false;
-              const artifact = `${artifactPrefix}.projection-coverage.json`;
-              await writeFile(path.join(artifactDir, artifact), JSON.stringify(coverage));
-              result.projectionCoverageArtifact = artifact;
+              if (values["function-counts"]) {
+                const artifact = `${artifactPrefix}.function-coverage.json`;
+                await writeFile(path.join(artifactDir, artifact), JSON.stringify(coverage));
+                result.functionCoverageArtifact = artifact;
+              }
+              if (scenario.projectionFamily && values["projection-counts"]) {
+                const artifact = `${artifactPrefix}.projection-coverage.json`;
+                await writeFile(path.join(artifactDir, artifact), JSON.stringify(coverage));
+                result.projectionCoverageArtifact = artifact;
+              }
             }
             const after = await metrics(cdp);
             if (processSession && result.rendererProcessMetrics?.before) {
@@ -1107,29 +1219,7 @@ try {
                 observation.after = await rendererProcesses(processSession);
                 const beforeRows = observation.before!;
                 const afterRows = observation.after;
-                if (
-                  beforeRows.length !== afterRows.length ||
-                  beforeRows.some(({ id }) => !afterRows.some((row) => row.id === id))
-                ) {
-                  throw new Error("Owned renderer process set changed during the interval");
-                }
-                const cpuSeconds = afterRows.reduce(
-                  (sum, row) =>
-                    sum + row.cpuSeconds - beforeRows.find(({ id }) => id === row.id)!.cpuSeconds,
-                  0,
-                );
-                if (cpuSeconds < 0) {
-                  throw new Error("Owned renderer CPU counters moved backwards");
-                }
-                result.rendererCpuMs = cpuSeconds * 1000;
-                result.rendererRssBeforeBytes = beforeRows.reduce(
-                  (sum, row) => sum + row.rssBytes,
-                  0,
-                );
-                result.rendererRssAfterBytes = afterRows.reduce(
-                  (sum, row) => sum + row.rssBytes,
-                  0,
-                );
+                Object.assign(result, measureRendererProcessMetrics(beforeRows, afterRows));
                 observation.complete = true;
               } catch (error) {
                 observation.error = String(error);
@@ -1138,15 +1228,7 @@ try {
             result.heapBeforeBytes = before.JSHeapUsedSize;
             result.heapAfterBytes = after.JSHeapUsedSize;
             result.heapDeltaBytes = after.JSHeapUsedSize - before.JSHeapUsedSize;
-            result.longTasks = await taskProbe.evaluate(({ durations, observer }) => {
-              durations.push(...observer.takeRecords().map((entry) => entry.duration));
-              observer.disconnect();
-              return {
-                count: durations.length,
-                totalMs: durations.reduce((sum, duration) => sum + duration, 0),
-                maxMs: Math.max(0, ...durations),
-              };
-            });
+            Object.assign(result, await taskProbe.evaluate((probe) => probe.read()));
             await taskProbe.dispose();
             if (processSession && processWakeupReader && result.processWakeups?.before) {
               try {
@@ -1364,13 +1446,18 @@ try {
               const retainedHeap = result.retainedHeap;
               if (values["retained-heap"] && cdp && retainedHeap && result.status === "passed") {
                 await capture(async () => {
-                  await cdp!.send("HeapProfiler.collectGarbage");
-                  const final = await metrics(cdp!);
-                  if (final.JSHeapUsedSize === undefined) {
-                    throw new Error("Missing JSHeapUsedSize after final garbage collection");
-                  }
-                  retainedHeap.afterBytes = final.JSHeapUsedSize;
-                  retainedHeap.deltaBytes = final.JSHeapUsedSize - retainedHeap.beforeBytes;
+                  const artifact = `${artifactPrefix}.after.heapsnapshot`;
+                  const final = await captureRetention(
+                    page,
+                    cdp!,
+                    path.join(artifactDir, artifact),
+                    {
+                      preserveFixtureRequests: true,
+                    },
+                  );
+                  retainedHeap.after = { ...final, artifact };
+                  retainedHeap.afterBytes = final.heapUsedBytes;
+                  retainedHeap.deltaBytes = final.heapUsedBytes - retainedHeap.beforeBytes;
                 });
               }
               if (!values["first-pair-screenshots"] || pair === 0 || result.status === "failed") {
@@ -1505,11 +1592,14 @@ const summary = viewports
                 "taskMs",
                 "layoutMs",
                 "styleMs",
+                "cls",
                 ...(values["renderer-process-metrics"] ? ["rendererCpuMs" as const] : []),
               ] as const
             ).map((metric) => [
               metric,
               !diagnostic &&
+              !values["function-counts"] &&
+              !values["retained-heap"] &&
               samples.length &&
               !values["projection-counts"] &&
               samples.every((row) => row[metric] !== undefined)
@@ -1584,10 +1674,11 @@ const rows = summary
         result.viewport === row.viewport &&
         result.bundle === row.bundle,
     );
-    const metric = (name: "scriptMs" | "taskMs" | "layoutMs" | "styleMs") => {
+    const metric = (name: "scriptMs" | "taskMs" | "layoutMs" | "styleMs" | "cls") => {
       const value = row.metrics[name];
+      const precision = name === "cls" ? 4 : 1;
       return value
-        ? `${value.median.toFixed(1)} / ${value.p95.toFixed(1)} / ${value.min.toFixed(1)}–${value.max.toFixed(1)}`
+        ? `${value.median.toFixed(precision)} / ${value.p95.toFixed(precision)} / ${value.min.toFixed(precision)}–${value.max.toFixed(precision)}`
         : "—";
     };
     const links = representative
@@ -1603,12 +1694,12 @@ const rows = summary
           )
           .join(" ")
       : "";
-    return `<tr><td>${escapeHtml(row.viewport)}</td><td>${escapeHtml(row.step)}</td><td>${row.bundle}</td><td>${row.passed}/${row.failed}/${row.skipped}</td><td>${metric("scriptMs")}</td><td>${metric("taskMs")}</td><td>${metric("layoutMs")}</td><td>${metric("styleMs")}</td><td>${row.trace?.longTasks?.median ?? "—"}</td><td>${links}</td></tr>`;
+    return `<tr><td>${escapeHtml(row.viewport)}</td><td>${escapeHtml(row.step)}</td><td>${row.bundle}</td><td>${row.passed}/${row.failed}/${row.skipped}</td><td>${metric("scriptMs")}</td><td>${metric("taskMs")}</td><td>${metric("layoutMs")}</td><td>${metric("styleMs")}</td><td>${metric("cls")}</td><td>${row.trace?.longTasks?.median ?? "—"}</td><td>${links}</td></tr>`;
   })
   .join("\n");
 await writeFile(
   path.join(artifactDir, "report.html"),
-  `<!doctype html><meta charset="utf-8"><title>Warm interactions</title><style>body{font:15px system-ui;padding:24px}table{border-collapse:collapse}td,th{padding:8px;border:1px solid #bbb;text-align:left}a{margin-right:6px}</style><h1>Production-renderer warm interactions</h1><p>${trace ? "Trace and CPU sampling overhead included." : "Untraced CDP metric deltas."} ${values["selector-stats"] ? "CSS selector instrumentation overhead included; selectors ranked by elapsed microseconds." : ""} Theme: ${theme}. Cells: median / p95 / min–max (ms). Wall time in JSON is automation-to-assertion, not INP. Synthetic Gateway; native clocks. <a href="manifest.json">Manifest</a> <a href="summary.json">Summary</a></p><table><tr><th>Viewport</th><th>Step</th><th>Bundle</th><th>Pass/fail/skip</th><th>Script</th><th>Task</th><th>Layout</th><th>Style</th><th>Long tasks</th><th>Evidence</th></tr>${rows}</table>`,
+  `<!doctype html><meta charset="utf-8"><title>Warm interactions</title><style>body{font:15px system-ui;padding:24px}table{border-collapse:collapse}td,th{padding:8px;border:1px solid #bbb;text-align:left}a{margin-right:6px}</style><h1>Production-renderer warm interactions</h1><p>${trace ? "Trace and CPU sampling overhead included." : "Untraced CDP metric deltas."} ${values["selector-stats"] ? "CSS selector instrumentation overhead included; selectors ranked by elapsed microseconds." : ""} Theme: ${theme}. Cells: median / p95 / min–max; times in ms, CLS unitless. Wall time in JSON is automation-to-assertion, not INP. Synthetic Gateway; native clocks. <a href="manifest.json">Manifest</a> <a href="summary.json">Summary</a></p><table><tr><th>Viewport</th><th>Step</th><th>Bundle</th><th>Pass/fail/skip</th><th>Script</th><th>Task</th><th>Layout</th><th>Style</th><th>CLS</th><th>Long tasks</th><th>Evidence</th></tr>${rows}</table>`,
 );
 console.log(`Warm interaction artifacts: ${artifactDir}`);
 if (results.some((result) => result.status === "failed")) {

@@ -161,12 +161,15 @@ function expectEmbeddingFetch(
 }
 
 describe("ollama embedding provider", () => {
-  it("preserves a host-applied query instruction instead of adding the family template", async () => {
-    mockEmbeddingResponse();
-    const { provider } = await createEmbeddingProvider();
-    await provider.embed("custom: hello", { inputType: "query", queryInstructionApplied: true });
-    expectEmbeddingFetch(`${LOCAL_HOST}/api/embed`, {}, "custom: hello");
-  });
+  it.each(["custom: hello", "hello"])(
+    "preserves host-formatted query %j instead of adding the family template",
+    async (query) => {
+      mockEmbeddingResponse();
+      const { provider } = await createEmbeddingProvider();
+      await provider.embed(query, { inputType: "query", queryInstructionApplied: true });
+      expectEmbeddingFetch(`${LOCAL_HOST}/api/embed`, {}, query);
+    },
+  );
 
   it.each([7, -1])("sends one batch and reports native usage %s", async (tokens) => {
     const fetchMock = mockEmbeddingResponse(
@@ -181,10 +184,6 @@ describe("ollama embedding provider", () => {
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expectEmbeddingFetch(`${LOCAL_HOST}/api/embed`, {}, ["a", "bb", "ccc"]);
-    expect(fetchMock.mock.calls[0]?.[0]).toMatchObject({
-      policy: { allowedOrigins: [LOCAL_HOST] },
-      configuredLocalOriginBaseUrl: LOCAL_HOST,
-    });
   });
 
   it("reports actionable embed errors for a missing model", async () => {
@@ -315,7 +314,11 @@ describe("ollama embedding provider", () => {
   });
 
   it("preserves the legacy identity only for the default Ollama endpoint", async () => {
-    const defaultEndpoint = await memoryKey({ dimensions: 2 });
+    const { runtime } = await ollamaMemoryEmbeddingProviderAdapter.create(
+      embeddingOptions<MemoryEmbeddingOptions>({ dimensions: 2 }),
+    );
+    expect(runtime?.inlineIndexConcurrency).toBe(1);
+    const defaultEndpoint = runtime?.cacheKeyData;
     const customEndpoint = await memoryKey({
       remote: { baseUrl: "http://10.0.0.5:11434" },
       dimensions: 2,

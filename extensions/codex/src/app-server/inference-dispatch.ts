@@ -5,6 +5,7 @@ import { zstdCompress, zstdDecompress } from "node:zlib";
 import type { CodexAppServerClient } from "./client.js";
 import type { createCodexInferenceContext } from "./inference-context.js";
 import { readCodexInferenceMetadata, type CodexInferenceMetadata } from "./inference-metadata.js";
+import { CODEX_INFERENCE_TRANSPORT_FAILURE as FAILURE } from "./inference-transport.js";
 import { createUploadBody, createRetryableUploadBody, MAX_BODY_BYTES } from "./inference-upload.js";
 import type {
   NativeModelSourceCapture,
@@ -12,9 +13,6 @@ import type {
 } from "./native-subagent-monitor-types.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 
-export const CODEX_INFERENCE_TRANSPORT_FAILURE =
-  "Codex parent-local inference transport failed; retry on a fresh connection.";
-const FAILURE = CODEX_INFERENCE_TRANSPORT_FAILURE;
 const compress = promisify(zstdCompress);
 const decompress = promisify(zstdDecompress);
 
@@ -32,6 +30,28 @@ export type CodexInferenceModelRequest = Readonly<{
   transport: "http" | "websocket";
   signal: AbortSignal;
 }>;
+
+/** An ephemeral caller already holds model authority; it cannot start child/background work. */
+export function createCodexBoundedInferenceModelBinding(params: {
+  model: string;
+  assertCurrent: () => void;
+}) {
+  return (request: CodexInferenceModelRequest): CodexInferenceModelExecution => {
+    params.assertCurrent();
+    request.signal.throwIfAborted();
+    if (
+      request.path !== "/responses" ||
+      request.body.model !== params.model ||
+      request.metadata.requestKind !== "turn" ||
+      request.metadata.parentThreadId ||
+      request.metadata.subagent ||
+      request.metadata.subagentKind
+    ) {
+      throw new CodexInferenceAuthorizationError("owner");
+    }
+    return { assertCurrent: params.assertCurrent, release: () => {} };
+  };
+}
 
 /** Only host-owned authorization failures may cross the private transport boundary. */
 export class CodexInferenceAuthorizationError extends Error {
@@ -220,14 +240,27 @@ export function createCodexInferenceModelBinding(params: {
         }
         try {
           const mapping = captured.modelMapping;
-          model = bind(
+          const accessPrograms = body.access_programs;
+          if (accessPrograms !== undefined && !isJsonObject(accessPrograms)) {
+            throw new CodexInferenceAuthorizationError("model");
+          }
+          const cyber = isJsonObject(accessPrograms) ? accessPrograms.cyber : undefined;
+          if (
+            cyber !== undefined &&
+            cyber !== "standard" &&
+            cyber !== "daybreak_blue" &&
+            cyber !== "daybreak_red"
+          ) {
+            throw new CodexInferenceAuthorizationError("model");
+          }
+          const selection =
             params.modelPolicyEnforced === false
               ? undefined
               : mapping?.nativeModel.provider === provider &&
                   mapping.nativeModel.model === body.model
                 ? mapping.authorizedModel
-                : { provider, model: body.model },
-          );
+                : { provider, model: body.model };
+          model = bind(selection && { ...selection, cyberAccessProgram: cyber ?? "standard" });
         } catch {
           cancelNativeTurn();
           throw new CodexInferenceAuthorizationError("model");

@@ -17,6 +17,7 @@ import {
   VOICE_TRANSCRIPT_QUEUE_POLICY,
 } from "../../../talk/voice-transcript.js";
 import { sleep } from "../../../utils/sleep.js";
+import { appendTalkClientTranscript } from "../client-transcript.js";
 import { drainingRelaySessions, type RelaySession } from "./state.js";
 
 const RELAY_TRANSCRIPT_RETRY_DELAYS_MS = [0, 500, 2_000] as const;
@@ -147,7 +148,7 @@ export function enqueueRelayVoiceTranscript(
           });
           try {
             await withRelayTranscriptRetries(() =>
-              appendRelayVoiceTranscript(
+              appendTalkClientTranscript(
                 {
                   agentId,
                   sessionKey,
@@ -157,9 +158,11 @@ export function enqueueRelayVoiceTranscript(
                   role,
                   text: normalizedText,
                   ...(session.capabilities?.handlesAgentConsult ? { providerOwned: true } : {}),
-                  ...(session.voiceConfig ? { config: session.voiceConfig } : {}),
+                  config: session.voiceConfig ?? session.context.getRuntimeConfig(),
                 },
+                session.context,
                 writer,
+                appendRelayVoiceTranscript,
               ),
             );
           } finally {

@@ -186,6 +186,7 @@ function stripBunLifecyclePaths(pathEntries, cwd, pathApi, platform, dependencyL
  *   access?: (path: string, mode: number) => void;
  *   realpath?: (path: string) => string;
  *   run?: PackageCliNodeProbeRun;
+ *   allowUnavailableNodeFallback?: boolean;
  * }} [options]
  * @returns {PackageCliNodeRuntime | null}
  */
@@ -200,6 +201,7 @@ export function probePackageCliNodeRuntime(options = {}) {
     access = accessSync,
     realpath = realpathSync,
     run = spawnSync,
+    allowUnavailableNodeFallback = false,
   } = options;
   const pathApi = platform === "win32" ? win32 : posix;
   const delimiter = platform === "win32" ? ";" : ":";
@@ -295,6 +297,9 @@ export function probePackageCliNodeRuntime(options = {}) {
       continue;
     }
     if (result?.status !== 0) {
+      if (allowUnavailableNodeFallback) {
+        continue;
+      }
       return null;
     }
 
@@ -348,7 +353,7 @@ export function enforceSupportedNodeRuntime(
       return true;
     }
     reportError(
-      `[openclaw] error: Bun launcher ${detectedRuntime.execPath ?? execPath} requires Bun 1.4.3+ (detected ${detectedRuntime.bunVersion}).`,
+      `[openclaw] error: Bun launcher ${detectedRuntime.execPath ?? execPath} requires Bun 1.4.4+ (detected ${detectedRuntime.bunVersion}).`,
     );
     return false;
   }
@@ -464,7 +469,12 @@ export function warnIfNonPnpmLifecycle(env = process.env, warn = console.warn) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  if (enforceSupportedNodeRuntime() && removeLegacyPackageInstallGuard()) {
+  // `npm exec` hides lifecycle output and failures, and replaces no installed release.
+  // Let its throwaway install finish so the launcher can report the runtime problem.
+  if (
+    (enforceSupportedNodeRuntime() || process.env.npm_command === "exec") &&
+    removeLegacyPackageInstallGuard()
+  ) {
     warnIfNonPnpmLifecycle();
   } else {
     process.exitCode = 1;

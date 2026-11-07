@@ -7,6 +7,7 @@ import {
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  constants as fsConstants,
   copyFileSync,
   cpSync,
   existsSync,
@@ -23,6 +24,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { constants as osConstants, homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -41,6 +43,10 @@ import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-in
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { spawnTerminalPty } from "../../src/process/terminal-pty.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { withinTest } from "../helpers/promise.js";
 import { makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -51,10 +57,11 @@ const invocationLogTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const artifactTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const dependencyTempDirs = useAutoCleanupTempDirTracker(afterAll);
 const repoRoot = process.cwd();
+const require = createRequire(import.meta.url);
 const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
 const realBundledWrapperPath = bundledWrapperPath.replace(".mjs", "-real.mjs");
 const bundledOutputPaths = new Set<string>();
-let realWrapperOutputPaths: string[];
+let bundledChunkPaths: string[];
 let bundledSetupPath: string;
 let preparedDependencyRoot: string | undefined;
 const fakeCrabboxBinDirs = new Map<string, string>();
@@ -209,7 +216,7 @@ async function main() {
     if (process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_UNKNOWN_PATH) topFiles.push({ path: "not-a-source-candidate.txt" });
     process.stdout.write(JSON.stringify({ candidate: { files: topFiles.length + Number(process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_COUNT_DELTA || "0") }, topFiles })); return;
   }
-  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.79.2"); return; }
+  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.81.0"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "warmup" && args[1] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeWarmupValueOptionHelp}`)}); return; }
   if (args[0] === "actions" && args[1] === "hydrate" && args[2] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeHydrateValueOptionHelp}`)}); return; }
@@ -318,7 +325,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         '  if [ -n "${OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG:-}" ]; then',
         `    printf '%s\\n' '["--version"]' >> "$OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG"`,
         "  fi",
-        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.79.2}"`,
+        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.81.0}"`,
         "  exit 0",
         "fi",
         'if [ "$#" -eq 2 ] && [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
@@ -353,7 +360,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         "  printf '%s\\000\\000' \"$PWD\"",
         "  exit 0",
         "fi",
-        `exec node ${shellQuote(nodePath)} "$@"`,
+        `exec ${shellQuote(nodePath)} "$@"`,
       ].join("\n"),
     );
   }
@@ -371,7 +378,7 @@ function makeSlowHelpCrabbox(helpText: string, delayMs: number): string {
     String.raw`
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
-  console.log("crabbox 0.79.2");
+  console.log("crabbox 0.81.0");
 } else if (args[0] === "run" && args[1] === "--help") {
   setTimeout(() => { process.stderr.write(${JSON.stringify(runHelpText)}); process.exit(0); }, ${delayMs});
 }`,
@@ -443,13 +450,33 @@ function writeShellCommand(commandPath: string, script: string): void {
   chmodSync(commandPath, 0o755);
 }
 
+function resolvePinnedFixturePnpm(cwd: string, nodeExecPath: string, pnpmArgs: string[] = []) {
+  // Capture the actual pin before HOME isolation. An ambient launcher can wrap
+  // a different manager and own its signals, or bootstrap an unusable placeholder.
+  const bootstrap = resolvePnpmRunner({ nodeExecPath });
+  const result = spawnSync(bootstrap.command, [...bootstrap.args, "--silent", "run", "pnpm-path"], {
+    cwd,
+    encoding: "utf8",
+    timeout: 20_000,
+    env: { ...process.env, CI: "true", COREPACK_ENABLE_NETWORK: "0" },
+  });
+  expect(result.error, result.stderr).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stderr).not.toContain("ERR_PNPM_BAD_CONFIG_DEP");
+  const npmExecPath = result.stdout.trim();
+  expect(path.isAbsolute(npmExecPath), npmExecPath).toBe(true);
+  return resolvePnpmRunner({ cwd, nodeExecPath, npmExecPath, pnpmArgs });
+}
+
 function writeNodeCommand(commandPath: string, script: string): void {
-  writeFileSync(commandPath, `#!/usr/bin/env node\n${script.trimStart()}\n`, "utf8");
+  const sourcePath = `${commandPath}.cjs`;
+  writeFileSync(sourcePath, `${script.trimStart()}\n`, "utf8");
   if (process.platform === "win32") {
-    const shim = windowsNodeCmdShim(path.basename(commandPath));
+    const shim = windowsNodeCmdShim(path.basename(sourcePath));
     writeFileSync(`${commandPath}.cmd`, shim, "utf8");
+  } else {
+    writeShellCommand(commandPath, `exec node ${shellQuote(sourcePath)} "$@"`);
   }
-  chmodSync(commandPath, 0o755);
 }
 
 function makeFakeGit(
@@ -506,10 +533,7 @@ process.exit(response.status ?? 0);`;
       ].join("\n");
     });
     writeNodeCommand(nodePath, script);
-    writeShellCommand(
-      gitPath,
-      `${responseCases.join("\n")}\nexec node ${shellQuote(nodePath)} "$@"`,
-    );
+    writeShellCommand(gitPath, `${responseCases.join("\n")}\nexec ${shellQuote(nodePath)} "$@"`);
   }
   fakeGitBinDirs.set(key, binDir);
   return binDir;
@@ -829,12 +853,16 @@ async function runWrapperCleanupProof(
   const leaseId = blacksmith ? "tbx_fixture" : "cbx_999999999999";
   const hasDescendant =
     proof.kind === "signal" || proof.kind === "escaped" || proof.kind === "readiness";
-  await withShimFixture(
+  const receipts =
+    proof.kind === "signal" && proof.entrypoint === "pnpm" && proof.repeated
+      ? await openFixtureReceiptChannel()
+      : undefined;
+  const fixture = withShimFixture(
     "scripts/crabbox-wrapper.mjs",
     async ({ checkoutRoot: producer, fixtureRoot, implementationPath, wrapperPath }) => {
       // Keep the real TSX entrypoint without transforming the compiled dependency bundle again.
       const compiledWrapperPath = implementationPath.replace(/\.mts$/u, ".compiled.mjs");
-      copyRealWrapper(compiledWrapperPath);
+      copyBundledScript(compiledWrapperPath);
       writeFileSync(
         implementationPath,
         `import ${JSON.stringify(pathToFileURL(compiledWrapperPath).href)};\n`,
@@ -871,6 +899,23 @@ const phase = (name) => {
   fs.renameSync(temporary, phasesPath);
 };
 if (entry === ${JSON.stringify(wrapperPath)}) phase("entrypoint started");
+if (entry === ${JSON.stringify(wrapperPath)} && ${Boolean(receipts)}) {
+  ${receipts ? fixtureReceiptClientSource(receipts.endpoint).replace('import { createConnection as connectFixtureReceipts } from "node:net";', 'const { createConnection: connectFixtureReceipts } = require("node:net");') : ""}
+  // Keep pnpm's lifecycle child registered until the second interrupt arrives.
+  // The implementation still owns cancellation and publishes its genuine exit.
+  void awaitRelease(entry, "release").catch((error) => { console.error(error); process.exitCode = 1; });
+  process.on("SIGINT", () => sendReceipt(entry, "SIGINT"));
+  const childProcess = require("node:child_process");
+  const spawn = childProcess.spawn;
+  childProcess.spawn = (command, args, options) => {
+    const child = spawn(command, args, options);
+    if (args?.includes(${JSON.stringify(implementationPath)})) {
+      child.once("close", (code, signal) => sendReceipt(entry, JSON.stringify({ pid: child.pid, code, signal })));
+    }
+    return child;
+  };
+  require("node:module").syncBuiltinESMExports();
+}
 if (entry === ${JSON.stringify(implementationPath)}) {
   phase("loading wrapper");
   // Stall at phase publication; teardown must already own this PID.
@@ -982,7 +1027,10 @@ if (entry === ${JSON.stringify(implementationPath)}) {
         type: "module",
         packageManager: JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"))
           .packageManager,
-        scripts: { "crabbox:run": "node scripts/crabbox-wrapper.mjs run" },
+        scripts: {
+          "crabbox:run": "node scripts/crabbox-wrapper.mjs run",
+          "pnpm-path": "node -p process.env.npm_execpath",
+        },
       });
       // Match the repository policy: pnpm run must not reconcile borrowed dependencies.
       writeFiles(producer, {
@@ -1060,11 +1108,11 @@ if (entry === ${JSON.stringify(implementationPath)}) {
       try {
         let exited: Promise<{ status: number | null; signal: NodeJS.Signals | null }>;
         if (entrypoint === "pnpm") {
-          const command = resolvePnpmRunner({
-            cwd: producer,
-            env,
-            pnpmArgs: ["crabbox:run", "--", ...args],
-          });
+          const command = resolvePinnedFixturePnpm(producer, nodeExecPath, [
+            "crabbox:run",
+            "--",
+            ...args,
+          ]);
           const terminalOwnerPath = path.join(fixtureRoot, "terminal.cjs");
           writeFileSync(
             terminalOwnerPath,
@@ -1206,14 +1254,35 @@ child.once("exit", (code, signal) => {
                 ownerPid = Number(parentPid);
               }
             }
+            if (!pnpmRetainsShell) {
+              receipts?.release(wrapperPath, "release");
+            }
             stop();
             if (proof.repeated) {
-              await delay(20);
+              if (receipts && pnpmRetainsShell) {
+                await withinTest(receipts.waitFor(wrapperPath, "SIGINT"), testSignal);
+                const phases: WrapperReadinessPhase[] = readJson(phasesPath);
+                const wrapperPid = phases.find(({ phase }) => phase === "loading wrapper")!.pid!;
+                await withinTest(
+                  receipts.waitFor(
+                    wrapperPath,
+                    JSON.stringify({ pid: wrapperPid, code: 130, signal: null }),
+                  ),
+                  testSignal,
+                );
+                expect(readJson(wrapperExitPath), output).toEqual({ code: 130 });
+              } else {
+                await delay(20);
+              }
               stop();
             }
           }
         }
         const result = await exited;
+        receipts?.release(wrapperPath, "release");
+        if (receipts) {
+          await withinTest(receipts.waitForExit(wrapperPath), testSignal);
+        }
         if (cooperative) {
           expect(isProcessAlive(entrypointPid), "terminal session still owns cleanup output").toBe(
             true,
@@ -1337,6 +1406,16 @@ child.once("exit", (code, signal) => {
           error instanceof Error ? error : new Error("signal proof failed", { cause: error });
       }
       try {
+        try {
+          receipts?.release(wrapperPath, "release");
+        } catch (cause) {
+          // A failed observation channel must not prevent joining its live owner.
+          failure = new AggregateError(
+            failure === undefined ? [cause] : [failure, cause],
+            "fixture release failed",
+            { cause: failure ?? cause },
+          );
+        }
         // Release even a late-starting escaped leaf before any fixture disposal.
         if (proof.kind === "escaped") {
           writeFileSync(releasePath, "release");
@@ -1440,6 +1519,11 @@ child.once("exit", (code, signal) => {
       }
     },
   );
+  try {
+    await fixture;
+  } finally {
+    await receipts?.close();
+  }
 }
 
 function testCrabboxConfigDir(home: string): string {
@@ -1649,14 +1733,17 @@ function copyDependencyFingerprint(directory: string) {
   }
 }
 
-function copyRealWrapper(destination: string) {
-  for (const output of realWrapperOutputPaths) {
-    copyFileSync(
-      output,
-      output === realBundledWrapperPath
-        ? destination
-        : path.join(path.dirname(destination), path.basename(output)),
-    );
+function copyBundledScript(destination: string, entry = realBundledWrapperPath) {
+  // Compiled outputs stay immutable until afterAll; each fixture owns its directory entries.
+  for (const output of [entry, ...bundledChunkPaths]) {
+    const target =
+      output === entry ? destination : path.join(path.dirname(destination), path.basename(output));
+    try {
+      linkSync(output, target);
+    } catch {
+      // Temp directories can be on another volume or disallow hard links.
+      copyFileSync(output, target);
+    }
   }
 }
 
@@ -1715,6 +1802,16 @@ describe("scripts/crabbox-wrapper", () => {
       target: "node22",
       plugins: [
         {
+          name: "fs-safe-source-owner",
+          setup(builder) {
+            // Relocated fixtures keep the parser beside its package-owned WASM asset.
+            builder.onResolve({ filter: /^@openclaw\/fs-safe(?:\/|$)/ }, (args) => ({
+              path: pathToFileURL(require.resolve(args.path)).href,
+              external: true,
+            }));
+          },
+        },
+        {
           name: "canonical-state-schemas",
           setup(builder) {
             // Relocated fixtures need the same embedded SQL as production bundles.
@@ -1767,24 +1864,15 @@ describe("scripts/crabbox-wrapper", () => {
     for (const output of outputs) {
       bundledOutputPaths.add(output);
     }
-    realWrapperOutputPaths = outputs.filter(
-      (output) => output !== setupOutput && output !== bundledWrapperPath,
+    bundledChunkPaths = outputs.filter(
+      (output) => ![setupOutput, bundledWrapperPath, realBundledWrapperPath].includes(output),
     );
     bundledSetupPath = path.join(
       makeTempDir(tempDirs, "openclaw-crabbox-setup-"),
       "openclaw/scripts/crabbox-setup.mjs",
     );
     mkdirSync(path.dirname(bundledSetupPath), { recursive: true });
-    for (const output of outputs) {
-      if (output !== realBundledWrapperPath && output !== bundledWrapperPath) {
-        copyFileSync(
-          output,
-          output === setupOutput
-            ? bundledSetupPath
-            : path.join(path.dirname(bundledSetupPath), path.basename(output)),
-        );
-      }
-    }
+    copyBundledScript(bundledSetupPath, setupOutput);
   });
 
   it("prepares the supported executable for later workflow steps", () => {
@@ -1822,7 +1910,7 @@ describe("scripts/crabbox-wrapper", () => {
       const stateDir = path.join(root, "state");
       const platform = process.platform;
       const arch = process.arch === "x64" ? "amd64" : process.arch;
-      const managed = path.join(stateDir, "tools/crabbox/0.79.2", `${platform}-${arch}`, "crabbox");
+      const managed = path.join(stateDir, "tools/crabbox/0.81.0", `${platform}-${arch}`, "crabbox");
       mkdirSync(path.dirname(managed), { recursive: true });
       // Keep candidate and managed commands distinguishable at the executable boundary.
       const fake = path.join(makeFakeCrabbox(defaultProviderHelp), "crabbox-node");
@@ -1831,11 +1919,11 @@ describe("scripts/crabbox-wrapper", () => {
       mkdirSync(path.dirname(candidate));
       writeShellCommand(
         candidate,
-        `OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG=${shellQuote(candidateLog)} exec node ${shellQuote(fake)} "$@"`,
+        `OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG=${shellQuote(candidateLog)} exec ${shellQuote(fake)} "$@"`,
       );
       writeShellCommand(
         managed,
-        `unset OPENCLAW_FAKE_CRABBOX_VERSION\nexec node ${shellQuote(fake)} "$@"`,
+        `unset OPENCLAW_FAKE_CRABBOX_VERSION\nexec ${shellQuote(fake)} "$@"`,
       );
       const log = makeInvocationLog();
       const options = {
@@ -1848,7 +1936,7 @@ describe("scripts/crabbox-wrapper", () => {
       };
       const result = runDefaultWrapper(runArgs(provider, "--", "true"), options);
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain(`version=0.79.2 provider=${provider}`);
+      expect(result.stderr).toContain(`version=0.81.0 provider=${provider}`);
       expect(readInvocations(candidateLog)).toEqual([["--version"]]);
       const calls = readInvocations(log);
       expect(calls[0]).toEqual(["--version"]);
@@ -2548,7 +2636,7 @@ describe("scripts/crabbox-wrapper", () => {
       const env = testHomeEnv(home);
       if (customState) {
         env.XDG_STATE_HOME = path.join(home, "selected state");
-        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.79.2";
+        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.81.0";
         const legacyKey = path.join(
           testCrabboxConfigDir(home),
           "testboxes",
@@ -2571,16 +2659,16 @@ describe("scripts/crabbox-wrapper", () => {
   );
 
   it.each([
-    { id: "tbx_default", createKey: true, state: "", version: "0.79.2", selectedKey: false },
-    { id: "tbx_selected", createKey: true, state: "state", version: "0.79.2", selectedKey: true },
-    { id: "blue-hermit", createKey: false, state: "", version: "0.79.2", selectedKey: false },
+    { id: "tbx_default", createKey: true, state: "", version: "0.81.0", selectedKey: false },
+    { id: "tbx_selected", createKey: true, state: "state", version: "0.81.0", selectedKey: true },
+    { id: "blue-hermit", createKey: false, state: "", version: "0.81.0", selectedKey: false },
     ...(process.platform === "win32"
       ? [
           {
             id: "tbx_namespaced",
             createKey: true,
             state: "namespaced",
-            version: "0.79.2",
+            version: "0.81.0",
             selectedKey: true,
           },
         ]
@@ -2639,14 +2727,14 @@ describe("scripts/crabbox-wrapper", () => {
       env: {
         ...testHomeEnv(home),
         XDG_STATE_HOME: stateRoot,
-        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.79.2",
+        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.81.0",
       },
     });
     expect(result).toMatchObject({ status: 2, stdout: "" });
     expect(result.stderr).toContain("XDG_STATE_HOME must be absolute");
   });
 
-  it.each([{ version: "0.79.2", stateDirectory: "state " }])(
+  it.each([{ version: "0.81.0", stateDirectory: "state " }])(
     "fails before reuse when a Blacksmith Testbox is claimed by another repo ($version, $stateDirectory)",
     ({ version, stateDirectory }) => {
       const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
@@ -2721,9 +2809,31 @@ describe("scripts/crabbox-wrapper", () => {
 
   it.each([
     { args: ["warmup", "--timing-json=false"], status: 0, retained: true },
-    { args: ["run", "--label=", "--keep", "--", "echo", "ok"], status: 0, retained: true },
+    {
+      args: [
+        "run",
+        "--label=decoy",
+        "-label=",
+        "--keep",
+        "--",
+        "echo",
+        "--id",
+        "payload",
+        "--keep=false",
+        "--blacksmith-job=payload",
+      ],
+      status: 0,
+      retained: true,
+    },
+    { args: ["run", "--keep=true", "-keep=false", "--", "echo", "ok"], status: 0, retained: false },
+    { args: ["run", "--keep=false", "-keep", "--", "echo", "ok"], status: 0, retained: true },
     { args: ["run", "--keep-on-failure", "--", "false"], status: 7, retained: true },
     { args: ["run", "--keep-on-failure", "--", "true"], status: 0, retained: false },
+    {
+      args: ["run", "--keep-on-failure=true", "-keep-on-failure=false", "--", "false"],
+      status: 7,
+      retained: false,
+    },
   ])("records retained allocation for $args with exit $status", ({ args, status, retained }) => {
     const home = invocationLogTempDirs.make("openclaw-testbox-allocation-");
     const id = "tbx_allocation_fixture";
@@ -3028,7 +3138,7 @@ esac
       input: ["bun", "--version"],
       includes: [
         "openclaw_crabbox_bootstrap_macos_js",
-        "bun_version=1.4.3",
+        "bun_version=1.4.4",
         'bun_root="$tool_root/bun-v${bun_version}"',
         'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
         "bun --version >&2 || return 1",
@@ -3582,7 +3692,7 @@ esac
       name: "bootstraps Bun for AWS macOS script-stdin bun shebangs",
       input: ["#!/usr/bin/env bun", "console.log(Bun.version);"].join("\n"),
       includes: [
-        "bun_version=1.4.3",
+        "bun_version=1.4.4",
         'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
         "bun --version >&2 || return 1",
       ],
@@ -3821,11 +3931,26 @@ esac
     expect(parseFakeCrabboxOutput(result).args).toContain("aws");
   });
 
-  it.each([false, true])("requires advertised Tensorlake support for aliases: %s", (advertised) => {
-    const providers = parseProvidersFromHelp(`provider: aws${advertised ? ", tensorlake" : ""}\n`);
-    for (const provider of ["tensorlake", "tl", "tensorlake-sbx"]) {
-      expect(isProviderAdvertised(provider, providers), provider).toBe(advertised);
+  it.each([
+    { canonical: "tensorlake", aliases: ["tensorlake", "tl", "tensorlake-sbx"] },
+    { canonical: "ascii-box", aliases: ["ascii-box", "ascii", "asciibox", "boat"] },
+  ])("requires advertised $canonical support for aliases", ({ canonical, aliases }) => {
+    for (const advertised of [false, true]) {
+      const providers = parseProvidersFromHelp(
+        `provider: aws${advertised ? `, ${canonical}` : ""}\n`,
+      );
+      for (const provider of aliases) {
+        expect(isProviderAdvertised(provider, providers), provider).toBe(advertised);
+      }
     }
+  });
+
+  it("passes an advertised Boat alias to Crabbox unchanged", () => {
+    const args = runArgs("boat", "--", "echo ok");
+    const result = runWrapper("provider: ascii-box\n", args);
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toEqual(args);
   });
 
   it.each([
@@ -4188,7 +4313,7 @@ esac
       const sourceMode = lstatSync(path.join(producer, sourcePath)).mode;
       const wrapper = path.join(producer, ".tmp", "wrapper.mjs");
       mkdirSync(path.dirname(wrapper));
-      copyRealWrapper(wrapper);
+      copyBundledScript(wrapper);
       const preload = path.join(root, "write-failure.cjs");
       writeFileSync(
         preload,
@@ -4629,7 +4754,7 @@ process.on("exit", () => {
       }
       const fixtureWrapper = path.join(producer, ".tmp", "crabbox-wrapper.mjs");
       mkdirSync(path.dirname(fixtureWrapper), { recursive: true });
-      copyRealWrapper(fixtureWrapper);
+      copyBundledScript(fixtureWrapper);
       const sourceCommand =
         provider === "blacksmith-testbox" || scenario === "arbitrary"
           ? "scripts/source-fixture.mjs"
@@ -4913,25 +5038,22 @@ require('node:module').syncBuiltinESMExports();`,
           preparedDependencyRoot ?? dependencyTempDirs.make("openclaw-capsule-dependencies-");
         const hydratedSource = path.join(dependencyRoot, "a");
         const selectedSource = path.join(dependencyRoot, "b");
+        const dependencyBin = path.join(dependencyRoot, "bin");
+        mkdirSync(dependencyBin, { recursive: true });
         const dependencyEnv = {
           ...env,
           CI: "true",
-          PATH: [path.dirname(process.execPath), env.PATH].join(path.delimiter),
+          PATH: [dependencyBin, path.dirname(nodeExecPath), env.PATH].join(path.delimiter),
           COREPACK_HOME: path.join(dependencyRoot, "corepack"),
           PNPM_CONFIG_STORE_DIR: path.join(dependencyRoot, "store"),
           PNPM_CONFIG_CACHE_DIR: path.join(dependencyRoot, "cache"),
         };
-        const runPnpm = (directory: string, args: string[]) => {
-          const runner = resolvePnpmRunner({ cwd: directory, env: dependencyEnv });
-          const result = runCommand(runner.command, [...runner.args, ...args], {
-            cwd: directory,
-            env: dependencyEnv,
-          });
-          expect(result.error, failureDetail(result)).toBeUndefined();
-          expect(result.status, failureDetail(result)).toBe(0);
-          return result;
+        const rootManifest = {
+          name: "capsule-dependency-fixture",
+          private: true,
+          packageManager,
+          scripts: { "pnpm-path": "node -p process.env.npm_execpath" },
         };
-        const rootManifest = { name: "capsule-dependency-fixture", private: true, packageManager };
         const consumerManifest = (graph: "a" | "b") => ({
           name: "capsule-dependency-consumer",
           private: true,
@@ -4972,8 +5094,33 @@ require('node:module').syncBuiltinESMExports();`,
           );
         };
         if (!preparedDependencyRoot) {
+          // The installer prepends dirname(process.execPath); a symlink resolves to the host.
+          // Keep a real Node copy beside pinned pnpm so both lookups stay fixture-owned.
+          copyFileSync(
+            nodeExecPath,
+            path.join(dependencyBin, "node"),
+            fsConstants.COPYFILE_FICLONE,
+          );
           writeDependencySource(hydratedSource, "a");
           writeDependencySource(selectedSource, "b");
+        }
+        const pnpm = resolvePinnedFixturePnpm(hydratedSource, nodeExecPath);
+        // The receiver's install owner must use the same pin as preparation.
+        writeShellCommand(
+          path.join(dependencyBin, "pnpm"),
+          `exec ${[pnpm.command, ...pnpm.args].map(shellQuote).join(" ")} "$@"`,
+        );
+        const runPnpm = (directory: string, args: string[]) => {
+          const result = runCommand(pnpm.command, [...pnpm.args, ...args], {
+            cwd: directory,
+            env: dependencyEnv,
+          });
+          expect(result.error, failureDetail(result)).toBeUndefined();
+          expect(result.status, failureDetail(result)).toBe(0);
+          expect(result.stderr).not.toContain("ERR_PNPM_BAD_CONFIG_DEP");
+          return result;
+        };
+        if (!preparedDependencyRoot) {
           const version = runPnpm(hydratedSource, ["--version"]);
           expect("pnpm@" + version.stdout.trim()).toBe(packageManager.split("+")[0]);
           runPnpm(hydratedSource, ["install", "--lockfile-only"]);
@@ -5077,6 +5224,9 @@ require('node:module').syncBuiltinESMExports();`,
           },
         });
         expect(preparedGraph).toBe("graph-a");
+        expect(imported.result.stderr).toContain(
+          path.join(realpathSync(dependencyBin), "node") + "\n",
+        );
         const payload = path.join(imported.receiver, ".capsule-proof/payload");
         if (scenario === "graph") {
           expect(imported.result.status, failureDetail(imported.result)).toBe(0);
@@ -6041,7 +6191,7 @@ cp.spawnSync = (command, args, options) => {
       git(["update-ref", "refs/remotes/origin/main", git(["rev-parse", "HEAD"])]);
       const wrapper = path.join(producer, ".tmp", "crabbox-wrapper.mjs");
       mkdirSync(path.dirname(wrapper));
-      copyRealWrapper(wrapper);
+      copyBundledScript(wrapper);
       const result = spawnSync(
         process.execPath,
         [wrapper, "run", "--provider", "aws", "--target", "linux", "--", "pnpm", "check:changed"],
@@ -6435,7 +6585,7 @@ cp.spawnSync = (command, args, options) => {
       const syncRoot = path.join(root, "sync");
       const fixtureWrapper = path.join(producer, ".tmp", "crabbox-wrapper.mjs");
       mkdirSync(path.dirname(fixtureWrapper), { recursive: true });
-      copyRealWrapper(fixtureWrapper);
+      copyBundledScript(fixtureWrapper);
       const env = {
         ...sourceFixtureEnv(path.join(root, "home"), syncRoot),
         XDG_STATE_HOME: path.join(root, "home", ".local", "state"),

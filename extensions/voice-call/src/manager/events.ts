@@ -498,7 +498,7 @@ async function processEventInQueue(
       prepareLiveDurationTimer();
       transitionState(activeCall, "speaking");
       if (event.type === "call.assistant-speech" && event.transcript.trim()) {
-        addTranscriptEntry(activeCall, "bot", event.transcript);
+        addTranscriptEntry(activeCall, "bot", event.transcript, event.timestamp);
       }
       break;
 
@@ -510,7 +510,7 @@ async function processEventInQueue(
           result = { kind: "ignored" };
           break;
         }
-        addTranscriptEntry(activeCall, "user", event.transcript);
+        addTranscriptEntry(activeCall, "user", event.transcript, event.timestamp);
         const speechResult: Extract<ProcessEventResult, { kind: "final-speech" }> = {
           kind: "final-speech",
           call,

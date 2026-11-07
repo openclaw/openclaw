@@ -14,6 +14,7 @@ import {
 import type { GatewayBrowserClientOptions } from "../api/gateway.ts";
 import { inferBasePathFromPathname, sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
 import { createNativeGatewayConnectAuth } from "./native-gateway-auth.ts";
+import { setNativeControlHost } from "./native-web-chrome.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import {
   resolveGatewayCredentialsForUrlEdit,
@@ -111,6 +112,7 @@ export function resolveApplicationStartupSettings(
   const nativeAuth =
     injectedNativeAuth ??
     (nativePortGateway ? { gatewayUrl: nativePortGateway, nativeConnectAuth: true } : undefined);
+  setNativeControlHost(Boolean(nativeAuth));
   if (nativeAuth) {
     try {
       delete window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];

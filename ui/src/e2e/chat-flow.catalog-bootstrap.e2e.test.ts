@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import {
@@ -10,9 +12,10 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -31,6 +34,7 @@ const suite = createControlUiE2eSuite({
   resources: {
     retainedState: () => state?.root,
     async run(signal) {
+      const cronBindingsLoaded = createDeferred();
       state = await createOpenClawTestState({
         label: "chat-catalog-mutation",
         env: {
@@ -67,6 +71,14 @@ const suite = createControlUiE2eSuite({
         configPath: state.configPath,
         token,
         scopes: ["operator.admin"],
+        onEvent: (event) => {
+          if (
+            event.event === "sessions.changed" &&
+            asOptionalRecord(event.payload)?.reason === "cron-bindings-loaded"
+          ) {
+            cronBindingsLoaded.resolve();
+          }
+        },
         cfg: {
           gateway: {
             mode: "local",
@@ -101,8 +113,8 @@ const suite = createControlUiE2eSuite({
         },
       });
       realGateway = await gatewayStartup;
-      // Startup cron hydration publishes a separate sessions.changed invalidation.
-      await realGateway.server.startupSettled;
+      // Post-ready cron hydration invalidates catalogs separately from sidecar startup.
+      await withinTest(cronBindingsLoaded.promise, signal);
       signal.throwIfAborted();
     },
     async close() {
@@ -147,6 +159,23 @@ suite.define(() => {
         let holdReplacement = true;
         let holdReconnectCatalog = false;
         let holdInitialSnapshot = true;
+        let catalogReloadStarted = false;
+        let reloadSnapshots = 0;
+        let reloadReplies = 0;
+        let reloadSnapshotIsB = false;
+        let reloadReplyIsB = false;
+        const recordCatalogFacts = () =>
+          recordControlUiE2eFailureFacts(page, {
+            catalogReloadStarted,
+            reloadSnapshots,
+            reloadReplies,
+            reloadSnapshotIsB,
+            reloadReplyIsB,
+            heldCatalogReplies: heldReplies.length,
+            holdInitialSnapshot,
+            holdReplacement,
+            holdReconnectCatalog,
+          });
         await page.routeWebSocket(`ws://127.0.0.1:${port}/**`, (socket) => {
           const server = socket.connectToServer();
           disconnect.resolve(() => socket.close({ code: 1012, reason: "Reconnect proof" }));
@@ -164,6 +193,24 @@ suite.define(() => {
           });
           server.onMessage((message) => {
             const frame = requireRecord(JSON.parse(message.toString()));
+            if (catalogReloadStarted && frame.event === "models.snapshot") {
+              reloadSnapshots += 1;
+              const catalog = asOptionalRecord(asOptionalRecord(frame.payload)?.catalog);
+              reloadSnapshotIsB =
+                asOptionalRecord(catalog?.accountSelection)?.authProfileId === "fixture:account-b";
+              recordCatalogFacts();
+            }
+            if (
+              catalogReloadStarted &&
+              typeof frame.id === "string" &&
+              catalogRequests.has(frame.id)
+            ) {
+              reloadReplies += 1;
+              reloadReplyIsB =
+                asOptionalRecord(asOptionalRecord(frame.payload)?.accountSelection)
+                  ?.authProfileId === "fixture:account-b";
+              recordCatalogFacts();
+            }
             if (frame.event === "models.snapshot" && holdInitialSnapshot) {
               initialSnapshot.resolve({
                 deliver: () => socket.send(message),
@@ -302,14 +349,72 @@ suite.define(() => {
           accountSelection: { authProfileId: "fixture:account-b" },
         });
         holdInitialSnapshot = false;
+        catalogReloadStarted = true;
+        recordCatalogFacts();
         await page.reload();
+        // Saved controls can appear before reload finishes its authoritative startup read.
+        await expect
+          .poll(() =>
+            page
+              .locator('openclaw-chat-pane[aria-hidden="false"]')
+              .evaluate(
+                (pane) => (pane as HTMLElement & { transcriptReady: boolean }).transcriptReady,
+              ),
+          )
+          .toBe(true);
         await trigger.click();
-        await expect.poll(() => account.textContent()).toContain("Account B");
+        try {
+          await expect.poll(() => account.textContent()).toContain("Account B");
+        } catch (error) {
+          recordCatalogFacts();
+          await withTimeout(
+            page.evaluate(() => {
+              const pickerElement = document.querySelector(
+                'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
+              );
+              const accountElement = pickerElement?.querySelector(
+                "[data-chat-account-group-toggle]",
+              );
+              return {
+                catalogPickerPresent: Boolean(pickerElement),
+                catalogMenuOpen: pickerElement?.hasAttribute("open") ?? false,
+                catalogAccountPresent: Boolean(accountElement),
+                catalogAccountIsB: accountElement?.textContent?.includes("Account B") ?? false,
+                catalogAccountIsA: accountElement?.textContent?.includes("Account A") ?? false,
+                catalogTriggerDisabled:
+                  pickerElement
+                    ?.querySelector("[data-chat-model-select]")
+                    ?.getAttribute("aria-disabled") !== "false",
+                catalogComposerSnapshot: Boolean(
+                  pickerElement?.closest("[data-composer-catalog-state]"),
+                ),
+              };
+            }),
+            500,
+          )
+            .then((facts) =>
+              recordControlUiE2eFailureFacts(page, {
+                ...facts,
+                catalogDomRead: true,
+              }),
+            )
+            .catch(() => recordControlUiE2eFailureFacts(page, { catalogDomRead: false }));
+          throw error;
+        }
         const selectedRow = picker.locator('[data-chat-model-option="fixture/second"]');
         await revealChatModelOption(picker, "fixture/second");
         await expect.poll(() => selectedRow.isVisible()).toBe(true);
         expect(await selectedRow.isEnabled()).toBe(true);
         expect(await account.textContent()).not.toContain("Account A");
+        await expect
+          .poll(() =>
+            page
+              .locator(
+                'openclaw-chat-pane[aria-hidden="false"] [data-composer-catalog-state="stale"]',
+              )
+              .count(),
+          )
+          .toBe(0);
         const readsBeforeReopen = catalogRequests.size;
         await trigger.click();
         await trigger.click();

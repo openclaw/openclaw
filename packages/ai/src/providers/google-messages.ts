@@ -8,6 +8,7 @@ import {
 import { hasRuntimeContextMarker, type Tool } from "../types.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { googleToolParameters, mapGoogleToolArguments } from "./google-tool-parameters.js";
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 
 type GoogleContentPart = Part & Record<string, unknown>;
@@ -61,6 +62,7 @@ function supportsMultimodalFunctionResponse(modelId: string): boolean {
 export function projectGoogleMessages(params: {
   model: Pick<ProviderModel, "id" | "api" | "provider" | "input">;
   messages: ProviderContext["messages"];
+  tools?: Tool[];
   replay: "signed-parts" | "managed";
   requiresToolCallSignature: boolean;
   videoPart?: (video: VideoContent) => GoogleContentPart;
@@ -150,7 +152,12 @@ export function projectGoogleMessages(params: {
           if (isSameProviderAndModel && (managed || model.provider !== "google-gemini-cli")) {
             sameRouteToolCallIds.add(block.id);
           }
-          const args = coerceTransportToolCallArguments(block.arguments);
+          const args = mapGoogleToolArguments(
+            params.tools,
+            block.name,
+            coerceTransportToolCallArguments(block.arguments),
+            "encode",
+          );
           const ownSignature = isSameProviderAndModel
             ? signature(block.thoughtSignature)
             : undefined;
@@ -279,7 +286,7 @@ export function convertGoogleTools(
       functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
         name: tool.name,
         description: tool.description,
-        parametersJsonSchema: tool.parameters,
+        parametersJsonSchema: googleToolParameters(tool.parameters),
       })),
     },
   ];

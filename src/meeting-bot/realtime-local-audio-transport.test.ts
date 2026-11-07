@@ -45,7 +45,10 @@ function createTransport(
 ) {
   const output = createProcess({ stdin: outputStdin });
   const input = createProcess({ stdout: new EventEmitter() });
-  const replacementOutput = createProcess({ stdin: createStdin(true, true) });
+  const replacementOutput = createProcess({
+    stdin: createStdin(true, true),
+    stdout: new EventEmitter(),
+  });
   const spawn = vi.fn().mockReturnValueOnce(output).mockReturnValueOnce(input);
   spawn.mockReturnValueOnce(replacementOutput);
   const transport = createTransportWith({ spawn: spawn as never, ...overrides });
@@ -53,7 +56,10 @@ function createTransport(
 }
 
 describe("local meeting realtime audio transport", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
 
   it("stops output after input spawn throws even when output spawn failed", () => {
     const output = createProcess({ stdin: createStdin(true, true) });
@@ -80,6 +86,30 @@ describe("local meeting realtime audio transport", () => {
     );
     expect(spawn).toHaveBeenCalledTimes(2);
     await transport.stop();
+  });
+
+  it.each([60_000, -60_000])("keeps cooldown after a %i ms wall-clock change", async (shiftMs) => {
+    vi.useFakeTimers();
+    const { transport, replacementOutput: microphone } = createTransport(undefined, {
+      bargeInInputCommand: ["microphone"],
+      bargeInCooldownMs: 1_000,
+      bargeInPeakThreshold: 1,
+      bargeInRmsThreshold: 1,
+    });
+    const onBargeIn = vi.fn(() => true);
+    transport.startBargeInMonitor?.(onBargeIn);
+    try {
+      microphone.stdout?.emit("data", Buffer.from([1, 0]));
+      expect(onBargeIn).toHaveBeenCalledOnce();
+      vi.setSystemTime(Date.now() + shiftMs);
+      microphone.stdout?.emit("data", Buffer.from([1, 0]));
+      expect(onBargeIn).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1_000);
+      microphone.stdout?.emit("data", Buffer.from([1, 0]));
+      expect(onBargeIn).toHaveBeenCalledTimes(2);
+    } finally {
+      await transport.stop();
+    }
   });
 
   it("releases a backpressured write on clear and ignores retired output failures", async () => {

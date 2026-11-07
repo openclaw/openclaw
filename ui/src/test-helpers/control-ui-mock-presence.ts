@@ -21,9 +21,17 @@ export type ControlUiMockPresenceUser = {
   watchedSessions?: string[];
 };
 
+export type ControlUiMockPresenceScenario = {
+  /** Online users included in hello and the full roster stream. The self entry
+   * adopts the connecting client's instanceId so presence surfaces resolve "you". */
+  presenceUsers?: ControlUiMockPresenceUser[];
+  /** Disable to hold the full roster until an explicit presence event. */
+  emitPresenceOnConnect?: boolean;
+};
+
 // Serialized into the browser with explicit runtime dependencies.
 export function createControlUiMockPresence(
-  scenario: { presenceUsers: ControlUiMockPresenceUser[] },
+  scenario: ControlUiMockPresenceScenario & { presenceUsers: ControlUiMockPresenceUser[] },
   isRecord: (value: unknown) => value is Record<string, unknown>,
 ) {
   /** Presence slice of the connect snapshot. The self-flagged entry adopts the
@@ -66,6 +74,21 @@ export function createControlUiMockPresence(
   const self = scenario.presenceUsers.find((user) => user.self);
   return {
     snapshot,
+    afterHello(frame: unknown, publish: (payload: { presence: unknown[] }) => void) {
+      if (
+        scenario.emitPresenceOnConnect !== false &&
+        isRecord(frame) &&
+        frame.type === "res" &&
+        frame.ok &&
+        isRecord(frame.payload) &&
+        frame.payload.type === "hello-ok" &&
+        isRecord(frame.payload.snapshot) &&
+        Array.isArray(frame.payload.snapshot.presence)
+      ) {
+        const roster = frame.payload.snapshot.presence;
+        window.queueMicrotask(() => publish({ presence: roster }));
+      }
+    },
     eventFrame(
       client: { hasCapability: (capability: string) => boolean },
       event: string,

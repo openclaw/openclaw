@@ -4,12 +4,18 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
-import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
-import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { catalogDiscoveryError, loadModelProvidersData, type ModelProvidersData } from "./load.ts";
 
 export type ModelProviderRefreshReason = "publication" | "replacement" | "forced";
 
 export type ModelProviderCatalogReceipt = { promise: Promise<string | null> };
+
+// One credential save publishes several catalog changes within a few hundred
+// milliseconds; a bounded window turns that burst into one reload.
+const PUBLICATION_SETTLE_MS = 150;
+
+type ModelProviderRefreshTarget = { providerId?: string; data: ModelProvidersData };
 
 async function loadConnectedProviderData(
   client: GatewayBrowserClient,
@@ -24,6 +30,8 @@ async function loadConnectedProviderData(
   return {
     ...target.data,
     providerOutcomes: refreshed.providerOutcomes,
+    pendingProviders: refreshed.pendingProviders,
+    catalogRequestFailed: refreshed.catalogRequestFailed,
     catalogError: refreshed.catalogError,
     error: authStatus ? refreshed.error : t("modelProviders.login.statusRefreshFailed"),
     authStatus:
@@ -52,6 +60,11 @@ export class ModelProviderCoreLoader {
   retryProvider: string | undefined;
   private request: AbortController | null = null;
   private publicationPending = false;
+  private scheduledPublication: {
+    timer: ReturnType<typeof setTimeout>;
+    done: ReturnType<typeof Promise.withResolvers<void>>;
+    run: () => Promise<void>;
+  } | null = null;
 
   constructor(
     private readonly notify: () => void,
@@ -104,10 +117,7 @@ export class ModelProviderCoreLoader {
         signal: request.signal,
       });
       if (ownsResult()) {
-        this.catalogError = modelCatalogRefreshError(
-          result,
-          t("modelProviders.defaults.discoverFailed"),
-        );
+        this.catalogError = catalogDiscoveryError(result);
         this.options.onCatalogComplete(result);
       }
     } catch (failure) {
@@ -125,11 +135,52 @@ export class ModelProviderCoreLoader {
     }
   }
 
-  async refresh(
+  refresh(
     client: GatewayBrowserClient,
     agentId: string,
     reason: ModelProviderRefreshReason,
-    target?: { providerId?: string; data: ModelProvidersData },
+    target?: ModelProviderRefreshTarget,
+  ): Promise<void> {
+    if (reason !== "publication") {
+      // An explicit reload reads everything a pending publication would.
+      this.cancelScheduledPublication();
+      return this.load(client, agentId, reason, target);
+    }
+    if (this.active || this.catalogLoading) {
+      // The active read's catch-up already re-reads after this notification.
+      this.publicationPending = true;
+      return Promise.resolve();
+    }
+    const run = () => this.load(client, agentId, reason, target);
+    if (this.scheduledPublication) {
+      // The latest notification's scope wins; all callers share one reload.
+      this.scheduledPublication.run = run;
+      return this.scheduledPublication.done.promise;
+    }
+    const done = Promise.withResolvers<void>();
+    const timer = setTimeout(() => {
+      const scheduled = this.scheduledPublication;
+      this.scheduledPublication = null;
+      void scheduled?.run().finally(done.resolve);
+    }, PUBLICATION_SETTLE_MS);
+    this.scheduledPublication = { timer, done, run };
+    return done.promise;
+  }
+
+  private cancelScheduledPublication(): void {
+    const scheduled = this.scheduledPublication;
+    this.scheduledPublication = null;
+    if (scheduled) {
+      clearTimeout(scheduled.timer);
+      scheduled.done.resolve();
+    }
+  }
+
+  private async load(
+    client: GatewayBrowserClient,
+    agentId: string,
+    reason: ModelProviderRefreshReason,
+    target?: ModelProviderRefreshTarget,
   ): Promise<void> {
     if (reason === "publication" && (this.active || this.catalogLoading)) {
       this.publicationPending = true;
@@ -182,6 +233,7 @@ export class ModelProviderCoreLoader {
 
   invalidate(): void {
     this.publicationPending = false;
+    this.cancelScheduledPublication();
     this.resetCatalog();
     this.retryProvider = undefined;
     this.active = false;

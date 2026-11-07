@@ -1,6 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
@@ -13,6 +13,7 @@ import type {
   PluginListResult,
 } from "../../lib/plugins/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createClient,
@@ -28,6 +29,7 @@ import {
   resetPluginsPageTestState,
   settlePlugins,
 } from "./plugins-page.test-support.ts";
+import { pages } from "./route.tsx";
 
 const SETTINGS_URL = "/settings/plugins/workboard?view=settings";
 const objectSchema = (properties: Record<string, unknown>) => ({ type: "object", properties });
@@ -204,7 +206,7 @@ it.each([true, false])("retries failed configuration recovery (write=%s)", async
   expect(refresh).toHaveBeenCalledTimes(write ? 0 : 1);
 });
 
-it("closes setting menus before Escape dismisses settings and commits a focused field", async () => {
+it("closes menus before Escape commits the focused field and bubbles to the shell", async () => {
   const result = createResult();
   const { harness } = pageGateway({
     "plugins.inspect": () => createInspectResult(),
@@ -268,17 +270,19 @@ it("closes setting menus before Escape dismisses settings and commits a focused 
     releaseDrawer();
     drawer.remove();
   }
+  const shellEscape = vi.fn();
+  document.addEventListener("keydown", shellEscape);
+  onTestFinished(() => document.removeEventListener("keydown", shellEscape));
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  expect(shellEscape).toHaveBeenCalledOnce();
   await page.updateComplete;
-  expect(page.querySelector(".plugin-editor")).toBeNull();
+  expect(page.querySelector(".plugin-editor")).not.toBeNull();
   expect(runtimeConfig.runtimeConfig.patchForm).toHaveBeenCalledExactlyOnceWith(
     ["plugins", "entries", "workboard", "config", "refreshMinutes"],
     30,
   );
   expect(runtimeConfig.runtimeConfig.flushFormChanges).toHaveBeenCalledOnce();
-  expect(context.replace).toHaveBeenCalledWith("plugin-settings", {
-    pathname: "/settings/plugins",
-  });
+  expect(context.replace).not.toHaveBeenCalled();
 });
 
 it("keeps the autosaved inspection when an older optional catalog completes", async () => {
@@ -359,7 +363,9 @@ it("keeps the autosaved inspection when an older optional catalog completes", as
   );
   await page.updateComplete;
   const rows = () =>
-    [...page.querySelectorAll(".plugin-capability__copy strong")].map((row) => row.textContent);
+    [...page.querySelectorAll(".plugin-capabilities .settings-row__title")].map(
+      (row) => row.textContent,
+    );
   expect(rows()).toEqual(["Current skill"]);
 
   catalog.resolve(discoveryDetail(plugin));
@@ -515,7 +521,7 @@ it.each(["disabled", "needs-setup"] as const)(
 
     await waitForSolid(() =>
       expect(
-        [...page.querySelectorAll(".plugin-capability__static strong")].map((row) =>
+        [...page.querySelectorAll(".plugin-capabilities .settings-row__title")].map((row) =>
           row.textContent?.trim(),
         ),
       ).toContain("board_create"),
@@ -527,14 +533,14 @@ it.each(["disabled", "needs-setup"] as const)(
     if (state === "needs-setup") {
       expect(page.querySelector(".plugins-settings-detail-setup")).toBeNull();
       expect(page.querySelector('[role="tablist"]')).toBeNull();
-      expect(page.querySelector(".plugin-catalog-detail__panel .oc-banner-warning")).toBeNull();
+      expect(page.querySelector(".plugins-row-message--warning")).toBeNull();
       expect(
         page.querySelector<HTMLAnchorElement>(
           '.plugin-catalog-detail__actions a[aria-label="Settings"]',
         )?.href,
       ).toContain("view=settings");
     } else {
-      expect(page.querySelector('[aria-label="Connect account"]')).not.toBeNull();
+      expect(page.querySelector('[aria-label="Sign in to account"]')).not.toBeNull();
       expect(page.textContent).toContain("Credentials");
     }
     expect(page.querySelector(".plugin-catalog-detail__sidebar")?.textContent).toContain("1.2.3");
@@ -620,10 +626,41 @@ it("uses a late local inventory while catalog metadata is pending", async () => 
   expect(page.querySelector(".plugin-catalog-detail__install")).toBeNull();
 });
 
-const hello = gatewayHelloForMethods(["config.get", "config.schema", "plugins.list"]);
+const hello = gatewayHelloForMethods([
+  "config.get",
+  "config.schema",
+  "plugins.list",
+  "plugins.inspect",
+]);
 const capabilities = new Set<ReturnType<typeof createRuntimeConfigCapability>>();
 
-async function mountAdvanced(options: { connected: boolean; schema?: () => Promise<unknown> }) {
+it.each([
+  ["/settings/plugins", false],
+  ["/settings/plugins/workboard", false],
+  ["/settings/plugins?tab=advanced", true],
+  ["/settings/plugins/workboard?view=settings", true],
+  ["/settings/plugins/workboard#configuration", true],
+] as const)("preloads schema only for configuration surfaces at %s", async (url, schemaNeeded) => {
+  const result = createResult();
+  const { harness } = pageGateway({ "plugins.list": () => result });
+  const context = createContext(harness.gateway);
+  const loader = pages[1].loader;
+  if (!loader) {
+    throw new Error("Plugin Settings route has no loader");
+  }
+
+  const data = await loader(context, createRouteLoaderOptions(createPluginsRouteLocation(url)));
+
+  expect(data).toMatchObject({ result });
+  expect(context.runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+  expect(context.runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledTimes(schemaNeeded ? 1 : 0);
+});
+
+async function mountSettings(options: {
+  connected: boolean;
+  location?: string;
+  schema?: () => Promise<unknown>;
+}) {
   const inventory = createResult();
   const { client, request } = createClient(async (method) => {
     switch (method) {
@@ -633,6 +670,8 @@ async function mountAdvanced(options: { connected: boolean; schema?: () => Promi
         return options.schema ? options.schema() : configMocks["config.schema"];
       case "plugins.list":
         return inventory;
+      case "plugins.inspect":
+        return createInspectResult();
       default:
         throw new Error(`Unexpected method: ${method}`);
     }
@@ -647,7 +686,7 @@ async function mountAdvanced(options: { connected: boolean; schema?: () => Promi
     createPluginsRouteData(
       gateway.gateway,
       options.connected ? inventory : null,
-      createPluginsRouteLocation("/settings/plugins?tab=advanced"),
+      createPluginsRouteLocation(options.location ?? "/settings/plugins?tab=advanced"),
     ),
   );
   return {
@@ -655,6 +694,14 @@ async function mountAdvanced(options: { connected: boolean; schema?: () => Promi
     request,
     runtimeConfig,
     connect: () => gateway.emit(client, true, { hello }),
+    async navigate(location: string) {
+      page.routeData = createPluginsRouteData(
+        gateway.gateway,
+        inventory,
+        createPluginsRouteLocation(location),
+      );
+      await page.updateComplete;
+    },
     async settle() {
       await runtimeConfig.ensureLoaded();
       await Promise.all(schemaLoads.mock.results.map((result) => result.value));
@@ -663,23 +710,52 @@ async function mountAdvanced(options: { connected: boolean; schema?: () => Promi
   };
 }
 
-function expectAdvancedFields(page: HTMLElement) {
-  const advanced = page.querySelector("#plugin-settings-advanced");
-  expect(advanced?.textContent).toContain("Plugin system enabled");
-  expect(advanced?.textContent).toContain("Allowed plugin IDs");
-  expect(advanced?.textContent).toContain("Blocked plugin IDs");
-  expect(advanced?.textContent).not.toContain("Plugin settings schema is unavailable");
+it.each([
+  ["inventory", "/settings/plugins", "/settings/plugins?tab=advanced"],
+  ["overview", "/settings/plugins/workboard", SETTINGS_URL],
+] as const)(
+  "keeps %s schema-free after connecting until configuration opens",
+  async (_, start, next) => {
+    const harness = await mountSettings({ connected: false, location: start });
+    await harness.settle();
+    harness.connect();
+    await harness.settle();
+    await waitForSolid(() => expect(harness.page.textContent).toContain("Workboard"));
+    expect(harness.request.mock.calls.some(([method]) => method === "config.schema")).toBe(false);
+
+    await harness.navigate(next);
+    await harness.settle();
+
+    await waitForSolid(() =>
+      expect(
+        harness.page.querySelector("[data-setting], #plugin-settings-advanced input"),
+      ).not.toBeNull(),
+    );
+    expect(
+      harness.request.mock.calls.filter(([method]) => method === "config.schema"),
+    ).toHaveLength(1);
+  },
+);
+
+async function expectAdvancedFields(page: HTMLElement) {
+  await waitForSolid(() => {
+    const advanced = page.querySelector("#plugin-settings-advanced");
+    expect(advanced?.textContent).toContain("Plugin system enabled");
+    expect(advanced?.textContent).toContain("Allowed plugin IDs");
+    expect(advanced?.textContent).toContain("Blocked plugin IDs");
+    expect(advanced?.textContent).not.toContain("Plugin settings schema is unavailable");
+  });
 }
 
 it("renders global plugin settings when the Gateway connects after the page mounts", async () => {
-  const harness = await mountAdvanced({ connected: false });
+  const harness = await mountSettings({ connected: false });
   await harness.settle();
   expect(harness.request).not.toHaveBeenCalledWith("config.schema", {});
 
   harness.connect();
   await harness.settle();
 
-  expectAdvancedFields(harness.page);
+  await expectAdvancedFields(harness.page);
   expect(harness.request.mock.calls.filter(([method]) => method === "config.schema")).toHaveLength(
     1,
   );
@@ -688,7 +764,7 @@ it("renders global plugin settings when the Gateway connects after the page moun
 it("reloads the missing schema after a failed schema read", async () => {
   const firstSchema = deferred<(typeof configMocks)["config.schema"]>();
   let attempts = 0;
-  const harness = await mountAdvanced({
+  const harness = await mountSettings({
     connected: true,
     schema: () =>
       ++attempts === 1 ? firstSchema.promise : Promise.resolve(configMocks["config.schema"]),
@@ -707,7 +783,7 @@ it("reloads the missing schema after a failed schema read", async () => {
   await Promise.all(reloads.mock.results.map((result) => result.value));
   await harness.settle();
 
-  expectAdvancedFields(harness.page);
+  await expectAdvancedFields(harness.page);
   expect(attempts).toBe(2);
   expect(harness.request.mock.calls.some(([method]) => method === "config.set")).toBe(false);
 });
@@ -716,7 +792,7 @@ it("keeps settings navigation available during a held schema retry", async () =>
   const first = deferred<(typeof configMocks)["config.schema"]>();
   const retry = deferred<(typeof configMocks)["config.schema"]>();
   let attempts = 0;
-  const harness = await mountAdvanced({
+  const harness = await mountSettings({
     connected: true,
     schema: () => (++attempts === 1 ? first.promise : retry.promise),
   });
@@ -735,6 +811,6 @@ it("keeps settings navigation available during a held schema retry", async () =>
   });
   retry.resolve(configMocks["config.schema"]);
   await harness.settle();
-  expectAdvancedFields(harness.page);
+  await expectAdvancedFields(harness.page);
   expect(harness.request.mock.calls.some(([method]) => method === "config.set")).toBe(false);
 });

@@ -107,9 +107,13 @@ type ChatScrollOptions = {
 type PendingChatScroll = { manual: boolean; cancel: () => void };
 const pendingChatScrolls = new WeakMap<ChatScrollHost, PendingChatScroll>();
 
+export function hasPendingManualChatScroll(host: ChatScrollHost): boolean {
+  return pendingChatScrolls.get(host)?.manual ?? false;
+}
+
 /** A queued reader command owns the next viewport movement, including geometric follow. */
 export function canAutoFollowChat(host: ChatScrollHost): boolean {
-  return !host.chatFollowLocked && !pendingChatScrolls.get(host)?.manual;
+  return !host.chatFollowLocked && !hasPendingManualChatScroll(host);
 }
 
 export function cancelChatScroll(host: ChatScrollHost): void {
@@ -283,7 +287,7 @@ function updateChatScrollPosition(
   // streaming stops pinning them back to the bottom.
   const isUserScrollUp = takeover !== false || (delta < 0 && !host.chatIsMaintenanceScroll?.());
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-  if (host.chatIsProgrammaticScroll?.() && !isUserScrollUp) {
+  if ((host.chatIsProgrammaticScroll?.() || host.chatIsMaintenanceScroll?.()) && !isUserScrollUp) {
     // A measured arrival clears the affordance even when maintenance must not
     // change the reader's follow policy.
     if (distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {

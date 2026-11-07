@@ -1,12 +1,13 @@
 // Cold direct-route inventory, independent coverage passes, and interleaved A/A/B timings.
 // node --import ./scripts/tsx.mjs scripts/bench-control-ui-route-leaks.ts \
 //   --bundle-dir BASE --compare-bundle-dir HEAD --mode all --pairs 10 --profiles local,remote
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { chromium, type CDPSession, type Page } from "playwright";
+import { chromium, type BrowserContext, type CDPSession, type Page } from "playwright";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
@@ -23,17 +24,25 @@ import {
   installScriptedRfbServer,
 } from "../ui/src/e2e/desktop-rfb-test-support.ts";
 import { CONFIG_PAGE_IDS } from "../ui/src/pages/config/config-sections.ts";
+import { logbookStatus, logbookTimeline } from "../ui/src/pages/plugin/logbook.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
-import type { MockGatewayWindow } from "../ui/src/test-helpers/control-ui-e2e-contract.ts";
+import type {
+  MockGatewayRequest,
+  MockGatewayWindow,
+} from "../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import {
   controlUiSessionPath,
+  controlUiSessionUrl,
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
   resolvePlaywrightChromiumExecutablePath,
   defaultControlUiFeatureMethods,
-  prepareControlUiMockGatewayScenario,
-  type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  prepareNativePluginMockGatewayScenario,
+  type NativeControlUiMockGatewayScenario,
+} from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
+import { createControlUiSessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
 import { parityBaseScenario, parityWorkboardScenario } from "./control-ui-parity/fixtures.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { summarizeScriptCoverage } from "./lib/control-ui-cold-load-trace.ts";
@@ -51,6 +60,16 @@ import {
   type DockScenarioId,
 } from "./lib/control-ui-route-dock-scenarios.ts";
 import { qualifyRouteNetworkClock, routeNetworkPhase } from "./lib/control-ui-route-network.ts";
+import {
+  type ActivityMediaMode,
+  activityMediaFixture,
+  activityMediaMethods,
+  activityMediaTrigger,
+  activityLightboxImage,
+  waitForActivityMedia,
+  waitForActivityLightbox,
+  closeActivityLightbox,
+} from "./route-leaks-activity-pilot.ts";
 import {
   appsGatewayInitScript,
   appsPilotFixture,
@@ -71,6 +90,8 @@ type ProbeRoute =
   | AppsPilotId
   | "desktop-document"
   | "portal-embedded"
+  | "roster"
+  | "settings-native-root"
   | DockScenarioId;
 let appsSandbox: Awaited<ReturnType<typeof startAppsPilotSandbox>> | undefined;
 
@@ -80,9 +101,12 @@ const { values } = parseArgs({
     "compare-bundle-dir": { type: "string" },
     routes: { type: "string" },
     interactions: { type: "string" },
+    "activity-media": { type: "string" },
     mode: { type: "string", default: "coverage" },
     profiles: { type: "string", default: "local,remote" },
     pairs: { type: "string", default: "10" },
+    viewport: { type: "string", default: "desktop" },
+    "cpu-throttle": { type: "string", default: "1" },
     output: { type: "string" },
     screenshots: { type: "boolean", default: false },
     help: { type: "boolean", default: false },
@@ -90,12 +114,23 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,cron-transcript probes follow cold readiness. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
+    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,cron-transcript,worktree-create,templates-search,roster-create-template,model-search-and-compose probes follow cold readiness; new-session-typing-immediate types before artifact work with no hover or think time; preload-idle observes native New Session/roster prefetch without prior intent; --routes roster exercises the persisted sidebar roster on New Session. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
+    "Native Settings root: --routes settings-native-root uses the iOS phone embed at 390x844; do not combine with --interactions.",
     `Browser/Reader cells: ${DOCK_SCENARIO_IDS.join(",")}. Each owns its cold/native first-open phases; do not combine with --interactions.`,
+    "Activity media: --routes activity --activity-media empty|gallery; --interactions activity-lightbox opens the viewer after the fixed warmup, activity-lightbox-immediate opens it before artifact analysis, and activity-idle records the warmup without a click.",
+    "--viewport desktop|mobile (1440x1000 or 390x844 with mobile/touch emulation); --cpu-throttle RATE (>=1). Defaults are desktop and 1. Native Settings and Browser/Reader retain their own viewport overrides, recorded as contextViewport.",
   );
   process.exit(0);
 }
 const pairs = Number(values.pairs);
+const cpuThrottle = Number(values["cpu-throttle"]);
+if (
+  !["desktop", "mobile"].includes(values.viewport) ||
+  !Number.isFinite(cpuThrottle) ||
+  cpuThrottle < 1
+) {
+  throw new Error("Use --viewport desktop|mobile and --cpu-throttle >= 1");
+}
 if (
   !Number.isSafeInteger(pairs) ||
   pairs < 1 ||
@@ -132,8 +167,10 @@ const defaults = [
 const routes = (values.routes?.split(",") ?? defaults).map((id) => {
   if (
     id !== "sharing" &&
+    id !== "settings-native-root" &&
     id !== "desktop-document" &&
     id !== "portal-embedded" &&
+    id !== "roster" &&
     !isAppsPilotId(id) &&
     !isDockScenario(id) &&
     !APP_ROUTE_IDS.some((route) => route === id)
@@ -142,17 +179,41 @@ const routes = (values.routes?.split(",") ?? defaults).map((id) => {
   }
   return id as ProbeRoute;
 });
-const appsProbesEnabled = routes.some(isAppsPilotId);
+const appsProbesEnabled = routes.some((route) => isAppsPilotId(route) || route === "apps");
+const activityMediaOption = values["activity-media"];
+if (
+  activityMediaOption !== undefined &&
+  activityMediaOption !== "empty" &&
+  activityMediaOption !== "gallery"
+) {
+  throw new Error("activity-media must be empty or gallery");
+}
+const activityMedia: ActivityMediaMode | undefined = activityMediaOption;
 const interactionIds = values.interactions?.split(",") ?? [];
+if (routes.includes("settings-native-root") && interactionIds.length) {
+  throw new Error("Native Settings root is a cold-only cell; do not combine with --interactions");
+}
 if (routes.some(isDockScenario) && interactionIds.length) {
   throw new Error(`Dock cells (${DOCK_SCENARIO_IDS.join(",")}) own their native first-open phases`);
 }
 const securityInteractions = ["settings-security-immediate", "settings-security-idle"];
+const creationInteractions: Record<string, ProbeRoute[]> = {
+  "templates-search": ["templates"],
+  "worktree-create": ["worktrees"],
+  "roster-create-template": ["roster"],
+  "model-search-and-compose": ["chat", "new-session"],
+};
 const knownInteractions = [
   "agents-files",
   "cron-history",
   "cron-transcript",
+  "new-session-typing-immediate",
+  "preload-idle",
+  "activity-lightbox",
+  "activity-idle",
+  "activity-lightbox-immediate",
   ...securityInteractions,
+  ...Object.keys(creationInteractions),
 ];
 for (const id of interactionIds) {
   if (!knownInteractions.includes(id)) {
@@ -160,6 +221,18 @@ for (const id of interactionIds) {
   }
 }
 const securityInteraction = interactionIds.find((id) => securityInteractions.includes(id));
+const immediateTyping = interactionIds.includes("new-session-typing-immediate");
+const preloadIdle = interactionIds.includes("preload-idle");
+if (
+  (immediateTyping || preloadIdle) &&
+  (interactionIds.length !== 1 ||
+    (immediateTyping && (routes.length !== 1 || routes[0] !== "new-session")) ||
+    (preloadIdle && routes.some((route) => route !== "new-session" && route !== "roster")))
+) {
+  throw new Error(
+    "Immediate typing requires only --routes new-session; preload-idle requires only new-session/roster; use one interaction",
+  );
+}
 if (
   securityInteraction &&
   (interactionIds.length !== 1 || routes.length !== 1 || routes[0] !== "advanced")
@@ -168,33 +241,512 @@ if (
     "Security navigation requires only --routes advanced and one Security interaction",
   );
 }
+const activityImmediate = interactionIds.includes("activity-lightbox-immediate");
+if (
+  interactionIds.includes("activity-idle") &&
+  (interactionIds.length !== 1 || routes.length !== 1 || routes[0] !== "activity" || !activityMedia)
+) {
+  throw new Error(
+    "Activity idle requires only --routes activity and --activity-media empty|gallery",
+  );
+}
+if (
+  interactionIds.some((id) => id.startsWith("activity-lightbox")) &&
+  activityMedia !== "gallery"
+) {
+  throw new Error("Activity lightbox interactions require --activity-media gallery");
+}
+if (
+  activityImmediate &&
+  (interactionIds.length !== 1 || routes.length !== 1 || routes[0] !== "activity")
+) {
+  throw new Error(
+    "Immediate Activity lightbox requires only --routes activity and one interaction",
+  );
+}
 const output = createControlUiE2eArtifactDir("route-leaks", values.output);
 const configPages = new Set<string>(CONFIG_PAGE_IDS);
 const fields =
   ':is(input:not(:disabled),textarea:not(:disabled),select:not(:disabled),button[role="combobox"]:not(:disabled),[role="switch"]:not([aria-disabled="true"]))';
-function routeTarget(
-  id: ProbeRoute,
-  sessionKey: string,
-): {
+const censusTime = 1_800_000_000_000;
+const censusDashboardKey = "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef";
+const censusBoardText = "Synthetic census board ready";
+const censusMeeting = {
+  selector: "2026-08-12/design-review",
+  sessionId: "design-review",
+  title: "Design review",
+  providerId: "discord-voice",
+  providerName: "Discord voice",
+  source: { providerId: "discord-voice" },
+  startedAt: "2026-08-12T17:00:00Z",
+  stoppedAt: "2026-08-12T17:45:00Z",
+  active: false,
+  activeSubscription: false,
+  agentId: "main",
+  updatedAt: "2026-08-12T17:45:00Z",
+  lastUtteranceAt: "2026-08-12T17:44:00Z",
+  utteranceCount: 42,
+  participants: ["Ada", "Sam"],
+  hasSummary: true,
+  summarySource: "model",
+  overview: "Synthetic census summary ready",
+};
+const censusRoutes = [
+  "terminal",
+  "dashboard",
+  "dashboards",
+  "custodian",
+  "meetings",
+  "memory-import",
+  "debug",
+  "logs",
+  "skill-workshop",
+  "skills",
+  "plugin",
+] as const;
+type CensusRoute = (typeof censusRoutes)[number];
+const isCensusRoute = (id: ProbeRoute): id is CensusRoute =>
+  censusRoutes.some((route) => route === id);
+type RouteTarget = {
   route: RouteId | "desktop-document" | "browser-document";
   pathname: string;
   search: string;
   selector: string | undefined;
   requiredMethods?: string[];
-} {
+};
+function censusTarget(id: CensusRoute): RouteTarget {
+  const targets = {
+    terminal: {
+      pathname: "/terminal",
+      selector:
+        "openclaw-terminal-page .tp:not(.tp--mobile) .tp-session-menu--inline .tp-session.is-current, openclaw-terminal-page .tp.tp--mobile .tp-composer input",
+      requiredMethods: ["terminal.open"],
+    },
+    dashboard: {
+      pathname: new URL(controlUiSessionUrl("http://localhost/", censusDashboardKey, "dashboard"))
+        .pathname,
+      selector: "openclaw-board-view .board-report__text",
+      requiredMethods: ["board.get"],
+    },
+    dashboards: {
+      pathname: "/dashboards",
+      selector: ".dashboard-preview .board-report__text",
+      requiredMethods: ["sessions.list", "board.get"],
+    },
+    custodian: {
+      pathname: "/custodian",
+      selector: "openclaw-custodian-page .custodian-surface textarea:not(:disabled)",
+      requiredMethods: ["openclaw.chat.history", "openclaw.chat"],
+    },
+    meetings: {
+      pathname: "/meetings",
+      search: `?selector=${encodeURIComponent(censusMeeting.selector)}`,
+      selector: '.transcripts-reader[aria-busy="false"]',
+      requiredMethods: ["transcripts.list", "transcripts.get"],
+    },
+    "memory-import": {
+      pathname: "/memory-import",
+      selector: '[data-test-id="memory-import-page"] [data-provider-id="codex"]',
+      requiredMethods: ["migrations.memory.plan"],
+    },
+    debug: {
+      pathname: "/debug",
+      selector: ".command-lanes-table .command-lane-row__name",
+      requiredMethods: ["status", "health", "models.list", "last-heartbeat", "diagnostics.lanes"],
+    },
+    logs: {
+      pathname: "/logs",
+      selector: "openclaw-logs-page .log-message",
+      requiredMethods: ["logs.tail"],
+    },
+    "skill-workshop": {
+      pathname: "/skills/workshop",
+      selector: ".sw-layout .sw-markdown",
+      requiredMethods: ["skills.workshop.list", "skills.workshop.changes", "skills.workshop.read"],
+    },
+    skills: {
+      pathname: "/skills",
+      selector:
+        '.skill-discovery .plugin-catalog-grid[aria-busy="false"] [data-skill-id="remote:@fixture/census"] button',
+      requiredMethods: ["skills.status", "skills.search"],
+    },
+    plugin: {
+      pathname: "/plugin",
+      search: "?plugin=logbook&id=logbook",
+      selector: "openclaw-plugin-page .logbook-card__header",
+      requiredMethods: ["logbook.status", "logbook.timeline"],
+    },
+  };
+  return { route: id, search: "", ...targets[id] };
+}
+
+function censusFixture(
+  id: CensusRoute,
+  base: NativeControlUiMockGatewayScenario,
+): NativeControlUiMockGatewayScenario {
+  const methods = new Set(base.featureMethods ?? []);
+  const methodResponses = { ...base.methodResponses };
+  const changes: Partial<NativeControlUiMockGatewayScenario> = {};
+  const add = (name: string, response: unknown) => {
+    methods.add(name);
+    methodResponses[name] = response;
+  };
+  if (id === "terminal") {
+    methods.add("terminal.open");
+    changes.terminalEnabled = true;
+  }
+  if (id === "dashboard" || id === "dashboards") {
+    changes.sessionKey = censusDashboardKey;
+    changes.sessions = [
+      {
+        ...createControlUiSessionRow(censusDashboardKey, "Census mission control", censusTime),
+        boardFace: "dashboard",
+        hasBoard: true,
+      },
+    ];
+    changes.sessionTranscripts = {
+      [censusDashboardKey]: {
+        messages: [
+          { role: "assistant", content: "Synthetic census briefing.", timestamp: censusTime },
+        ],
+      },
+    };
+    changes.controlUiWidgetKinds = [
+      { pluginId: "session", kind: "session:report", label: "Report" },
+    ];
+    add("board.get", {
+      sessionKey: censusDashboardKey,
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Census", position: 0, chatDock: "right" }],
+      widgets: [
+        {
+          name: "census-report",
+          tabId: "main",
+          title: "Census report",
+          contentKind: "plugin",
+          pluginKind: "session:report",
+          props: { blocks: [{ type: "text", text: censusBoardText }] },
+          sizeW: 12,
+          sizeH: 6,
+          position: 0,
+          grantState: "none",
+          revision: 1,
+        },
+      ],
+    });
+  }
+  if (id === "custodian") {
+    add("openclaw.chat.history", {
+      turns: [{ role: "assistant", text: "Synthetic census history ready.", at: censusTime }],
+    });
+    add("openclaw.chat", {
+      sessionId: "census-custodian",
+      reply: "Synthetic census caretaker ready.",
+      action: "none",
+    });
+  }
+  if (id === "meetings") {
+    add("transcripts.list", { sessions: [censusMeeting], nextCursor: null });
+    add("transcripts.get", {
+      session: censusMeeting,
+      nextCursor: null,
+      summary: {
+        generatedAt: censusMeeting.updatedAt,
+        overview: censusMeeting.overview,
+        decisions: [],
+        actionItems: [],
+        risks: [],
+        participants: censusMeeting.participants,
+        utteranceCount: 42,
+        source: "model",
+        markdown: "# Design review\n\nSynthetic census summary ready",
+      },
+    });
+  }
+  if (id === "memory-import") {
+    add("migrations.memory.plan", {
+      agentId: "main",
+      workspace: "/synthetic/workspace",
+      providers: [
+        {
+          providerId: "codex",
+          label: "Codex",
+          description: "Synthetic memory import.",
+          planFingerprint: "a".repeat(64),
+          found: true,
+          source: "/synthetic/codex",
+          target: "/synthetic/workspace",
+          summary: {
+            total: 1,
+            planned: 1,
+            migrated: 0,
+            skipped: 0,
+            conflicts: 0,
+            errors: 0,
+            sensitive: 0,
+          },
+          items: [
+            {
+              id: "memory:codex:MEMORY.md",
+              status: "planned",
+              source: "/synthetic/codex/MEMORY.md",
+              target: "/synthetic/workspace/memory/imports/codex/MEMORY.md",
+              details: {
+                collectionId: "codex",
+                collectionLabel: "Codex",
+                relativePath: "MEMORY.md",
+              },
+            },
+          ],
+        },
+      ],
+    });
+  }
+  if (id === "debug") {
+    add("status", {
+      runtime: "census-synthetic",
+      securityAudit: { summary: { critical: 0, warn: 0, info: 0 } },
+    });
+    add("health", { ok: true, status: "census-healthy" });
+    add("last-heartbeat", { status: "census-heartbeat", ts: censusTime });
+    methods.add("models.list");
+    add("diagnostics.lanes", {
+      lanes: [
+        {
+          lane: "census-main",
+          queuedCount: 0,
+          activeCount: 0,
+          maxConcurrent: 16,
+          draining: false,
+          generation: 1,
+        },
+      ],
+      dynamic: null,
+    });
+  }
+  if (id === "logs") {
+    add("logs.tail", {
+      file: "/synthetic/census.log",
+      cursor: 1,
+      size: 1,
+      lines: [
+        JSON.stringify({
+          time: new Date(censusTime).toISOString(),
+          level: "info",
+          subsystem: "census",
+          message: "Synthetic census log ready",
+        }),
+      ],
+    });
+  }
+  if (id === "skill-workshop") {
+    add("skills.workshop.list", {
+      agentId: "main",
+      mode: "off",
+      root: "/synthetic/workshop",
+      skills: [
+        {
+          name: "census-review",
+          description: "Synthetic review skill.",
+          updatedAtMs: censusTime,
+          sizeBytes: 47,
+          files: ["SKILL.md"],
+        },
+      ],
+      archived: [],
+    });
+    add("skills.workshop.changes", { changes: [] });
+    add("skills.workshop.read", {
+      content: "# Census review\n\nSynthetic census skill ready.",
+      files: ["SKILL.md"],
+    });
+  }
+  if (id === "skills") {
+    add("skills.status", {
+      workspaceDir: "/synthetic/workspace",
+      managedSkillsDir: "/synthetic/skills",
+      skills: [],
+    });
+    add("skills.search", {
+      results: [
+        {
+          slug: "census",
+          installRef: "@fixture/census",
+          displayName: "Census fixture skill",
+          summary: "Synthetic census discovery ready",
+          score: 1,
+          registry: "https://clawhub.ai",
+        },
+      ],
+    });
+    add("skills.library.list", {
+      entries: [],
+      profileId: "census",
+      multipleProfiles: false,
+      defaultTarget: "personal",
+      canManageWorkspace: true,
+      defaultSelectionLimit: 64,
+    });
+  }
+  if (id === "plugin") {
+    const day = "2026-08-12";
+    changes.controlUiTabs = [
+      { group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" },
+    ];
+    add("logbook.status", logbookStatus(day));
+    add("logbook.days", { days: [day] });
+    add(
+      "logbook.timeline",
+      logbookTimeline(
+        day,
+        [{ title: "Synthetic census logbook ready", summary: "Synthetic census timeline ready" }],
+        1,
+      ),
+    );
+  }
+  return { ...base, ...changes, featureMethods: [...methods], methodResponses };
+}
+
+// These populated states match the original route census; an empty route shell
+// is not readiness for a terminal, document, board, or retained plugin view.
+function censusReady({ id, sessionKey }: { id: CensusRoute; sessionKey: string }) {
+  const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+  const present = (selector: string) =>
+    [...document.querySelectorAll<HTMLElement>(selector)].some(
+      (node) =>
+        node.getClientRects().length > 0 &&
+        getComputedStyle(node).visibility !== "hidden" &&
+        !node.matches(':disabled,[aria-busy="true"]'),
+    );
+  const text = (selector: string, expected: string) =>
+    [...document.querySelectorAll(selector)].some((node) => node.textContent?.includes(expected));
+  if (id === "terminal") {
+    const panel = document.querySelector<HTMLElement>("openclaw-terminal-page .tp");
+    if (
+      !panel ||
+      present("openclaw-terminal-page .tp-error") ||
+      (gateway?.findRequests("terminal.open").length ?? 0) === 0
+    ) {
+      return false;
+    }
+    if (panel.classList.contains("tp--mobile")) {
+      return (
+        !present("openclaw-terminal-page .tp-session-menu") &&
+        present("openclaw-terminal-page .tp-composer input") &&
+        present("openclaw-terminal-page .tp-host canvas")
+      );
+    }
+    return (
+      (gateway?.findRequests("terminal.list").length ?? 0) > 0 &&
+      present("openclaw-terminal-page .tp-session-menu--inline .tp-session.is-current") &&
+      present("openclaw-terminal-page .tp-session-menu--inline .tp-session-refresh") &&
+      text("openclaw-terminal-page .tp-session.is-current .tp-session__name", "zsh") &&
+      text("openclaw-terminal-page .tp-session.is-current .tp-session__cwd", "main") &&
+      panel.querySelector(".tp-viewport")?.getAttribute("aria-hidden") === "true" &&
+      !present("openclaw-terminal-page .tp-composer input")
+    );
+  }
+  if (id === "dashboard" || id === "dashboards") {
+    return (
+      text(
+        id === "dashboard"
+          ? "openclaw-board-view .board-report__text"
+          : ".dashboard-preview .board-report__text",
+        "Synthetic census board ready",
+      ) &&
+      (id !== "dashboard" || window.openclawControlUi?.snapshot().sessionKey === sessionKey)
+    );
+  }
+  if (id === "custodian") {
+    return (
+      present("openclaw-custodian-page textarea:not(:disabled)") &&
+      text("openclaw-custodian-page .custodian__messages", "Synthetic census caretaker ready.") &&
+      !present("openclaw-custodian-page .custodian__thinking")
+    );
+  }
+  if (id === "meetings") {
+    return (
+      text("openclaw-meetings-page", "Synthetic census summary ready") &&
+      present('openclaw-meetings-page [role="tab"][aria-selected="true"]') &&
+      !present("openclaw-meetings-page .meetings-loading")
+    );
+  }
+  if (id === "memory-import") {
+    return (
+      text('[data-provider-id="codex"]', "MEMORY.md") &&
+      !present(".memory-import__loading") &&
+      present('[data-test-id="memory-import-page"] button[aria-label="Refresh"]:not(:disabled)')
+    );
+  }
+  if (id === "debug") {
+    return (
+      text(".command-lane-row__name", "census-main") &&
+      text("pre.code-block", "census-healthy") &&
+      [...document.querySelectorAll<HTMLButtonElement>("button")].some(
+        (node) => node.textContent?.trim() === "Refresh" && !node.disabled,
+      )
+    );
+  }
+  if (id === "logs") {
+    return text(".log-message", "Synthetic census log ready");
+  }
+  if (id === "skill-workshop") {
+    return (
+      text(".sw-row__name", "census-review") &&
+      text(".sw-markdown", "Synthetic census skill ready.")
+    );
+  }
+  if (id === "skills") {
+    return (
+      present(
+        '.skill-discovery .plugin-catalog-grid[aria-busy="false"] [data-skill-id="remote:@fixture/census"] button',
+      ) &&
+      text(".skill-discovery", "Census fixture skill") &&
+      (gateway?.findRequests("skills.search").length ?? 0) > 0
+    );
+  }
+  return (
+    text(".logbook-card__title", "Synthetic census logbook ready") &&
+    present(".logbook-card__header") &&
+    !present('.logbook [role="alert"]')
+  );
+}
+
+function routeTarget(id: ProbeRoute, sessionKey: string): RouteTarget {
+  if (id === "settings-native-root") {
+    return {
+      route: "settings",
+      pathname: "/settings",
+      search: "",
+      selector: '.settings-embed-list a[href="/settings/appearance"]',
+    };
+  }
   if (isDockScenario(id)) {
     return dockTarget(id);
   }
   if (isAppsPilotId(id)) {
     return appsPilotTarget();
   }
+  if (id === "apps") {
+    return appsPilotTarget();
+  }
+  if (isCensusRoute(id)) {
+    return censusTarget(id);
+  }
   const route =
-    id === "sharing" || id === "settings" || id === "portal-embedded"
-      ? "chat"
-      : id === "config"
-        ? "appearance"
-        : id;
+    id === "roster"
+      ? "new-session"
+      : id === "sharing" || id === "settings" || id === "portal-embedded"
+        ? "chat"
+        : id === "config"
+          ? "appearance"
+          : id;
   const selectors: Partial<Record<ProbeRoute, string>> = {
+    roster: 'openclaw-sidebar-agent-roster a[data-agent-id="main"]',
+    templates:
+      "[data-templates-featured] [data-templates-entry] button.agents-home__template-card-link:not(:disabled)",
+    worktrees:
+      'openclaw-worktrees-page button[aria-label="Delete: synthetic-route-worktree"]:not(:disabled)',
     systems: ".systems-desktop .desktop-surface canvas",
     portals: "openclaw-portals-page .portals-preview__frame",
     "portal-embedded": "openclaw-portals-page[embedded] .portals-preview__frame",
@@ -211,11 +763,10 @@ function routeTarget(
     notifications: "openclaw-config-page .settings-section .settings-row__control .settings-status",
     secrets:
       "openclaw-secrets-page .secrets-store__table tbody tr, openclaw-secrets-page .secrets-store__empty, openclaw-secrets-page .settings-section .settings-empty",
-    approvals:
-      "openclaw-approvals-page .approval-history-table[aria-busy=false] .data-table-empty-state",
+    approvals: "openclaw-approvals-page .settings-empty",
     search: 'openclaw-search-page select[aria-label="Search provider"]:not(:disabled)',
     labs: "openclaw-labs-page .settings-section input[role=switch]:not(:disabled)",
-    about: "openclaw-about-page .about-hero__links a",
+    about: "openclaw-about-page nav a.about-link",
     memory: ".memory-page__panel :is(a.memory-page__link,button:not(:disabled))",
     devices:
       "openclaw-devices-page .device-entry, openclaw-devices-page .settings-section .settings-empty",
@@ -230,6 +781,7 @@ function routeTarget(
     // can remain disabled in an otherwise usable read-only fixture.
     agents: "openclaw-agents-page .agents-refresh-btn:not(:disabled)",
     usage: "openclaw-usage-page .usage-date-input",
+    activity: activityMedia === "gallery" ? activityMediaTrigger : ".activity-feed__session",
     workboard: ".workboard button:not(:disabled)",
     plugins:
       "openclaw-plugins-page .plugin-catalog-card:not(.plugin-catalog-card--skeleton), openclaw-plugins-page .plugin-catalog-results__body openclaw-panel-empty-state",
@@ -247,12 +799,21 @@ function routeTarget(
     pathname:
       id === "desktop-document"
         ? `/focus/desktop/session/${encodeURIComponent(sessionKey)}`
-        : id === "sharing" || id === "portal-embedded"
-          ? controlUiSessionPath(sessionKey)
-          : id === "agents"
-            ? pathForAgentPanel("main")
-            : pathForRoute(id),
-    search: id === "model-setup" ? "?firstRun=explicit" : "",
+        : id === "roster"
+          ? pathForRoute("new-session")
+          : id === "sharing" || id === "portal-embedded"
+            ? controlUiSessionPath(sessionKey)
+            : id === "agents"
+              ? pathForAgentPanel("main")
+              : pathForRoute(id),
+    search:
+      id === "model-setup"
+        ? "?firstRun=explicit"
+        : id === "activity" && activityMedia
+          ? "?time=all"
+          : "",
+    ...(id === "templates" ? { requiredMethods: ["templates.catalog.search"] } : {}),
+    ...(id === "worktrees" ? { requiredMethods: ["worktrees.list"] } : {}),
     ...(id === "desktop-document"
       ? { requiredMethods: ["sessions.describe", "environments.status", "desktop.observe"] }
       : id === "systems"
@@ -279,7 +840,7 @@ function fixtureFor(
   build: { buildId: string; version: string },
   id: ProbeRoute,
   baseUrl: string,
-): ControlUiMockGatewayScenario {
+): NativeControlUiMockGatewayScenario {
   if (isDockScenario(id)) {
     return dockFixture(build, id);
   }
@@ -289,13 +850,55 @@ function fixtureFor(
     }
     return appsPilotFixture(fixtureFor(build, "apps", baseUrl), appsSandbox.descriptor);
   }
-  const fixture = createInteractionFixture(build.buildId, build.version);
+  if (isCensusRoute(id)) {
+    return censusFixture(id, fixtureFor(build, "new-session", baseUrl));
+  }
+  const baseFixture = createInteractionFixture(build.buildId, build.version);
+  const fixture =
+    id === "activity" && activityMedia
+      ? activityMediaFixture(baseFixture, activityMedia)
+      : baseFixture;
   const workboard = id === "workboard" ? parityWorkboardScenario : {};
+  const creationFixture = id === "templates" || id === "roster";
+  const templatesConfig = {
+    ...fixture.methodResponses["config.get"].config,
+    gateway: { controlUi: { experimental: { templates: true } } },
+  };
+  const clawEntry = {
+    packageName: "@synthetic/route-claw",
+    displayName: "Synthetic route Template",
+    summary: "Synthetic catalog entry for route proof.",
+    latestVersion: "1.0.0",
+    channel: "community" as const,
+    official: false,
+    ownerHandle: "synthetic",
+    downloads: 1,
+    installs: 1,
+    featuredAt: 1_800_000_000_000,
+    updatedAtMs: 1_800_000_000_000,
+  };
   return {
     ...fixture,
     ...workboard,
+    ...(id === "settings-native-root"
+      ? { automaticallyFetchFavicons: false, operatorScopes: ["operator.admin", "operator.read"] }
+      : {}),
     serverBuildId: build.buildId,
     serverVersion: build.version,
+    ...((id === "chat" || id === "new-session") &&
+    interactionIds.includes("model-search-and-compose")
+      ? {
+          models: [
+            ...fixture.models,
+            {
+              id: "synthetic-model",
+              name: "Synthetic Model",
+              provider: "example",
+              contextWindow: 128000,
+            },
+          ],
+        }
+      : {}),
     ...(id === "systems" || id === "desktop-document"
       ? { deferredMethods: ["desktop.observe"] }
       : {}),
@@ -336,11 +939,54 @@ function fixtureFor(
         ...(id === "search" ? ["webSearch.status"] : []),
         ...(id === "model-setup" ? ["openclaw.setup.detect"] : []),
         ...(id === "cron" && interactionIds.length ? ["cron.history"] : []),
+        ...(creationFixture
+          ? ["templates.catalog.search", "templates.drafts.create", "chat.send"]
+          : []),
+        ...(id === "worktrees" ? ["worktrees.list", "worktrees.branches", "worktrees.create"] : []),
+        ...(id === "activity" && activityMedia ? activityMediaMethods : []),
       ]),
     ],
     methodResponses: {
       ...fixture.methodResponses,
       "config.schema": parityBaseScenario.methodResponses?.["config.schema"],
+      ...(id === "worktrees"
+        ? {
+            "worktrees.list": {
+              worktrees: [
+                {
+                  id: "route-proof-worktree",
+                  name: "synthetic-route-worktree",
+                  repoFingerprint: "0123456789abcdef",
+                  repoRoot: "/synthetic/repository",
+                  path: "/synthetic/repository/.worktrees/synthetic-route-worktree",
+                  branch: "worktrees/synthetic-route-worktree",
+                  baseRef: "main",
+                  ownerKind: "manual",
+                  createdAt: 1_800_000_000_000,
+                  lastActiveAt: 1_800_000_000_000,
+                },
+              ],
+            },
+          }
+        : {}),
+      ...(creationFixture
+        ? {
+            "config.get": {
+              ...fixture.methodResponses["config.get"],
+              config: templatesConfig,
+              sourceConfig: templatesConfig,
+              raw: JSON.stringify(templatesConfig),
+            },
+            "templates.catalog.search": {
+              cases: [
+                { match: { featured: true }, response: { entries: [clawEntry] } },
+                { match: { category: "productivity" }, response: { entries: [clawEntry] } },
+                { match: { query: "synthetic" }, response: { entries: [clawEntry] } },
+                { response: { entries: [] } },
+              ],
+            },
+          }
+        : {}),
       ...(id === "portals" || id === "portal-embedded"
         ? {
             "portal.list": {
@@ -546,7 +1192,14 @@ async function readBuild(directory: string) {
     build,
     indexSha256: createHash("sha256").update(html).digest("hex"),
     nextPreloads: Object.fromEntries(
-      ["agents-next", "cron-next"].map((key) => [key, navigationPreloads[key] ?? []]),
+      [
+        "agents-next",
+        "cron-next",
+        "activity-next",
+        "templates-next",
+        "model-picker",
+        "roster-next",
+      ].map((key) => [key, navigationPreloads[key] ?? []]),
     ),
   };
 }
@@ -635,16 +1288,19 @@ async function save() {
     JSON.stringify(
       {
         workload:
-          "cold direct navigation; real production HTTP assets, synthetic in-document WebSocket Gateway; portal-embedded includes Chat navigation and native Portal panel activation; Agents/Cron interactions use a minimum2,000ms think time, Apps immediate has no intentional wait and Apps idle has a minimum2,000ms wait without manual preloading",
+          "cold direct navigation; real production HTTP assets, synthetic in-document WebSocket Gateway; portal-embedded includes Chat navigation and native Portal panel activation; Agents/Cron/Creation interactions use a minimum2,000ms think time, immediate New Session typing uses native key events before artifact work without hover/think time, preload-idle observes native warming without intent, Apps immediate has no intentional wait and Apps idle has a minimum2,000ms wait without manual preloading; Activity warmed/idle cells use the fixed minimum2000ms wait, and Activity immediate has no intentional delay",
         instrumentation:
-          "Timing uses renderer-main-frame threadTicks without coverage. Optional interaction wallMs/CPU are automation-to-ready intervals after cold capture, not INP; evaluatedScriptUrls uses positive top-level V8 ranges. Parsed scripts without execution are reported separately. Import references are regex-extracted chunk references, not a complete source import graph. V8 coverage also belongs to the page target; workerUrls records any dedicated-worker coverage/network-emulation gap. Coverage is a separate pass bounded by usable route readiness and includes requested preloads absent from V8 as unexecuted. requestedRawBytes counts the full source of requested files; loadedBytes includes only completed/evaluated files. pendingJsRequests identifies incomplete transfer accounting, and jsResources contains completed Resource Timing entries. Remote emulates 100ms HTTP latency and 10Mbps; synthetic WS has no simulated RTT. Workboard plugin fixture is built from the current checkout and held identical across bundle variants; its bytes are reported separately from UI-bundle code. Ready requires route success and a visible enabled page control, then one animation frame. Security navigation additionally requires the checked/enabled Browser control and all four enabled tool profiles, with no fixture override selected; config/schema receipt counts must stay unchanged. Security before/after observations have their own timestamps, and no hover/focus/import or artificial preload precedes its native click. Its readinessToActionMs records observation overhead; coverage and screenshots are written after its action. Sharing includes opening the menu after the chat becomes usable. Apps first-open cells trigger before cold summarization/screenshot/file work; immediate has no intentional delay, idle has a native minimum2000ms from cold readiness without manual warming. Each cell starts a fresh context, with base eager imports observed naturally. Phase network data retains raw CDP MonotonicTime timestamps and the actual NavigationStart metric; RPC method counts use direct same-document performance.now. Native counter/Close assertions happen after first-open CPU cutoff. Cold-plus-first-open elapsed includes the idle interval and automation gap and does not waive any individual regression. Page-target V8/CPU excludes inner App and worker execution; frame URLs retain that scope gap. Matching Agents/Cron interactions give every variant the same minimum 2,000 ms post-ready think time, recording warmup CPU/wall time even when no passive preload files exist. Passive preload completion may extend that window. Cold-only and sharing runs have no think-time delay.",
+          "Timing uses renderer-main-frame threadTicks without coverage. Optional interaction wallMs/CPU are automation-to-ready intervals after cold capture, not INP; evaluatedScriptUrls uses positive top-level V8 ranges. Parsed scripts without execution are reported separately. Import references are regex-extracted chunk references, not a complete source import graph. V8 coverage also belongs to the page target; workerUrls records any dedicated-worker coverage/network-emulation gap. Coverage is a separate pass bounded by usable route readiness and includes requested preloads absent from V8 as unexecuted. requestedRawBytes counts the full source of requested files; loadedBytes includes only completed/evaluated files. pendingJsRequests identifies incomplete transfer accounting, and jsResources contains completed Resource Timing entries. Remote emulates 100ms HTTP latency and 10Mbps; synthetic WS has no simulated RTT. Workboard plugin fixture is built from the current checkout and held identical across bundle variants; its bytes are reported separately from UI-bundle code. Ready requires route success and a visible enabled page control, then one animation frame. Security navigation additionally requires the checked/enabled Browser control and all four enabled tool profiles, with no fixture override selected; config/schema receipt counts must stay unchanged. Security before/after observations have their own timestamps, and no hover/focus/import or artificial preload precedes its native click. Its readinessToActionMs records observation overhead; coverage and screenshots are written after its action. Sharing includes opening the menu after the chat becomes usable. Apps first-open cells trigger before cold summarization/screenshot/file work; immediate has no intentional delay, idle has a native minimum2000ms from cold readiness without manual warming. Each cell starts a fresh context, with base eager imports observed naturally. Phase network data retains raw CDP MonotonicTime timestamps and the actual NavigationStart metric; RPC method counts use direct same-document performance.now. Native counter/Close assertions happen after first-open CPU cutoff. Cold-plus-first-open elapsed includes the idle interval and automation gap and does not waive any individual regression. Page-target V8/CPU excludes inner App and worker execution; frame URLs retain that scope gap. Matching Agents/Cron/Creation/warmed Activity interactions give every variant the same minimum 2,000 ms idle interval before expected-preload verification. interactionWarmup CPU/wall and Activity network stop before verification polling; preloadVerification records additional wall/CPU and Activity network through confirmed completion. Total warm cost includes both intervals. Completion verification can extend readiness-to-action time. Immediate New Session typing focuses the textarea and uses native pressSequentially before any cold artifact/screenshot work; its cutoff is the next animation frame and it records pending action requests without waiting for speculative imports. preload-idle has no synthetic intent and observes a minimum2000ms native idle window. Cold-only and sharing runs have no think-time delay. Activity media cold cells retain raw request/finish/failure timestamps, reconstruct network state at actual NavigationStart plus same-document readiness, and require matched Resource Timing start/end residuals within5ms before totals. Activity RPC counts are snapshots after readiness, not a cutoff-filtered timeline. Immediate Activity opens before artifact analysis/screenshots and records readiness-to-action overhead; warmed Activity verifies preload completion and non-evaluation before the native click.",
         acceptance:
           "A measured real-scenario win of at least 5%; no median readiness regression over 5% or worse p95 unless an A/A control attributes the movement to host noise. On a noisy host, run 20 interleaved pairs and judge affected threadTicks CPU plus structural byte/request counts. Coverage-instrumented timings are diagnostic only.",
         buildVariants: variants,
         routes,
         interactions: interactionIds,
+        activityMedia: activityMedia ?? null,
         profiles,
         pairs,
+        viewport: values.viewport,
+        cpuThrottle,
         summaries,
         results,
       },
@@ -684,7 +1340,7 @@ async function summarizeCoverage(
   coverage: CoverageEntry[],
   requests: AssetRequest[],
   root: string,
-  assets: Awaited<ReturnType<typeof prepareControlUiMockGatewayScenario>>["assets"],
+  assets: Awaited<ReturnType<typeof prepareNativePluginMockGatewayScenario>>["assets"],
 ) {
   const scripts = await Promise.all(
     requests.map(async (request) => {
@@ -736,6 +1392,87 @@ async function summarizeCoverage(
     executedBytes: scripts.reduce((sum, item) => sum + item.executedBytes, 0),
     unusedBytes: loaded.reduce((sum, item) => sum + item.unusedBytes, 0),
   };
+}
+
+async function runCreationAction(
+  page: Page,
+  id: string,
+  route: ProbeRoute,
+  before: { created: number; sent: number; search: number },
+): Promise<{ request?: MockGatewayRequest; sent?: MockGatewayRequest }> {
+  const receipt = async (
+    receiptMethod: string,
+    seenCount: number,
+    receiptMatch: Record<string, unknown> = {},
+  ) => {
+    await page.waitForFunction(
+      ({ method, match, after }) =>
+        (window as MockGatewayWindow).openclawControlUiE2eGateway!.findRequests(method, match)
+          .length > after,
+      { method: receiptMethod, match: receiptMatch, after: seenCount },
+    );
+    return page.evaluate(
+      ({ method, match }) =>
+        (window as MockGatewayWindow)
+          .openclawControlUiE2eGateway!.findRequests(method, match)
+          .at(-1)!,
+      { method: receiptMethod, match: receiptMatch },
+    );
+  };
+  if (id === "worktree-create") {
+    await page.getByRole("button", { name: "New worktree", exact: true }).click();
+    await page
+      .getByRole("textbox", { name: "Repository", exact: true })
+      .fill(" /synthetic/repository ");
+    await page.getByRole("textbox", { name: "Name", exact: true }).fill(" native-created ");
+    await page.getByLabel("Base branch", { exact: true }).fill(" main ");
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    const request = await receipt("worktrees.create", before.created);
+    await page.getByRole("button", { name: "Delete: native-created", exact: true }).waitFor();
+    return { request };
+  }
+  if (id === "templates-search") {
+    await page.locator("input[data-templates-search]").fill("synthetic");
+    const request = await receipt("templates.catalog.search", before.search, {
+      query: "synthetic",
+    });
+    await page
+      .locator("[data-templates-results] [data-templates-entry] h3")
+      .filter({ hasText: /^Synthetic route Template$/u })
+      .first()
+      .waitFor();
+    return { request };
+  }
+  if (id === "roster-create-template") {
+    await page
+      .locator('openclaw-sidebar-agent-roster a[data-agent-id="main"]')
+      .click({ button: "right" });
+    await page.locator('[role="menuitem"][data-value="create-template"]').click();
+    const request = await receipt("templates.drafts.create", before.created);
+    const sent = await receipt("chat.send", before.sent);
+    await page.waitForFunction(
+      () => window.openclawControlUi?.snapshot().route?.matches[0]?.routeId === "chat",
+    );
+    await page.locator(".chat-pane-cache__pane--active textarea").first().waitFor();
+    return { request, sent };
+  }
+  assert.equal(id, "model-search-and-compose");
+  const composer = page.locator(
+    route === "chat" ? ".chat-pane-cache__pane--active" : ".new-session-page",
+  );
+  await composer.locator("textarea").first().fill("Synthetic unsent draft");
+  await composer.locator('[data-chat-model-select][aria-disabled="false"]').first().click();
+  const search = composer.locator("[data-chat-model-search]");
+  await search.waitFor({ state: "visible" });
+  await search.fill("Synthetic Model");
+  await composer
+    .locator('[data-chat-model-option="example/synthetic-model"]:not(:disabled)')
+    .waitFor();
+  await search.press("Escape");
+  assert.equal(await search.inputValue(), "");
+  await search.press("Escape");
+  await search.waitFor({ state: "hidden" });
+  return {};
 }
 
 async function runSecurityNavigation(
@@ -928,12 +1665,19 @@ try {
               `[route-leaks] ${mode}/${profile.id}/${route}/${variant.id}/${pair}: preparing fresh context`,
             );
             await server.selectBuild(variant.root);
-            const context = await browser.newContext({
-              viewport: { width: 1440, height: 1000 },
+            const context: BrowserContext = await browser.newContext({
+              viewport:
+                values.viewport === "mobile"
+                  ? { width: 390, height: 844 }
+                  : { width: 1440, height: 1000 },
+              ...(values.viewport === "mobile" ? { hasTouch: true, isMobile: true } : {}),
+              ...(route === "settings-native-root"
+                ? { viewport: { width: 390, height: 844 }, hasTouch: true, locale: "en-US" }
+                : {}),
               ...(isDockScenario(route) ? dockContextOptions(route) : {}),
               serviceWorkers: "block",
             });
-            const page = await context.newPage();
+            const page: Page = await context.newPage();
             const prefix = `${mode}-${profile.id}-${route}-${variant.id}-${pair}`;
             const errors: string[] = [];
             const hostLoad = loadavg();
@@ -945,15 +1689,24 @@ try {
               variant: variant.id,
               pair,
               hostLoad,
+              viewport: values.viewport,
+              contextViewport: page.viewportSize(),
+              cpuRate: cpuThrottle,
             };
             let pendingColdCoverage: CoverageEntry[] | undefined;
             let abortAfterContext = false;
+            let preloadExpectation: { key: string; urls: string[] } | undefined;
+            const requests = new Map<string, AssetRequest>();
             try {
               console.info(`[route-leaks] ${prefix}: preparing synthetic fixture`);
-              const prepared = await prepareControlUiMockGatewayScenario(
-                fixtureFor(variant.build, route, server.baseUrl),
+              const routeFixture = fixtureFor(variant.build, route, server.baseUrl);
+              const prepared = await prepareNativePluginMockGatewayScenario(
+                route === "apps"
+                  ? appsPilotFixture(routeFixture, appsSandbox!.descriptor)
+                  : routeFixture,
               );
               const fixture = prepared.scenario;
+              server.setTerminalEnabled(fixture.terminalEnabled ?? false);
               const bootstrapPayload = JSON.stringify(createControlUiMockBootstrapConfig(fixture));
               server.setFixtureReader((pathname) =>
                 pathname === CONTROL_UI_BOOTSTRAP_CONFIG_PATH
@@ -974,14 +1727,41 @@ try {
                   "No verified page-content readiness selector; not counted as a successful route measurement";
                 throw new Error(String(result.gap));
               }
+              if (route === "roster") {
+                const gatewayUrl = new URL(server.baseUrl);
+                gatewayUrl.protocol = gatewayUrl.protocol === "https:" ? "wss:" : "ws:";
+                gatewayUrl.pathname = fixture.basePath || "/";
+                const gatewayScope = `${gatewayUrl.protocol}//${gatewayUrl.host}${gatewayUrl.pathname.replace(/\/+$/u, "")}`;
+                await page.addInitScript(
+                  ({ scope }) => {
+                    localStorage.setItem(
+                      `openclaw.control.settings.v1:${scope}`,
+                      JSON.stringify({
+                        gatewayUrl: scope,
+                        sidebarAgentsMode: "roster",
+                      }),
+                    );
+                  },
+                  { scope: gatewayScope },
+                );
+              }
               await page.addInitScript("globalThis.__name = (fn) => fn");
+              if (route === "settings-native-root") {
+                await page.addInitScript(() => {
+                  Object.assign(window, {
+                    __OPENCLAW_NATIVE_EMBED__: { platform: "ios", formFactor: "phone" },
+                  });
+                });
+              }
               if (isDockScenario(route)) {
                 await page.addInitScript(installDockInputTrace);
               }
               const gatewayInit = createControlUiMockGatewayInitScript(fixture);
               await page.addInitScript({
                 content:
-                  isAppsPilotId(route) || (appsProbesEnabled && route === "memory")
+                  isAppsPilotId(route) ||
+                  route === "apps" ||
+                  (appsProbesEnabled && route === "memory")
                     ? appsGatewayInitScript(gatewayInit)
                     : gatewayInit,
               });
@@ -1018,7 +1798,9 @@ try {
                 uploadThroughput: profile.uploadThroughput,
               });
               await cdp.send("Performance.enable", { timeDomain: "threadTicks" });
-              const requests = new Map<string, AssetRequest>();
+              if (cpuThrottle !== 1) {
+                await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
+              }
               cdp.on("Network.requestWillBeSent", (event) =>
                 requests.set(event.requestId, {
                   requestId: event.requestId,
@@ -1108,7 +1890,7 @@ try {
                   .waitFor();
                 await page.locator(".chat-pane__sharing-trigger").click();
               }
-              if (isAppsPilotId(route)) {
+              if (isAppsPilotId(route) || route === "apps") {
                 await waitForAppsCatalog(page);
               }
               if (route === "portal-embedded") {
@@ -1138,22 +1920,54 @@ try {
                   .click();
               }
               await page.waitForFunction(
-                ({ routeId, probeRoute, selector, requiredMethods }) => {
+                ({ routeId, probeRoute, selector, requiredMethods, creationModelProbe }) => {
                   const snapshot = window.openclawControlUi?.snapshot();
                   const approvalsSettled =
                     routeId !== "approvals" ||
                     (document
-                      .querySelector(
-                        ".approval-history-table[aria-busy=false] .data-table-empty-state",
-                      )
-                      ?.textContent?.trim() ===
-                      "No resolved approvals in the rolling 30-day window." &&
-                      document
-                        .querySelector(".standing-grants-table .data-table-empty-state")
-                        ?.textContent?.trim() ===
-                        "No standing grants. Answer an automation approval with Always allow to mint one.");
+                      .getElementById("approval-history-title")
+                      ?.closest(".settings-section")
+                      ?.querySelector(".settings-empty")
+                      ?.textContent?.trim() === "No resolved approvals in the last 30 days." &&
+                      document.querySelector(".standing-grants-empty")?.textContent?.trim() ===
+                        "No standing grants yet. Choose Always allow on an automation approval to create one.");
                   // SAFETY: Every measured page receives this fixture before navigation.
                   const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+                  const enabled = (candidateSelector: string) =>
+                    [...document.querySelectorAll<HTMLElement>(candidateSelector)].some(
+                      (node) =>
+                        node.getClientRects().length &&
+                        getComputedStyle(node).visibility !== "hidden" &&
+                        !node.matches(":disabled,[aria-disabled=true],[aria-busy=true]"),
+                    );
+                  const clawsSettled =
+                    routeId !== "templates" ||
+                    (enabled("input[data-templates-search]") &&
+                      document.querySelector("[data-templates-featured] [data-templates-entry] h3")
+                        ?.textContent === "Synthetic route Template" &&
+                      document.querySelector(
+                        '[data-templates-category="productivity"] [data-templates-entry] h3',
+                      )?.textContent === "Synthetic route Template" &&
+                      (gateway?.findRequests("templates.catalog.search", {
+                        limit: 8,
+                        featured: true,
+                      }).length ?? 0) > 0 &&
+                      (gateway?.findRequests("templates.catalog.search", {
+                        limit: 8,
+                        category: "productivity",
+                      }).length ?? 0) > 0);
+                  const worktreesSettled =
+                    routeId !== "worktrees" ||
+                    (document.querySelector("openclaw-worktrees-page .settings-row__title")
+                      ?.textContent === "synthetic-route-worktree" &&
+                      (gateway?.findRequests("worktrees.list", {}).length ?? 0) > 0);
+                  const composerSettled =
+                    (!creationModelProbe && probeRoute !== "roster") ||
+                    (enabled(
+                      '.chat-controls__model-trigger[aria-disabled="false"][aria-busy="false"]',
+                    ) &&
+                      (probeRoute !== "roster" ||
+                        enabled('openclaw-sidebar-agent-roster a[data-agent-id="main"]')));
                   const desktopSettled =
                     (routeId !== "systems" && routeId !== "desktop-document") ||
                     (() => {
@@ -1184,6 +1998,29 @@ try {
                         frame.contentDocument.querySelector("button:not(:disabled)") !== null
                       );
                     })();
+                  const nativeSettingsSettled =
+                    probeRoute !== "settings-native-root" ||
+                    (() => {
+                      const rows = [...document.querySelectorAll(".settings-embed-list a")];
+                      return (
+                        document.querySelector("html.openclaw-native-embed .shell--embed") !==
+                          null &&
+                        document.querySelector(
+                          ".native-embed-header openclaw-settings-save-indicator",
+                        ) !== null &&
+                        rows.length > 0 &&
+                        rows.every(
+                          (row) =>
+                            row.getClientRects().length > 0 &&
+                            getComputedStyle(row).visibility !== "hidden" &&
+                            row.getBoundingClientRect().height >= 44,
+                        ) &&
+                        document.querySelector(
+                          ".shell-nav, openclaw-app-topbar, .shell-chrome-controls, openclaw-macos-titlebar-controls",
+                        ) === null &&
+                        document.documentElement.scrollWidth <= innerWidth
+                      );
+                    })();
                   const portalRailSettled =
                     probeRoute !== "portal-embedded" ||
                     (() => {
@@ -1197,9 +2034,13 @@ try {
                       return style.display === "grid" && style.gap === "3px";
                     })();
                   return (
+                    clawsSettled &&
+                    worktreesSettled &&
+                    composerSettled &&
                     desktopSettled &&
                     portalSettled &&
                     portalRailSettled &&
+                    nativeSettingsSettled &&
                     approvalsSettled &&
                     (routeId === "desktop-document" ||
                       (snapshot?.routeReady &&
@@ -1221,10 +2062,23 @@ try {
                   routeId: target.route,
                   probeRoute: route,
                   selector: target.selector,
+                  creationModelProbe:
+                    interactionIds.includes("model-search-and-compose") &&
+                    (route === "chat" || route === "new-session"),
                   requiredMethods: target.requiredMethods ?? [],
                 },
                 { timeout: 30_000, polling: "raf" },
               );
+              if (isCensusRoute(route)) {
+                await page.waitForFunction(
+                  censusReady,
+                  { id: route, sessionKey: fixture.sessionKey! },
+                  { timeout: 30_000, polling: "raf" },
+                );
+              }
+              if (route === "activity" && activityMedia) {
+                await waitForActivityMedia(page, activityMedia);
+              }
               const readyMs = await page.evaluate(
                 () =>
                   new Promise<number>((resolve) => {
@@ -1232,16 +2086,42 @@ try {
                   }),
               );
               // Freeze observed transfer state before stopping coverage or reading artifacts.
-              const requestsAtReady = Array.from(requests.values(), (request) =>
+              const observedRequestsAtReady = Array.from(requests.values(), (request) =>
                 Object.assign({}, request),
               );
               const coverageAtReady =
                 mode === "coverage" ? await page.coverage.stopJSCoverage() : undefined;
               pendingColdCoverage = coverageAtReady;
+              const after = await metrics(cdp);
+              const observedAfterReady = Array.from(requests.values(), (request) =>
+                Object.assign({}, request),
+              );
+              const coldCutoff = after.NavigationStart! + readyMs / 1_000;
+              const requestsAtReady = observedAfterReady
+                .filter((request) => request.timestampSeconds! <= coldCutoff)
+                .map((request) => {
+                  const item = Object.assign({}, request);
+                  if ((item.finishedTimestampSeconds ?? Infinity) > coldCutoff) {
+                    delete item.finishedTimestampSeconds;
+                    delete item.wireBytes;
+                  }
+                  if ((item.failedTimestampSeconds ?? Infinity) > coldCutoff) {
+                    delete item.failedTimestampSeconds;
+                    delete item.failed;
+                  }
+                  return item;
+                });
+              result.observedRequestsAtReady = observedRequestsAtReady;
+              result.observedRequestsAfterReady = observedAfterReady;
+              result.phaseClockEvidence = {
+                navigationStart: after.NavigationStart,
+                coldMetricTimestamp: after.Timestamp,
+                sameDocumentCutoffMs: readyMs,
+                rawCutoffSeconds: coldCutoff,
+              };
               result.jsRequestsColdCapture = requestsAtReady.filter((request) =>
                 /\.m?js$/u.test(new URL(request.url).pathname),
               );
-              const after = await metrics(cdp);
               result.readyMs = readyMs;
               result.workerUrls = page.workers().map((worker) => worker.url());
               if (coverageAtReady) {
@@ -1250,6 +2130,64 @@ try {
               result.cpu = cpuDelta(before, after);
               result.target = target;
               result.errors = errors;
+              if (immediateTyping) {
+                const cell: InteractionResult = { id: "new-session-typing-immediate" };
+                result.interactions = [cell];
+                const prior = new Map(
+                  Array.from(requests, ([key, request]) => [key, Object.assign({}, request)]),
+                );
+                if (mode === "coverage") {
+                  await page.coverage.startJSCoverage({
+                    resetOnNavigation: false,
+                    reportAnonymousScripts: false,
+                  });
+                }
+                const cpuBefore = await metrics(cdp);
+                const started = await page.evaluate(() => performance.now());
+                const textarea = page.locator(".new-session-page textarea").first();
+                await textarea.focus();
+                await textarea.pressSequentially("Synthetic unsent draft");
+                const ended = await page.evaluate(
+                  () =>
+                    new Promise<number>((resolve) => {
+                      requestAnimationFrame(() => resolve(performance.now()));
+                    }),
+                );
+                cell.cpu = cpuDelta(cpuBefore, await metrics(cdp));
+                cell.wallMs = ended - started;
+                cell.coldToActionGapMs = started - readyMs;
+                cell.intentionalThinkTimeMs = 0;
+                const atEnd = Array.from(requests.values(), (request) => ({ ...request }));
+                cell.newJsRequests = atEnd.filter(
+                  (request) =>
+                    !prior.has(request.requestId) && /\.m?js$/u.test(new URL(request.url).pathname),
+                );
+                cell.previousPendingCompleted = atEnd.filter(
+                  (request) =>
+                    prior.has(request.requestId) &&
+                    prior.get(request.requestId)!.wireBytes === undefined &&
+                    request.wireBytes !== undefined,
+                );
+                const typingCoverage =
+                  mode === "coverage" ? await page.coverage.stopJSCoverage() : undefined;
+                if (typingCoverage) {
+                  cell.evaluatedScriptUrls = evaluatedUrls(typingCoverage);
+                  await writeFile(
+                    path.join(output, `${prefix}-immediate-typing-v8.json`),
+                    JSON.stringify(typingCoverage),
+                  );
+                }
+                assert.equal(await textarea.inputValue(), "Synthetic unsent draft");
+                const writes = await page.evaluate(() => {
+                  const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+                  return ["templates.drafts.create", "sessions.create", "chat.send"].map(
+                    (method) => gateway.findRequests(method).length,
+                  );
+                });
+                assert.deepEqual(writes, [0, 0, 0]);
+                cell.draftRetained = true;
+                cell.noWrites = true;
+              }
               // First App opens happen before cold summaries, screenshots, or file writes.
               // Each route/variant already owns a fresh browser context: never visit Chat first.
               let appsFirstAction: InteractionResult | undefined;
@@ -1390,7 +2328,11 @@ try {
                   });
                 }
                 appsFirstAction.nativeBehavior = await verifyFirstAppAndClose(page, appSessionKey);
-              } else if (isAppsPilotId(route) || (appsProbesEnabled && route === "memory")) {
+              } else if (
+                isAppsPilotId(route) ||
+                route === "apps" ||
+                (appsProbesEnabled && route === "memory")
+              ) {
                 const probe = await appsProbeSnapshot(page, readyMs);
                 result.appsColdProbe = probe;
                 result.phaseClockEvidence = {
@@ -1416,25 +2358,69 @@ try {
                   throw new Error("Memory control unexpectedly admitted an Apps request");
                 }
               }
-              const routeInteractions = interactionIds.filter((value) =>
-                value.startsWith(
-                  route === "agents" ? "agents-" : route === "cron" ? "cron-" : "__none__",
-                ),
+              const routeInteractions = interactionIds.filter(
+                (value) =>
+                  creationInteractions[value]?.includes(route) ||
+                  (value !== "activity-lightbox-immediate" &&
+                    value.startsWith(
+                      route === "agents"
+                        ? "agents-"
+                        : route === "cron"
+                          ? "cron-"
+                          : route === "activity"
+                            ? "activity-"
+                            : "__none__",
+                    )),
               );
-              const warmFiles = routeInteractions.length
-                ? (variant.nextPreloads[`${route}-next`] ?? [])
-                : [];
-              const warmup = routeInteractions.length
-                ? { cpu: await metrics(cdp), started: await page.evaluate(() => performance.now()) }
-                : undefined;
+              const creationWarmup = routeInteractions.some((id) => id in creationInteractions);
+              const warmKey = preloadIdle
+                ? route === "roster"
+                  ? "roster-next"
+                  : undefined
+                : route === "chat" || route === "new-session"
+                  ? "model-picker"
+                  : `${route}-next`;
+              const warmFiles =
+                warmKey && (routeInteractions.length || preloadIdle)
+                  ? (variant.nextPreloads[warmKey] ?? [])
+                  : [];
+              if (creationWarmup && (route === "chat" || route === "new-session")) {
+                assert(warmFiles.length > 0, `Missing native preload descriptor: ${warmKey}`);
+              }
+              const warmup =
+                routeInteractions.length || preloadIdle
+                  ? {
+                      cpu: await metrics(cdp),
+                      started: await page.evaluate(() => performance.now()),
+                    }
+                  : undefined;
               if (warmup && mode === "coverage") {
                 await page.coverage.startJSCoverage({
                   resetOnNavigation: false,
                   reportAnonymousScripts: false,
                 });
               }
+              if (creationWarmup && warmKey === "model-picker") {
+                // Native hover listeners precede the descriptor fetch; include this wait in warmup.
+                await page.waitForFunction((baseUrl) => {
+                  const descriptor = document
+                    .getElementById("openclaw-navigation-preloads")
+                    ?.getAttribute("content");
+                  if (!descriptor) {
+                    return false;
+                  }
+                  return performance
+                    .getEntriesByName(new URL(descriptor, baseUrl).href)
+                    .some((entry) => (entry as PerformanceResourceTiming).responseEnd > 0);
+                }, server.baseUrl);
+                await page
+                  .locator('.chat-controls__model-trigger[aria-disabled="false"]')
+                  .first()
+                  .hover();
+              }
               const data = await page.evaluate(
                 (cutoffMs) => ({
+                  observedAtMs: performance.now(),
                   resources: performance
                     .getEntriesByType("resource")
                     .map((entry) => {
@@ -1445,6 +2431,7 @@ try {
                         rawBytes: resource.decodedBodySize,
                         encodedBytes: resource.encodedBodySize,
                         transferBytes: resource.transferSize,
+                        startTime: resource.startTime,
                         responseEnd: resource.responseEnd,
                       };
                     })
@@ -1475,6 +2462,104 @@ try {
                 }),
                 readyMs,
               );
+              result.rpcObservedAtMs = data.observedAtMs;
+              const clock = qualifyRouteNetworkClock(
+                requestsAtReady,
+                after.NavigationStart!,
+                data.resources.filter((resource) => resource.responseEnd > 0),
+              );
+              result.clockQualification = clock;
+              if (!clock.passed) {
+                result.routeClockFailure = true;
+                result.networkAndCoverageTotalsWithheld = true;
+                throw new Error("Route cold clock did not qualify; raw evidence retained");
+              }
+              result.networkAtReady = routeNetworkPhase(
+                requestsAtReady,
+                after.NavigationStart!,
+                0,
+                readyMs,
+              );
+              // Keep the first open ahead of artifact analysis and screenshots.
+              let activityImmediateCell: InteractionResult | undefined;
+              if (activityImmediate) {
+                const cell: InteractionResult = { id: "activity-lightbox-immediate" };
+                activityImmediateCell = cell;
+                result.interactions = [cell];
+                const prior = new Map(
+                  Array.from(requests, ([key, request]) => [key, Object.assign({}, request)]),
+                );
+                if (mode === "coverage") {
+                  await page.coverage.startJSCoverage({
+                    resetOnNavigation: false,
+                    reportAnonymousScripts: false,
+                  });
+                }
+                let stepCoverage: CoverageEntry[] | undefined;
+                let failure: { error: unknown } | undefined;
+                try {
+                  const cpuBefore = await metrics(cdp);
+                  const started = await page.evaluate(() => performance.now());
+                  await page.locator(activityMediaTrigger).first().click();
+                  await waitForActivityLightbox(page);
+                  const ended = await page.evaluate(
+                    () =>
+                      new Promise<number>((resolve) => {
+                        requestAnimationFrame(() => resolve(performance.now()));
+                      }),
+                  );
+                  const cpuAfter = await metrics(cdp);
+                  const atEnd = Array.from(requests.values(), (request) =>
+                    Object.assign({}, request),
+                  );
+                  cell.coldReadyMs = readyMs;
+                  cell.actionStartedMs = started;
+                  cell.readinessToActionMs = started - readyMs;
+                  cell.wallMs = ended - started;
+                  cell.cpu = cpuDelta(cpuBefore, cpuAfter);
+                  cell.newJsRequests = atEnd.filter(
+                    (request) =>
+                      !prior.has(request.requestId) &&
+                      /\.m?js$/u.test(new URL(request.url).pathname),
+                  );
+                  cell.previousPendingCompleted = atEnd.filter(
+                    (request) =>
+                      prior.has(request.requestId) &&
+                      prior.get(request.requestId)!.wireBytes === undefined &&
+                      request.wireBytes !== undefined,
+                  );
+                  if (mode === "coverage") {
+                    stepCoverage = await page.coverage.stopJSCoverage();
+                  }
+                  if (values.screenshots && pair === 0) {
+                    await page.screenshot({
+                      path: path.join(output, `${prefix}-activity-lightbox-immediate.png`),
+                    });
+                  }
+                  await closeActivityLightbox(page);
+                } catch (error) {
+                  failure = { error };
+                  cell.error = String(error);
+                } finally {
+                  if (mode === "coverage") {
+                    try {
+                      stepCoverage ??= await page.coverage.stopJSCoverage();
+                      cell.evaluatedScriptUrls = evaluatedUrls(stepCoverage);
+                      const suffix = failure ? "-failure" : "";
+                      await writeFile(
+                        path.join(output, `${prefix}-activity-lightbox-immediate${suffix}-v8.json`),
+                        JSON.stringify(stepCoverage),
+                      );
+                    } catch (error) {
+                      cell.coverageCaptureError = String(error);
+                      failure ??= { error };
+                    }
+                  }
+                }
+                if (failure) {
+                  throw failure.error;
+                }
+              }
               // Keep immediate navigation ahead of artifact analysis and screenshots.
               const securityCell = securityInteraction
                 ? await runSecurityNavigation(
@@ -1490,6 +2575,22 @@ try {
                 : undefined;
               result.rpc = data.rpc;
               result.alerts = data.alerts;
+              if (route === "templates" || route === "worktrees" || route === "roster") {
+                for (const method of [
+                  "templates.drafts.create",
+                  "templates.drafts.publish",
+                  "templates.add.apply",
+                  "worktrees.create",
+                  "sessions.create",
+                  "chat.send",
+                ]) {
+                  assert.equal(
+                    data.rpc?.[method] ?? 0,
+                    0,
+                    `Cold creation route admitted a write: ${method}`,
+                  );
+                }
+              }
               if (route === "portal-embedded") {
                 result.portalIdentity = data.portalIdentity;
               }
@@ -1539,7 +2640,22 @@ try {
                 throw new Error(`Unexpected visible alerts: ${unexpectedAlerts.join("; ")}`);
               }
               if (warmup) {
+                await page.evaluate(async (started) => {
+                  const remaining = started + 2_000 - performance.now();
+                  if (remaining > 0) {
+                    await new Promise<void>((resolve) => {
+                      setTimeout(resolve, remaining);
+                    });
+                  }
+                }, warmup.started);
+                const idleEnded = await page.evaluate(() => performance.now());
+                const idleCpu = await metrics(cdp);
+                const idleRequests = Array.from(requests.values(), (request) =>
+                  Object.assign({}, request),
+                );
+                // Keep descriptor-specific readiness polling outside the idle CPU sample.
                 const urls = warmFiles.map((file) => new URL(file, server.baseUrl).href);
+                preloadExpectation = { key: warmKey ?? "no-intent", urls };
                 if (urls.length) {
                   await page.waitForFunction(
                     (expectedUrls) =>
@@ -1551,15 +2667,8 @@ try {
                     urls,
                   );
                 }
-                await page.evaluate(async (started) => {
-                  const remaining = started + 2_000 - performance.now();
-                  if (remaining > 0) {
-                    await new Promise<void>((resolve) => {
-                      setTimeout(resolve, remaining);
-                    });
-                  }
-                }, warmup.started);
                 const warmEnded = await page.evaluate(() => performance.now());
+                const verifiedCpu = await metrics(cdp);
                 const warmCoverage =
                   mode === "coverage" ? await page.coverage.stopJSCoverage() : undefined;
                 const evaluated = warmCoverage ? evaluatedUrls(warmCoverage) : undefined;
@@ -1569,31 +2678,144 @@ try {
                         .concat(evaluated)
                         .includes(urls[0]!)
                     : undefined;
+                const observedNativeLinks: string[] =
+                  creationWarmup || preloadIdle
+                    ? await page.evaluate(() =>
+                        [
+                          ...document.querySelectorAll<HTMLLinkElement>(
+                            'link[rel="modulepreload"],link[rel="preload"][as="style"],link[rel="stylesheet"]',
+                          ),
+                        ].map((link) => link.href),
+                      )
+                    : [];
+                const nativeLinks = observedNativeLinks.filter((url) => urls.includes(url));
+                const appliedStyleUrls =
+                  route === "roster"
+                    ? await page.evaluate(() =>
+                        [...document.styleSheets]
+                          .filter((sheet) => !sheet.disabled)
+                          .flatMap((sheet) => (sheet.href ? [sheet.href] : [])),
+                      )
+                    : [];
                 result.interactionWarmup = {
                   files: warmFiles,
                   minimumThinkTimeMs: 2_000,
-                  postReadyWallMs: warmEnded - readyMs,
-                  wallMs: warmEnded - warmup.started,
-                  cpu: cpuDelta(warmup.cpu, await metrics(cdp)),
+                  postReadyWallMs: idleEnded - readyMs,
+                  wallMs: idleEnded - warmup.started,
+                  cpu: cpuDelta(warmup.cpu, idleCpu),
+                  preloadVerification: {
+                    wallMs: warmEnded - idleEnded,
+                    cpu: cpuDelta(idleCpu, verifiedCpu),
+                    ...(route === "activity"
+                      ? {
+                          network: routeNetworkPhase(
+                            Array.from(requests.values()),
+                            after.NavigationStart!,
+                            idleEnded,
+                            warmEnded,
+                          ),
+                        }
+                      : {}),
+                  },
                   evaluatedScriptUrls: evaluated,
                   panelEvaluatedBeforeAction: panelEvaluated,
+                  ...(creationWarmup || preloadIdle
+                    ? {
+                        id: warmFiles.length
+                          ? `native-next-prefetch-${warmKey}`
+                          : "post-ready-think-time",
+                        nativeLinks,
+                        observedNativeLinks,
+                        ...(route === "roster" ? { appliedStyleUrls } : {}),
+                        alreadyEvaluatedAtCold: urls.filter((url) =>
+                          evaluatedUrls(coverageAtReady ?? []).includes(url),
+                        ),
+                      }
+                    : {}),
+                  ...(route === "activity"
+                    ? {
+                        requestsAtEnd: idleRequests,
+                        network: routeNetworkPhase(
+                          idleRequests,
+                          after.NavigationStart!,
+                          readyMs,
+                          idleEnded,
+                        ),
+                      }
+                    : {}),
                 };
+                if (route === "roster") {
+                  const styleFiles = warmFiles.filter((file) => file.endsWith(".css"));
+                  assert(
+                    styleFiles
+                      .filter((file) => !file.startsWith("assets/plugins/"))
+                      .every((file) =>
+                        appliedStyleUrls.includes(new URL(file, server.baseUrl).href),
+                      ),
+                    "Roster host CSS was not applied before interaction",
+                  );
+                  assert(
+                    styleFiles
+                      .filter((file) => file.startsWith("assets/plugins/"))
+                      .every(
+                        (file) => !appliedStyleUrls.includes(new URL(file, server.baseUrl).href),
+                      ),
+                    "Roster prefetch applied plugin CSS before activation",
+                  );
+                }
+                if ((creationWarmup || preloadIdle) && urls.length) {
+                  const coldUrls = new Set(requestsAtReady.map((request) => request.url));
+                  assert(
+                    urls
+                      .filter((url) => !coldUrls.has(url))
+                      .every((url) => nativeLinks.includes(url)),
+                    "Next assets were not fetched by native preload links",
+                  );
+                  if (evaluated) {
+                    const coldEvaluated = new Set(evaluatedUrls(coverageAtReady ?? []));
+                    assert.deepEqual(
+                      evaluated.filter((url) => urls.includes(url) && !coldEvaluated.has(url)),
+                      [],
+                      "Native prefetch evaluated a previously unevaluated next module",
+                    );
+                  }
+                }
+                if (preloadIdle) {
+                  const coldRequests = new Set(requestsAtReady.map((request) => request.requestId));
+                  const newJsRequests = Array.from(requests.values(), (request) => ({ ...request }))
+                    .filter((request) => !coldRequests.has(request.requestId))
+                    .filter((request) => /\.m?js$/u.test(new URL(request.url).pathname));
+                  result.idleControl = { noPriorIntent: true, newJsRequests, observedNativeLinks };
+                  if (route === "new-session") {
+                    const chatChunk = /\/(?:control-ui-boot-chat|chat-route-entry)-/u;
+                    assert(newJsRequests.every((request) => !chatChunk.test(request.url)));
+                    assert((evaluated ?? []).every((url) => !chatChunk.test(url)));
+                  }
+                }
                 if (warmCoverage) {
                   await writeFile(
                     path.join(output, `${prefix}-warmup-v8.json`),
                     JSON.stringify(warmCoverage),
                   );
                 }
-                if (panelEvaluated) {
+                if (panelEvaluated && !creationWarmup && !preloadIdle) {
                   throw new Error(`Next panel evaluated before interaction: ${warmFiles[0]}`);
                 }
+                if (route === "roster" && mode === "coverage" && values.screenshots && pair === 0) {
+                  await page.screenshot({ path: path.join(output, `${prefix}-warm-idle.png`) });
+                }
               }
-              result.interactions = appsFirstAction
-                ? [appsFirstAction]
-                : securityCell
-                  ? [securityCell]
-                  : [];
+              result.interactions ??= activityImmediateCell
+                ? [activityImmediateCell]
+                : appsFirstAction
+                  ? [appsFirstAction]
+                  : securityCell
+                    ? [securityCell]
+                    : [];
               for (const id of routeInteractions) {
+                if (id === "activity-idle") {
+                  continue;
+                }
                 const cell: InteractionResult = { id };
                 try {
                   // Transcript probing starts with the Activity list already available.
@@ -1611,13 +2833,67 @@ try {
                       ? "#agents-tab-files"
                       : id === "cron-history"
                         ? '[data-test-id="cron-list-tab-activity"]'
-                        : ".cron-activity .cron-run-entry button";
+                        : id === "activity-lightbox"
+                          ? activityMediaTrigger
+                          : ".cron-activity .cron-run-entry button";
                   const ready =
                     id === "agents-files"
                       ? "#agent-panel .agent-file-tabs [role=tab]"
                       : id === "cron-history"
                         ? '.cron-activity .cron-runs[aria-busy="false"] .cron-run-entry'
-                        : "[data-cron-run-transcript] .chat-text";
+                        : id === "activity-lightbox"
+                          ? activityLightboxImage
+                          : "[data-cron-run-transcript] .chat-text";
+                  const creationBefore =
+                    id in creationInteractions
+                      ? await page.evaluate(
+                          ({ id: actionId }) => {
+                            const gateway = (window as MockGatewayWindow)
+                              .openclawControlUiE2eGateway!;
+                            if (actionId === "worktree-create") {
+                              gateway.setMethodResponse("worktrees.branches", {
+                                branches: [{ name: "main" }],
+                              });
+                              const created = {
+                                id: "native-created",
+                                name: "native-created",
+                                repoFingerprint: "0123456789abcdef",
+                                repoRoot: "/synthetic/repository",
+                                path: "/synthetic/repository/.worktrees/native-created",
+                                branch: "worktrees/native-created",
+                                baseRef: "main",
+                                ownerKind: "manual",
+                                createdAt: 1_800_000_000_000,
+                                lastActiveAt: 1_800_000_000_001,
+                              };
+                              gateway.setMethodResponse("worktrees.create", created);
+                              gateway.setMethodResponse("worktrees.list", { worktrees: [created] });
+                            } else if (actionId === "roster-create-template") {
+                              gateway.setMethodResponse("templates.drafts.create", {
+                                draftId: "native-draft",
+                                prompt: "Synthetic draft instructions",
+                              });
+                              gateway.setMethodResponse("chat.send", {
+                                status: "ok",
+                                runId: "native-draft-run",
+                              });
+                            }
+                            return {
+                              created: gateway.findRequests(
+                                actionId === "worktree-create"
+                                  ? "worktrees.create"
+                                  : "templates.drafts.create",
+                              ).length,
+                              sent: gateway.findRequests("chat.send").length,
+                              search: gateway.findRequests("templates.catalog.search", {
+                                query: "synthetic",
+                              }).length,
+                            };
+                          },
+                          { id },
+                        )
+                      : { created: 0, sent: 0, search: 0 };
+                  let creationOutcome: Awaited<ReturnType<typeof runCreationAction>> | undefined;
                   const prior = new Map(
                     Array.from(requests, ([key, request]) => [key, Object.assign({}, request)]),
                   );
@@ -1627,15 +2903,47 @@ try {
                       reportAnonymousScripts: false,
                     });
                   }
+                  const activation =
+                    id === "roster-create-template"
+                      ? await page.evaluateHandle(() => {
+                          const recorded = { at: null as number | null };
+                          const capture = (event: MouseEvent) => {
+                            if (
+                              event.button === 0 &&
+                              event
+                                .composedPath()
+                                .some(
+                                  (member) =>
+                                    member instanceof Element &&
+                                    member.matches(
+                                      '[role="menuitem"][data-value="create-template"]',
+                                    ),
+                                )
+                            ) {
+                              recorded.at = performance.now();
+                              document.removeEventListener("click", capture, true);
+                            }
+                          };
+                          document.addEventListener("click", capture, true);
+                          return recorded;
+                        })
+                      : undefined;
                   const cpuBefore = await metrics(cdp);
                   const started = await page.evaluate(() => performance.now());
-                  await page.locator(trigger).first().click();
-                  await page.locator(ready).first().waitFor({ state: "visible" });
+                  if (id in creationInteractions) {
+                    creationOutcome = await runCreationAction(page, id, route, creationBefore);
+                  } else {
+                    await page.locator(trigger).first().click();
+                    await page.locator(ready).first().waitFor({ state: "visible" });
+                  }
                   if (id === "cron-transcript") {
                     await page
                       .locator(ready)
                       .filter({ hasText: "Synthetic route transcript ready." })
                       .waitFor();
+                  }
+                  if (id === "activity-lightbox") {
+                    await waitForActivityLightbox(page);
                   }
                   const ended = await page.evaluate(
                     () =>
@@ -1650,6 +2958,13 @@ try {
                     mode === "coverage" ? await page.coverage.stopJSCoverage() : undefined;
                   cell.wallMs = ended - started;
                   cell.cpu = cpuDelta(cpuBefore, await metrics(cdp));
+                  if (activation) {
+                    const activated = await activation.evaluate((recorded) => recorded.at);
+                    assert(activated !== null && activated >= started && activated <= ended);
+                    cell.preActivationMs = activated - started;
+                    cell.activationToReadyMs = ended - activated;
+                    await activation.dispose();
+                  }
                   cell.newJsRequests = atEnd.filter(
                     (request) =>
                       !prior.has(request.requestId) &&
@@ -1662,14 +2977,74 @@ try {
                       request.wireBytes !== undefined,
                   );
                   if (stepCoverage) {
-                    cell.evaluatedScriptUrls = evaluatedUrls(stepCoverage);
+                    const actionEvaluated = evaluatedUrls(stepCoverage);
+                    cell.evaluatedScriptUrls = actionEvaluated;
+                    if (id === "model-search-and-compose") {
+                      const coldEvaluated = new Set(evaluatedUrls(coverageAtReady ?? []));
+                      const panelUrl = new URL(warmFiles[0]!, server.baseUrl).href;
+                      assert(
+                        coldEvaluated.has(panelUrl) || actionEvaluated.includes(panelUrl),
+                        "Model interaction panel was neither cold-evaluated nor evaluated on open",
+                      );
+                    }
                     await writeFile(
                       path.join(output, `${prefix}-${id}-v8.json`),
                       JSON.stringify(stepCoverage),
                     );
                   }
+                  // Inspect payloads and retained state after the action's CPU/wall cutoff.
+                  if (id === "worktree-create") {
+                    assert(creationOutcome?.request);
+                    assert.deepEqual(creationOutcome.request.params, {
+                      repoRoot: "/synthetic/repository",
+                      name: "native-created",
+                      baseRef: "main",
+                    });
+                    cell.created = creationOutcome.request.params;
+                  } else if (id === "roster-create-template") {
+                    assert(creationOutcome?.request && creationOutcome.sent);
+                    assert.deepEqual(creationOutcome.request.params, { agentId: "main" });
+                    const params = creationOutcome.sent.params;
+                    assert(
+                      params &&
+                        typeof params === "object" &&
+                        "message" in params &&
+                        "deliver" in params,
+                    );
+                    assert.equal(params.message, "Synthetic draft instructions");
+                    assert.equal(params.deliver, false);
+                    cell.created = creationOutcome.request.params;
+                    cell.sent = params;
+                  } else if (id === "templates-search" || id === "model-search-and-compose") {
+                    const writes = await page.evaluate(() => {
+                      const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+                      return {
+                        drafts: gateway.findRequests("templates.drafts.create").length,
+                        sends: gateway.findRequests("chat.send").length,
+                      };
+                    });
+                    assert.equal(writes.drafts, 0);
+                    assert.equal(writes.sends, 0);
+                    if (id === "templates-search") {
+                      assert(creationOutcome?.request);
+                      cell.search = creationOutcome.request.params;
+                    } else {
+                      const composer = page.locator(
+                        route === "chat" ? ".chat-pane-cache__pane--active" : ".new-session-page",
+                      );
+                      assert.equal(
+                        await composer.locator("textarea").first().inputValue(),
+                        "Synthetic unsent draft",
+                      );
+                      cell.searchUsable = true;
+                      cell.draftRetained = true;
+                    }
+                  }
                   if (values.screenshots && pair === 0) {
                     await page.screenshot({ path: path.join(output, `${prefix}-${id}.png`) });
+                  }
+                  if (id === "activity-lightbox") {
+                    await closeActivityLightbox(page);
                   }
                 } catch (error) {
                   cell.error = String(error);
@@ -1682,6 +3057,9 @@ try {
                 }
                 result.interactions.push(cell);
                 if (cell.error) {
+                  if (id in creationInteractions) {
+                    abortAfterContext = true;
+                  }
                   break;
                 }
               }
@@ -1689,6 +3067,17 @@ try {
                 throw new Error(errors.join("\n"));
               }
             } catch (error) {
+              if (
+                immediateTyping ||
+                preloadIdle ||
+                route === "templates" ||
+                route === "worktrees" ||
+                route === "roster" ||
+                ((route === "chat" || route === "new-session") &&
+                  interactionIds.includes("model-search-and-compose"))
+              ) {
+                abortAfterContext = true;
+              }
               if (pendingColdCoverage) {
                 await writeFile(
                   path.join(output, `${prefix}-cold-failure-v8.json`),
@@ -1710,12 +3099,56 @@ try {
                 .screenshot({ path: path.join(output, `${prefix}-failure.png`) })
                 .catch(() => {});
               result.failure = await page
-                .evaluate(() => ({
-                  url: location.href,
-                  text: document.body?.textContent,
-                  snapshot: window.openclawControlUi?.snapshot(),
-                }))
+                .evaluate(
+                  (preload) => ({
+                    capturedAtMs: performance.now(),
+                    url: location.href,
+                    text: document.body?.textContent,
+                    snapshot: window.openclawControlUi?.snapshot(),
+                    visibilityState: document.visibilityState,
+                    online: navigator.onLine,
+                    saveData:
+                      (navigator as Navigator & { connection?: { saveData?: boolean } }).connection
+                        ?.saveData ?? null,
+                    preload,
+                    missingExpectedUrls: preload?.urls.filter(
+                      (url) =>
+                        !performance
+                          .getEntriesByName(url)
+                          .some((entry) => (entry as PerformanceResourceTiming).responseEnd > 0),
+                    ),
+                    resources: performance.getEntriesByType("resource").map((entry) => {
+                      const resource = entry as PerformanceResourceTiming;
+                      return {
+                        url: resource.name,
+                        initiatorType: resource.initiatorType,
+                        startTime: resource.startTime,
+                        fetchStart: resource.fetchStart,
+                        responseStart: resource.responseStart,
+                        responseEnd: resource.responseEnd,
+                        duration: resource.duration,
+                        rawBytes: resource.decodedBodySize,
+                        encodedBytes: resource.encodedBodySize,
+                        transferBytes: resource.transferSize,
+                        nextHopProtocol: resource.nextHopProtocol,
+                      };
+                    }),
+                    links: [
+                      ...document.querySelectorAll<HTMLLinkElement>(
+                        'link[rel="modulepreload"],link[rel="preload"],link[rel="stylesheet"]',
+                      ),
+                    ].map((link) => ({
+                      href: link.href,
+                      rel: link.rel,
+                      as: link.as,
+                      crossOrigin: link.crossOrigin,
+                      fetchPriority: link.fetchPriority,
+                    })),
+                  }),
+                  preloadExpectation,
+                )
                 .catch(() => null);
+              result.failureRequests = Array.from(requests.values(), (request) => ({ ...request }));
             } finally {
               results.push(result);
               try {
@@ -1736,11 +3169,14 @@ try {
                 }),
               );
             }
+            if (result.routeClockFailure) {
+              throw new Error("Route clock qualification failed; remaining contexts aborted");
+            }
             if (result.dockClockFailure) {
               throw new Error("Dock clock qualification failed; stopped after saving the failure");
             }
             if (abortAfterContext) {
-              throw new Error("Apps clock qualification failed; stopped after saving the failure");
+              throw new Error("Route qualification failed; stopped after saving the failure");
             }
           }
         }

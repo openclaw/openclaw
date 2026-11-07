@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsTeamConfig } from "../runtime-api.js";
 
 const {
@@ -24,9 +24,12 @@ vi.mock("./graph-users.js", () => ({
   findGraphUsersByExactIdentity,
 }));
 
+import { resolveMSTeamsRouteConfig } from "./policy.js";
 import {
+  keepConfiguredMSTeamsAllowlistActive,
   looksLikeMSTeamsTargetId,
   projectStableMSTeamsGroupAllowlist,
+  projectStableMSTeamsTeamsConfig,
   projectStableMSTeamsUserAllowlist,
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsTeamsConfig,
@@ -305,4 +308,75 @@ it.each(["8:orgid:user-object-id"])("accepts explicit target %s", (raw) => {
 
 it.each(["user:John Smith", "Product Team/Roadmap"])("rejects non-id input %s", (raw) => {
   expect(looksLikeMSTeamsTargetId(raw)).toBe(false);
+});
+
+describe("configured allowlists that cannot be resolved stay configured", () => {
+  it("does not add placeholders to a team without channels or to an empty map", () => {
+    expect(projectStableMSTeamsTeamsConfig({ "19:eng@thread.tacv2": {} })).toEqual({
+      "19:eng@thread.tacv2": { channels: {} },
+    });
+    expect(projectStableMSTeamsTeamsConfig({})).toEqual({});
+    expect(projectStableMSTeamsTeamsConfig(undefined)).toBeUndefined();
+  });
+
+  it("keeps stable entries untouched when some names resolve to nothing", () => {
+    const projected = projectStableMSTeamsTeamsConfig({
+      Engineering: {},
+      "19:stable@thread.tacv2": team({ "19:chan@thread.tacv2": {} }),
+    });
+    expect(projected).toEqual({
+      "19:stable@thread.tacv2": team({ "19:chan@thread.tacv2": {} }),
+    });
+  });
+
+  it("keeps the allowlist configured when no configured team resolves", async () => {
+    listTeamsByNameWithPageInfo.mockResolvedValueOnce(page([]));
+    const result = await resolveMSTeamsTeamsConfig({
+      cfg: {},
+      teamIdMode: "bot-framework",
+      teams: { Missing: {} },
+    });
+    expect(Object.keys(result.teams)).toHaveLength(1);
+    expect(
+      resolveMSTeamsRouteConfig({ cfg: { teams: result.teams }, teamId: "19:other@thread.tacv2" })
+        .allowed,
+    ).toBe(false);
+    expect(result.unresolved).toEqual(["Missing"]);
+  });
+
+  it("drops placeholders once a real team resolves", async () => {
+    listTeamsByNameWithPageInfo
+      .mockResolvedValueOnce(
+        page([{ id: "11111111-1111-1111-1111-111111111111", displayName: "Product" }]),
+      )
+      .mockResolvedValueOnce(page([]));
+    listChannelsForTeamWithPageInfo.mockResolvedValueOnce(
+      page([{ id: "19:general@thread.tacv2", displayName: "General" }]),
+    );
+    const result = await resolveMSTeamsTeamsConfig({
+      cfg: {},
+      teamIdMode: "bot-framework",
+      teams: { Product: {}, Missing: {} },
+    });
+    expect(Object.keys(result.teams)).toEqual(["19:general@thread.tacv2"]);
+  });
+
+  it("never mutates the stored configuration or leaks the placeholder into it", () => {
+    const teams = { Engineering: team({ Roadmap: {} }) };
+    const groupAllowFrom = ["Bob Builder"];
+    const before = structuredClone({ teams, groupAllowFrom });
+    projectStableMSTeamsTeamsConfig(teams);
+    keepConfiguredMSTeamsAllowlistActive(
+      groupAllowFrom,
+      projectStableMSTeamsGroupAllowlist(groupAllowFrom),
+    );
+    expect({ teams, groupAllowFrom }).toEqual(before);
+  });
+
+  it("leaves resolvable, empty, and unset sender allowlists unchanged", () => {
+    expect(keepConfiguredMSTeamsAllowlistActive([userId, "Bob"], [userId])).toEqual([userId]);
+    expect(keepConfiguredMSTeamsAllowlistActive([], [])).toEqual([]);
+    expect(keepConfiguredMSTeamsAllowlistActive(["  "], [])).toEqual([]);
+    expect(keepConfiguredMSTeamsAllowlistActive(undefined, undefined)).toBeUndefined();
+  });
 });

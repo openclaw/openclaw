@@ -1,7 +1,16 @@
+import { chmodSync, statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  readPersistedQuarantineRow,
+  seedOpenClawDatabaseQuarantine,
+} from "../state/openclaw-quarantine-store.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import {
+  CRON_DEFAULT_STORE_IDENTITY_SCHEMA_VERSION,
+  readCronDefaultStoreKeyInDatabase,
+} from "../state/openclaw-state-db-cron-identity-migration.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -14,10 +23,90 @@ import {
   DoctorStateMigrationRefusalError,
   logStateMigrationResult,
 } from "./state-migrations.messages.js";
+import { autoMigrateLegacyPluginDoctorState } from "./state-migrations.plugin-doctor.js";
 import { createStateSchemaMigrationStep } from "./state-migrations.state-schema.js";
 import { createUpdateFailureFact } from "./update-failure-facts.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => closeOpenClawStateDatabaseAsync());
+
+it.each(
+  (
+    ["automatic", "doctor-preparation", "doctor", "plugin-automatic", "plugin-doctor"] as const
+  ).flatMap((mode) =>
+    (["config", "state", "homedir"] as const).map((selection) => ({ mode, selection })),
+  ),
+)(
+  "preserves launch selector precedence in $mode with $selection selection",
+  async ({ mode, selection }) => {
+    const root = directories.make("schema-cron-selection-");
+    const stateDir = path.join(root, ".openclaw");
+    const pathname = path.join(stateDir, "state", "openclaw.sqlite");
+    const configPath = path.join(root, "external", "openclaw.json");
+    const env =
+      selection === "homedir"
+        ? {}
+        : {
+            HOME: root,
+            OPENCLAW_CONFIG_PATH: configPath,
+            ...(selection === "state" ? { OPENCLAW_STATE_DIR: stateDir } : {}),
+          };
+    const physicalEnv = { ...env, OPENCLAW_STATE_DIR: stateDir };
+    const options = { path: pathname, env: physicalEnv };
+    openOpenClawStateDatabase(options);
+    await closeOpenClawStateDatabaseAsync();
+    const physicalKey = path.join(stateDir, "cron", "jobs.json");
+    const configKey = path.join(path.dirname(configPath), "cron", "jobs.json");
+    const before = (() => {
+      using db = openNodeSqliteDatabase(pathname);
+      const previousVersion = CRON_DEFAULT_STORE_IDENTITY_SCHEMA_VERSION - 1;
+      db.exec(`DELETE FROM config_machine_state WHERE state_key IN
+      ('cron.defaultStoreKey', 'state.schema.contentVersion');
+      UPDATE schema_meta SET schema_version = ${previousVersion};
+      PRAGMA user_version = ${previousVersion};`);
+      for (const key of [physicalKey, configKey]) {
+        db.prepare(`INSERT INTO cron_job_scratch
+        (store_key, job_id, content, revision, updated_at_ms)
+        VALUES (?, 'retained', 'preserve this partition', 7, 1)`).run(key);
+      }
+      return db.prepare("SELECT * FROM cron_job_scratch ORDER BY store_key").all();
+    })();
+    const quarantined =
+      selection === "homedir" && mode !== "automatic" && mode !== "plugin-automatic";
+    if (quarantined) {
+      seedOpenClawDatabaseQuarantine({
+        env: physicalEnv,
+        path: pathname,
+        kind: "state",
+        reason: "Historical fixture quarantine",
+      });
+    }
+    chmodSync(path.dirname(pathname), 0o755);
+    const result = await withStateMigrationBackupForTest(options, () =>
+      mode === "plugin-automatic" || mode === "plugin-doctor"
+        ? autoMigrateLegacyPluginDoctorState({
+            config: { plugins: { enabled: false } },
+            env,
+            homedir: () => root,
+            doctorOnlyStateMigrations: mode === "plugin-doctor",
+          })
+        : createStateSchemaMigrationStep({ stateDir, env, mode, requiredness: "required" }).run(),
+    );
+    expect(result.warnings).toEqual([]);
+    if (quarantined) {
+      expect(readPersistedQuarantineRow(pathname, { env: physicalEnv })).toBeUndefined();
+    }
+    if (process.platform !== "win32") {
+      expect(statSync(path.dirname(pathname)).mode & 0o777).toBe(0o700);
+    }
+    await closeOpenClawStateDatabaseAsync();
+    using db = openNodeSqliteDatabase(pathname, { readOnly: true });
+    expect(readCronDefaultStoreKeyInDatabase(db)).toBe(
+      selection === "config" ? configKey : physicalKey,
+    );
+    expect(db.prepare("SELECT * FROM cron_job_scratch ORDER BY store_key").all()).toEqual(before);
+  },
+);
 
 it("keeps the missing shared-state table and recovery advice in Doctor's refusal and log", async () => {
   const root = directories.make("schema-diagnostic-");

@@ -109,7 +109,7 @@ it("retires changed placements after real placement and session writes without i
     runtimeFactoryMocks.createSessionEvidenceResolver.mockImplementation(
       evidence.createWorkerPlacementSessionEvidenceResolver,
     );
-    const list = vi.spyOn(placements, "listAsync");
+    const list = vi.spyOn(placements, "listSessionIdentitiesAsync");
     const reconcileActive = vi.fn(async () => {});
     let reconciled = createDeferredCore();
     const warn = vi.fn();

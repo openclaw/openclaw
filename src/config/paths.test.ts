@@ -151,6 +151,10 @@ it.each([
 it.each<[string | undefined, number | undefined, string | undefined, number]>([
   ["19001", 19002, "work", 19001],
   [undefined, 19002, "work", 19002],
+  [undefined, undefined, "dev", 19001],
+  [undefined, undefined, " dev ", 19001],
+  [undefined, 19002, "dev", 19002],
+  ["19003", 19002, "dev", 19003],
   [undefined, undefined, "p2380", 55636],
   ...["65536", "127.0.0.1:65536", "[::1]:65536", "::1"].map(
     (value): [string, number, undefined, number] => [value, 19003, undefined, 19003],

@@ -1,12 +1,12 @@
 import * as crypto from "node:crypto";
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import { convertProviderResponsesMessages } from "../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
-import {
-  normalizeTranscriptJsonValue,
-  isOwnedTranscriptPayload,
-} from "../../config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json-normalize.js";
+import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import type { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { Message, TextContent } from "../../llm/types.js";
@@ -19,8 +19,9 @@ import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixture
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { transformTransportMessages } from "../transport-message-transform.js";
 import { log } from "./logger.js";
-import { fingerprintMessage } from "./prompt-cache-history.js";
+import { fingerprintMessage, messageFingerprints } from "./prompt-cache-history.js";
 import {
+  clearPromptCacheObservations,
   completePromptCacheObservation,
   declarePromptHistoryRewrite,
   declarePromptToolPin,
@@ -70,16 +71,47 @@ function history(key: string, messages: Message[]) {
     },
   };
 }
-function historyChange(detail: string) {
-  return [{ code: "historyRewrite", detail }];
-}
-
 describe("prompt cache history fingerprints", () => {
   beforeEach(() => {
     testScope += 1;
     vi.mocked(crypto.hash).mockClear();
   });
   afterEach(() => vi.restoreAllMocks());
+
+  it("bounds retained history bytes across long sessions without losing active rewrite checks", async () => {
+    const references: WeakRef<ReturnType<typeof fingerprintMessage>>[] = [];
+    for (let session = 0; session < 24; session++) {
+      const messages: Message[] = Array.from({ length: 512 }, (_, timestamp) => ({
+        role: "user",
+        content: Array.from({ length: 8 }, (_block, block) => ({
+          type: "text" as const,
+          text: `Synthetic ${session}:${timestamp}:${block}`,
+        })),
+        timestamp,
+      }));
+      for (const message of messages) {
+        normalizeTranscriptJsonValue({ message }, "");
+      }
+      const baseline = history(`retention-${session}`, messages);
+      references.push(...messages.map((message) => new WeakRef(fingerprintMessage(message))));
+      messages.push({ role: "user", content: "append", timestamp: 512 });
+      expect(baseline.read()).toMatchObject(unchangedPrefix);
+      messages[500] = { role: "user", content: "rewrite", timestamp: 500 };
+      baseline.assertRewrite("historyRewrite");
+    }
+    const control = new WeakRef({ unowned: true });
+    await setImmediate();
+    queryObjects(WeakRef);
+    expect(control.deref()).toBeUndefined();
+    const retainedStringBytes = references.reduce((bytes, reference) => {
+      const fingerprint = reference.deref();
+      return (
+        bytes + (fingerprint ? 2 * (fingerprint.packed.length + fingerprint.layout.length) : 0)
+      );
+    }, 0);
+    expect(retainedStringBytes).toBeLessThanOrEqual(16 * 1024 * 1024);
+    clearPromptCacheObservations();
+  });
 
   it.each(["string", "blocks"] as const)(
     "keeps %s content stable across append and sealed ownership",
@@ -322,6 +354,21 @@ describe("prompt cache history fingerprints", () => {
     });
   });
 
+  it("does not republish cached fingerprints when an unchanged history is observed again", () => {
+    const messages = Array.from({ length: 200 }, (_, timestamp) => {
+      const entry = { message: { role: "user" as const, content: "fixture", timestamp } };
+      normalizeTranscriptJsonValue(entry, "entry");
+      return entry.message;
+    });
+    const tracker = history("cached-history", messages);
+    const layouts = new Set(messages.map((message) => fingerprintMessage(message).layout));
+    const writes = vi.spyOn(messageFingerprints, "set");
+    const lookups = vi.spyOn(Map.prototype, "get");
+    expect(tracker.read()).toMatchObject(unchangedPrefix);
+    expect(writes).not.toHaveBeenCalled();
+    expect(lookups.mock.calls.filter(([key]) => layouts.has(key))).toHaveLength(0);
+  });
+
   it("reuses owned content under mutable append envelopes across observers", async () => {
     const args = { options: { path: "before-append" } };
     const message = makeAgentAssistantMessage({
@@ -521,9 +568,9 @@ describe("prompt cache history fingerprints", () => {
       }
       const detail = `message 1 (${message.role}) differs from the previous request; history must be append-only; changed fields: ${kind === "string" ? "content" : "content[0].text"}`;
       tracker.assertRewrite(detail, [first, rebuildWrapper ? { ...message } : message]);
-      expect(tracker.complete({ input: 8_000, cacheRead: 0 })?.changes).toEqual(
-        historyChange(detail),
-      );
+      expect(tracker.complete({ input: 8_000, cacheRead: 0 })?.changes).toEqual([
+        { code: "historyRewrite", detail },
+      ]);
     },
   );
 
@@ -538,27 +585,42 @@ describe("prompt cache history fingerprints", () => {
     tracker.assertRewrite("changed fields: content[0].arguments");
   });
 
-  it("names changed reasoning signatures without exposing values or extension keys", () => {
+  it("names added, changed, and removed extension keys without exposing values", () => {
     const sessionId = scopedKey("reasoning-fields");
     const block = {
       type: "thinking" as const,
       thinking: "private reasoning",
       thinkingSignature: "private original signature",
-      "private-extension-name": "original extension value",
+      changedBlock: "private original block value",
+      removedBlock: "private removed block value",
     };
-    const message = makeAgentAssistantMessage({ content: [block] });
+    const message = {
+      ...makeAgentAssistantMessage({ content: [block] }),
+      changedEnvelope: "private original envelope value",
+      removedEnvelope: "private removed envelope value",
+    };
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     observe(sessionId, [message]);
     block.thinkingSignature = "private rewritten signature";
-    block["private-extension-name"] = "rewritten extension value";
+    block.changedBlock = "private rewritten block value";
+    Reflect.deleteProperty(block, "removedBlock");
+    Object.assign(block, { addedBlock: "private added block value" });
+    message.changedEnvelope = "private rewritten envelope value";
+    Reflect.deleteProperty(message, "removedEnvelope");
+    Object.assign(message, { addedEnvelope: "private added envelope value" });
     const changes = observe(sessionId, [message]).changes;
     expect(changes).toEqual([
       {
         code: "historyRewrite",
         detail:
-          "message 0 (assistant) differs from the previous request; history must be append-only; changed fields: content[0].thinkingSignature, content[0].other",
+          'message 0 (assistant) differs from the previous request; history must be append-only; changed fields: content[0].thinkingSignature, content[0].other["changedBlock"], content[0].other["removedBlock"], content[0].other["addedBlock"], envelope.other["changedEnvelope"], envelope.other["removedEnvelope"], envelope.other["addedEnvelope"]',
       },
     ]);
     expect(JSON.stringify(changes)).not.toContain("private");
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('content[0].other["removedBlock"]'),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("private");
   });
 
   it("detects primitive property additions, changes, and removals", () => {
@@ -650,7 +712,7 @@ describe("prompt cache history fingerprints", () => {
         expect(
           completePromptCacheObservation({ sessionId, usage: { input: 8_000, cacheRead: 0 } })
             ?.changes,
-        ).toEqual(historyChange(detail));
+        ).toEqual([{ code: "historyRewrite", detail }]);
         observe(sessionId, messages);
         expect(warn).toHaveBeenCalledTimes(1);
       });
@@ -664,44 +726,41 @@ describe("prompt cache history fingerprints", () => {
     { field: "timestamp", value: 2, label: "timestamp" },
     { field: "idempotencyKey", value: "private-value", label: "idempotencyKey" },
     { field: "usage", value: { input: 42 }, label: "usage" },
-    { field: "private-field-name", value: "private-value", label: "other" },
-  ])(
-    "identifies changed $label metadata without logging values or extension keys",
-    ({ field, value, label }) => {
-      const sessionId = scopedKey(`metadata-${label}`);
-      const message: Message & Record<string, unknown> = {
-        role: "user",
-        content: "private-prompt",
-        timestamp: 1,
-      };
-      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-      observe(sessionId, [message]);
-      completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
-      message[field] = value;
-      withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: undefined }, () => {
-        expect(observe(sessionId, [message]).changes).toEqual([
-          {
-            code: "historyRewrite",
-            detail: `message 0 (user) differs from the previous request; history must be append-only; changed fields: envelope.${label}`,
-          },
-        ]);
-      });
-      expect(warn).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining(`changed fields: envelope.${label} sessionKey=`),
-      );
-      expect(JSON.stringify(warn.mock.calls)).not.toContain("private-");
-      completePromptCacheObservation({ sessionId });
-      observe(sessionId, [message]);
-      expect(
-        completePromptCacheObservation({ sessionId, usage: { cacheRead: 2_000 } })?.changes,
-      ).toEqual([
+    { field: "extensionField", value: "private-value", label: 'other["extensionField"]' },
+  ])("identifies changed $label metadata without logging values", ({ field, value, label }) => {
+    const sessionId = scopedKey(`metadata-${label}`);
+    const message: Message & Record<string, unknown> = {
+      role: "user",
+      content: "private-prompt",
+      timestamp: 1,
+    };
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    observe(sessionId, [message]);
+    completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
+    message[field] = value;
+    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: undefined }, () => {
+      expect(observe(sessionId, [message]).changes).toEqual([
         {
           code: "historyRewrite",
           detail: `message 0 (user) differs from the previous request; history must be append-only; changed fields: envelope.${label}`,
         },
       ]);
-    },
-  );
+    });
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(`changed fields: envelope.${label} sessionKey=`),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("private-");
+    completePromptCacheObservation({ sessionId });
+    observe(sessionId, [message]);
+    expect(
+      completePromptCacheObservation({ sessionId, usage: { cacheRead: 2_000 } })?.changes,
+    ).toEqual([
+      {
+        code: "historyRewrite",
+        detail: `message 0 (user) differs from the previous request; history must be append-only; changed fields: envelope.${label}`,
+      },
+    ]);
+  });
 
   it("bounds diagnostics while detecting changes beyond the retained block prefix", () => {
     const blocks: TextContent[] = Array.from({ length: 20 }, () => ({

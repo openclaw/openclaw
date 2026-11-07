@@ -1,14 +1,9 @@
-import { ConnectErrorDetailCodes } from "@openclaw/gateway-client/browser";
 import type { UsersMentionableParams, UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { createStore } from "solid-js";
-import {
-  GatewayRequestError,
-  resolveGatewayErrorDetailCode,
-} from "../../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { handleComposerMenuKeydown } from "../../../components/composer-menu.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
-import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
+import { createIdleImport } from "../../../lib/idle-import.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 
 export type HumanMentionDirectory = {
@@ -37,18 +32,7 @@ export type HumanMentionAccess = {
   request: (query?: string) => Promise<HumanMentionRead | null>;
 };
 
-const MENTION_RESULTS_FRESH_MS = 5 * 60_000;
-const MENTION_RESULTS_MAX_AGE_MS = 30 * 60_000;
-const MENTION_REFRESH_RETRY_MS = 30_000;
-const MENTION_REQUEST_TIMEOUT_MS = 15_000;
-const MAX_CACHED_MENTION_QUERIES = 16;
-
-type MentionTarget = { start: number; end: number; query: string; value: string };
-type MentionResultSnapshot = {
-  result: UsersMentionableResult;
-  fetchedAt: number;
-  refreshAfter: number;
-};
+export type MentionTarget = { start: number; end: number; query: string; value: string };
 type MentionSearch =
   | { kind: "loading" }
   | { kind: "ready"; result: UsersMentionableResult }
@@ -57,7 +41,7 @@ type MentionSearch =
       reason: "unavailable" | "accessDenied" | "profileUnavailable" | "rejected";
     };
 
-function findMentionTarget(value: string, caret: number): MentionTarget | null {
+export function findMentionTarget(value: string, caret: number): MentionTarget | null {
   if (value.trimStart().startsWith("/")) {
     return null;
   }
@@ -87,10 +71,10 @@ function findMentionTarget(value: string, caret: number): MentionTarget | null {
   return { start, end, query, value };
 }
 
-type MentionPerson = UsersMentionableResult["users"][number];
-type MentionInput = Pick<HTMLTextAreaElement, "value" | "selectionStart" | "selectionEnd">;
-type MentionIntent = "input" | "trigger" | "selection";
-type MentionMenuState = {
+export type MentionPerson = UsersMentionableResult["users"][number];
+export type MentionInput = Pick<HTMLTextAreaElement, "value" | "selectionStart" | "selectionEnd">;
+export type MentionIntent = "input" | "trigger" | "selection";
+export type MentionMenuState = {
   target: MentionTarget | null;
   search: MentionSearch | null;
   index: number;
@@ -110,8 +94,36 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
   });
   const selectedAvatars = new Map<string, string>();
   const selectedAvatarUrls: ReadonlyMap<string, string> = selectedAvatars;
-  const results = new Map<string, MentionResultSnapshot>();
-  const requests = new Map<string, Promise<UsersMentionableResult>>();
+  let latestInput: MentionInput | undefined;
+  let engine:
+    | ReturnType<typeof import("./chat-composer-mention-menu-engine.ts").createHumanMentionEngine>
+    | undefined;
+  const engineImport = createIdleImport(
+    () => import("./chat-composer-mention-menu-engine.ts"),
+    (loaded) => {
+      engine = loaded.createHumanMentionEngine({
+        get directory() {
+          return directory;
+        },
+        set directory(next) {
+          directory = next;
+        },
+        get generation() {
+          return generation;
+        },
+        set timer(next: ReturnType<typeof setTimeout> | undefined) {
+          timer = next;
+        },
+        setState,
+        selectedAvatars,
+        cancelSearch,
+        update,
+        close,
+        syncDirectory,
+        matchesDirectory,
+      });
+    },
+  );
 
   function matchesDirectory(next: HumanMentionDirectory | undefined) {
     return (
@@ -128,8 +140,7 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
       return;
     }
     setState(close);
-    results.clear();
-    requests.clear();
+    engine?.clear();
     selectedAvatars.clear();
     // Each lifetime owns a fresh descriptor, even if a caller reuses A after A → B → A.
     // Old requests must never become current again or retire a replacement query.
@@ -145,6 +156,7 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
   function close(draft: MentionMenuState) {
     const wasOpen = draft.target !== null;
     cancelSearch();
+    latestInput = undefined;
     Object.assign(draft, { target: null, search: null, index: 0, selectedProfileId: undefined });
     if (wasOpen) {
       onOpenChange?.(false);
@@ -154,8 +166,9 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
   function dispose() {
     cancelSearch();
     directory = undefined;
-    results.clear();
-    requests.clear();
+    latestInput = undefined;
+    engineImport.dispose();
+    engine?.clear();
     selectedAvatars.clear();
   }
 
@@ -164,6 +177,7 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
     input: MentionInput,
     intent: MentionIntent = "selection",
   ) {
+    latestInput = input;
     const { value, selectionStart: caret, selectionEnd } = input;
     const target = directory ? findMentionTarget(value, caret) : null;
     // Only typing may extend a full-name query. Moving into untouched prose or
@@ -196,137 +210,51 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
     }
   }
 
-  function showResults(draft: MentionMenuState, result: UsersMentionableResult) {
-    draft.index = Math.max(
-      0,
-      result.users.findIndex((user) => user.profileId === draft.selectedProfileId),
-    );
-    draft.selectedProfileId = result.users[draft.index]?.profileId;
-    draft.search = { kind: "ready", result };
-  }
-
-  function cachedResult(query: string) {
-    const cached = results.get(query);
-    if (cached && Date.now() - cached.fetchedAt >= MENTION_RESULTS_MAX_AGE_MS) {
-      results.delete(query);
-      return undefined;
-    }
-    return cached;
-  }
-
-  function requestPeople(query: string, source: HumanMentionDirectory) {
-    let request = requests.get(query);
-    if (!request) {
-      const cached = cachedResult(query);
-      // Failed refreshes do not extend data lifetime or retry on every reopen.
-      if (cached) {
-        cached.refreshAfter = Date.now() + MENTION_REFRESH_RETRY_MS;
-      }
-      request = source.client
-        .request<UsersMentionableResult>(
-          "users.mentionable",
-          { ...source.params, query },
-          { timeoutMs: MENTION_REQUEST_TIMEOUT_MS },
-        )
-        .then((result) => {
-          // Presentation may close; only this directory may inherit the snapshot.
-          if (directory === source) {
-            results.delete(query);
-            if (results.size === MAX_CACHED_MENTION_QUERIES) {
-              results.delete(results.keys().next().value!);
-            }
-            const fetchedAt = Date.now();
-            results.set(query, {
-              result,
-              fetchedAt,
-              refreshAfter: fetchedAt + MENTION_RESULTS_FRESH_MS,
-            });
-          }
-          return result;
-        })
-        .catch((error: unknown) => {
-          const profileUnavailable =
-            error instanceof GatewayRequestError &&
-            resolveGatewayErrorDetailCode(error) ===
-              ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE;
-          const rejected =
-            error instanceof GatewayRequestError &&
-            (error.gatewayCode !== "UNAVAILABLE" || profileUnavailable);
-          if (directory === source && rejected) {
-            results.clear();
-            requests.clear();
-            directory = { ...source };
-            cancelSearch();
-            setState((next) => {
-              if (next.target) {
-                next.search = {
-                  kind: "error",
-                  reason: profileUnavailable
-                    ? "profileUnavailable"
-                    : error.gatewayCode === "FORBIDDEN"
-                      ? "accessDenied"
-                      : "rejected",
-                };
-              }
-            });
-          }
-          throw error;
-        })
-        .finally(() => {
-          // A hung read releases this shared slot at the native request deadline.
-          if (directory === source) {
-            requests.delete(query);
-          }
-        });
-      requests.set(query, request);
-    }
-    return request;
-  }
-
   function searchPeople(draft: MentionMenuState) {
+    if (engine) {
+      engine.searchPeople(draft);
+      return;
+    }
     const target = draft.target;
     const source = directory;
     if (!target || !source) {
       return;
     }
     cancelSearch();
-    const query = target.query;
-    // Only the Gateway knows every searchable identity field and its matching rules.
-    // Reuse exact snapshots; display-name filtering would lose verified-login matches.
-    const cached = cachedResult(query);
-    if (cached) {
-      showResults(draft, cached.result);
-      if (Date.now() < cached.refreshAfter && !requests.has(query)) {
-        return;
-      }
-    } else {
-      draft.search = { kind: "loading" };
-    }
+    draft.search = { kind: "loading" };
     const requestGeneration = generation;
-    timer = setTimeout(() => {
-      timer = undefined;
-      const refreshed = results.get(query);
-      if (refreshed && refreshed !== cached && Date.now() < refreshed.refreshAfter) {
-        setState((next) => showResults(next, refreshed.result));
-        return;
-      }
-      const request = requestPeople(query, source);
-      void request.then(
-        (result) => {
-          if (requestGeneration === generation) {
-            setState((next) => showResults(next, result));
+    const deadline = Date.now() + 150;
+    void engineImport.load().then(
+      () => {
+        if (requestGeneration !== generation || directory !== source || !latestInput) {
+          return;
+        }
+        const input = latestInput;
+        setState((next) => {
+          const current = findMentionTarget(input.value, input.selectionStart);
+          if (
+            !next.target ||
+            !current ||
+            current.start !== next.target.start ||
+            current.query !== next.target.query ||
+            input.value !== next.target.value ||
+            input.selectionEnd > next.target.end
+          ) {
+            close(next);
+            return;
           }
-        },
-        () => {
-          // Transient outages keep stale suggestions usable; the query owner evicts rejections.
-          if (requestGeneration === generation && !cached) {
-            setState((next) => {
-              next.search = { kind: "error", reason: "unavailable" };
-            });
-          }
-        },
-      );
-    }, 150);
+          // Import time overlaps the original debounce; never start a second 150 ms wait.
+          engine!.searchPeople(next, Math.max(0, deadline - Date.now()));
+        });
+      },
+      () => {
+        if (requestGeneration === generation && directory === source) {
+          setState((next) => {
+            next.search = { kind: "error", reason: "unavailable" };
+          });
+        }
+      },
+    );
   }
 
   function handleKeydown(event: KeyboardEvent, host: HumanMentionMenuHost) {
@@ -349,79 +277,10 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
           draft.selectedProfileId = users[index]?.profileId;
           return users[index] ? paneDomId(host.paneId, `mention-option-${index}`) : null;
         },
-        select: () => select(draft, users[draft.index]!, host),
+        select: () => engine?.select(draft, users[draft.index]!, host),
       });
     });
     return handled;
-  }
-
-  function select(draft: MentionMenuState, person: MentionPerson, host: HumanMentionMenuHost) {
-    const textarea = host.getTextarea();
-    const current = textarea?.value ?? host.getDraft();
-    // Revalidate and consume the target within one draft: Solid publishes writes
-    // after the event, but selection must use the current textarea immediately.
-    update(
-      draft,
-      textarea ?? { value: current, selectionStart: current.length, selectionEnd: current.length },
-    );
-    if (draft.target) {
-      insert(draft, person, host, draft.target);
-    }
-  }
-
-  function insert(
-    draft: MentionMenuState,
-    person: MentionPerson,
-    host: HumanMentionMenuHost,
-    target: MentionTarget,
-    prefix = "",
-  ) {
-    const textarea = host.getTextarea();
-    const current = textarea?.value ?? host.getDraft();
-    if (current !== target.value || host.getMentions().length >= MAX_HUMAN_MENTIONS) {
-      return false;
-    }
-    const label = `@${person.displayName}`;
-    const replacement = `${prefix}${label} `;
-    const next = `${current.slice(0, target.start)}${replacement}${current.slice(target.end)}`;
-    const mentions = [
-      ...updateHumanMentions(current, next, host.getMentions(), {
-        value: current,
-        start: target.start,
-        end: target.end,
-        inputType: "insertReplacementText",
-      }),
-      {
-        profileId: person.profileId,
-        start: target.start + prefix.length,
-        end: target.start + prefix.length + label.length,
-      },
-    ].toSorted((a, b) => a.start - b.start);
-    // Preserve only selected presentation URLs, so the shared loader reuses the
-    // exact image already requested by the picker. Recipient metadata stays unchanged.
-    for (const profileId of selectedAvatars.keys()) {
-      if (!mentions.some((mention) => mention.profileId === profileId)) {
-        selectedAvatars.delete(profileId);
-      }
-    }
-    if (person.avatarUrl) {
-      selectedAvatars.set(person.profileId, person.avatarUrl);
-    } else {
-      selectedAvatars.delete(person.profileId);
-    }
-    host.commitDraft(next, mentions);
-    const caret = target.start + replacement.length;
-    close(draft);
-    const source = directory;
-    queueMicrotask(() => {
-      if (directory !== source || host.getTextarea() !== textarea) {
-        return;
-      }
-      const currentTextarea = host.getTextarea();
-      currentTextarea?.focus({ preventScroll: true });
-      currentTextarea?.setSelectionRange(caret, caret);
-    });
-    return true;
   }
 
   function externalAccess(
@@ -429,79 +288,25 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
       | { directory: HumanMentionDirectory | undefined; host: HumanMentionMenuHost | undefined }
       | undefined,
   ): HumanMentionAccess {
-    const resolveHost = (sync: boolean) => {
-      const current = getCurrent();
-      if (!current) {
-        return undefined;
-      }
-      if (sync) {
-        syncDirectory(current.directory);
-      } else if (!matchesDirectory(current.directory)) {
-        return undefined;
-      }
-      return current.host;
-    };
-    const read = (query = ""): HumanMentionRead | null => {
-      // Reading never starts a request or changes the @ menu's presentation.
-      if (!resolveHost(false)) {
-        return null;
-      }
-      const source = directory;
-      const cached = cachedResult(query);
-      if (!source || !cached) {
-        return null;
-      }
-      return {
-        result: cached.result,
-        insert: (profileId) => {
-          const host = resolveHost(true);
-          if (!host || directory !== source) {
-            return false;
-          }
-          const person = cachedResult(query)?.result.users.find(
-            (user) => user.profileId === profileId,
-          );
-          const textarea = host.getTextarea();
-          if (!person || !textarea || textarea.disabled || textarea.readOnly) {
-            return false;
-          }
-          let inserted = false;
-          setState((draft) => {
-            update(draft, textarea);
-            if (draft.target) {
-              inserted = insert(draft, person, host, draft.target);
-              return;
-            }
-            const value = textarea.value;
-            const start = textarea.selectionStart;
-            const end = textarea.selectionEnd;
-            const prefix = start && !/[\s([{]/u.test(value[start - 1]!) ? " " : "";
-            // Apply the native slash/code/quote rules without committing a temporary @.
-            const candidate = value.slice(0, start) + prefix + "@" + value.slice(end);
-            if (!findMentionTarget(candidate, start + prefix.length + 1)) {
-              return;
-            }
-            inserted = insert(draft, person, host, { start, end, value, query: "" }, prefix);
-          });
-          return inserted;
-        },
-      };
-    };
     return {
-      read,
-      request: async (query = "") => {
-        if (!resolveHost(true) || !directory) {
-          return null;
+      read: (query) => engine?.externalAccess(getCurrent).read(query) ?? null,
+      request: async (query) => {
+        if (!engine) {
+          const current = getCurrent();
+          if (!current?.host) {
+            return null;
+          }
+          syncDirectory(current.directory);
+          const source = directory;
+          if (!source) {
+            return null;
+          }
+          await engineImport.load();
+          if (directory !== source || !matchesDirectory(getCurrent()?.directory)) {
+            return null;
+          }
         }
-        const source = directory;
-        const cached = cachedResult(query);
-        if (!cached || Date.now() >= cached.refreshAfter || requests.has(query)) {
-          await requestPeople(query, source);
-        }
-        if (!resolveHost(false) || directory !== source) {
-          return null;
-        }
-        return read(query);
+        return engine!.externalAccess(getCurrent).request(query);
       },
     };
   }
@@ -528,7 +333,7 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
         ? (state.search.result.users[state.index]?.displayName ?? "")
         : "",
     select: (person: MentionPerson, host: HumanMentionMenuHost) =>
-      setState((draft) => select(draft, person, host)),
+      setState((draft) => engine?.select(draft, person, host)),
     hover: (index: number, profileId: string) =>
       setState((draft) => Object.assign(draft, { index, selectedProfileId: profileId })),
     retry: () => setState(searchPeople),

@@ -91,8 +91,8 @@ async function writeOkfBundle(bundlePath: string) {
 }
 
 describe("importMemoryWikiOkfBundle", () => {
-  it("imports OKF concept documents as searchable wiki concept pages", async () => {
-    const { bundlePath, config, run, page, read } = await createImport("sales-okf");
+  it("imports searchable OKF concept pages that can round-trip into another vault", async () => {
+    const { rootDir, bundlePath, config, run, page, read } = await createImport("sales-okf");
     await writeOkfBundle(bundlePath);
     const result = await run();
 
@@ -145,6 +145,19 @@ describe("importMemoryWikiOkfBundle", () => {
     expect(searchResults.map((searchResult) => searchResult.path)).toContain(
       path.relative(config.vault.path, ordersPath).split(path.sep).join("/"),
     );
+
+    const exportedBundle = path.join(rootDir, "exported-okf");
+    await fs.cp(path.join(config.vault.path, "concepts"), exportedBundle, { recursive: true });
+    const { config: destination } = await createVault({
+      rootDir: path.join(rootDir, "destination"),
+    });
+    const reimport = await importMemoryWikiOkfBundle({
+      config: destination,
+      bundlePath: exportedBundle,
+      nowMs: Date.UTC(2026, 5, 12, 11),
+    });
+    expect(reimport).toMatchObject({ importedCount: 3, skippedCount: 0, warnings: [] });
+    expect(orders.frontmatter.type).toBe("BigQuery Table");
   });
 
   it("prunes repository metadata and dependency subtrees", async () => {

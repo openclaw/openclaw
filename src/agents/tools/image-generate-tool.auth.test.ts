@@ -1,5 +1,6 @@
 import { assert, describe, expect, it, vi } from "vitest";
-import type { ImageGenerationProvider } from "../../image-generation/types.js";
+import { createProviderConfigFixture } from "../../config/runtime-snapshot.test-fixtures.js";
+import type { ImageGenerationProvider } from "../../image-generation/provider-types.js";
 import * as mediaGenerationRegistry from "../../media-generation/registry.js";
 import { withEnv } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -96,19 +97,7 @@ describe("image generation credential availability", () => {
         const tool = createImageGenerateTool({
           config: {
             plugins: { allow: ["openai"] },
-            ...(pinned
-              ? {
-                  models: {
-                    providers: {
-                      openai: {
-                        baseUrl: "https://api.openai.com/v1",
-                        apiKey: "openai:siwc",
-                        models: [],
-                      },
-                    },
-                  },
-                }
-              : {}),
+            ...(pinned ? createProviderConfigFixture("openai:siwc") : {}),
           },
           authProfileStore: createAuthProfileStoreFixture({
             "openai:siwc": { ...oauth, authFlow },

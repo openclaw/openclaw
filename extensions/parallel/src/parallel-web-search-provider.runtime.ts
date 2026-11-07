@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import {
   mergeScopedSearchConfig,
+  nativeWebSearchCodecs,
   readWebSearchApiKey,
   resolveProviderWebSearchPluginConfig,
   type SearchConfigRecord,
@@ -100,10 +101,11 @@ export async function executeParallelWebSearchProviderTool(
     args,
     searchConfig,
     search: async (request, timeoutSeconds): Promise<ParallelSearchResponse> => {
-      const body: Record<string, unknown> = {
-        search_queries: request.searchQueries,
-        advanced_settings: { max_results: request.count },
-      };
+      const { body } = nativeWebSearchCodecs["parallel.search"].request(
+        endpoint,
+        request.searchQueries,
+        request.count,
+      );
       if (request.objective) {
         body.objective = request.objective;
       }

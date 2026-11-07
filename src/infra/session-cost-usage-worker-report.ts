@@ -1,3 +1,5 @@
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { sha256Hex } from "./crypto-digest.js";
 import {
   readSessionCostUsageRollupRowsInDatabase,
   type SessionCostUsageDeferredMetadata,
@@ -17,6 +19,7 @@ import {
   createUsageDayKeyFormatter,
   projectSessionCostSummaries,
 } from "./session-cost-usage-projection.js";
+import type { createUsageCostCollectionAccess } from "./session-cost-usage-refresh-inputs.worker.js";
 import {
   decodeUsageCostRollup,
   decodeUsageCostRollupEnvelope,
@@ -60,51 +63,6 @@ export function prepareUsageCostReportEntry(params: {
   const selected =
     blob && envelope?.projection && aligned ? params.partitions(params.row.key) : undefined;
   return { valueJson: params.row.valueJson, blob, envelope, selected };
-}
-
-function createUsageCostReportSource(
-  params: Omit<Parameters<typeof readUsageCostReportEntry>[0], "prepared" | "file"> & {
-    rows: ReadonlyMap<string, SessionCostUsageRollupRow>;
-    entries: ReadonlyMap<string, ReturnType<typeof prepareUsageCostReportEntry>>;
-    files: ReadonlyMap<string, UsageCostTranscriptFile>;
-    deferredPaths: ReadonlySet<string>;
-    deferredMetadata: ReadonlyMap<string, SessionCostUsageDeferredMetadata>;
-  },
-) {
-  const consumed = new Set<string>();
-  const invalidRows = new Map<string, SessionCostUsageRollupRow>();
-  return {
-    invalidRows,
-    source: {
-      deferredPaths: params.deferredPaths,
-      deferredMetadata: params.deferredMetadata,
-      readRow(filePath: string) {
-        consumed.add(filePath);
-        return params.rows.get(filePath);
-      },
-      readBody: (row: SessionCostUsageRollupRow) => params.entries.get(row.key)?.blob ?? null,
-      async readEntry(row: SessionCostUsageRollupRow) {
-        return readUsageCostReportEntry({
-          ...params,
-          prepared: params.entries.get(row.key)!,
-          file: params.files.get(row.key),
-        });
-      },
-      onInvalidBody(key: string) {
-        const row = params.rows.get(key);
-        if (row) {
-          invalidRows.set(key, row);
-        }
-      },
-      remainingRows: (function* () {
-        for (const row of params.rows.values()) {
-          if (!consumed.has(row.key)) {
-            yield row;
-          }
-        }
-      })(),
-    },
-  };
 }
 
 /** Project captured cache inputs; replay opens its own bounded transcript reads. */
@@ -238,6 +196,7 @@ export async function projectUsageCostSessionsInWorker(params: {
   /** Cache keys of `operation.sessions`, in order; undefined for unresolved archives. */
   sessionPaths: ReadonlyArray<string | undefined>;
   access: UsageCostCollectionAccess;
+  readFreshness: ReturnType<typeof createUsageCostCollectionAccess>["readFreshness"];
   readCache: <T>(read: (db: EngineConnection) => T, empty: () => T) => Promise<T>;
   scan: RollupScan;
   throwIfCancelled: () => void;
@@ -263,72 +222,123 @@ export async function projectUsageCostSessionsInWorker(params: {
   ): Promise<UsageCostWorkerResult> => {
     const byPath = new Map(rows.map((row) => [row.key, row]));
     // Uncached sessions remain pending; only cached reports need transcript freshness.
-    const sessions = operation.sessions.filter(
-      (_, index) =>
-        byPath.has(sessionPaths[index] ?? "") ||
-        cacheBudget.deferredPaths.has(sessionPaths[index] ?? ""),
+    const selected = operation.sessions.flatMap((session, index) =>
+      byPath.has(sessionPaths[index] ?? "") ||
+      cacheBudget.deferredPaths.has(sessionPaths[index] ?? "")
+        ? [{ session, filePath: sessionPaths[index] }]
+        : [],
     );
-    const discovered = sessions.flatMap((session) =>
-      session.transcriptFile ? [session.transcriptFile] : [],
-    );
-    for (const file of discovered) {
-      const checkpoint = entries.get(file.filePath)?.envelope?.checkpoint;
-      if (checkpoint?.kind !== "sqlite") {
-        continue;
-      }
-      const rewritten = (checkpoint.generation ?? null) !== (file.generation ?? null);
-      if (rewritten) {
-        // Discovery and reporting crossed a rewrite. Omit the projection without
-        // pruning it; an older checkpoint still needs the normal stale refresh.
-        cacheBudget.deferredPaths.add(file.filePath);
-      }
-      if (rewritten ? checkpoint.mtimeMs >= file.mtimeMs : checkpoint.maxSeq > (file.maxSeq ?? 0)) {
-        // A same-generation append may publish newer totals after discovery.
-        // Across rewrites, the owner's monotonic mutation version orders the
-        // snapshots: newer cache waits for rediscovery instead of rebuilding.
-        Object.assign(file, {
-          size: checkpoint.size,
-          mtimeMs: checkpoint.mtimeMs,
-          eventCount: checkpoint.eventCount,
-          maxSeq: checkpoint.maxSeq,
+    const sqliteSnapshots = [];
+    const unresolved = [];
+    for (const { session, filePath } of selected) {
+      const marker = parseSqliteSessionFileMarker(session.sessionFile);
+      const envelope = filePath ? entries.get(filePath)?.envelope : undefined;
+      const deferred = filePath ? cacheBudget.deferredMetadata.get(filePath) : undefined;
+      const checkpoint = envelope?.checkpoint ?? deferred?.checkpoint;
+      if (marker && filePath && checkpoint?.kind === "sqlite") {
+        sqliteSnapshots.push({
+          session,
+          marker,
+          filePath,
+          checkpoint,
+          generation:
+            envelope?.checkpoint.kind === "sqlite" ? envelope.checkpoint.generation : undefined,
+          generationHash: deferred?.sqliteGenerationHash,
         });
+      } else if (!marker) {
+        // JSONL still needs its physical file identity; unusable SQLite rows need refresh.
+        unresolved.push(session.sessionFile);
       }
     }
+    const mutations = sqliteSnapshots.length
+      ? await params.readFreshness(sqliteSnapshots.map(({ marker }) => marker))
+      : [];
+    const sqliteMutationTimes = new Map<string, number>();
+    const snapshots: UsageCostTranscriptFile[] = [];
+    for (const [index, snapshot] of sqliteSnapshots.entries()) {
+      const { session, filePath, checkpoint, generation, generationHash } = snapshot;
+      const mutation = mutations[index];
+      if (
+        !mutation ||
+        (generationHash
+          ? generationHash !== sha256Hex(JSON.stringify(mutation.generation))
+          : (generation ?? null) !== mutation.generation)
+      ) {
+        continue;
+      }
+      sqliteMutationTimes.set(filePath, mutation.mtimeMs);
+      // These are the recorded snapshot's replay bounds, not current transcript statistics.
+      snapshots.push({
+        kind: "sqlite",
+        filePath,
+        sourcePath: session.sessionFile,
+        sessionId: session.sessionId,
+        mtimeMs: checkpoint.mtimeMs,
+        size: checkpoint.size,
+        maxSeq: checkpoint.maxSeq,
+        eventCount: checkpoint.eventCount,
+        generation: mutation.generation,
+        cold: mutation.cold,
+      });
+    }
     const reportFiles = [
-      ...discovered,
-      ...(await resolveUsageCostTranscriptFiles(
-        sessions.filter((session) => !session.transcriptFile).map((session) => session.sessionFile),
-        params.access,
-      )),
+      ...snapshots,
+      ...(await resolveUsageCostTranscriptFiles(unresolved, params.access)),
     ];
     const filesByPath = new Map(
       reportFiles.flatMap((file) => (file ? [[file.filePath, file] as const] : [])),
     );
-    const report = createUsageCostReportSource({
-      rows: byPath,
-      entries,
-      files: filesByPath,
+    const { startMs, endMs, dayBucket } = operation;
+    const scan = params.scan;
+    const consumed = new Set<string>();
+    const invalidRows = new Map<string, SessionCostUsageRollupRow>();
+    const source = {
       deferredPaths: cacheBudget.deferredPaths,
       deferredMetadata: cacheBudget.deferredMetadata,
-      startMs: operation.startMs,
-      endMs: operation.endMs,
-      dayBucket: operation.dayBucket,
-      throwIfCancelled,
-      replayBudget,
-      cacheBudget,
-      scan: params.scan,
-    });
+      readRow(filePath: string) {
+        consumed.add(filePath);
+        return byPath.get(filePath);
+      },
+      readBody: (row: SessionCostUsageRollupRow) => entries.get(row.key)?.blob ?? null,
+      async readEntry(row: SessionCostUsageRollupRow) {
+        return readUsageCostReportEntry({
+          startMs,
+          endMs,
+          dayBucket,
+          throwIfCancelled,
+          replayBudget,
+          cacheBudget,
+          scan,
+          prepared: entries.get(row.key)!,
+          file: filesByPath.get(row.key),
+        });
+      },
+      onInvalidBody(key: string) {
+        const row = byPath.get(key);
+        if (row) {
+          invalidRows.set(key, row);
+        }
+      },
+      remainingRows: (function* () {
+        for (const row of byPath.values()) {
+          if (!consumed.has(row.key)) {
+            yield row;
+          }
+        }
+      })(),
+    };
     const result = {
       kind: "sessions" as const,
       ...(await projectSessionCostSummaries({
-        ...report.source,
+        ...source,
         ...operation,
         files: sessionPaths.map((filePath) => filesByPath.get(filePath ?? "")),
+        sqliteMutationTimes,
       })),
       remainingReportBytes: Math.max(0, cacheBudget.remainingBytes),
     };
     throwIfCancelled();
-    return { ...result, invalidRows: [...report.invalidRows.values()] };
+    return { ...result, invalidRows: [...invalidRows.values()] };
   };
   const empty = (): {
     rows: SessionCostUsageRollupRow[];

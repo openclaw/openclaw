@@ -11,6 +11,7 @@ import {
 } from "solid-js";
 import type { CronStatus } from "../../../api/types.ts";
 import type { MenuControls } from "../../../components/solid/menu.tsx";
+import { isCronInventoryInvalidation } from "../../../lib/cron/inventory-connection.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
@@ -27,6 +28,7 @@ import {
   type CiAutomationJobs,
 } from "../../../lib/session-pr-automation.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import { showToast } from "../../../lib/toast.ts";
 import {
   ChatCiAutomationError,
   ChatCiAutomationView,
@@ -118,7 +120,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
         })
       : undefined;
     stopEvents = source?.subscribeEvents((event) => {
-      if (event.event === "cron" || event.event === "config.changed") {
+      if (isCronInventoryInvalidation(event, source.snapshot)) {
         invalidate();
       }
     });
@@ -364,7 +366,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
 
     async function commit() {
       try {
-        const job = await setCiAutomationEnabled(
+        const outcome = await setCiAutomationEnabled(
           admitted.client,
           admitted.target,
           option,
@@ -373,6 +375,10 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
         );
         if (!admitted.current()) {
           return;
+        }
+        const job = outcome?.job;
+        if (outcome?.warning) {
+          showToast({ severity: "warning", message: outcome.warning });
         }
         if (accepted) {
           accepted = { ...accepted, jobs: { ...accepted.jobs, [option]: job } };

@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { createServer, type RequestListener, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { Readable } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, expect, it } from "vitest";
 import { tlonRuntimeOutbound } from "../channel.runtime.js";
@@ -21,7 +22,13 @@ async function serve(handler: RequestListener) {
   const closed: Promise<unknown>[] = [];
   server = createServer((request, response) => {
     if (request.method !== "POST") {
-      closed.push(once(request.socket, "close"));
+      // Bounded reads cancel oversized bodies, so the client may reset the socket
+      // while streamBody still writes. Wait for close; never reject on that error.
+      closed.push(
+        new Promise((resolve) => {
+          request.socket.once("close", resolve);
+        }),
+      );
     }
     handler(request, response);
   });
@@ -38,34 +45,20 @@ async function serve(handler: RequestListener) {
 }
 const scry = async (handler: RequestListener) =>
   scryUrbitPath(await serve(handler), { path: PATH, auditContext: "test" });
-const poke = async (handler: RequestListener) =>
-  pokeUrbitChannel(await serve(handler), {
-    app: "test",
-    mark: "test",
-    json: {},
-    auditContext: "test",
-  });
+const pokeParams = { app: "test", mark: "test", json: {}, auditContext: "test" };
 function streamBody(res: ServerResponse, size: number, suffix = "") {
   const chunk = Buffer.alloc(64 * 1024, "X");
-  let written = 0;
-  const write = () => {
-    if (res.destroyed) {
-      return;
-    }
-    if (written >= size) {
-      res.end(suffix);
-      return;
-    }
-    written += chunk.length;
-    if (res.write(chunk)) {
-      setImmediate(write);
-    } else {
-      res.once("drain", write);
-    }
-  };
-  write();
+  const body = Readable.from(
+    (function* () {
+      for (let written = 0; written < size; written += chunk.length) {
+        yield chunk;
+      }
+      yield suffix;
+    })(),
+  );
+  res.once("close", () => body.destroy());
+  body.pipe(res);
 }
-
 it.each(["success", "creation", "activation"])("releases channel %s bodies", async (step) => {
   let puts = 0;
   const deps = await serve((request, response) => {
@@ -104,37 +97,23 @@ it("reads a successful scry response over HTTP", async () => {
     }),
   ).resolves.toEqual({ groups: {} });
 });
-it("bounds poke error bodies at 16 KiB", async () => {
-  const error = await poke((_request, response) => {
-    response.writeHead(500, { "Content-Type": "text/plain" });
-    streamBody(response, 4 * 1024 * 1024);
-  }).catch((cause: unknown) => cause);
-  expect(error).toBeInstanceOf(Error);
-  const message = (error as Error).message;
-  expect(Buffer.byteLength(message, "utf8")).toBeLessThan(32 * 1024);
-  expect(message).toContain("X");
-});
 it.each([
   ["Poke", true],
   ["Subscribe", true],
   ["Subscribe", false],
-] as const)("redacts reflected %s cookies (JSON: %s)", async (operation, json) => {
+] as const)("bounds %s errors and redacts cookies (JSON: %s)", async (operation, json) => {
   const deps = await serve((request, response) => {
     response.writeHead(500, { "Content-Type": json ? "application/json" : "text/plain" });
-    response.end(
+    response.write(
       json
-        ? JSON.stringify({ error: "invalid session", cookie: request.headers.cookie })
-        : `invalid session: ${request.headers.cookie}`,
+        ? `{"error":"invalid session","cookie":"${request.headers.cookie}","padding":"`
+        : `invalid session: ${request.headers.cookie}\n`,
     );
+    streamBody(response, 4 * 1024 * 1024, json ? '"}' : "");
   });
   let error: unknown;
   if (operation === "Poke") {
-    error = await pokeUrbitChannel(deps, {
-      app: "test",
-      mark: "test",
-      json: {},
-      auditContext: "test",
-    }).catch((cause: unknown) => cause);
+    error = await pokeUrbitChannel(deps, pokeParams).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(UrbitHttpError);
   } else {
     const client = new UrbitSSEClient(deps.baseUrl, COOKIE, deps);
@@ -148,15 +127,20 @@ it.each([
   expect(message).toContain(`${operation} failed: 500`);
   expect(message).toContain("invalid session");
   expect(message).not.toContain(COOKIE);
+  expect(Buffer.byteLength(message, "utf8")).toBeLessThan(32 * 1024);
+  expect(message).toContain("X");
+  await expect(deps.closed()).resolves.toBeUndefined();
 });
 it("bounds streaming successful scry responses", async () => {
-  await expect(
-    scry((_request, response) => {
-      response.writeHead(200, { "Content-Type": "application/json" });
-      response.write('{"payload":"');
-      streamBody(response, 18 * 1024 * 1024, '"}');
-    }),
-  ).rejects.toThrow(`Tlon scry response for path ${PATH}: JSON response exceeds 16777216 bytes`);
+  const deps = await serve((_request, response) => {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.write('{"payload":"');
+    streamBody(response, 18 * 1024 * 1024, '"}');
+  });
+  await expect(scryUrbitPath(deps, { path: PATH, auditContext: "test" })).rejects.toThrow(
+    `Tlon scry response for path ${PATH}: JSON response exceeds 16777216 bytes`,
+  );
+  await expect(deps.closed()).resolves.toBeUndefined();
 });
 it("delivers an authenticated outbound message and closes its unread poke body", async () => {
   let observedCookie: string | undefined;

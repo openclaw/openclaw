@@ -1,7 +1,3 @@
-import {
-  createHookRunner,
-  createMockPluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWorkboardAutomationNudgeService } from "./automation-nudge.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
@@ -15,7 +11,6 @@ import {
 import {
   createWorkboardLifecycleService,
   readWorkboardLifecycleSessions,
-  syncWorkboardAgentEnded,
   syncWorkboardSubagentEnded,
 } from "./lifecycle-sync.js";
 import { createLinkedCard } from "./lifecycle-sync.test-support.js";
@@ -252,6 +247,33 @@ describe("Workboard gateway lifecycle sync", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
+  it.each([-60_000, 60_000])(
+    "keeps the board debounce at 60 seconds after a %s ms wall-clock step",
+    async (wallClockStepMs) => {
+      const request = vi.fn(async () => {
+        vi.setSystemTime(Date.now() + wallClockStepMs);
+        return { ok: true, ran: true };
+      });
+      const { card, service } = await nudgeFixture(request);
+      const boards = await store.listBoards();
+      using lookup = vi.spyOn(store, "listBoards");
+      lookup.mockResolvedValue(boards);
+      vi.useFakeTimers();
+      try {
+        await service.nudge({ cards: [card] });
+        await vi.advanceTimersByTimeAsync(59_999);
+        await service.nudge({ cards: [card] });
+        expect(request).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(1);
+        await service.nudge({ cards: [card] });
+        expect(request).toHaveBeenCalledTimes(2);
+      } finally {
+        service.stop();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each(["failure", "disabled"] as const)(
     "handles %s automation without affecting lifecycle sync",
     async (outcome) => {
@@ -308,80 +330,24 @@ describe("Workboard gateway lifecycle sync", () => {
     expect((await read())?.status).toBe("review");
   });
 
-  it("defers incognito failure until its session settles without exposing private content", async () => {
-    const sessionKey = "agent:main:dashboard:incognito-agent-end";
-    const { card, read } = await runningCard(sessionKey);
-    let active = true;
-    const { request, readSessions } = sessionFixture(() => [
-      lifecycleSession(sessionKey, active ? "running" : "failed", card.updatedAt + 1, active),
-    ]);
-    const onMatched = vi.fn();
-
-    const handler = vi.fn(async (...args: unknown[]) =>
-      syncWorkboardAgentEnded({
-        store,
-        event: args[0] as Parameters<typeof syncWorkboardAgentEnded>[0]["event"],
-        context: args[1] as Parameters<typeof syncWorkboardAgentEnded>[0]["context"],
-        readSessions,
-        onMatched,
-        now: card.updatedAt + 1,
-      }),
-    );
-    const runner = createHookRunner(createMockPluginRegistry([{ hookName: "agent_end", handler }]));
-    await runner.runAgentEnd(
-      {
-        messages: [{ role: "user", content: "PRIVATE_INPUT" }],
-        error: "PRIVATE_ERROR",
-        success: false,
-      },
-      { runId: "run-agent", sessionKey },
-    );
-    const vetoed = await read();
-    expect(vetoed).toMatchObject({ status: "running", execution: { status: "running" } });
-    expect(vetoed?.metadata?.failureCount).toBeUndefined();
-    expect(
-      vetoed?.events?.some((event) => event.kind === "moved" && event.toStatus === "blocked"),
-    ).toBe(false);
-    expect(onMatched).not.toHaveBeenCalled();
-    active = false;
-    await sweepService(createWorkboardLifecycleService({ store, readSessions, onMatched }));
-    expect(onMatched).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith(
-      "sessions.describe",
-      { key: sessionKey, includeDerivedTitles: false, includeLastMessage: false },
-      { scopes: ["operator.read"] },
-    );
-    await expect(read()).resolves.toMatchObject({
-      status: "blocked",
-      execution: { status: "blocked" },
-    });
-    expect(JSON.stringify(handler.mock.calls)).not.toContain("PRIVATE_");
-  });
-
   it.each([true, false])(
-    "uses an exact event session rather than another agent's suffix (exact=%s)",
+    "requires the event's exact session identity (exact=%s)",
     async (exact) => {
       const sessionKey = "subagent:workboard-ops-card";
       const { card, read } = await runningCard(sessionKey);
-      const alphaKey = `agent:alpha:${sessionKey}`;
-      const updatedAt = exact ? card.updatedAt + 1 : undefined;
-      const sessions = [
-        lifecycleSession(alphaKey, "failed", updatedAt),
-        lifecycleSession(`agent:beta:${sessionKey}`, "running", updatedAt, true),
-      ];
-      const readSessions = vi.fn().mockResolvedValue(lifecycleSnapshot(...sessions));
-      await syncWorkboardAgentEnded({
-        store,
-        event: { runId: "run-agent", success: false },
-        context: { runId: "run-agent", ...(exact ? { sessionKey: alphaKey } : {}) },
-        now: card.updatedAt + 2,
-        readSessions,
+      const service = managedService(async () => lifecycleSnapshot());
+      await service.start(serviceContext());
+      await service.onRunSettled({
+        stream: "lifecycle",
+        runId: "run-agent",
+        seq: 1,
+        ts: card.updatedAt + 1,
+        ...(exact ? { sessionKey: `agent:alpha:${sessionKey}` } : {}),
+        data: { phase: "error", executionSettled: true, error: "PRIVATE_ERROR" },
       });
-      await expect(read()).resolves.toMatchObject(
-        exact
-          ? { status: "blocked", execution: { status: "blocked" }, metadata: { failureCount: 1 } }
-          : { status: "running", execution: { status: "running" } },
-      );
+      const result = await read();
+      expect(result?.status).toBe(exact ? "blocked" : "running");
+      expect(JSON.stringify(result)).not.toContain("PRIVATE_ERROR");
     },
   );
 
@@ -568,25 +534,35 @@ describe("Workboard lifecycle service", () => {
     vi.useFakeTimers();
   });
   afterEach(() => vi.useRealTimers());
-  it("uses the active service reader from prepared hooks across replacement", async () => {
+  it("discards a queued settlement when the service owner is replaced", async () => {
+    const sessionKey = "agent:main:retired-settlement";
+    const card = await createLinkedCard(store, { status: "running", sessionKey });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const list = store.list.bind(store);
+    using read = vi.spyOn(store, "list");
+    read.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return list();
+    });
     const original = managedService(async () => lifecycleSnapshot());
-    const readReplacement = vi.fn(async () => lifecycleSnapshot());
-    const replacement = managedService(readReplacement);
-    const preparedReader = vi.fn(async () => lifecycleSnapshot());
-    const prepared = managedService(preparedReader);
-    const readPrepared = () => prepared.readSessions({ sessionKey: "agent:main:card" });
-    const context = serviceContext();
-    await original.start(context);
-    await expect(readPrepared()).resolves.toEqual(lifecycleSnapshot());
+    const replacement = managedService(async () => lifecycleSnapshot());
+    await original.start(serviceContext());
+    const pending = original.onRunSettled({
+      sessionKey,
+      runId: "run-agent",
+      stream: "lifecycle",
+      seq: 1,
+      ts: card.updatedAt + 1,
+      data: { phase: "end", executionSettled: true },
+    });
+    await entered.promise;
     original.stop();
-    await replacement.start(context);
-    original.stop();
-    await expect(readPrepared()).resolves.toEqual(lifecycleSnapshot());
-    expect(readReplacement).toHaveBeenCalledOnce();
-    expect(preparedReader).not.toHaveBeenCalled();
-    replacement.stop();
-    await expect(readPrepared()).resolves.toEqual({ sessions: [], complete: false });
-    expect(readReplacement).toHaveBeenCalledOnce();
+    await replacement.start(serviceContext());
+    release.resolve();
+    await pending;
+    expect((await store.get(card.id))?.status).toBe("running");
   });
 
   it.each(["interval", "plugin reload"] as const)(

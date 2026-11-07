@@ -1,9 +1,11 @@
 export type {
+  MusicGenerationProvider,
+  MusicGenerationRequest,
+} from "../music-generation/provider-types.js";
+export type {
   GeneratedMusicAsset,
   MusicGenerationModeCapabilities,
-  MusicGenerationProvider,
   MusicGenerationProviderCapabilities,
-  MusicGenerationRequest,
   MusicGenerationSourceImage,
 } from "../music-generation/types.js";
 export {

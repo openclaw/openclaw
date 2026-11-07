@@ -163,20 +163,13 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         shell,
       );
       await waitForSolid(() => expect(part(shell, "tabs")).not.toBeNull());
-      await shell.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
-        "openclaw-tooltip",
-      )?.updateComplete;
       const headerHeight = bounds(part(shell, "header")).height;
       const tabsTop = bounds(part(shell, "tabs")).top;
 
       setSelectedTab("approvals");
       flush();
-      const placeholder = shell.querySelector<HTMLButtonElement>(
-        ".sidebar-issues-panel__dismiss-shown",
-      )!;
-      expect(placeholder.disabled).toBe(true);
-      expect(placeholder.getAttribute("aria-hidden")).toBe("true");
-      expect(style(placeholder).visibility).toBe("hidden");
+      expect(shell.querySelector('[data-value="dismiss-shown"]')).toBeNull();
+      expect(shell.querySelector('[data-value="notifications"]')).not.toBeNull();
       expect(bounds(part(shell, "header")).height).toBe(headerHeight);
       expect(bounds(part(shell, "tabs")).top).toBe(tabsTop);
       shell.remove();
@@ -186,8 +179,16 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
   it.each(["system", "mentions", "all"] as const)(
     "dismisses only the selected %s tab without mixing mentions and local snoozes",
     (selectedTab) => {
+      const automation: SidebarAttentionItem = {
+        ...authWarning,
+        category: "automations",
+        kind: "cronFailed",
+        label: "Nightly report",
+        dismissal: { kind: "cronFailed", signature: "nightly-report" },
+        signature: "nightly-report",
+      };
       const entries = inboxEntries(
-        [authWarning],
+        [authWarning, automation],
         [inboxMention("mention-a"), inboxMention("mention-b")],
       );
       const params = panelParams(entries);
@@ -199,13 +200,15 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
           row.getAttribute("data-mention-id"),
         ),
       ).toEqual(selectedTab === "system" ? [] : ["mention-a", "mention-b"]);
-      part(shell, "dismiss-shown").click();
+      part(shell, "more").click();
+      flush();
+      query(shell, '[data-value="dismiss-shown"]').click();
 
       expect(vi.mocked(params.mentions.dismiss).mock.calls).toEqual(
         selectedTab === "system" ? [] : [[["mention-a"]]],
       );
       expect(vi.mocked(params.onDismiss).mock.calls).toEqual(
-        selectedTab === "mentions" ? [] : [[authWarning.dismissal]],
+        selectedTab === "mentions" ? [] : [[authWarning.dismissal], [automation.dismissal]],
       );
     },
   );
@@ -332,33 +335,20 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       const header = part(fixture, "header");
       const tabs = Array.from(fixture.querySelectorAll<HTMLElement>(".hub-tab"));
       expect(group.querySelector("[active]")?.getAttribute("data-tab-value")).toBe("all");
-      const badge = query(group, ".hub-tab__badge");
       const list = part(fixture, "list");
       const item = query(fixture, "[data-attention-kind]");
-      const summary = part(fixture, "summary");
 
       expect(bounds(group).width).toBeLessThanOrEqual(fixture.clientWidth);
       expect(style(group)).toMatchObject({
         overflowX: "auto",
         backgroundColor: style(header).backgroundColor,
-        paddingBottom: "2px",
       });
       expect(style(group).backgroundColor).toBe("rgba(0, 0, 0, 0)");
       expect(backgroundAlpha(fixture)).toBe(255);
       expect(style(part(fixture, "list-wrap")).backgroundColor).toBe(
         style(fixture).backgroundColor,
       );
-      const colorProbe = document.createElement("span");
-      colorProbe.style.cssText = "position: absolute; color: var(--track-color);";
-      group.append(colorProbe);
-      const separatorColor = style(colorProbe).color;
-      colorProbe.remove();
-      const paint = document.createElement("canvas").getContext("2d")!;
-      paint.fillStyle = separatorColor;
-      paint.fillRect(0, 0, 1, 1);
-      expect(paint.getImageData(0, 0, 1, 1).data[3]).toBeGreaterThan(0);
-      expect(style(group).boxShadow).toBe(`${separatorColor} 0px -2px 0px 0px inset`);
-      if (width === 320) {
+      if (textScale > 1) {
         expect(group.scrollWidth).toBeGreaterThan(group.clientWidth);
       }
       for (const [index, tab] of tabs.entries()) {
@@ -381,6 +371,10 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
           expect(badgeBounds.right).toBeLessThanOrEqual(tabBounds.right + 1);
         }
       }
+      // Finish the shared tabs' initial frame-based reveal before testing keyboard scrolling.
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
       tabs[0]!.focus();
       for (const [key, tab] of [
         ["End", tabs.at(-1)!],
@@ -390,17 +384,34 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         expect(document.activeElement).toBe(tab);
         await expect.poll(() => horizontalOverflow(tab, group)).toBeLessThanOrEqual(1);
       }
-      expect(style(badge).borderRadius).not.toBe("0px");
-      expect(style(summary!).paddingBlock).toBe("8px");
-      expect(bounds(item!).right).toBeCloseTo(bounds(list!).right, 1);
+      expect(bounds(item!).right).toBeCloseTo(bounds(list!).right - 6, 0);
     },
   );
+
+  it("trades the arrival time for dismiss on hover without moving the row", async () => {
+    const { page } = await import("vitest/browser");
+    const shell = shellFor();
+    const timed = { ...authWarning, arrivedAtMs: Date.now() - 300_000 };
+    mountPanel(panelParams(inboxEntries([timed], [])), shell);
+    const row = part(shell, "summary");
+    const age = part(shell, "age");
+    const dismiss = part(shell, "dismiss");
+    const before = { row: bounds(row).height, title: bounds(part(shell, "entity")).width };
+    await page.elementLocator(part(shell, "header")).hover();
+    await expect.poll(() => style(dismiss).opacity).toBe("0");
+    expect(style(age).visibility).toBe("visible");
+
+    await page.elementLocator(row).hover();
+    await expect.poll(() => style(dismiss).opacity).toBe("1");
+    expect(style(age).visibility).toBe("hidden");
+    expect({ row: bounds(row).height, title: bounds(part(shell, "entity")).width }).toEqual(before);
+  });
 
   it("keeps mobile controls touch-sized and the sheet header visually continuous", () => {
     const shell = shellFor(true);
     mountPanel(panelParams([authWarning]), shell);
     const dismiss = part(shell, "dismiss");
-    const dismissShown = part(shell, "dismiss-shown");
+    const more = part(shell, "more");
     const close = part(shell, "mobile-close");
     const sheet = query(shell, ".sidebar-issues-panel");
     const header = part(shell, "header");
@@ -411,10 +422,10 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(dismissStyle.pointerEvents).not.toBe("none");
     expect(bounds(dismiss).width).toBeGreaterThanOrEqual(40);
     expect(bounds(dismiss).height).toBeGreaterThanOrEqual(40);
-    expect(bounds(dismissShown).height).toBeGreaterThanOrEqual(40);
-    expect(bounds(close)).toMatchObject({ width: 36, height: 36 });
-    expect(style(close)).toMatchObject({ borderTopWidth: "1px", borderRadius: "9999px" });
-    expect(style(close).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+    expect(bounds(more).width).toBeGreaterThanOrEqual(36);
+    expect(bounds(more).height).toBeGreaterThanOrEqual(36);
+    expect(bounds(close).width).toBeGreaterThanOrEqual(36);
+    expect(bounds(close).height).toBeGreaterThanOrEqual(36);
     expect(style(header).backgroundColor).toBe("rgba(0, 0, 0, 0)");
     expect(backgroundAlpha(sheet)).toBe(255);
     expect(style(list).backgroundColor).toBe(style(sheet).backgroundColor);

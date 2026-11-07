@@ -31,6 +31,7 @@ function resolveWithStoredEntry(params?: {
   forceNew?: boolean;
   fresh?: boolean;
   exactRunSession?: boolean;
+  inferenceCaptured?: boolean;
 }) {
   const sessionKey = params?.sessionKey ?? "webhook:stable-key";
   const sourceSessionKey = params?.sourceSessionKey;
@@ -54,6 +55,7 @@ function resolveWithStoredEntry(params?: {
     nowMs: NOW_MS,
     forceNew: params?.forceNew,
     exactRunSession: params?.exactRunSession,
+    inferenceCaptured: params?.inferenceCaptured,
     store,
     lifecycleTimestamps: {},
   });
@@ -160,6 +162,10 @@ it.each([true, false])("resets routing and runtime handles (forced=$0)", (forceN
   const preferences = {
     pinnedAt: NOW_MS - 500,
     sidebarRoot: true,
+    label: "Scheduled check",
+    displayName: "My scheduled check",
+    category: "Automations",
+    icon: "🤖",
     modelOverride: "claude-sonnet-4-6",
     providerOverride: "anthropic",
     modelOverrideSource: "user" as const,
@@ -205,11 +211,8 @@ it.each([true, false])("resets routing and runtime handles (forced=$0)", (forceN
           }),
     },
   });
-  expect(result).toMatchObject({
-    isNewSession: true,
-    systemSent: false,
-    previousSessionId: forceNew ? "old-session" : undefined,
-  });
+  expect(result).toMatchObject({ isNewSession: true, systemSent: false });
+  expect(result.previousSessionId).toBe(forceNew ? "old-session" : undefined);
   expect(result.lifecycleRevision).not.toBe("old-revision");
   expectObjectFields(result.sessionEntry, { agentHarnessId: undefined, delivery: undefined });
   expect(result.sessionEntry).not.toHaveProperty("channel");
@@ -245,10 +248,8 @@ it("keeps a provider-owned CLI session with the default reset policy", () => {
       cliSessionBindings: { "claude-cli": { sessionId: "cli-conversation-xyz" } },
     },
   });
-  expect(result).toMatchObject({
-    isNewSession: false,
-    sessionEntry: { sessionId: "old-session-id" },
-  });
+  expect(result.isNewSession).toBe(false);
+  expect(result.sessionEntry.sessionId).toBe("old-session-id");
   expect(getCliSessionBinding(result.sessionEntry, "claude-cli")).toEqual({
     sessionId: "cli-conversation-xyz",
   });
@@ -281,5 +282,44 @@ it.each([
     const result = resolveWithStoredEntry({ forceNew: true, entry });
     expect(result.isNewSession).toBe(true);
     expectObjectFields(result.sessionEntry, expected);
+  },
+);
+
+it.each([
+  { name: "a captured job copying its conversation", source: true, captured: true, carries: false },
+  {
+    name: "an uncaptured job copying its conversation",
+    source: true,
+    captured: false,
+    carries: true,
+  },
+  { name: "a captured job rolling its own row", source: false, captured: true, carries: true },
+])(
+  "seeds inference selection only when it is not captured ($name)",
+  ({ source, captured, carries }) => {
+    const selection = {
+      modelOverride: "gpt-4.1",
+      providerOverride: "openai",
+      modelOverrideSource: "user" as const,
+      agentRuntimeOverride: "codex",
+      authProfileOverride: "work-profile",
+      authProfileOverrideSource: "user" as const,
+    };
+    const result = resolveWithStoredEntry({
+      sessionKey: "agent:main:cron:job-1",
+      ...(source ? { sourceSessionKey: "agent:main:dashboard:parent" } : {}),
+      forceNew: true,
+      inferenceCaptured: captured,
+      entry: { thinkingLevel: "high", ...selection },
+    });
+    // Preferences other than inference keep following the copied row.
+    expect(result.sessionEntry.thinkingLevel).toBe("high");
+    if (carries) {
+      expect(result.sessionEntry).toMatchObject(selection);
+    } else {
+      for (const field of Object.keys(selection)) {
+        expect(result.sessionEntry).not.toHaveProperty(field);
+      }
+    }
   },
 );

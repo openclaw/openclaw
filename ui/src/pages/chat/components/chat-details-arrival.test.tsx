@@ -1,9 +1,14 @@
 /* @vitest-environment jsdom */
-import { createComponent, createSignal } from "solid-js";
+import { Loading, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
+import {
+  compactCronJobFixture,
+  createCronJob,
+  cronJobsListResponse,
+} from "../../../test-helpers/cron.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -47,14 +52,11 @@ function mountDetails(overrides: Partial<ChatDetailsProps> = {}) {
     ...overrides,
   };
   const [details, setDetails] = createSignal(initial);
-  const view = mountSolid(() =>
-    createComponent(ChatDetailsDesktopComposition, {
-      get props() {
-        return details();
-      },
-      presented: true,
-    }),
-  );
+  const view = mountSolid(() => (
+    <Loading>
+      <ChatDetailsDesktopComposition props={details()} presented />
+    </Loading>
+  ));
   flush();
   onTestFinished(() => {
     view.unmount();
@@ -111,68 +113,36 @@ it("keeps unknown and empty desktop Outputs and Progress quiet during slow reads
   expect(view.container.textContent).toContain("Review the layout");
 });
 
-it("appends late desktop automations after retained Outputs and task progress", async () => {
-  const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
-  const request = createGatewayRequestMock(() => pending.promise);
-  const { gateway, publish } = createApplicationGateway();
-  publish({
-    ...gateway.snapshot,
-    client: createTestGatewayClient(request),
-    phase: "connected",
-    hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: ["operator.read"] } },
-    assistantAgentId: "main",
+it("replaces cached progress after a failed child read settles", async () => {
+  const progressCard = {
     sessionKey: "agent:main:arrival",
-  });
-  const view = mountDetails({ pullRequestsGateway: gateway });
-  view.update({
-    outputs: { ...view.initial.outputs!, dashboard: { title: "Build report", onOpen() {} } },
-    progressCard: {
-      sessionKey: view.initial.sessionKey,
-      revision: 1,
-      updatedAt: 1,
-      steps: [{ step: "Review the layout", status: "in_progress" }],
+    revision: 1,
+    updatedAt: 1,
+    steps: [{ step: "Review the layout", status: "in_progress" as const }],
+  };
+  const view = mountDetails({
+    connected: true,
+    progressCardInitialLoading: false,
+    progressCard,
+    runActive: false,
+    selectedSession: { key: progressCard.sessionKey, kind: "direct", status: "done", endedAt: 2 },
+    cachedDetails: {
+      locale: "en",
+      progress: {
+        revision: 1,
+        updatedAt: 1,
+        hasActiveRun: true,
+        sessionStatus: "running",
+        startedAt: 1,
+        runtime: { known: true, connected: true, hasActiveSubagentRun: true },
+      },
     },
   });
-  const outputs = view.group("outputs")!;
-  const progress = view.container.querySelector("openclaw-chat-details-progress")!;
-  expect(view.group("automations")).toBeNull();
-  const jobs: CronCompactJob[] = Array.from({ length: 10 }, (_, index) => ({
-    id: `arrival-${index}`,
-    name: `Scheduled check ${index}`,
-    agentId: "main",
-    enabled: true,
-    updatedAtMs: 1,
-    nextRunAt: null,
-    nextRunAtMs: null,
-    scheduleKind: "every",
-    schedule: { kind: "every", everyMs: 600_000 },
-    lastRunAt: null,
-    lastRunAtMs: null,
-    lastRunStatus: null,
-    lastRunError: null,
-  }));
-  pending.resolve({
-    jobs,
-    snapshotRevision: "arrival-1",
-    offset: 0,
-    limit: 50,
-    total: jobs.length,
-    hasMore: false,
-    nextOffset: null,
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
-  const automations = view.group("automations")!;
-  expect(automations.querySelectorAll(".chat-summary__automation")).toHaveLength(10);
-  expect(view.group("outputs")).toBe(outputs);
-  expect(view.container.querySelector("openclaw-chat-details-progress")).toBe(progress);
-  expect(outputs.compareDocumentPosition(automations) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(
-    0,
+  await waitForSolid(() =>
+    expect(view.container.textContent).toContain("Waiting for delegated work"),
   );
-  expect(progress.compareDocumentPosition(automations) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(
-    0,
-  );
-  expect(request).toHaveBeenCalledOnce();
+  view.update({ subagentSessionsUnavailable: true });
+  await waitForSolid(() => expect(view.container.textContent).toContain("No active work"));
 });
 
 it("admits each real Environment content source without an empty section", async () => {
@@ -215,32 +185,22 @@ it("admits each real Environment content source without an empty section", async
   expect(view.group("environment")?.textContent).toContain("worker:device");
 });
 
-function automationPage(name: string): CronJobsListResult<CronCompactJob> {
-  return {
-    jobs: [
-      {
-        id: name,
-        name,
+async function advance() {
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+}
+
+function automationPage(name: string, count = 1): CronJobsListResult<CronCompactJob> {
+  const page = cronJobsListResponse(
+    Array.from({ length: count }, (_, index) =>
+      createCronJob(`scheduled-${index}`, count === 1 ? name : `${name} ${index}`, {
         agentId: "main",
-        enabled: true,
         updatedAtMs: 1,
-        nextRunAt: null,
-        nextRunAtMs: null,
-        scheduleKind: "every",
         schedule: { kind: "every", everyMs: 600_000 },
-        lastRunAt: null,
-        lastRunAtMs: null,
-        lastRunStatus: null,
-        lastRunError: null,
-      },
-    ],
-    snapshotRevision: name,
-    offset: 0,
-    limit: 50,
-    total: 1,
-    hasMore: false,
-    nextOffset: null,
-  };
+      }),
+    ),
+  );
+  return { ...page, snapshotRevision: name, jobs: page.jobs.map(compactCronJobFixture) };
 }
 
 function automationGateway(request: ReturnType<typeof createGatewayRequestMock>) {
@@ -256,35 +216,138 @@ function automationGateway(request: ReturnType<typeof createGatewayRequestMock>)
   return { gateway, publish };
 }
 
-it("retires an automation page when the logical session changes", async () => {
-  const retired = createDeferred<CronJobsListResult<CronCompactJob>>();
-  const current = createDeferred<CronJobsListResult<CronCompactJob>>();
-  const request = createGatewayRequestMock()
-    .mockReturnValueOnce(retired.promise)
-    .mockReturnValueOnce(current.promise);
-  const view = mountDetails({ pullRequestsGateway: automationGateway(request).gateway });
-  expect(request).toHaveBeenCalledOnce();
-  view.update({
-    sessionKey: "agent:main:replacement",
-    selectedSession: { key: "agent:main:replacement", kind: "direct", sessionId: "replacement-1" },
+it("retains cached Subagents until the roster observes its parent, then adopts no children", async () => {
+  const remember = vi.fn<NonNullable<ChatDetailsProps["onDetailsSnapshot"]>>();
+  const open = vi.fn();
+  const view = mountDetails({
+    selectedSession: undefined,
+    subagentSessionsHydrated: true,
+    onOpenSubagent: open,
+    onOpenSubagents: open,
+    onDetailsSnapshot: remember,
+    cachedDetails: {
+      locale: "en",
+      subagents: {
+        total: 1,
+        rows: [{ key: "agent:main:subagent:review", label: "Review", status: "done" }],
+        counts: [{ status: "done", count: 1 }],
+      },
+    },
   });
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(request.mock.calls[1]?.[1]).toMatchObject({
-    sessionKey: "agent:main:replacement",
-    sessionAgentId: "main",
-  });
-  retired.resolve(automationPage("Retired automation"));
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
-  expect(view.container.textContent).not.toContain("Retired automation");
-
-  current.resolve(automationPage("Current automation"));
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
-  expect(view.group("automations")?.textContent).toContain("Current automation");
-  expect(view.container.textContent).not.toContain("Retired automation");
-  expect(request).toHaveBeenCalledTimes(2);
+  const pending: Partial<ChatDetailsProps>[] = [
+    {},
+    { selectedSession: { key: view.initial.sessionKey, kind: "direct" } },
+    { subagentSessions: [] },
+    {
+      subagentSessions: [
+        {
+          key: "agent:main:subagent:partial",
+          kind: "direct",
+          derivedTitle: "Partial child",
+          parentSessionKey: view.initial.sessionKey,
+        },
+      ],
+    },
+  ];
+  for (const facts of pending) {
+    view.update(facts);
+    await advance();
+    expect(view.group("subagents")?.textContent).toContain("Review");
+    view
+      .group("subagents")!
+      .querySelector<HTMLButtonElement>("button[data-subagent-session-key]")!
+      .click();
+    expect(open).not.toHaveBeenCalled();
+    expect(remember).not.toHaveBeenCalled();
+  }
+  view.update({ subagentSessions: [{ key: view.initial.sessionKey, kind: "direct" }] });
+  await advance();
+  expect(view.group("subagents")).toBeNull();
+  expect(remember).toHaveBeenCalledWith(
+    expect.objectContaining({ subagents: { total: 0, rows: [], counts: [] } }),
+  );
 });
+
+it.each(["empty", "unavailable", "unavailable-with-parent-facts"] as const)(
+  "retains ordinary child display until its live roster is %s, without cached navigation",
+  async (outcome) => {
+    const remember = vi.fn<NonNullable<ChatDetailsProps["onDetailsSnapshot"]>>();
+    const open = vi.fn();
+    const view = mountDetails({
+      selectedSession: undefined,
+      onSessionSelect: open,
+      onDetailsSnapshot: remember,
+      cachedDetails: {
+        locale: "en",
+        subagents: {
+          total: 1,
+          counts: [{ status: "done", count: 1, listed: false }],
+          rows: [
+            {
+              key: "agent:main:review",
+              label: "Cached review",
+              status: "done",
+              listed: false,
+            },
+          ],
+        },
+      },
+    });
+    await advance();
+    await waitForSolid(() =>
+      expect(view.group("subagents")?.textContent).toContain("Cached review"),
+    );
+    expect(view.group("subagents")!.querySelector("button.chat-subagent-activity__row")).toBeNull();
+    expect(remember).not.toHaveBeenCalled();
+    view.update({
+      selectedSession: { key: view.initial.sessionKey, kind: "direct" },
+      subagentSessionsHydrated: true,
+      subagentSessions: [],
+    });
+    await advance();
+    expect(view.group("subagents")?.textContent).toContain("Cached review");
+    expect(remember).not.toHaveBeenCalled();
+    const parent = { key: view.initial.sessionKey, kind: "direct" as const };
+    view.update(
+      outcome === "empty"
+        ? { subagentSessions: [parent] }
+        : {
+            subagentSessionsUnavailable: true,
+            ...(outcome === "unavailable-with-parent-facts"
+              ? {
+                  subagentSessions: [
+                    parent,
+                    {
+                      key: "agent:main:live-review",
+                      kind: "direct",
+                      label: "Known live review",
+                      parentSessionKey: parent.key,
+                      status: "done",
+                    },
+                  ],
+                }
+              : {}),
+          },
+    );
+    await advance();
+    if (outcome === "unavailable-with-parent-facts") {
+      expect(view.group("subagents")?.textContent).toContain("Known live review");
+      expect(view.group("subagents")?.textContent).not.toContain("Cached review");
+    } else {
+      expect(view.group("subagents")).toBeNull();
+    }
+    expect(remember).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subagents: {
+          total: 0,
+          rows: [],
+          counts: [],
+        },
+      }),
+    );
+    expect(open).not.toHaveBeenCalled();
+  },
+);
 
 it.each([false, true])(
   "keeps disclosure reset and restored preference: controlled=%s",
@@ -299,8 +362,7 @@ it.each([false, true])(
         ? { desktopDisclosures: { expanded: { automations: false }, onExpandedChange } }
         : {}),
     });
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
+    await advance();
     const summary = () => view.group("automations")!.querySelector("summary")!;
     expect(summary().getAttribute("aria-expanded")).toBe(controlled ? "false" : "true");
     if (!controlled) {
@@ -310,51 +372,12 @@ it.each([false, true])(
     }
     view.update({ selectedSession: undefined });
     view.update({ selectedSession: view.initial.selectedSession });
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
+    await advance();
     expect(summary().getAttribute("aria-expanded")).toBe(controlled ? "false" : "true");
     expect(request).toHaveBeenCalledOnce();
     expect(onExpandedChange).not.toHaveBeenCalled();
   },
 );
-
-it("resets only the automation reveal count across physical identity changes", async () => {
-  const page = automationPage("Scheduled check");
-  page.jobs = Array.from({ length: 12 }, (_, index) => ({
-    ...page.jobs[0]!,
-    id: `scheduled-${index}`,
-    name: `Scheduled check ${index}`,
-  }));
-  page.total = page.jobs.length;
-  const request = createGatewayRequestMock(() => Promise.resolve(page));
-  const view = mountDetails({ pullRequestsGateway: automationGateway(request).gateway });
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
-  const count = () =>
-    view.group("automations")!.querySelectorAll(".chat-summary__automation").length;
-  const more = () =>
-    view.group("automations")!.querySelector<HTMLButtonElement>(".chat-summary__automation-more")!;
-  expect(count()).toBe(10);
-  more().click();
-  flush();
-  expect(count()).toBe(12);
-  view.update({ progressCardInitialLoading: false });
-  expect(count()).toBe(12);
-
-  view.update({ selectedSession: undefined });
-  view.update({ selectedSession: view.initial.selectedSession });
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
-  expect(count()).toBe(10);
-  more().click();
-  flush();
-  expect(count()).toBe(12);
-  view.update({ selectedSession: { ...view.initial.selectedSession!, sessionId: "arrival-2" } });
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
-  expect(count()).toBe(10);
-  expect(request).toHaveBeenCalledOnce();
-});
 
 it("accepts one replacement-client page while its physical session row is restored", async () => {
   const retired = createDeferred<CronJobsListResult<CronCompactJob>>();
@@ -377,12 +400,10 @@ it("accepts one replacement-client page while its physical session row is restor
   expect(newRequest).toHaveBeenCalledOnce();
 
   retired.resolve(automationPage("Retired client automation"));
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
+  await advance();
   expect(view.container.textContent).not.toContain("Retired client automation");
   current.resolve(automationPage("Replacement client automation"));
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
+  await advance();
   expect(view.group("automations")?.textContent).toContain("Replacement client automation");
   expect(view.container.textContent).not.toContain("Retired client automation");
   expect(oldRequest).toHaveBeenCalledOnce();
@@ -393,13 +414,8 @@ it("accepts one replacement-client page while its physical session row is restor
   expect(newRequest).toHaveBeenCalledOnce();
 });
 
-it("does not reapply a pending reveal after the same physical identity is restored", async () => {
-  const first = automationPage("Scheduled check");
-  first.jobs = Array.from({ length: 50 }, (_, index) => ({
-    ...first.jobs[0]!,
-    id: `scheduled-${index}`,
-    name: `Scheduled check ${index}`,
-  }));
+it("resets reveals on physical identity changes without reapplying a pending reveal", async () => {
+  const first = automationPage("Scheduled check", 50);
   first.total = 51;
   first.hasMore = true;
   first.nextOffset = 50;
@@ -408,8 +424,7 @@ it("does not reapply a pending reveal after the same physical identity is restor
     .mockResolvedValueOnce(first)
     .mockReturnValueOnce(appended.promise);
   const view = mountDetails({ pullRequestsGateway: automationGateway(request).gateway });
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
+  await advance();
   const group = () => view.group("automations")!;
   const count = () => group().querySelectorAll(".chat-summary__automation").length;
   const more = () => group().querySelector<HTMLButtonElement>(".chat-summary__automation-more")!;
@@ -419,6 +434,17 @@ it("does not reapply a pending reveal after the same physical identity is restor
     flush();
     expect(count()).toBe(expected);
     expect(request).toHaveBeenCalledOnce();
+  }
+  view.update({ progressCardInitialLoading: false });
+  expect(count()).toBe(50);
+  view.update({ selectedSession: undefined });
+  view.update({ selectedSession: view.initial.selectedSession });
+  await advance();
+  expect(count()).toBe(10);
+  for (const expected of [20, 30, 40, 50]) {
+    more().click();
+    flush();
+    expect(count()).toBe(expected);
   }
   const button = more();
   button.focus();
@@ -438,8 +464,7 @@ it("does not reapply a pending reveal after the same physical identity is restor
     offset: 50,
     total: 51,
   });
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
+  await advance();
   expect(count()).toBe(10);
   expect(group().textContent).not.toContain("Appended automation");
   expect(request).toHaveBeenCalledTimes(2);
@@ -451,4 +476,8 @@ it("does not reapply a pending reveal after the same physical identity is restor
     expect(request).toHaveBeenCalledTimes(2);
   }
   expect(group().textContent).toContain("Appended automation");
+  view.update({ selectedSession: { ...view.initial.selectedSession!, sessionId: "arrival-2" } });
+  await advance();
+  expect(count()).toBe(10);
+  expect(request).toHaveBeenCalledTimes(2);
 });

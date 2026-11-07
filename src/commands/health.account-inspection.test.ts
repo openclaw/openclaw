@@ -19,13 +19,14 @@ async function inspectAccounts(
   plugins = [
     { ...health.createChannelTestPluginBase({ id, label: "Inspection" }), config, status },
   ];
-  return (await health.getHealthSnapshot({ probe: true })).channels[id]?.accounts;
+  return (await health.collectGatewayHealthSnapshot({ audience: "admin", probe: true })).channels[
+    id
+  ]?.accounts;
 }
 beforeAll(async () => {
   health = await loadFreshHealthModulesForTest({
     getConfig: () => ({}),
     getSessionStorePath: () => sessionStorePath,
-    getSessions: () => ({}),
     getPlugins: () => plugins,
   });
 });

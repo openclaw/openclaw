@@ -25,8 +25,8 @@ import {
   parseCsvFilter,
   parseProviderModelMap,
   redactLiveApiKey,
-  resolveConfiguredLiveMusicModels,
-  resolveLiveMusicAuthStore,
+  resolveConfiguredLiveProviderModels,
+  resolveLiveAuthStore,
 } from "openclaw/plugin-sdk/test-media-generation";
 import { describe, expect, it, vi } from "vitest";
 import falPlugin from "./fal/index.js";
@@ -174,7 +174,9 @@ describeLive("music generation provider live", () => {
     "covers generate plus declared edit paths with shell/profile auth",
     async ({ skip }) => {
       const cfg = withPluginsEnabled(await readLiveTestConfig());
-      const configuredModels = resolveConfiguredLiveMusicModels(cfg);
+      const configuredModels = resolveConfiguredLiveProviderModels(
+        cfg.agents?.defaults?.mediaModels?.music,
+      );
       const agentDir = resolveDefaultAgentDir(cfg as never);
       const attempted: string[] = [];
       const skipped: string[] = [];
@@ -193,7 +195,7 @@ describeLive("music generation provider live", () => {
         }
 
         const hasLiveKeys = collectProviderApiKeys(testCase.providerId).length > 0;
-        const authStore = resolveLiveMusicAuthStore({
+        const authStore = resolveLiveAuthStore({
           requireProfileKeys: REQUIRE_PROFILE_KEYS,
           hasLiveKeys,
         });

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -11,7 +12,6 @@ import { addSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import * as persistence from "./subagents/registry/subagent-registry-persistence.js";
 import { mutateSubagentRuns } from "./subagents/registry/subagent-registry-persistence.js";
 import {
@@ -209,10 +209,7 @@ describe("requester yield ownership", () => {
     resetProcessRegistryForTests();
   });
 
-  it.each([
-    [CRON_RUN_KEY, false, "no requester continuation"],
-    ["agent:main:subagent:collector", true, "collected explicitly"],
-  ] as const)(
+  it.each([["agent:main:subagent:collector", true, "collected explicitly"]] as const)(
     "rejects %s before claim, intent, or yield",
     async (requesterSessionKey, swarmCollector, error) => {
       await seedRequiredChild(requesterSessionKey);
@@ -443,18 +440,20 @@ describe("requester yield ownership", () => {
     }
   });
 
-  it("omits yield for the execution identity and leaves its child owned", async () => {
+  it("ends the automation execution and leaves child delivery scheduler-owned", async () => {
     await seedRequiredChild();
     const before = structuredClone(getSubagentRunByRunId("run-child"));
+    const onYield = vi.fn();
     const tools = createTestOpenClawTools({
       sessionKey: "agent:main:telegram:default:direct:1234",
       runSessionKey: CRON_RUN_KEY,
       sessionId: "cron-requester-session",
       runId: "run-requester",
-      onYield: vi.fn(),
+      onYield,
     });
 
-    expect(tools.map((tool) => tool.name)).not.toContain("sessions_yield");
+    await expectYield(requireTool(tools, "sessions_yield"), "yielded");
+    expect(onYield).toHaveBeenCalledExactlyOnceWith("Turn yielded.", undefined, undefined);
     expect(getSubagentRunByRunId("run-child")).toEqual(before);
   });
 
@@ -586,7 +585,7 @@ describe("requester yield ownership", () => {
         runtimeToolAllowlist: runtime,
         inheritRuntimeToolAllowlist: true,
       });
-      expect(parent.map((tool) => tool.name)).not.toContain("sessions_yield");
+      expect(parent.some((tool) => tool.name === "sessions_yield")).toBe(allowed);
       expect(inheritedToolAllowlistRef.includes("sessions_yield")).toBe(allowed);
       const childSessionKey = "agent:main:subagent:policy-child";
       await replaceSessionEntry(
