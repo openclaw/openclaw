@@ -6,6 +6,10 @@ import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.ui.OpenClawTheme
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.icons.filled.FlipCameraAndroid
+import ai.openclaw.app.ui.icons.filled.PhotoCamera
+import ai.openclaw.app.ui.icons.filled.Stop
+import ai.openclaw.app.ui.icons.filled.Videocam
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
@@ -43,10 +47,6 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.FlipCameraAndroid
-import androidx.compose.material.icons.filled.PhotoCamera
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton

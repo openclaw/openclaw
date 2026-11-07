@@ -3,6 +3,8 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.icons.filled.Stop
+import ai.openclaw.app.ui.icons.outlined.MicNone
 import ai.openclaw.app.voice.SpeechRecognitionListenerAdapter
 import android.content.Context
 import android.content.Intent
@@ -17,8 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text

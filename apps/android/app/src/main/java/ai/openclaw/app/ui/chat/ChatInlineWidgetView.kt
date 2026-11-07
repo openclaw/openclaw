@@ -9,6 +9,8 @@ import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.AppDropdownMenu
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.icons.filled.ContentCopy
+import ai.openclaw.app.ui.icons.filled.Download
 import android.annotation.SuppressLint
 import android.os.Handler
 import android.os.Looper
@@ -29,8 +31,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon

@@ -3,12 +3,12 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.accessibility.AccessibilityComponentController
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.ui.icons.automirrored.filled.ScreenShare
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState

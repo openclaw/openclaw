@@ -10,6 +10,8 @@ import ai.openclaw.app.parseClawHubSearchResults
 import ai.openclaw.app.ui.SettingsRefreshControls
 import ai.openclaw.app.ui.SettingsSummaryContent
 import ai.openclaw.app.ui.chat.ChatMarkdown
+import ai.openclaw.app.ui.icons.filled.Cloud
+import ai.openclaw.app.ui.icons.filled.Mic
 import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -26,8 +28,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton

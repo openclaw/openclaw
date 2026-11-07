@@ -6,6 +6,10 @@ import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.node.LocationCaptureManager
 import ai.openclaw.app.node.LocationDisclosure
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.icons.filled.ChevronRight
+import ai.openclaw.app.ui.icons.filled.Description
+import ai.openclaw.app.ui.icons.filled.Photo
+import ai.openclaw.app.ui.icons.filled.PhotoCamera
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -24,11 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Photo
-import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon

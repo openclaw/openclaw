@@ -1,8 +1,8 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.ui.design.ClawDesignTheme
+import ai.openclaw.app.ui.icons.filled.CameraAlt
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue

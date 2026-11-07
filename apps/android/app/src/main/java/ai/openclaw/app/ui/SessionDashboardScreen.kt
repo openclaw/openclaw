@@ -3,11 +3,11 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawPlainIconButton
+import ai.openclaw.app.ui.icons.outlined.Dashboard
+import ai.openclaw.app.ui.icons.outlined.DesktopWindows
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Dashboard
-import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue

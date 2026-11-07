@@ -38,6 +38,11 @@ import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.ui.design.statusColors
+import ai.openclaw.app.ui.icons.filled.GraphicEq
+import ai.openclaw.app.ui.icons.filled.Tune
+import ai.openclaw.app.ui.icons.outlined.ChatBubbleOutline
+import ai.openclaw.app.ui.icons.outlined.Folder
+import ai.openclaw.app.ui.icons.outlined.MicNone
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -64,13 +69,8 @@ import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface

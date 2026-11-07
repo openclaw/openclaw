@@ -7,6 +7,9 @@ import ai.openclaw.app.ui.AppAlertDialog
 import ai.openclaw.app.ui.AppDropdownMenu
 import ai.openclaw.app.ui.design.ClawIconButton
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.icons.automirrored.filled.LastPage
+import ai.openclaw.app.ui.icons.automirrored.filled.NavigateBefore
+import ai.openclaw.app.ui.icons.automirrored.filled.NavigateNext
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -24,9 +27,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.LastPage
-import androidx.compose.material.icons.automirrored.filled.NavigateBefore
-import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton

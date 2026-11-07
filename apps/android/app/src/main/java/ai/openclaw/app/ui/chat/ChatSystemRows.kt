@@ -2,6 +2,9 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.i18n.nativeStringResource
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.icons.filled.Memory
+import ai.openclaw.app.ui.icons.filled.Restore
+import ai.openclaw.app.ui.icons.filled.UnfoldLess
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,9 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Memory
-import androidx.compose.material.icons.filled.Restore
-import androidx.compose.material.icons.filled.UnfoldLess
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text

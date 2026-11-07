@@ -13,6 +13,10 @@ import ai.openclaw.app.ui.AppDialog
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.foldAwareSheet
+import ai.openclaw.app.ui.icons.filled.ChatBubbleOutline
+import ai.openclaw.app.ui.icons.filled.ChevronRight
+import ai.openclaw.app.ui.icons.filled.ContentCopy
+import ai.openclaw.app.ui.icons.filled.ExpandMore
 import android.graphics.Paint
 import android.graphics.Typeface
 import androidx.activity.compose.BackHandler
@@ -48,11 +52,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChatBubbleOutline
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider

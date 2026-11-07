@@ -6,6 +6,7 @@ import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.takeUtf8Bytes
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.icons.automirrored.filled.InsertDriveFile
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Context
@@ -19,7 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
