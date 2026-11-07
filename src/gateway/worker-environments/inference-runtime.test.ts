@@ -65,6 +65,33 @@ const MODEL_ERROR = {
 };
 
 describe("worker inference provider runtime", () => {
+  it.each([
+    { name: "SIWC", mode: "oauth", authFlow: "chatgpt-token-sharing" },
+    { name: "API key", mode: "api-key", authFlow: undefined },
+    { name: "other OAuth", mode: "oauth", authFlow: "openai-codex" },
+  ] as const)(
+    "forwards $name auth classification without credentials",
+    async ({ mode, authFlow }) => {
+      const runtime = setup();
+      const originalPrepare = runtime.prepareModel.getMockImplementation();
+      if (!originalPrepare) {
+        throw new Error("Missing prepareModel fixture");
+      }
+      runtime.prepareModel.mockImplementation(async (...args) => {
+        const prepared = await originalPrepare(...args);
+        if (!("model" in prepared)) {
+          return prepared;
+        }
+        return { ...prepared, auth: { ...prepared.auth, mode, authFlow } };
+      });
+      await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+        type: "done",
+      });
+      const options = runtime.applyStreamPolicy.mock.calls[0]?.[11];
+      expect(options?.auth).toEqual({ mode, authFlow });
+      expect(JSON.stringify(options)).not.toContain(AUTH_MARKER);
+    },
+  );
   it("constructs only the embedded provider stream when preparing a worker turn", async () => {
     const stream = vi.fn<StreamFn>(() => providerStream());
     const createStreamFn = vi.fn(() => stream);
