@@ -71,13 +71,28 @@ function shouldConsiderSlackNativeForwardingSuppression(
   return turnSourceChannel === "slack";
 }
 
+// A top-level channel message carries its ts as turnSourceThreadId (replies thread
+// under it), while the persisted channel session target has no thread. Both name the
+// same conversation, so the live/stored consistency check must not reject the pair;
+// two different threads, or two different channels, still never match.
+function slackOriginTargetsMatch(a: SlackOriginTarget, b: SlackOriginTarget): boolean {
+  if (slackTargetsMatch(a, b)) {
+    return true;
+  }
+  const hasThread = (target: SlackOriginTarget) => String(target.threadId ?? "").trim() !== "";
+  return (
+    hasThread(a) !== hasThread(b) &&
+    slackTargetsMatch({ ...a, threadId: undefined }, { ...b, threadId: undefined })
+  );
+}
+
 const resolveSlackOriginTarget = createChannelNativeOriginTargetResolverAsync({
   channel: "slack",
   shouldHandleRequest: shouldHandleSlackNativeApprovalRequest,
   resolveTurnSourceTarget: resolveTurnSourceSlackOriginTarget,
   resolveSessionTarget: resolveSessionSlackOriginTarget,
   normalizeTargetForMatch: normalizeSlackOriginTarget,
-  targetsMatch: slackTargetsMatch,
+  targetsMatch: slackOriginTargetsMatch,
   resolveFallbackTarget: resolveSlackFallbackOriginTarget,
 });
 
