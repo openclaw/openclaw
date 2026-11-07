@@ -430,7 +430,12 @@ export async function prepareAgentRestartRecovery(
   params.assertCurrent();
   const prepared = await prepareRestartStores(params, targets);
   params.assertCurrent();
-  if (!prepared?.length) {
+  // Empty stores need the startup recovery barrier only to acknowledge pending crash windows.
+  if (
+    !prepared?.some(
+      (store) => store.entries.length || store.orphaned.length || store.windows?.length,
+    )
+  ) {
     return undefined;
   }
   // Do not retain assertCurrent: it belongs to the temporary preparation borrow.
