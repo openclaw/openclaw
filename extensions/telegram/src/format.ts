@@ -251,6 +251,20 @@ function preserveTelegramHtmlTag(
   return rawTag;
 }
 
+// A `<` followed by another `<` before any `>` is text (`a < b <i>c</i>`): the
+// `>` closes the later tag, which must not be escaped along with it.
+function findTelegramHtmlTagEnd(text: string, start: number): number {
+  for (let index = start + 1; index < text.length; index += 1) {
+    if (text[index] === ">") {
+      return index;
+    }
+    if (text[index] === "<") {
+      return -1;
+    }
+  }
+  return -1;
+}
+
 function escapeUnsupportedTelegramHtml(text: string): string {
   let result = "";
   const openTags: string[] = [];
@@ -260,7 +274,7 @@ function escapeUnsupportedTelegramHtml(text: string): string {
       char === "&"
         ? findTelegramHtmlEntityEnd(text, index)
         : char === "<"
-          ? text.indexOf(">", index + 1)
+          ? findTelegramHtmlTagEnd(text, index)
           : -1;
     if (end === -1) {
       result += char === "&" || char === "<" || char === ">" ? escapeTelegramHtml(char) : char;

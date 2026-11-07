@@ -3,10 +3,11 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
-import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import "../../components/modal-dialog.tsx";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ChannelSettingsSlot } from "./channel-settings-presentation.tsx";
@@ -125,19 +126,19 @@ function ChannelProblem(params: ChannelDetailParams) {
       fallback={
         <Show when={fallback()}>
           {(problem) => (
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               <Show when={problem().title}>
                 <strong>{problem().title}</strong>
               </Show>
               <Show when={problem().message}>
                 <div>{problem().message}</div>
               </Show>
-            </div>
+            </InlineAlert>
           )}
         </Show>
       }
     >
-      <div class="callout danger" role="note">
+      <InlineAlert tone="danger" role="note">
         <For each={issues()}>
           {(issue) => (
             <div class="channels-detail__issue">
@@ -149,7 +150,7 @@ function ChannelProblem(params: ChannelDetailParams) {
             </div>
           )}
         </For>
-      </div>
+      </InlineAlert>
     </Show>
   );
 }

@@ -22,6 +22,7 @@ import {
   verifyInviteRedemptionSignature,
   verifyMembershipSnapshot,
   verifyOwnerStatement,
+  verifyRootResetSignature,
   type TrustAnchor,
   type VerifyOptions,
 } from "./verify.js";
@@ -46,11 +47,13 @@ async function verify(
         )
       : verifier === "redemption"
         ? await verifyInviteRedemptionSignature(statement as SignedStatement<"InviteRedemption">)
-        : await verifyOwnerStatement(
-            statement as SignedStatement<"OwnerDeviceCert">,
-            anchor,
-            options,
-          );
+        : verifier === "reset"
+          ? await verifyRootResetSignature(statement as SignedStatement<"RootReset">, binding.body)
+          : await verifyOwnerStatement(
+              statement as SignedStatement<"OwnerDeviceCert">,
+              anchor,
+              options,
+            );
   return result.ok ? "ok" : result.code;
 }
 
@@ -190,6 +193,7 @@ describe("membership snapshot at the caps", () => {
         role: "operator" as const,
         peer_keys: Array.from({ length: MAX_MEMBER_PEER_KEYS }, iroh),
       })),
+      protocols: { statement: [1], descriptor: [1] },
       issued_at: vectors.now,
     };
     return signStatement("MembershipSnapshot", body, await generateEd25519Signer());

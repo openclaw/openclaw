@@ -37,6 +37,7 @@ function readIndicators(page: Page) {
 const css = readStyles(
   "styles/base",
   "styles/components",
+  "styles/checkbox",
   "styles/settings-controls",
   "styles/settings",
   "styles/channels",

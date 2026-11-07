@@ -4,7 +4,7 @@ import type { PreparedModelRuntimeLeaseOptions } from "../agents/prepared-model-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { ImageDescriptionRequest } from "./types.js";
+import type { ImageDescriptionRequest } from "./provider-types.js";
 
 export const API_KEY_FIELD = ["api", "Key"].join("") as "apiKey";
 const REQUIRE_API_KEY_FIELD = ["require", "ApiKey"].join("");

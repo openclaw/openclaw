@@ -250,7 +250,7 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
       id={`side-panel-type-${id}`}
       class="side-panel-type-menu"
       panelClass="side-panel-type-menu__panel"
-      triggerClass="rail-header__action side-panel-type-menu__trigger"
+      triggerClass="oc-icon-button oc-icon-button--28 rail-header__action side-panel-type-menu__trigger"
       triggerAttributes={{ title: t("chat.sidePanel.addTab") }}
       placement="bottom-start"
       label={t("chat.sidePanel.addTab")}
@@ -650,7 +650,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
             <Show when={state().tabs.length > 0 && props.callbacks?.newTab}>
               <button
                 type="button"
-                class="rail-header__action tabstrip-new"
+                class="oc-icon-button oc-icon-button--28 rail-header__action tabstrip-new"
                 title={t("browser.newTab")}
                 aria-label={t("browser.newTab")}
                 disabled={closing()}
@@ -669,7 +669,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
             <Show when={props.onOpenMobileLauncher} fallback={<TypeMenu {...props} />}>
               <button
                 type="button"
-                class="rail-header__action tabstrip-new"
+                class="oc-icon-button oc-icon-button--28 rail-header__action tabstrip-new"
                 title={t("browser.newTab")}
                 aria-label={t("browser.newTab")}
                 onClick={() => props.onOpenMobileLauncher?.()}
