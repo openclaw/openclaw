@@ -24,7 +24,8 @@ Enable **Templates** in **Settings → Labs** before adding one. On a headless i
 `gateway.controlUi.experimental.templates` to `true` in OpenClaw config.
 Authoring and inspecting local Template packages do not require the Labs toggle.
 
-The CLI accepts a canonical local package directory or `CLAW.md` with YAML frontmatter.
+The CLI accepts a canonical local package directory, `.tgz` or `.tar.gz` package archive,
+or `CLAW.md` with YAML frontmatter.
 Packages must declare `package.json.openclaw.template` as a safe package-relative
 path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. The obsolete
 `openclaw.claw` selector and JSON Template manifests are rejected, including in downloaded archives.
@@ -93,6 +94,24 @@ remain unchanged.
 
 For `create`, omit `--name` and `--agent-id` to use default identities. Explicitly
 empty values are invalid and fail before project files are written.
+
+To deliver a Template offline, send the built `.tgz` to the recipient. They can
+inspect it and Add a new agent without the author's project directory or a
+ClawHub publication:
+
+```bash
+openclaw templates inspect ./incident-triage-1.0.0.tgz
+openclaw templates add ./incident-triage-1.0.0.tgz --dry-run --json
+openclaw templates add ./incident-triage-1.0.0.tgz
+```
+
+Review local package contents and declared requirements before Add. Local
+archives are not ClawHub-reviewed releases; dependency trust and capability
+consent checks still apply. Archive paths must be local files; URLs are not
+accepted. The installer rejects unsafe entries and applies its archive limits.
+Extraction is temporary: Add copies the selected content into the new agent's
+workspace and does not retain a managed Template installation or an extra copy of
+the source archive.
 
 A minimal `package.json` identifies the package and its manifest:
 

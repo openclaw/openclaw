@@ -25,11 +25,11 @@ import {
   isTemplatesLabsEnabled,
 } from "../templates/labs-gate.js";
 import { buildTemplateAddPlan } from "../templates/lifecycle.js";
+import { resolveLocalTemplateSource } from "../templates/local-source.js";
 import {
   preflightTemplatePackage,
   type TemplateSkillInstallConsent,
 } from "../templates/packages.js";
-import { readTemplateManifestFile } from "../templates/reader.js";
 import { collectTemplateSkillWarningReviews } from "../templates/skill-warning-review.js";
 import {
   TEMPLATE_INSPECT_RESULT_SCHEMA_VERSION,
@@ -123,7 +123,8 @@ export async function runTemplatesInspectCommand(
   sourcePath: string,
   opts: TemplatesInspectOptions,
 ): Promise<void> {
-  const result = await readTemplateManifestFile(sourcePath);
+  await using source = await resolveLocalTemplateSource(sourcePath);
+  const result = source.template;
   if (!result.ok) {
     emitTemplateFailure(opts.json, formatTemplateDiagnostics(result.diagnostics), {
       schemaVersion: TEMPLATE_INSPECT_RESULT_SCHEMA_VERSION,
@@ -210,7 +211,8 @@ export async function runTemplatesAddCommand(
         return;
       }
 
-      const result = await readTemplateManifestFile(sourcePath);
+      await using source = await resolveLocalTemplateSource(sourcePath);
+      const result = source.template;
       if (!result.ok) {
         emitTemplateFailure(opts.json, formatTemplateDiagnostics(result.diagnostics), {
           schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
