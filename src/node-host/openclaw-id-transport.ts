@@ -218,7 +218,9 @@ export async function startNodeTunnelTransport(options: {
           }
           const bytes = Array.isArray(data)
             ? Buffer.concat(data)
-            : Buffer.from(data as ArrayBuffer);
+            : data instanceof ArrayBuffer
+              ? Buffer.from(data)
+              : data;
           tail = tail
             .then(() =>
               writeFrame(

@@ -14,6 +14,7 @@ import {
   WORKER_PUBLIC_INGRESS_PATH,
   type WorkerConnectParams,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import {
   fingerprint,
   formatIrohEndpointKey,
@@ -108,7 +109,7 @@ describe.skipIf(!hasBinding)("native OpenClaw ID node transport", () => {
         gatewayServer!.emit("request", req, res);
       }
     });
-    workerServer = new WebSocketServer({ noServer: true });
+    workerServer = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
     upstream.on("upgrade", (req, socket, head) => {
       if (
         req.url?.startsWith("/node-desktop/attach?") ||
@@ -285,7 +286,9 @@ describe.skipIf(!hasBinding)("native OpenClaw ID node transport", () => {
     const worker = createWorkerConnection({
       endpoint: { kind: "unix", socketPath: unix.socketPath, path: WORKER_PUBLIC_INGRESS_PATH },
       connectParams: {
-        client: { id: "worker", version: "2026.11.1", platform: "linux", mode: "worker" },
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: { id: "openclaw-worker", version: "2026.11.1", platform: "linux", mode: "worker" },
         role: "worker",
         admission,
       },
