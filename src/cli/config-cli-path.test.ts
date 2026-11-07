@@ -6,6 +6,7 @@ import {
   parseConfigSetPath,
   parseConfigSetValue,
   setAtPath,
+  unsetAtPath,
 } from "./config-cli-path.js";
 
 function nestedRecord(depth: number, leaf: Record<string, unknown>): Record<string, unknown> {
@@ -217,5 +218,19 @@ describe("replacement guard advice", () => {
     expect(posix).toBe(`'models.providers["it\u2018s"].models'`);
     expect(powershell).toBe(`'models.providers["it\u2018\u2018s"].models'`);
     expect(parseConfigSetPath(readShellArgument(posix ?? ""))).toEqual(path);
+  });
+});
+
+describe("unsetAtPath", () => {
+  it("prunes an emptied keyed agent roster entry while preserving siblings", () => {
+    const root = {
+      agents: {
+        entries: { research: { model: "openai/gpt-5.4" } },
+        defaults: { authInheritance: { agentId: "research" } },
+      },
+    };
+    const result = unsetAtPath(root, ["agents", "entries", "research"]);
+    expect(result).toEqual({ removed: true, leafContainer: "object" });
+    expect(root).toEqual({ agents: { defaults: { authInheritance: { agentId: "research" } } } });
   });
 });

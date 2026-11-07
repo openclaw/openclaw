@@ -1,0 +1,3 @@
+# Config unset prunes emptied parent objects: shared pruneEmptyConfigParents regression
+# coverage (unit + command-to-disk integration + roster-entry persistence + write owner).
+128

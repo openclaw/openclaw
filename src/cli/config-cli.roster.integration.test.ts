@@ -50,6 +50,25 @@ describe("config cli roster integration", () => {
     });
   });
 
+  it("preserves a keyed agent entry when its last override is unset", async () => {
+    const raw = JSON.stringify({
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, research: { name: "Research" } },
+      },
+    });
+    await withConfig(raw, async ({ configPath }) => {
+      await invoke(["config", "unset", "agents.entries.research.name"]);
+      const saved = load(configPath);
+      // Only a whole-entry deletion authorizes roster removal; the inner-field unset
+      // clears the name but keeps the research entry so the roster-loss guard passes.
+      expect(saved.agents.entries).toEqual({ main: {}, research: {} });
+      expect(read(`${configPath}.bak`)).toBe(raw);
+      expect((await readConfigFileSnapshot()).valid).toBe(true);
+      expect(errors).toEqual([]);
+    });
+  });
+
   it("validates a surviving SecretRef after its agent is renamed within the batch", async () => {
     const raw = JSON.stringify({
       agents: { entries: { main: {} } },

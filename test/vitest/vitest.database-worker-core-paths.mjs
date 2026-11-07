@@ -1098,6 +1098,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/config-cli.reference-values.integration.test.ts",
   "src/cli/config-cli.roster.integration.test.ts",
   "src/cli/config-cli.secrets.integration.test.ts",
+  "src/cli/config-cli.unset-prunes.integration.test.ts",
   "src/cli/config-model-validation.runtime.test.ts",
   "src/cli/resume-cli.test.ts",
   "src/cli/program/config-guard.legacy-state.test.ts",
