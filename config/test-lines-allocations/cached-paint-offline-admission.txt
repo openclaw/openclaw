@@ -1,0 +1,3 @@
+# Exact +6 LF lines: settle click-started lazy imports before offline admission
+# assertions and await measured cached transcript paint before releasing catch-up.
+6

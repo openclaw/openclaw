@@ -388,6 +388,8 @@ it.each(["toggle-archived", "delete"] as const)(
       await selectNativeMenu(menu, "submenu:advanced");
     }
     await selectNativeMenu(menu, action);
+    // The click starts a second lazy import; settle it before timing deferred admission.
+    await vi.dynamicImportSettled();
     if (action === "delete") {
       const dialog = await waitForConfirmDialogActions();
       expect(h.gateway.snapshot.deferredIntentCount).toBe(0);

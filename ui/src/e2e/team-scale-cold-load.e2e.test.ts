@@ -599,6 +599,10 @@ suite.define(() => {
             .slice(requests)
             .filter(({ url }) => /assistant-media|artifacts\/download/.test(url)),
         ).toEqual([]);
+        // DOM-complete cached rows must actually paint before live catch-up.
+        await page.waitForFunction(
+          () => Reflect.get(window, "__warmReload").firstTranscriptPaint !== undefined,
+        );
         await gateway.resolveDeferred("connect");
         await page.waitForFunction(() =>
           Reflect.get(document.querySelector(".chat-pane-cache__pane--active")!, "transcriptReady"),

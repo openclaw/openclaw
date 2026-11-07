@@ -642,6 +642,9 @@ export function warmReloadProbe(
   };
   requestAnimationFrame(sample);
   Reflect.set(window, "__warmReload", {
+    get firstTranscriptPaint() {
+      return milestones.firstTranscriptPaint;
+    },
     read() {
       stopped = true;
       observer.disconnect();
@@ -710,7 +713,15 @@ export function warmReloadProbe(
           milestones.firstTranscriptPaint === undefined)
       ) {
         throw new Error(
-          "Unqualified late-row-facts sample: no measured cached first transcript paint",
+          "Unqualified late-row-facts sample: no measured cached first transcript paint " +
+            JSON.stringify({
+              firstTranscriptPaint: milestones.firstTranscriptPaint,
+              firstSampleAt: lateFrames[0]?.at,
+              firstPaintedFrame,
+              firstFrameCached: firstLateFrame?.cached,
+              cacheRead: milestones.cacheRead,
+              catchupResponse: milestones.catchupResponse,
+            }),
         );
       }
       return {
