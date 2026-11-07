@@ -96,9 +96,11 @@ describe("chat composer suggestion accessibility", () => {
 
       const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
       const textarea = getComposerTextarea(container);
-      const listbox = await waitForSolid(() =>
-        expectDefined(menu(container), "slash command listbox"),
-      );
+      const listbox = await waitForSolid(() => {
+        const rendered = expectDefined(menu(container), "slash command listbox");
+        expect(rendered.querySelector('[aria-busy="true"]')).toBeNull();
+        return rendered;
+      });
       const initialActiveId = activeId(container);
 
       expectAbsent(wrapper, "role", "aria-expanded", "aria-haspopup", "aria-controls");
