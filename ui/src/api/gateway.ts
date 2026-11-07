@@ -34,9 +34,10 @@ import {
 import {
   buildBrowserGatewayConnectPlan,
   deriveLegacyV4RecoveryScope,
-  selectBrowserGatewayConnectAuth,
   CONTROL_UI_OPERATOR_ROLE,
   CONTROL_UI_OPERATOR_SCOPES,
+  NativeGatewayHelloAdmission,
+  selectBrowserGatewayConnectAuth,
   type ConnectPlan,
   type GatewayBrowserClientOptions,
   type GatewayEventListener,
@@ -86,6 +87,7 @@ export class GatewayBrowserClient {
   private readonly remoteIngress = isRemoteControlUiIngress();
   private nativeAuthAbort: AbortController | null = null;
   private nativeAuthError: GatewayRequestError | null = null;
+  private readonly nativeHelloAdmission = new NativeGatewayHelloAdmission();
   // Close/stop advances this generation before another socket can make stale hello work look active.
   private recovery = { value: "", resolved: false, generation: 0 };
   private scopeUpgradeBinding: ScopeUpgradeBinding | null = null;
@@ -108,8 +110,10 @@ export class GatewayBrowserClient {
         scopes: [],
       });
     }
+    this.nativeHelloAdmission.reset(Boolean(this.opts.nativeConnectAuth));
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => {
+        this.nativeHelloAdmission.reset(Boolean(this.opts.nativeConnectAuth));
         this.openingStartedAtMs = Date.now();
         this.startupRetryPending = false;
         this.opts.onConnecting?.();
@@ -227,7 +231,9 @@ export class GatewayBrowserClient {
           this.handlePairingResolution(event);
           return;
         }
-        this.chatEvents.dispatch(event, this.opts.onEvent);
+        this.nativeHelloAdmission.dispatch(() =>
+          this.chatEvents.dispatch(event, this.opts.onEvent),
+        );
       },
       onGap: (info) => this.opts.onGap?.(info),
       onActivity: () => {
@@ -308,7 +314,7 @@ export class GatewayBrowserClient {
   }
 
   get connected() {
-    return this.client.connected;
+    return this.nativeHelloAdmission.dispatch(() => this.client.connected) ?? false;
   }
 
   private retireConnectDispatch() {
@@ -426,6 +432,8 @@ export class GatewayBrowserClient {
           this.pendingDeviceTokenRetry,
         ),
     });
+    assertCurrent();
+    this.nativeHelloAdmission.expect(plan);
     if (this.pendingDeviceTokenRetry && plan.selectedAuth.authDeviceToken) {
       this.pendingDeviceTokenRetry = false;
     }
@@ -433,6 +441,11 @@ export class GatewayBrowserClient {
   }
 
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
+    const admissionError = this.nativeHelloAdmission.validateHello(hello, plan);
+    if (admissionError) {
+      this.nativeAuthError = admissionError;
+      throw this.nativeAuthError;
+    }
     this.connectionHello = hello;
     // Publish this connection's identity before listeners can capture recovery intent.
     // A legacy hello must not retain its predecessor while its digest is pending.
@@ -467,6 +480,7 @@ export class GatewayBrowserClient {
         scopes,
       });
     }
+    this.nativeHelloAdmission.complete();
     void this.resolveRecoveryScope(hello, plan);
   }
 
@@ -674,6 +688,10 @@ export class GatewayBrowserClient {
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
+    const admissionRejection = this.nativeHelloAdmission.rejectRequest<T>();
+    if (admissionRejection) {
+      return admissionRejection;
+    }
     const requestOptions: GatewayProtocolRequestOptions = {
       ...options,
       onSent: (requestId) => {
@@ -727,7 +745,9 @@ export class GatewayBrowserClient {
   }
 
   addEventListener(listener: GatewayEventListener): () => void {
-    return this.client.addEventListener((event) => this.chatEvents.dispatch(event, listener));
+    return this.client.addEventListener(
+      this.nativeHelloAdmission.guard((event) => this.chatEvents.dispatch(event, listener)),
+    );
   }
 
   /** Drops a stale socket; the shared reconnect supervisor owns recovery. */

@@ -472,7 +472,7 @@ private final class AccessCookieInstallFixture {
 }
 
 @MainActor
-private func waitForDashboardCondition(_ condition: () -> Bool) async throws {
+func waitForDashboardCondition(_ condition: () -> Bool) async throws {
     let deadline = ContinuousClock.now.advanced(by: .seconds(10))
     while !condition() {
         guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }
@@ -948,12 +948,13 @@ private final class SettingsHubHTTPFixture {
 }
 
 @MainActor
-private final class DashboardDocumentFixture: NSObject, WKNavigationDelegate {
-    let url = URL(string: "https://gateway.example/settings")!
+final class DashboardDocumentFixture: NSObject, WKNavigationDelegate {
+    let url: URL
     let webView: WKWebView
     private var loaded: CheckedContinuation<WKNavigation, any Error>?
 
-    override init() {
+    init(url: URL = URL(string: "https://gateway.example/settings")!) {
+        self.url = url
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         self.webView = WKWebView(frame: .zero, configuration: configuration)

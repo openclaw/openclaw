@@ -35,6 +35,26 @@ extension GatewaySettingsStore {
         return self.saveGatewayRegistry(registry)
     }
 
+    static func usesPersonalTailscaleAuthentication(stableID: String) -> Bool {
+        self.loadGatewayRegistry().entries.first {
+            GatewayStableIdentifier.matches($0.stableID, stableID)
+        }?.personalTailscaleAuthentication == true
+    }
+
+    @discardableResult
+    static func setPersonalTailscaleAuthentication(stableID: String, enabled: Bool) -> Bool {
+        var registry = self.loadGatewayRegistry()
+        guard let index = registry.entries.firstIndex(where: {
+            GatewayStableIdentifier.matches($0.stableID, stableID)
+        }) else { return false }
+        let entry = registry.entries[index]
+        guard !enabled || entry.useTLS && entry.host?.lowercased().hasSuffix(".ts.net") == true else {
+            return false
+        }
+        registry.entries[index].personalTailscaleAuthentication = enabled ? true : nil
+        return self.saveGatewayRegistry(registry)
+    }
+
     @discardableResult
     static func setGatewayConnectionEnabled(stableID: String, enabled: Bool) -> Bool {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return false }

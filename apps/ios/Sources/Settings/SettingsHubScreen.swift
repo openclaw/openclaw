@@ -104,10 +104,12 @@ struct SettingsHubScreen: View {
                     }
                 }
         } else {
-            SettingsProTab(
-                registersNavigationDestinations: false,
-                headerSidebarAction: self.headerSidebarAction,
-                onApprovalNotificationsRoute: self.onApprovalNotificationsRoute)
+            VStack(spacing: 0) {
+                SettingsProTab(
+                    registersNavigationDestinations: false,
+                    headerSidebarAction: self.headerSidebarAction,
+                    onApprovalNotificationsRoute: self.onApprovalNotificationsRoute)
+            }
         }
     }
 
@@ -189,7 +191,8 @@ struct EmbeddedDashboardContent: View {
         let webContentIdentity = AuthenticatedControlUI.webContentIdentity(
             config: self.config,
             storedOperatorToken: storedOperatorToken,
-            authorizationRevision: authorization?.revision)
+            authorizationRevision: authorization?.revision,
+            authorityGeneration: self.appModel.operatorAuthorityGeneration)
         VStack(spacing: 0) {
             self.gatewayUpgradeBanner
             self.ingressSignInGuidance

@@ -121,11 +121,12 @@ final class GatewayOperatorFleet {
             (sessionBox?.session as? GatewayTLSPinningSession)?.finishTasksAndInvalidate()
         }
         let runtimeID = runtime.id
+        let session = runtime.session
         var attempt = 0
         while !Task.isCancelled, self.runtimes[key]?.id == runtime.id {
             do {
                 let bindingStore = GatewayAccessDeviceAuthBindingStore.shared
-                let optionsBase = Self.operatorOptions(from: config.nodeOptions)
+                let optionsBase = config.operatorOptions(from: Self.operatorOptions(from: config.nodeOptions))
                 let deviceAuthGatewayID = optionsBase.deviceAuthGatewayID ?? config.effectiveStableID
                 let storedOperatorAuth = bindingStore.storedDeviceAuth(
                     role: "operator",
@@ -142,10 +143,10 @@ final class GatewayOperatorFleet {
                 let tokenVersionBeforeConnect = bindingStore.tokenVersion(for: storedOperatorAuth)
                 try await runtime.session.connect(
                     url: config.url,
-                    credentials: GatewayNodeSessionCredentials(
+                    credentials: config.operatorCredentials(fallback: GatewayNodeSessionCredentials(
                         token: config.token,
                         bootstrapToken: config.bootstrapToken,
-                        password: config.password),
+                        password: config.password)),
                     connectOptions: options,
                     sessionBox: sessionBox,
                     extraHeadersProvider: {
@@ -156,6 +157,22 @@ final class GatewayOperatorFleet {
                             gatewayStableID: config.effectiveStableID)
                     },
                     onConnected: { [weak self] in
+                        let admittedRoute = await session.currentRoute(ifGatewayID: config.effectiveStableID)
+                        if config.personalTailscaleAuthentication {
+                            do {
+                                _ = try await config.verifiedPersonalRecoveryScope(session: session)
+                            } catch {
+                                if await session
+                                    .currentRoute(ifGatewayID: config.effectiveStableID) == admittedRoute
+                                {
+                                    await session.disconnect()
+                                }
+                                return
+                            }
+                        }
+                        guard let admittedRoute,
+                              await session.currentRoute(ifGatewayID: config.effectiveStableID) == admittedRoute
+                        else { return }
                         await MainActor.run {
                             guard let self, self.runtimes[key]?.id == runtimeID else { return }
                             _ = GatewayAccessDeviceAuthBindingStore.shared.bindCurrentTokenAfterHandshake(
@@ -345,7 +362,8 @@ extension GatewayConnectionController {
                   registry.connectedStableIDs.contains(where: { GatewayStableIdentifier.matches($0, stableID) }),
                   let current = registry.entries.first(where: { $0.id == entry.id }),
                   current.kind == entry.kind, current.host == entry.host, current.port == entry.port,
-                  current.useTLS == entry.useTLS, current.contextPath == entry.contextPath
+                  current.useTLS == entry.useTLS, current.contextPath == entry.contextPath,
+                  current.personalTailscaleAuthentication == entry.personalTailscaleAuthentication
             else { return false }
             let currentCredentials = GatewaySettingsStore.loadGatewayCredentials(
                 instanceId: instanceID, gatewayStableID: stableID)
@@ -378,6 +396,7 @@ extension GatewayConnectionController {
             bootstrapToken: credentials.bootstrapToken,
             password: credentials.password,
             nodeOptions: nodeOptions,
+            personalTailscaleAuthentication: entry.personalTailscaleAuthentication == true,
             ingressAuthorization: ingressAuthorization)
     }
 }

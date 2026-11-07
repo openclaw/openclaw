@@ -54,11 +54,14 @@ enum ControlUIHubPage {
             storedOperatorToken: storedOperatorToken)
     }
 
-    func webContentIdentity(config: GatewayConnectConfig?, storedOperatorToken: String?) -> Int {
+    func webContentIdentity(
+        config: GatewayConnectConfig?, storedOperatorToken: String?, authorityGeneration: UInt64 = 0) -> Int
+    {
         let identity = AuthenticatedControlUI.webContentIdentity(
             config: config,
             storedOperatorToken: storedOperatorToken,
-            authorizationRevision: config?.ingressAuthorization?.revision)
+            authorizationRevision: config?.ingressAuthorization?.revision,
+            authorityGeneration: authorityGeneration)
         guard case .desktop = self else { return identity }
         var hasher = Hasher()
         hasher.combine(identity)
@@ -98,7 +101,9 @@ struct ControlUIHubScreen: View {
         let nativeAuthProvider = IOSDashboardNativeGatewayAuthProvider(appModel: self.appModel, config: config)
         let authorization = config?.ingressAuthorization
         let webContentIdentity = self.page.webContentIdentity(
-            config: config, storedOperatorToken: storedOperatorToken)
+            config: config,
+            storedOperatorToken: storedOperatorToken,
+            authorityGeneration: self.appModel.operatorAuthorityGeneration)
         let url = self.page.url(config: config)
         let accessCookieAdmission = AuthenticatedControlUI.dashboardAccessCookieAdmission(
             url: url,
