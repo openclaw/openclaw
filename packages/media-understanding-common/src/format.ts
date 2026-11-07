@@ -23,7 +23,11 @@ export function formatDecisionSummary(decision: MediaUnderstandingDecision): str
       ? ` requested=${chosen.requestedBackend}`
       : "";
   const reason = findDecisionReason(decision, decision.outcome === "failed" ? "failed" : undefined);
-  const shortReason = summarizeDecisionReason(reason);
+  // Same selection as the attachment disposition: the last classified attempt explains the outcome.
+  const cause = decision.attachments
+    .flatMap((entry) => entry.attempts)
+    .findLast((attempt) => attempt.cause);
+  const shortReason = cause?.cause ?? summarizeDecisionReason(reason);
   const countLabel = total > 0 ? ` (${success}/${total})` : "";
   const viaLabel = modelLabel ? ` via ${modelLabel}${backendLabel}` : "";
   const reasonLabel = shortReason ? ` reason=${shortReason}` : "";
