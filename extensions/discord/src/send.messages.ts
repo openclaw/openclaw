@@ -16,6 +16,7 @@ import {
 } from "./internal/api.messages.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { isUnknownDiscordMessageError } from "./internal/rest-errors.js";
+import { prepareDiscordOutboundText } from "./outbound-text.js";
 import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
 import {
   classifyDiscordDeliveryFailure,
@@ -258,7 +259,7 @@ export async function createThreadDiscord(
   opts: DiscordReactOpts & { assertCreateAllowed?: () => void },
 ): Promise<DiscordThreadCreateResult> {
   const assertCreateAllowed = opts.assertCreateAllowed;
-  const { rest, request } = createDiscordClient(opts);
+  const { rest, request, account } = createDiscordClient(opts);
   const body: Record<string, unknown> = { name: payload.name };
   if (!payload.messageId && payload.type !== undefined) {
     body.type = payload.type;
@@ -285,7 +286,11 @@ export async function createThreadDiscord(
     : isForumLike
       ? payload.name
       : "";
-  const initialMessageChunks = buildDiscordTextChunks(initialMessageContent, {
+  const { textWithMentions } = prepareDiscordOutboundText(initialMessageContent, {
+    cfg: opts.cfg,
+    account,
+  });
+  const initialMessageChunks = buildDiscordTextChunks(textWithMentions, {
     maxLinesPerMessage: DISCORD_THREAD_TRANSPORT_ONLY_MAX_LINES,
   });
   if (isForumLike) {
