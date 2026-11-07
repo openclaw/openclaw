@@ -8,7 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import {
-  computeModelPolicyAllowlist,
+  computeAuthoredModelPolicyAllowlist,
   hasExplicitModelPolicyAllow,
 } from "../config/model-policy-allowlist-migration.js";
 import {
@@ -1229,10 +1229,9 @@ export function resolveConfiguredModelPolicyAllow(params: {
       repairConfigPath: DEFAULT_MODEL_POLICY_ALLOW_CONFIG_PATH,
     };
   }
-  const legacyDefaultRefs = computeModelPolicyAllowlist({
-    root: params.cfg,
-    defaults,
-  });
+  // Provider runtime defaults add model keys the operator never authored (e.g. Anthropic's
+  // cacheRetention entries); those are metadata, so the legacy allowlist comes from the source.
+  const legacyDefaultRefs = computeAuthoredModelPolicyAllowlist(params.cfg);
   if (legacyDefaultRefs) {
     return {
       refs: legacyDefaultRefs,
