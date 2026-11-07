@@ -21,7 +21,7 @@ vi.mock("./llama-server-assets.js", async (importOriginal) => ({
 }));
 
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { selectLlamaServerAsset } from "./llama-server-assets.js";
+import { LLAMA_SERVER_RELEASE, selectLlamaServerAsset } from "./llama-server-assets.js";
 import { withHuggingFaceMetadataFixture } from "./managed-server-huggingface.test-support.js";
 import { inspectLlamaServerRuntime } from "./managed-server-inspection.js";
 import {
@@ -142,8 +142,8 @@ it("selects the pinned darwin/x64 asset", () => {
     arch: "x64",
     backend: "cpu",
     archive: "tar.gz",
-    name: "llama-b10809-bin-macos-x64.tar.gz",
-    sha256: "13b34aa8a5d87341a21065a83f54a8167e1aaa6fe0d66065de01632a1ed64be6",
+    name: `llama-${LLAMA_SERVER_RELEASE}-bin-macos-x64.tar.gz`,
+    sha256: "51477b2d73146330d0e357107a031e2281d8e1b4e538298cab2f1eba8e0fc43b",
   });
 });
 
