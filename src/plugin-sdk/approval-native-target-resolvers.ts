@@ -96,6 +96,7 @@ function originTargetOptions<TTarget>(
         normalizedLeft && normalizedRight && params.targetsMatch(normalizedLeft, normalizedRight),
       );
     },
+    reconcileDivergentTargets: params.reconcileDivergentTargets,
     resolveFallbackTarget: params.resolveFallbackTarget
       ? (request: ApprovalRequest) =>
           normalizeTarget(params.resolveFallbackTarget?.(request) ?? null)

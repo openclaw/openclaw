@@ -61,6 +61,23 @@ describe("telegram native approval adapter", () => {
   );
 
   it("parses numeric string thread ids from the session store for plugin approvals", async () => {
+    const { storePath, sessionKey } = await seedForumTopicSession();
+
+    const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+      cfg: { ...cfg, session: { store: storePath } },
+      accountId: "default",
+      approvalKind: "plugin",
+      request: {
+        ...requestTimes,
+        id: "plugin:req-2",
+        request: { title: "Plugin approval", description: "Allow access", sessionKey },
+      },
+    });
+
+    expect(target).toEqual({ to: chatId, threadId: 928 });
+  });
+
+  async function seedForumTopicSession(): Promise<{ storePath: string; sessionKey: string }> {
     const storePath = path.join(sessionDirs.make(), "sessions.json");
     const sessionKey = `agent:main:telegram:group:${chatId}:topic:928`;
     await upsertSessionEntry({
@@ -79,6 +96,11 @@ describe("telegram native approval adapter", () => {
         }),
       },
     });
+    return { storePath, sessionKey };
+  }
+
+  it("keeps the stored forum topic when the live turn omits the thread", async () => {
+    const { storePath, sessionKey } = await seedForumTopicSession();
 
     const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
       cfg: { ...cfg, session: { store: storePath } },
@@ -86,11 +108,42 @@ describe("telegram native approval adapter", () => {
       approvalKind: "plugin",
       request: {
         ...requestTimes,
-        id: "plugin:req-2",
-        request: { title: "Plugin approval", description: "Allow access", sessionKey },
+        id: "plugin:topic-omitted",
+        request: {
+          title: "Plugin approval",
+          description: "Allow access",
+          sessionKey,
+          turnSourceChannel: "telegram",
+          turnSourceTo: `telegram:${chatId}`,
+          turnSourceAccountId: "default",
+        },
       },
     });
 
     expect(target).toEqual({ to: chatId, threadId: 928 });
+  });
+
+  it("does not route a forum topic when the live turn names a different thread", async () => {
+    const { storePath, sessionKey } = await seedForumTopicSession();
+
+    const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+      cfg: { ...cfg, session: { store: storePath } },
+      accountId: "default",
+      approvalKind: "plugin",
+      request: {
+        ...requestTimes,
+        id: "plugin:topic-conflict",
+        request: {
+          title: "Plugin approval",
+          description: "Allow access",
+          sessionKey,
+          turnSourceChannel: "telegram",
+          turnSourceTo: `telegram:${chatId}:topic:111`,
+          turnSourceAccountId: "default",
+        },
+      },
+    });
+
+    expect(target).toBeNull();
   });
 });
