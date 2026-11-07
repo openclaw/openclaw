@@ -270,7 +270,7 @@ async function runInstalledPluginUpdate(
           : record.spec;
     const minimumStableVersion =
       npmSpecs?.minimumStableVersion ?? clawhubSpecs?.minimumStableVersion;
-    if (minimumStableVersion) {
+    if (minimumStableVersion && record.spec !== recordSpec) {
       logger.warn?.(
         `Plugin "${pluginId}" follows stable: replacing saved selector ${record.spec} with ${recordSpec} after a successful update.`,
       );

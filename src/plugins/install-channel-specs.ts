@@ -111,7 +111,7 @@ export function resolveDefaultNpmSpec(spec: string): ParsedRegistryNpmSpec | nul
   return null;
 }
 
-/** Stored channel tags have no authored/automatic distinction; stable maintenance follows core. */
+/** Normalized latest must retain the stable policy on later updates. */
 export function resolveStableOfficialPluginSpec(params: {
   spec: string;
   officialPackageName?: string;
@@ -122,7 +122,7 @@ export function resolveStableOfficialPluginSpec(params: {
     parsed?.name === params.officialPackageName &&
     parsed?.name.startsWith("@openclaw/") &&
     parsed?.selectorKind === "tag" &&
-    /^(alpha|beta|next|rc|canary|nightly|dev)$/i.test(parsed.selector ?? "")
+    /^(latest|alpha|beta|next|rc|canary|nightly|dev)$/i.test(parsed.selector ?? "")
     ? `${parsed.name}@latest`
     : undefined;
 }
