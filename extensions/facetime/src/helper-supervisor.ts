@@ -168,8 +168,7 @@ export class FaceTimeHelperSupervisor {
     const timer = setTimeout(() => {
       this.#timers.delete(target);
       this.#enqueueInjection(target);
-    }, delayMs);
-    timer.unref?.();
+    }, delayMs).unref();
     this.#timers.set(target, timer);
   }
 
@@ -204,8 +203,7 @@ export class FaceTimeHelperSupervisor {
       state.attempts = 0;
       state.lastError = undefined;
       this.#schedule(target, 0);
-    }, 2_000);
-    timer.unref?.();
+    }, 2_000).unref();
     this.#timers.set(target, timer);
   }
 

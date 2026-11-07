@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   isPackageActivationComplete,
@@ -11,7 +12,11 @@ import {
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
+import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
+import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
+import { createUpdateRun } from "./update-run-ledger.js";
+import { loadPluginCohortRecovery } from "./update-run-recovery-store.js";
 
 export async function prepareInterruptedManagedServiceFixture(params: {
   root: string;
@@ -21,6 +26,7 @@ export async function prepareInterruptedManagedServiceFixture(params: {
   runId: string;
   updaterStopped?: "native" | "legacy";
   cut: "before" | "prepared" | "publishing" | "after" | "risk";
+  pluginCohort?: "own" | "foreign" | "risk";
 }) {
   const fixture = await createPackageSwapFixture(params.root);
   const installRoot = fixture.packageRoot;
@@ -35,8 +41,19 @@ export async function prepareInterruptedManagedServiceFixture(params: {
     const fs = (await import("node:fs")).default;
     const { createRequire } = await import("node:module");
     const require = createRequire(import.meta.url);
-    const { inspectUpdateRepairDriverAdmission } = await import(${runtimeUrl});
+    const { inspectUpdateRepairDriverAdmission, settleManagedHandoffPluginCohort,
+      assertUpdateRecoveryAdmission } = await import(${runtimeUrl});
     const runId = process.env.OPENCLAW_UPDATE_RUN_ID;
+    // Production finalize opens with this helper-owned settlement and admission.
+    await settleManagedHandoffPluginCohort();
+    await assertUpdateRecoveryAdmission({ env: process.env });
+    ${
+      params.pluginCohort === "risk"
+        ? `ledger.recordUpdateRunVerification(runId, {recovery:{serviceRestartSafe:false,
+      reason:"state-migration-started", dataAtRisk:"incomplete-migration"}});
+    throw new Error("Doctor failed after recording data risk");`
+        : ""
+    }
     if (process.argv.slice(2).join(" ") !== "update finalize --yes --json" ||
       inspectUpdateRepairDriverAdmission(ledger.listUpdateRuns({active:true}), runId).kind !== "continuation")
       throw new Error("Repair was not admitted as this helper's continuation");
@@ -65,6 +82,18 @@ export async function prepareInterruptedManagedServiceFixture(params: {
     await fs.writeFile(path.join(directory, "dist/cli/daemon-cli.js"), recovery);
     await fs.writeFile(path.join(directory, "openclaw.mjs"), repair);
     await writePackageDistInventory(directory);
+  }
+  const stateEnv = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: params.root,
+    OPENCLAW_CONFIG_PATH: path.join(params.root, "openclaw.json"),
+  };
+  const cohortRunId =
+    params.pluginCohort === "foreign"
+      ? createUpdateRun({ trigger: "cli" }, { env: stateEnv }).runId
+      : params.runId;
+  if (params.pluginCohort) {
+    reservePluginCohort(stateEnv, cohortRunId, installRoot);
   }
   const updaterScript = `void (async () => {
     ${params.ledgerRuntimeImport}
@@ -152,7 +181,44 @@ export async function prepareInterruptedManagedServiceFixture(params: {
         publicationPending:
           recorded &&
           !isPackageActivationComplete(anchor, openPackageActivationJournal(anchor).read()),
+        ...(params.pluginCohort
+          ? {
+              cohort:
+                loadPluginCohortRecovery(cohortRunId, { env: stateEnv })?.cohort.disposition ??
+                "settled",
+            }
+          : {}),
       };
     },
   };
+}
+
+/** Reserved before publication, as the killed updater's package transaction does. */
+function reservePluginCohort(env: NodeJS.ProcessEnv, runId: string, installRoot: string) {
+  const installKey = resolveUpdateInstallRoot(installRoot);
+  const runtime = (version: string) => ({
+    root: installKey,
+    nodePath: process.execPath,
+    version,
+    buildId: null,
+  });
+  const reservation = createRetainedUpdateRecovery(
+    { runId, from: runtime("1.0.0"), to: runtime("2.0.0") },
+    { env },
+  );
+  writeConfigMachineState(
+    "update.pluginCohort." + runId,
+    {
+      runId,
+      transactionId: reservation.transactionId,
+      revision: 0,
+      disposition: "pending",
+      installKey,
+      priorArtifacts: [],
+      artifacts: [],
+      publications: [],
+      settledPublications: 0,
+    },
+    { env },
+  );
 }

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { i18n } from "../i18n/index.ts";
 import { resolveServerUiPrefWriteStatus } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import {
@@ -152,6 +153,10 @@ it("strips browser-only edit metadata when a profileless mixed change retains on
 });
 
 it("does not infer an unknown edit base from a fresh server read", async () => {
+  expect(i18n.t("quickSettings.personal.shortcutsLocalOnly")).not.toBe(
+    "quickSettings.personal.shortcutsLocalOnly",
+  );
+  const translate = vi.spyOn(i18n, "t").mockReturnValue("localized missing sync state");
   const a = server({ a: { [pinsKey]: [usage, cron] } }).connect("a");
   const result = await writeProfileAppearancePrefs(
     a.writer.state.client,
@@ -159,7 +164,13 @@ it("does not infer an unknown edit base from a fresh server read", async () => {
     () => true,
     "a",
   );
-  expect(result).toMatchObject({ ok: false, reason: "rejected" });
+  expect(result).toMatchObject({
+    ok: false,
+    reason: "rejected",
+    error: "localized missing sync state",
+  });
+  expect(translate).toHaveBeenCalledWith("quickSettings.personal.shortcutsLocalOnly", undefined);
+  translate.mockRestore();
   expect(a.request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", expect.anything());
 });
 
@@ -383,4 +394,21 @@ it("serializes rapid reorders and retries CAS conflicts without losing newest in
   await committed.promise;
   expect(backend.profiles.a?.[pinsKey]).toEqual([cron]);
   expect(a.request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(2);
+});
+
+it("localizes device-only retained preference status", () => {
+  const localScope = "device-only-copy";
+  const key = "openclaw.control.serverPrefs.retained-local.v1:" + localScope;
+  localStorage.setItem(key, JSON.stringify({ themeMode: "dark" }));
+  expect(i18n.t("quickSettings.personal.deviceOnly")).not.toBe("quickSettings.personal.deviceOnly");
+  const translate = vi.spyOn(i18n, "t").mockReturnValue("localized device-only preference");
+  onTestFinished(() => {
+    translate.mockRestore();
+    localStorage.removeItem(key);
+  });
+  expect(resolveServerUiPrefWriteStatus("themeMode", localScope)).toEqual({
+    status: "error",
+    error: "localized device-only preference",
+  });
+  expect(translate).toHaveBeenCalledWith("quickSettings.personal.deviceOnly", undefined);
 });

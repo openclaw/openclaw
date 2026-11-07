@@ -235,6 +235,10 @@
   padding: 0 var(--field-padding-inline);
 }
 
+select.usage-select {
+  width: auto;
+}
+
 .usage-separator,
 .usage-query-hint,
 .sessions-card-count,
@@ -304,10 +308,6 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
-}
-
-.usage-select {
-  padding-right: 36px;
 }
 
 .usage-query-input {
@@ -518,20 +518,6 @@
   margin-top: 0;
 }
 
-.callout.warning {
-  border-color: color-mix(in srgb, var(--warn) 22%, var(--border));
-  background: var(--warn-subtle);
-  color: var(--text);
-}
-
-.callout.warning.usage-cache-warning {
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
-  background: var(--warn-subtle);
-  color: var(--accent);
-  font-weight: 600;
-  box-shadow: none;
-}
-
 .usage-empty-state {
   justify-items: start;
 }
@@ -728,7 +714,7 @@
 }
 
 /* Fixed width: identity names arrive with the data and must not move the controls beside it. */
-.usage-creator-filter {
+select.usage-creator-filter {
   width: 260px;
   max-width: 100%;
 }
@@ -758,7 +744,7 @@
 }
 
 /* Identities may be long keys; numbers never break mid-value. */
-.usage-creators-table td:first-child {
+.usage-creators-table tbody th:first-child {
   overflow-wrap: anywhere;
   white-space: normal;
 }
@@ -794,6 +780,7 @@
 
 .usage-creator-select {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   width: 100%;
   gap: 7px;
   padding: 4px 0;
@@ -1614,18 +1601,6 @@
   flex: 0 0 auto;
 }
 
-.session-bar-copy {
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
-  padding: 5px;
-}
-
-.session-bar-copy svg {
-  width: 14px;
-  height: 14px;
-}
-
 .session-bar-copy-feedback {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
@@ -1925,6 +1900,23 @@
     gap: 14px;
   }
 
+  .usage-creators {
+    container-type: inline-size;
+  }
+
+  /* Numbers keep their natural width; the identity takes the rest and wraps. */
+  .usage-creators-table {
+    table-layout: auto;
+  }
+
+  .usage-creators-table th:first-child {
+    width: auto;
+  }
+
+  .usage-creators-table tbody tr {
+    border-top: 0;
+  }
+
   .usage-controls,
   .usage-filter-row,
   .usage-filters-inline {
@@ -2044,7 +2036,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .usage-filter-sheet .oc-sheet__body {
+  .usage-filter-sheet__body {
     display: grid;
     gap: var(--space-3);
   }
@@ -2071,24 +2063,14 @@
     flex-basis: 150px;
   }
 
-  /* The calendar reads like a select's chevron: same color, stroke, size and inset. */
-  .usage-filter-sheet__fields input[type="date"] {
-    padding-inline-end: 10px;
-  }
-
-  .usage-filter-sheet__fields input[type="date"]::-webkit-calendar-picker-indicator {
-    width: 16px;
-    height: 16px;
-    margin: 0;
-    padding: 0;
-    background: var(--text-tertiary);
-    opacity: 1;
-    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 2v4'/%3E%3Cpath d='M16 2v4'/%3E%3Crect width='18' height='18' x='3' y='4' rx='2'/%3E%3Cpath d='M3 10h18'/%3E%3C/svg%3E")
-      center / contain no-repeat;
-  }
-
-  .usage-filter-sheet .oc-sheet__body :is(.usage-query-section, .usage-query-bar) {
+  .usage-filter-sheet__body :is(.usage-query-section, .usage-query-bar) {
     gap: var(--space-3);
+  }
+
+  /* The query's own Filter sits beside its field; the sheet's other buttons take the row. */
+  .oc-popover.oc-sheet .oc-sheet__body .usage-query-bar .btn {
+    flex: none;
+    width: auto;
   }
 
   .usage-filter-sheet__fields :is(.usage-date-input, .usage-select) {
@@ -2096,37 +2078,7 @@
     min-width: 0;
   }
 
-  /* A customizable select can't ellipsize its own label, so a long value would push the chevron out. */
-  @media not (forced-colors: active) {
-    .usage-filter-sheet__fields .field select.usage-select:not([multiple], [size]) {
-      display: block;
-      overflow: hidden;
-      padding-inline-end: 32px;
-      appearance: none;
-      background-image: none;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .usage-filter-sheet__fields .field:has(> .usage-select) {
-      position: relative;
-    }
-
-    .usage-filter-sheet__fields .field:has(> .usage-select)::after {
-      position: absolute;
-      inset-inline-end: 11px;
-      bottom: 12px;
-      width: 16px;
-      height: 16px;
-      background: var(--text-tertiary);
-      content: "";
-      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
-        center / contain no-repeat;
-      pointer-events: none;
-    }
-  }
-
-  .usage-filter-sheet .oc-sheet__body > .settings-segmented {
+  .usage-filter-sheet__body > .settings-segmented {
     display: flex;
     width: 100%;
   }
@@ -2194,6 +2146,56 @@
   }
 }
 
+/* Phones: the panel opens by scrolling to it, its X shares the title row, and the
+   conversation filters are the page's facet menus. */
+@media (max-width: 640px) {
+  .usage-session-detail-column {
+    scroll-margin-top: var(--space-3);
+  }
+
+  .session-detail-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+  }
+
+  /* The tooltip host lays out as its button, so both claim the title row's end. */
+  .session-detail-header > openclaw-tooltip,
+  .session-detail-header .session-detail-close {
+    grid-area: 1 / 2;
+  }
+
+  .session-detail-header > .session-detail-stats {
+    grid-column: 1 / -1;
+  }
+
+  /* Side by side when both labels fit; wider mono themes wrap instead of truncating. */
+  .session-log-filters > .usage-filter-select {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .session-log-filters .usage-filter-trigger {
+    width: 100%;
+  }
+
+  .session-log-filters .usage-filter-trigger > .oc-menu-item__label {
+    justify-content: space-between;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .session-log-filters .usage-filter-trigger__label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .session-log-filters > .session-log-has-tools {
+    flex: 1 0 100%;
+  }
+}
+
 /* Legend: every stacked series with its share of the range. */
 .daily-chart-legend {
   display: flex;
@@ -2210,4 +2212,37 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* Too narrow for four columns: the identity takes its own line above the numbers. */
+@container (max-width: 320px) {
+  .usage-creators-table,
+  .usage-creators-table thead,
+  .usage-creators-table tbody {
+    display: block;
+  }
+
+  .usage-creators-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr);
+  }
+
+  .usage-creators-table thead th:first-child {
+    display: none;
+  }
+
+  .usage-creators-table tbody th:first-child {
+    grid-column: 1 / -1;
+    padding-right: 0;
+    padding-bottom: 2px;
+  }
+
+  .usage-creators-table td {
+    padding-top: 4px;
+  }
+
+  .usage-creators-table :is(th, td):nth-child(2) {
+    padding-left: 0;
+    text-align: left;
+  }
 }

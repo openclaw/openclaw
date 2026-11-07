@@ -42,7 +42,10 @@ function NewReaderTabAction(props: { view: () => LinkReaderPanelOwner; internal?
   return (
     <button
       ref={nativeListener("click", () => props.view().createTab())}
-      class={["rail-header__action bp-icon", { "session-panel-rail__button": props.internal }]}
+      class={[
+        "oc-icon-button oc-icon-button--28 rail-header__action bp-icon",
+        { "session-panel-rail__button": props.internal },
+      ]}
       type="button"
       aria-label={label()}
       title={label()}
@@ -397,7 +400,7 @@ function PanelView(
                 {editedUrl() && (
                   <button
                     class={[
-                      "rail-header__action bp-icon lr-go",
+                      "oc-icon-button oc-icon-button--28 rail-header__action bp-icon lr-go",
                       { "session-panel-rail__button": !props.mobile },
                     ]}
                     type="submit"
@@ -438,8 +441,8 @@ function PanelView(
                   trigger={<Icon name="moreHorizontal" />}
                   triggerClass={
                     props.mobile
-                      ? "rail-header__action bp-icon lr-menu"
-                      : "rail-header__action bp-icon lr-menu session-panel-rail__button"
+                      ? "oc-icon-button oc-icon-button--28 rail-header__action bp-icon lr-menu"
+                      : "oc-icon-button oc-icon-button--28 rail-header__action bp-icon lr-menu session-panel-rail__button"
                   }
                   panelClass="lr-rail-menu"
                   placement="bottom-end"
@@ -453,6 +456,7 @@ function PanelView(
                       void copyToClipboard(href, () => host.isConnected).then((copied) => {
                         if (host.isConnected) {
                           showToast({
+                            severity: copied ? "success" : "error",
                             message: t(copied ? "common.copied" : "common.copyFailed"),
                             anchor: host,
                           });

@@ -455,7 +455,7 @@ Example (OpenAI-compatible):
     - `reasoning: false`
     - `input: ["text"]`
     - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`
-    - `maxTokens`: no fixed default. For OpenAI-compatible Completions, an unknown output limit omits both `max_tokens` and `max_completion_tokens`, letting the provider apply its default.
+    - `maxTokens`: the provider-level `maxTokens` when set, otherwise `32768`. When the model's `contextTokens` or `contextWindow` is below 65,536 tokens, the default drops to half of that window so the prompt keeps room, but never below `8192` unless the window itself is smaller. An authored `maxTokens` always wins.
 
     Anthropic and Mistral requests preserve an explicit request output limit when the model's `maxTokens` is unknown. Anthropic manual thinking must fit within that request limit when no model output capacity is available.
 

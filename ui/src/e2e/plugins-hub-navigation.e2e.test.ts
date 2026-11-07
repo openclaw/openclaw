@@ -144,7 +144,7 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
   const expected = {
     plugins: {
       title: "Plugins",
-      subtitle: "Extend your Claw with tools",
+      subtitle: "Add capabilities with plugins.",
       docs: "https://docs.openclaw.ai/plugins/manage-plugins",
     },
     skills: {
@@ -540,13 +540,20 @@ suite.define(() => {
         await skillsTab.focus();
         await page.keyboard.press("Enter");
         await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
-        await expect
-          .poll(() =>
-            page
-              .getByRole("searchbox", { name: "Search skills", exact: true })
-              .evaluate((input) => input === document.activeElement),
-          )
-          .toBe(true);
+        // Phone arrival keeps keyboard focus on the tab instead of opening the text keyboard.
+        if (viewport.width <= 768) {
+          await expect
+            .poll(() => page.evaluate(() => document.activeElement?.id))
+            .toBe("plugins-tab-skills");
+        } else {
+          await expect
+            .poll(() =>
+              page
+                .getByRole("searchbox", { name: "Search skills", exact: true })
+                .evaluate((input) => input === document.activeElement),
+            )
+            .toBe(true);
+        }
         expectStableHeader(await headerGeometry(page), pluginsHeader);
         await expectHeaderCopy(page, "skills");
         await expectActivePanelLabel(page, "plugins-tab-skills");

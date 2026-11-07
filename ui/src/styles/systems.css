@@ -413,16 +413,11 @@ openclaw-systems-page {
 .systems-session-link:hover .systems-session-link__title {
   color: var(--accent);
 }
-.systems-mobile-picker {
+/* Outranks the shared select's display so the picker stays phone-only. */
+.systems-workspace .systems-toolbar > select.systems-mobile-picker {
   display: none;
   min-width: 0;
   max-width: 230px;
-  background: var(--bg-elevated);
-  color: var(--text);
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
-  padding: 6px;
-  font-size: 12px;
 }
 .systems-sidebar {
   padding: 6px 0 12px;
@@ -649,10 +644,19 @@ openclaw-systems-page {
   .systems-heading {
     display: none;
   }
-  .systems-mobile-picker {
-    display: block;
+  /* Level with the 32px icon buttons beside it, and drawn with the same border. */
+  .systems-workspace .systems-toolbar > select.systems-mobile-picker {
+    --settings-control-height: 32px;
+
+    display: -webkit-inline-box;
     flex: 1;
     max-width: none;
+    height: 32px;
+    min-height: 32px;
+    border-color: var(--border);
+  }
+  .systems-desktop .desktop-toolbar select.settings-select {
+    border-color: var(--border);
   }
   .systems-workspace > .content-header.hub-page-header.systems-page-header {
     padding-inline: 10px;

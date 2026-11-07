@@ -9,7 +9,7 @@ import type {
 import { RECORD_RESPONSE_MAX_BYTES } from "./limits.js";
 import type { Envelope, LoadedRecord } from "./model.js";
 import { eligible } from "./retrieval.js";
-import { splitsPair } from "./text-window.js";
+import { splitsPair, textWindow } from "./text-window.js";
 import type { SampleVault } from "./vault.js";
 
 const summary = ({
@@ -348,10 +348,14 @@ export async function inspectOntology(
           "Ontology source unavailable. List view=sources to find an authorized sourcePath.",
         );
       }
-      const raw = source.raw.slice(offset, offset + (input.maxChars ?? 12000));
-      result.source = { path: source.path, raw, totalChars: source.raw.length };
+      const sourceWindow = textWindow(source.raw, offset, input.maxChars ?? 12000);
+      result.source = {
+        path: source.path,
+        raw: sourceWindow.text,
+        totalChars: source.raw.length,
+      };
       result.total = source.raw.length;
-      result.nextOffset = next(offset, raw.length, source.raw.length);
+      result.nextOffset = sourceWindow.content.nextOffset;
     } else {
       result.sources = page(data.sources).map((s) => ({
         path: s.path,

@@ -9,7 +9,6 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { ContextEnginePromptCacheObservationChange as PromptCacheChange } from "../../context-engine/types.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
-import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import type { NormalizedUsage } from "../usage.js";
 import { log } from "./logger.js";
@@ -57,6 +56,7 @@ type PromptCacheTracker = {
   sessionId: string;
   sessionKey?: string;
   history: PromptHistoryFingerprint[];
+  historyBytes: number;
   declaredRewrites?: Set<PromptHistoryRewriteReason>;
   snapshot: PromptCacheSnapshot;
   lastCacheRead: number | null;
@@ -81,16 +81,21 @@ const toolFactSources = new WeakMap<
 const MAX_PROMPT_FACT_SOURCE_CHARS = 32_768;
 const MAX_TOOL_FACT_SOURCE_CHARS = 16_384;
 const trackers = new Map<string, PromptCacheTracker>();
+// Budget UTF-16 diagnostic strings plus container overhead, not conversation payloads.
+const MAX_HISTORY_BYTES = 16 * 1024 * 1024;
+let retainedHistoryBytes = 0;
 
 /** Retired session IDs cannot reuse their cross-turn diagnostic baselines. */
 export function clearPromptCacheObservations(sessionId?: string): void {
   if (sessionId === undefined) {
     trackers.clear();
+    retainedHistoryBytes = 0;
     return;
   }
   for (const [key, tracker] of trackers) {
     if (tracker.sessionId === sessionId) {
       trackers.delete(key);
+      retainedHistoryBytes -= tracker.historyBytes;
     }
   }
 }
@@ -488,8 +493,11 @@ export function beginPromptCacheObservation(
     promptFactSources.set(snapshot, retained ?? Buffer.from(suffix, "utf16le").toString("utf16le"));
   }
   let history = previous?.history ?? [];
+  let historyBytes = 0;
   for (let index = 0; index < params.messages.length; index++) {
     const fingerprint = fingerprintMessage(params.messages[index]!, previous?.history[index]);
+    historyBytes +=
+      256 + 2 * (fingerprint.packed.length + fingerprint.layout.length + fingerprint.role.length);
     if (fingerprint !== history[index]) {
       // Copy before changing the baseline used by divergence diagnostics.
       history = history === previous?.history ? history.slice() : history;
@@ -544,6 +552,7 @@ export function beginPromptCacheObservation(
     sessionId: params.sessionId,
     sessionKey: params.sessionKey?.trim(),
     history,
+    historyBytes,
     snapshot,
     lastCacheRead: previous?.lastCacheRead ?? null,
     lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
@@ -552,8 +561,15 @@ export function beginPromptCacheObservation(
     pendingChanges: pendingChanges.length > 0 ? pendingChanges : null,
   };
   trackers.delete(key);
-  pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
   trackers.set(key, tracker);
+  retainedHistoryBytes += historyBytes - (previous?.historyBytes ?? 0);
+  for (const [oldestKey, oldest] of trackers) {
+    if (trackers.size <= MAX_TRACKERS && retainedHistoryBytes <= MAX_HISTORY_BYTES) {
+      break;
+    }
+    trackers.delete(oldestKey);
+    retainedHistoryBytes -= oldest.historyBytes;
+  }
   // Within one session the tool definitions depend only on session and config facts;
   // a model, transport or retention change starts over.
   const prefixChanges =

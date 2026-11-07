@@ -1,6 +1,7 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import {
+  acceptsWorkflowPaths,
   evaluateWorkflowExpression,
   readCiWorkflow,
   readWorkflow,
@@ -119,9 +120,16 @@ describe("hourly main CI admission", () => {
       steps: {
         diff_base: { outputs: { sha: baseSha } },
         guard_setup: { outputs: {}, outcome: "success" },
+        guard_ripgrep: { outputs: {}, outcome: "success" },
       },
     } as const;
     expect(evaluate(guards.if, context)).toBe(true);
+    expect(
+      evaluate(guards.if, {
+        ...context,
+        steps: { ...context.steps, guard_ripgrep: { outputs: {}, outcome: "failure" } },
+      }),
+    ).toBe(false);
     for (const name of ["BASE_SHA", "PROTOCOL_SINCE_BASE_SHA"]) {
       expect(evaluate(guards.env[name], context)).toBe(baseSha);
     }
@@ -214,6 +222,8 @@ describe("CodeQL language selection", () => {
       checkoutOutcome?: string;
       actionsChanged?: string;
       javascriptChanged?: string;
+      unchangedCategories?: string[];
+      scheduledProofs?: string;
     } = {},
   ) {
     return { files, expected, ...options };
@@ -223,14 +233,28 @@ describe("CodeQL language selection", () => {
     selectionCase([".github/actions/example/action.yml"], ["actions"]),
     selectionCase([".github/workflows/codeql.yml"]),
     selectionCase([".github/codeql/codeql-actions-critical-security.yml"]),
+    ...[".gitattributes", "apps/.gitattributes", ".hidden/.gitattributes"].map((file) =>
+      selectionCase([file]),
+    ),
     selectionCase(["src/main.ts"], categories.slice(0, -1)),
     selectionCase(["packages/example/README.md"], categories.slice(0, -1)),
     selectionCase([".github/workflows/docs.yml", "src/main.ts"]),
     selectionCase([]),
     selectionCase(undefined, undefined, { checkoutOutcome: "failure" }),
+    ...["{", "null", '{"actions":"false"}', "{}"].map((scheduledProofs) =>
+      selectionCase(undefined, undefined, { eventName: "schedule", scheduledProofs }),
+    ),
     selectionCase(undefined, undefined, { exitCode: 128 }),
     ...["schedule", "workflow_dispatch"].map((eventName) =>
       selectionCase(undefined, undefined, { eventName }),
+    ),
+    selectionCase(
+      undefined,
+      categories.filter((category) => category !== "network-ssrf-boundary"),
+      {
+        eventName: "schedule",
+        unchangedCategories: ["network-ssrf-boundary"],
+      },
     ),
     selectionCase(undefined, ["actions"], {
       eventName: "schedule",
@@ -262,8 +286,21 @@ describe("CodeQL language selection", () => {
         process: {
           env: {
             CODEQL_CHECKOUT_OUTCOME: options.checkoutOutcome ?? "success",
-            CODEQL_ACTIONS_CHANGED: options.actionsChanged,
-            CODEQL_JAVASCRIPT_CHANGED: options.javascriptChanged,
+            CODEQL_SCHEDULED_PROOFS:
+              options.scheduledProofs ??
+              JSON.stringify({
+                ...Object.fromEntries(
+                  categories.map((category) => [
+                    category,
+                    (category === "actions"
+                      ? options.actionsChanged
+                      : options.javascriptChanged) !== "false",
+                  ]),
+                ),
+                ...Object.fromEntries(
+                  (options.unchangedCategories ?? []).map((category) => [category, false]),
+                ),
+              }),
           },
         },
         core: {
@@ -306,6 +343,16 @@ describe("CodeQL language selection", () => {
       ).toBe(expected.length > 0);
     },
   );
+
+  it("admits root and nested attribute changes while excluding unrelated docs", () => {
+    expect(workflow.on.pull_request.paths).toEqual(
+      expect.arrayContaining([".gitattributes", "**/.gitattributes"]),
+    );
+    for (const file of [".gitattributes", "apps/.gitattributes"]) {
+      expect(acceptsWorkflowPaths(workflow.on.pull_request.paths, [file])).toBe(true);
+    }
+    expect(acceptsWorkflowPaths(workflow.on.pull_request.paths, ["docs/intro.md"])).toBe(false);
+  });
 
   it("keeps event admission and exact merge identity", () => {
     expectAdmission(scope.if);

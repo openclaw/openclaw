@@ -54,7 +54,6 @@ import {
   hasSessionControlAuthority,
   prepareSandboxSessionTools,
 } from "../agents/tools/sessions-operator-authority.js";
-import type { SkillWorkshopRunOptions } from "../agents/tools/skill-workshop-tool-factory.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
@@ -65,6 +64,7 @@ import { resolveExactExecModeFromPolicy } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
   captureGatewayToolResolutionAuthority,
@@ -125,10 +125,11 @@ export async function resolveGatewayScopedTools(
     /** Current node inventory predicate; evaluated with the resolved exec binding. */
     nodeExecAvailable?: (node?: string) => boolean;
     pairedNodeComputerUse?: import("../agents/computer-use-node-capabilities.js").PreparedPairedComputerUse;
-    skillWorkshop?: SkillWorkshopRunOptions;
+    skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
     /**
-     * Run-owned configured MCP tools for an exclusive CLI grant. They enter the
-     * same policy pipeline as Gateway tools; core names always win collisions.
+     * Configured MCP tools owned by the caller: a run for an exclusive CLI grant,
+     * or one standalone invocation. They enter the same policy pipeline as
+     * Gateway tools; core names always win collisions.
      */
     bundledTools?: readonly AnyAgentTool[];
   },
@@ -360,6 +361,7 @@ export async function resolveGatewayScopedTools(
     sessionConfigSource: "runtime" as const,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    webSearchModelSelection: params.webSearchModelSelection,
     modelHasVision: params.modelHasVision,
     requesterModel: params.requesterModel,
     pairedNodeComputerUse: params.pairedNodeComputerUse,
@@ -432,7 +434,7 @@ export async function resolveGatewayScopedTools(
     conversationReadOrigin: params.conversationReadOrigin,
     inputProvenance: params.inputProvenance,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-    skillWorkshop: params.skillWorkshop,
+    skillLibraryAuthoring: params.skillLibraryAuthoring,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
     disablePluginTools: params.disablePluginTools,
     agentDir: params.agentDir,
@@ -602,12 +604,9 @@ export async function resolveGatewayScopedTools(
     : toolsWithMediatedCoding;
 
   const coreToolNames = new Set(allTools.map((tool) => normalizeToolPolicyName(tool.name)));
-  const bundledTools =
-    surface === "loopback"
-      ? (params.bundledTools ?? []).filter(
-          (tool) => !coreToolNames.has(normalizeToolPolicyName(tool.name)),
-        )
-      : [];
+  const bundledTools = (params.bundledTools ?? []).filter(
+    (tool) => !coreToolNames.has(normalizeToolPolicyName(tool.name)),
+  );
   const toolsForMessageProvider = filterToolsByMessageProvider(
     bundledTools.length > 0 ? [...allTools, ...bundledTools] : allTools,
     params.messageProvider,

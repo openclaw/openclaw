@@ -8,38 +8,48 @@
   grid-template-columns: 1fr;
 }
 
-.agents-toolbar,
-.agent-file-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.agents-toolbar-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 1;
-  min-width: 0;
+.agents-main > [role="tabpanel"] {
+  padding-block-start: var(--space-5);
 }
 
 .agents-toolbar-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
-  flex-shrink: 0;
-  margin-left: auto;
 }
 
 .agents-page-menu {
-  display: none;
+  display: inline-flex;
+  flex: none;
+}
+
+.btn.agents-page-menu__trigger {
+  width: 33px;
+  height: 33px;
+  padding: 0;
+}
+
+.agents-page-menu__trigger > .oc-menu-item__label {
+  display: contents;
+}
+
+.agents-page-menu__trigger svg {
+  display: block;
+  width: 14px;
+  height: 14px;
 }
 
 .agent-file-tabs {
   display: flex;
   align-items: flex-end;
   gap: var(--space-2);
+}
+
+.agent-file-tabs > .hub-tabs {
+  /* This row shares width with Add File rather than height with a panel. */
+  flex-shrink: 1;
 }
 
 .agent-tab-add {
@@ -57,17 +67,167 @@
   border-color: var(--accent);
 }
 
+/* Short values and pickers share one column so the panel's controls start on the
+   same edge. Long model ids widen a picker rather than truncating. */
+.agent-overview {
+  --agent-overview-control-width: 340px;
+}
+
+.agent-overview .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input {
+  width: var(--agent-overview-control-width);
+}
+
+.agent-overview .settings-row__control > .model-picker {
+  min-width: min(var(--agent-overview-control-width), 100%);
+}
+
+.agent-overview .settings-row__control > .agent-fallbacks {
+  width: fit-content;
+  min-width: min(var(--agent-overview-control-width), 100%);
+  max-width: 100%;
+}
+
+/* Selects and chips read at the row's value size and stay on one line. Only the real
+   text inputs keep the touch floor that stops iOS zooming on focus. */
+.agent-overview .settings-row__control .settings-select .picker-select__trigger {
+  font-size: var(--field-font-size);
+}
+
+.agent-overview .agent-fallbacks .multi-select__input::placeholder {
+  font-size: var(--field-font-size);
+}
+
+.agent-overview .agent-fallbacks .multi-select__chip {
+  min-width: 0;
+  padding-block: 1px;
+  font-size: var(--field-font-size);
+}
+
+.agent-overview .agent-fallbacks .multi-select__chip-icon {
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+}
+
+/* The add input takes its line only while focused, so a filled chain ends at its last chip. */
+.agent-overview
+  .agent-fallbacks
+  .multi-select:has(.multi-select__chip):not(:focus-within)
+  .multi-select__input {
+  position: absolute;
+  width: 1px;
+  min-width: 0;
+  height: 1px;
+  padding: 0;
+  opacity: 0;
+}
+
+/* Touch has no title tooltip and the list leaves out chosen models, so tapping the field
+   shows the chain's full ids until focus leaves it. */
+@media (pointer: coarse), (max-width: 640px) {
+  .agent-overview .agent-fallbacks .multi-select__chip {
+    padding-inline: var(--space-2);
+  }
+
+  .agent-overview .agent-fallbacks .multi-select:focus-within .multi-select__chip {
+    border-radius: var(--radius-md);
+  }
+
+  .agent-overview .agent-fallbacks .multi-select:focus-within .multi-select__chip-label {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  /* The mark stays chip-sized; its touch target reaches past it, up to the next chip. */
+  .agent-overview .agent-fallbacks .multi-select__chip .chip-remove {
+    position: relative;
+    width: 24px;
+    min-width: 0;
+    height: 24px;
+    min-height: 0;
+  }
+
+  .agent-overview .agent-fallbacks .multi-select__chip .chip-remove::after {
+    position: absolute;
+    inset: -6px -10px;
+    content: "";
+  }
+
+  /* A save status stays on the heading line, so the group below it does not move. */
+  .agent-overview .settings-section__header {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .agent-overview .settings-section__actions {
+    flex: 0 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+
+  /* The list wraps long ids inside the select's own width. */
+  .agent-overview .picker-select__menu.oc-overlay {
+    max-width: anchor-size(width);
+  }
+}
+
+.agent-overview .settings-row__control input.settings-input:not(.picker-select__search) {
+  text-align: start;
+}
+
+.agent-overview__workspace {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+.agent-config-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+/* Shares the section heading's line; matching its line height keeps the header still. */
+.agent-identity-status {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.agent-identity-status--error {
+  color: var(--danger);
+}
+
+/* Avatar, name and emoji read as one identity: the portrait leads, the name takes the
+   room, and the single-glyph emoji keeps a compact field. */
+.settings-row:has(> .agent-identity-editor) {
+  padding: var(--space-4);
+}
+
 .agent-identity-editor {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: var(--space-4);
   width: 100%;
+  min-width: 0;
 }
 
-.agent-identity-editor__content {
+.agent-identity-editor__fields {
   display: grid;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  gap: var(--space-3);
   flex: 1;
+  min-width: 0;
+}
+
+.agent-identity-editor__fields .field {
+  min-width: 0;
+}
+
+.agent-identity-editor__fields input {
+  width: 100%;
   min-width: 0;
 }
 
@@ -153,23 +313,14 @@
   object-fit: cover;
 }
 
-.agent-identity-editor__fields {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px);
-  gap: 12px;
-  min-width: 0;
-}
-
-.agent-identity-editor__fields .field {
-  min-width: 0;
-}
-
 .agent-identity-editor__emoji-control {
   position: relative;
 }
 
+/* The glyph reads at emoji size, not at the text field's size. */
 .agent-identity-editor__emoji-control > input {
-  padding-inline-end: 42px;
+  padding-inline-end: 38px;
+  font-size: max(var(--field-font-size), 16px);
 }
 
 .agent-identity-editor__emoji-control > openclaw-agent-emoji-picker {
@@ -179,14 +330,21 @@
   transform: translateY(-50%);
 }
 
-.agent-identity-editor__fields input {
-  min-width: 0;
-  width: 100%;
-}
-
 @media (max-width: 640px) {
+  .agent-overview .settings-row__control > .agent-fallbacks {
+    width: 100%;
+  }
+
+  /* The name and emoji stack beside the avatar, so the name keeps its full width. */
   .agent-identity-editor__fields {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* The picker is wider than the room right of the avatar; center it on the screen. */
+  .oc-overlay.agent-identity-editor__popover {
+    position-area: bottom span-all;
+    position-try-fallbacks: flip-block;
+    justify-self: center;
   }
 }
 
@@ -222,6 +380,10 @@
 }
 
 .agent-file-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
   justify-content: space-between;
 }
 
@@ -247,47 +409,11 @@
   overflow: hidden;
 }
 
-.md-preview-dialog__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-  padding: var(--overlay-modal-padding) var(--overlay-modal-padding) 16px;
-  border-bottom: 1px solid var(--border);
-}
-
-.md-preview-dialog__header-main {
-  min-width: 0;
-  display: grid;
-  gap: 10px;
-}
-
-.md-preview-dialog__eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.md-preview-dialog__title-wrap {
-  min-width: 0;
-  display: grid;
-  gap: 6px;
+.oc-dialog__header.md-preview-dialog__header {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .md-preview-dialog__title {
-  min-width: 0;
-  font-size: clamp(1.2rem, 1rem + 0.6vw, 1.75rem);
-  line-height: 1.08;
-  font-weight: 650;
-  letter-spacing: -0.03em;
-  color: var(--text-strong);
-  text-wrap: balance;
   overflow-wrap: anywhere;
 }
 
@@ -303,58 +429,8 @@
 .md-preview-dialog__actions {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-1);
   flex-shrink: 0;
-}
-
-.md-preview-icon-btn {
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border-radius: var(--radius-md);
-  border-color: color-mix(in srgb, var(--border) 78%, white 10%);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--bg-elevated) 92%, white 8%),
-    color-mix(in srgb, var(--bg-elevated) 88%, black 12%)
-  );
-  color: color-mix(in srgb, var(--text) 86%, var(--muted));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.045),
-    var(--shadow-md);
-}
-
-.md-preview-icon-btn:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--border-strong) 78%, white 14%);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--bg-hover) 88%, white 10%),
-    color-mix(in srgb, var(--bg-elevated) 84%, black 16%)
-  );
-  color: var(--text-strong);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    var(--shadow-md);
-}
-
-.md-preview-icon-btn[aria-pressed="true"] {
-  border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
-  color: var(--text-strong);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
-    0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent),
-    var(--shadow-lg);
-}
-
-.md-preview-icon-btn > span {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.md-preview-icon-btn svg {
-  width: 16px;
-  height: 16px;
 }
 
 .md-preview-dialog__body {
@@ -363,80 +439,29 @@
   overflow: auto;
   overscroll-behavior: contain;
   padding: clamp(18px, 3vw, 28px);
-  background:
-    radial-gradient(
-      circle at top right,
-      color-mix(in srgb, var(--accent) 5.5%, transparent),
-      transparent 32%
-    ),
-    radial-gradient(
-      circle at bottom left,
-      color-mix(in srgb, var(--accent-2) 4.5%, transparent),
-      transparent 28%
-    ),
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--panel) 84%, black 16%),
-      color-mix(in srgb, var(--bg) 88%, black 12%)
-    );
-}
-
-.md-preview-dialog__footer {
-  flex-shrink: 0;
-  padding: 16px var(--overlay-modal-padding);
-  border-top: 1px solid var(--border);
 }
 
 .md-preview-dialog__meta {
   display: flex;
   flex-shrink: 0;
   overflow-x: auto;
-  scrollbar-width: thin;
-  gap: 8px;
-  padding: 0 22px 16px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 88%, white 6%);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--panel) 96%, transparent 4%),
-    color-mix(in srgb, var(--panel) 92%, black 8%)
-  );
+  scrollbar-width: none;
+  grid-column: 1 / -1;
+  min-width: 0;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
 }
 
 .md-preview-dialog__chip {
-  display: inline-flex;
   flex-shrink: 0;
-  white-space: nowrap;
-  align-items: center;
-  gap: 8px;
-  min-height: 32px;
-  padding: 6px 12px;
-  border-radius: var(--radius-full);
-  border: 1px solid color-mix(in srgb, var(--border) 78%, white 10%);
-  background: color-mix(in srgb, var(--secondary) 72%, transparent);
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
+  font-size: var(--control-ui-text-sm);
+  white-space: nowrap;
 }
 
-.md-preview-dialog__chip strong {
-  font-weight: 600;
-  color: var(--text-strong);
-}
-
-.md-preview-dialog__chip.is-dirty {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
-  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--secondary));
-}
-
-.md-preview-dialog__chip.is-missing {
-  border-color: color-mix(in srgb, var(--warn) 42%, var(--border));
-  background: color-mix(in srgb, var(--warn-subtle) 78%, var(--secondary));
-}
-
-.md-preview-dialog__chip.is-synced {
-  border-color: color-mix(in srgb, var(--accent-2) 36%, var(--border));
-  background: color-mix(in srgb, var(--accent-2-subtle) 72%, var(--secondary));
+.md-preview-dialog__chip + .md-preview-dialog__chip::before {
+  content: "·" / "";
+  margin-inline-end: var(--space-2);
 }
 
 .md-preview-dialog__reader {
@@ -608,38 +633,10 @@
     padding: var(--space-4);
   }
 
-  .agent-file-preview .md-preview-dialog__header {
-    flex-direction: row;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-3);
-  }
-
-  .md-preview-dialog__eyebrow {
-    display: none;
-  }
-
-  .md-preview-dialog__title-wrap {
-    gap: var(--space-1);
-  }
-
   .agent-file-preview .md-preview-dialog__title {
-    font-size: var(--control-ui-text-lg);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .md-preview-dialog__actions {
-    gap: var(--space-1);
-  }
-
-  .md-preview-dialog__meta {
-    padding: 0 var(--space-3) var(--space-2);
-  }
-
-  .md-preview-dialog__footer {
-    padding: var(--space-3);
   }
 
   .agent-file-preview .md-preview-dialog__body {
@@ -661,31 +658,11 @@
 }
 
 @media (max-width: 400px) {
-  .agent-file-preview .btn.md-preview-icon-btn {
-    width: var(--space-7);
-    height: var(--space-7);
-    min-width: var(--space-7);
-    min-height: var(--space-7);
-    border-color: transparent;
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--muted);
-    box-shadow: none;
-  }
-
-  .agent-file-preview .btn.md-preview-icon-btn:hover:not(:disabled) {
-    border-color: transparent;
-    background: var(--bg-hover);
-    color: var(--text);
-    box-shadow: none;
-  }
-
   .agent-file-preview .md-preview-dialog__meta {
     overflow: clip;
   }
 
-  .agent-file-preview .md-preview-dialog__chip[data-priority="secondary"],
-  .agent-file-preview .md-preview-dialog__chip > span {
+  .agent-file-preview .md-preview-dialog__chip[data-priority="secondary"] {
     display: none;
   }
 }
@@ -700,14 +677,15 @@
 .agent-tools-buttons,
 .agent-tools-runtime {
   display: flex;
+  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.agent-tools-grid {
+.agents-panel-body.agent-tools-grid {
   display: grid;
-  gap: 16px;
-  margin-top: 20px;
+  gap: 0;
+  padding: var(--space-1) 0;
 }
 
 .agent-tools-runtime-chip {
@@ -755,58 +733,92 @@
 }
 
 .agent-tools-group {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
-  overflow: hidden;
+  min-width: 0;
 }
 
-.agent-tools-group__summary {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  justify-content: space-between;
-  padding: 12px 14px;
-  list-style: none;
-  transition:
-    background-color var(--duration-fast) var(--ease-in-out),
-    color var(--duration-fast) var(--ease-in-out);
-}
-
-.agent-tools-group__summary::before {
-  content: "▸";
+.agent-tools-chevron {
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
+  margin-block-start: 2px;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 20px;
   transition: transform var(--duration-fast) var(--ease-in-out);
 }
 
-.agent-tools-group__summary:hover {
-  background: color-mix(in srgb, var(--bg-elevated) 96%, var(--text) 4%);
+:is(.agent-tools-group, .agent-tool-card)[open] > summary > .agent-tools-chevron {
+  transform: rotate(90deg);
+}
+
+.agent-tools-group__summary,
+.agent-tool-summary {
+  display: grid;
+  grid-template-columns: var(--list-row-icon-size) minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0 var(--space-2);
+  min-width: 0;
+  list-style: none;
+  cursor: var(--cursor-action);
+  transition: background-color var(--duration-fast) var(--ease-in-out);
+}
+
+.agent-tools-group__summary::-webkit-details-marker,
+.agent-tool-summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-tools-group__summary {
+  padding: var(--space-2) var(--space-4);
+}
+
+/* Tools hang off their group's title. */
+.agent-tool-summary {
+  padding: var(--space-2) var(--space-4) var(--space-2)
+    calc(var(--space-4) + var(--list-row-icon-size) + var(--space-2));
+}
+
+.agent-tools-group__summary:hover,
+.agent-tool-summary:hover {
+  background: var(--surface-hover);
+}
+
+.agent-tools-group__summary:focus-visible,
+.agent-tool-summary:focus-visible {
+  outline: none;
+  box-shadow: inset var(--focus-ring);
 }
 
 .agent-tools-group__title {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 0 8px;
   min-width: 0;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
+}
+
+.agent-tools-group__title .settings-row__value {
+  text-align: start;
+  white-space: nowrap;
 }
 
 .agent-tools-group__summary-main {
   display: grid;
-  gap: 6px;
+  gap: 2px;
   min-width: 0;
-  flex: 1;
 }
 
 .agent-tools-group__preview {
   display: flex;
-  gap: 6px;
+  gap: 2px var(--space-3);
   flex-wrap: wrap;
   min-width: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-xs);
+}
+
+/* The open group lists these tools itself. */
+.agent-tools-group[open] .agent-tools-group__preview {
+  display: none;
 }
 
 .agent-tools-group__preview > span,
@@ -820,171 +832,55 @@
 
 .agent-tools-group__preview > span {
   max-width: min(180px, 100%);
-  padding: 2px 6px;
-  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--card) 70%, transparent);
 }
 
 .agent-tools-group__counts {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
+  align-self: center;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.agent-tools-group__counts > span {
   white-space: nowrap;
 }
 
 .agent-tools-list {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
-  padding: 0 12px 12px;
+  grid-template-columns: minmax(0, 1fr);
+  padding-block-end: var(--space-2);
 }
 
 .agent-tool-card {
-  position: relative;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--card);
-  overflow: hidden;
+  min-width: 0;
   scroll-margin-top: 16px;
 }
 
-.agent-tool-card[open] {
-  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
-}
-
-.agent-tool-summary {
-  position: relative;
+.agent-tool-summary__main {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(220px, 0.9fr) auto;
-  gap: 12px 16px;
-  align-items: center;
-  min-width: 0;
-  padding: 12px 92px 12px 12px;
-  list-style: none;
-  transition:
-    background-color var(--duration-fast) var(--ease-in-out),
-    color var(--duration-fast) var(--ease-in-out);
-}
-
-.agent-tool-summary::after {
-  content: "▸";
-  position: absolute;
-  top: 18px;
-  right: 64px;
-  color: var(--muted);
-  font-size: 12px;
-  transition: transform var(--duration-fast) var(--ease-in-out);
-}
-
-.agent-tool-summary:hover {
-  background: color-mix(in srgb, var(--card) 97%, var(--text) 3%);
-}
-
-.agent-tools-group__summary:hover::before,
-.agent-tool-summary:hover::after {
-  color: color-mix(in srgb, var(--text) 78%, var(--muted));
-}
-
-.agent-tools-group__summary:focus-visible,
-.agent-tool-summary:focus-visible {
-  outline: none;
-  box-shadow: inset var(--focus-ring);
-}
-
-.agent-tool-summary__title-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  gap: 2px;
   min-width: 0;
 }
 
-.agent-tool-summary__badges .agent-tool-badges {
-  margin-top: 0;
-  justify-content: flex-end;
-}
-
-.agent-tool-summary__facts {
-  display: grid;
-  gap: 8px 12px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin: 0;
-  min-width: 0;
-}
-
-.agent-tool-summary__fact dd {
-  margin: 2px 0 0;
-  font-size: 12px;
-}
-
+/* Centered on the closed row's two lines; stays put when the row opens. */
 .agent-tool-toggle {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  margin: 0;
-  z-index: 1;
+  display: inline-flex;
+  margin: 10px 0 0;
 }
 
 .agent-tool-badges {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
-  margin-top: 8px;
 }
 
 .agent-tool-title {
-  font-weight: 600;
-  font-size: 13px;
-  max-width: 100%;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
 }
 
 .agent-tool-sub {
   color: var(--muted);
-  font-size: 12px;
-  margin-top: 3px;
-}
-
-.agent-tool-details {
-  padding: 0 12px 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-}
-
-.agent-tool-card:not([open]) .agent-tool-details {
-  display: none;
-}
-
-.agent-tool-details-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 20px;
-  align-items: flex-start;
-  padding-top: 10px;
-}
-
-.agent-tool-summary__main,
-.agent-tool-summary__badges,
-.agent-tool-summary__fact,
-.agent-tool-detail {
-  min-width: 0;
-}
-
-.agent-tool-detail--inline {
-  max-width: min(100%, 260px);
-}
-
-.agent-tool-detail .label {
-  margin-bottom: 4px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .agent-tool-card[open] .agent-tool-sub {
@@ -993,72 +889,45 @@
   white-space: normal;
 }
 
+/* Details line up with the tool's name. */
+.agent-tool-details {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4) var(--space-3)
+    calc(var(--space-4) + 2 * (var(--list-row-icon-size) + var(--space-2)));
+}
+
+.agent-tool-details .settings-kv {
+  padding: 0;
+}
+
 .agent-tool-jump {
-  color: var(--accent);
-  align-self: end;
-  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  text-decoration: none;
 }
 
 .agent-tool-jump:hover {
-  color: var(--accent-hover);
-  text-decoration: underline;
+  color: var(--text);
 }
 
 .agent-tool-jump:focus-visible {
   outline: none;
-  box-shadow: var(--focus-ring);
   border-radius: var(--radius-sm);
+  box-shadow: var(--focus-ring);
+}
+
+.agent-tool-card:not([open]) .agent-tool-details {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .agent-tools-runtime-chip,
   .agent-tools-group__summary,
   .agent-tool-summary,
-  .agent-tools-group__summary::before,
-  .agent-tool-summary::after {
+  .agent-tools-chevron {
     transition: none;
-  }
-}
-
-@media (max-width: 1320px) {
-  .agent-tool-summary {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .agent-tool-summary__facts {
-    grid-column: 1 / -1;
-  }
-
-  .agent-tool-summary__badges .agent-tool-badges {
-    justify-content: flex-start;
-  }
-}
-
-@media (max-width: 768px) {
-  .agent-tools-group__summary {
-    flex-wrap: wrap;
-  }
-
-  .agent-tools-group__summary::before {
-    line-height: 18px;
-  }
-
-  .agent-tools-group__counts {
-    justify-content: flex-start;
-    width: 100%;
-    padding-left: 24px;
-  }
-
-  .agent-tool-summary {
-    grid-template-columns: 1fr;
-  }
-
-  .agent-tool-summary__facts {
-    grid-template-columns: 1fr;
-  }
-
-  .agent-tool-jump {
-    margin-left: 0;
   }
 }
 
@@ -1125,11 +994,6 @@
   }
 }
 
-.md-preview-dialog__eyebrow svg {
-  width: 14px;
-  height: 14px;
-}
-
 /* Agents page escape hatches for the settings design language.
  * Custom panel content (file editor, tool catalog, skill groups) lives
  * inside one .settings-group per section; this wrapper matches the
@@ -1140,12 +1004,6 @@
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   min-width: 0;
-}
-
-.agents-panel-body + .agents-panel-body,
-.settings-kv + .agents-panel-body,
-.agents-panel-body + .settings-kv {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .agent-profile-tree,
@@ -1223,60 +1081,20 @@
     min-width: 0;
   }
 
-  .agents-toolbar-row {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
-  }
-
-  .agents-toolbar-actions {
-    margin-left: 0;
-    max-width: 100%;
-    flex-wrap: wrap;
-    justify-content: space-between;
-  }
-
-  .agents-toolbar-actions > .agents-toolbar-secondary {
-    display: none;
-  }
-
-  .agents-page-menu {
-    display: inline-flex;
-    flex: none;
-  }
-
   .btn.agents-page-menu__trigger {
     width: 44px;
     height: 44px;
-    padding: 0;
   }
 
-  .agents-page-menu__trigger > .oc-menu-item__label {
-    display: contents;
-  }
-
-  .agents-page-menu__trigger svg {
-    display: block;
-    width: 14px;
-    height: 14px;
-  }
-
-  /* Alone on its row, New agent needs the regular button shape to read as an action. */
-  .agents-toolbar-actions .agents-create-btn.btn--ghost {
-    border-color: var(--border);
-    background: var(--btn-bg, var(--bg-elevated));
-    color: var(--text);
-  }
-
-  :root[data-theme-mode="light"] .agents-toolbar-actions .agents-create-btn.btn--ghost {
-    border-color: var(--input);
-    background: var(--bg);
+  /* With the menu in the floating header, no row is left above the tabs. */
+  .page-header-actions:has(> .agents-toolbar-actions):not(:has(.agents-page-menu)) {
+    display: none;
   }
 }
 
-/* Where the page menu carries Refresh, hide the toolbar copy through its tooltip. */
+/* The phone menu carries Refresh even when portaled; the tooltip uses display: contents. */
 @media (max-width: 640px) {
-  .agents-toolbar-actions:has(.agents-page-menu) > openclaw-tooltip > .agents-refresh-btn {
+  .agents-toolbar-actions > openclaw-tooltip > .agents-refresh-btn {
     display: none;
   }
 }

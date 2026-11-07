@@ -1,6 +1,6 @@
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
-import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
+import { resolveUtilityModelSelectionForAgent } from "../../agents/utility-model.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 /**
@@ -15,19 +15,16 @@ export function resolveStatusUtilityModel(params: {
   gatewayCatalog?: ModelsListResult;
 }) {
   const setting = readUtilityModelSetting(params.cfg, params.agentId);
-  const ref = resolveUtilityModelRefForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    ...(params.gatewayCatalog ? { catalog: { entries: params.gatewayCatalog.models } } : {}),
-  });
+  // Public rows omit account inventories; the Gateway publishes the scoped decision.
+  const selection =
+    params.gatewayCatalog?.utilityModel ??
+    resolveUtilityModelSelectionForAgent({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      ...(params.gatewayCatalog ? { catalog: { entries: params.gatewayCatalog.models } } : {}),
+    });
   const fallbacks = setting.kind === "disabled" ? [] : setting.fallbacks;
-  const source =
-    setting.kind === "explicit" || fallbacks.some((fallback) => fallback.trim() === ref)
-      ? "config"
-      : setting.kind === "disabled"
-        ? "disabled"
-        : ref
-          ? "provider-default"
-          : "none";
+  const ref = selection?.modelRef ?? undefined;
+  const source = selection?.source ?? (setting.kind === "disabled" ? "disabled" : "none");
   return { ref, fallbacks, source } as const;
 }

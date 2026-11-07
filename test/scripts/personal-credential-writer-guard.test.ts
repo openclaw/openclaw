@@ -473,6 +473,45 @@ it("guards publication mutation entry paths and the existing repeated factory ca
   );
 });
 
+it("admits only the personal restart owner and its selected registry export", () => {
+  const personal = "src/gateway/github-personal-publication-store.worker.ts";
+  const registry = "src/state/openclaw-state-worker-registry.ts";
+  const writer = "requirePersonalGitHubPublicationConfirmationInDatabase";
+  const message = "unreviewed GitHub publication writer reference";
+  const reject = allowedGraph({
+    [personal]: `
+      export function ${writer}() {}
+      export const personalPublicationRestartOperations = {
+        'githubPublications.personalRestart': () => ${writer}(),
+      };
+    `,
+    [registry]: `
+      export const loaders = {
+        'githubPublications.personalRestart': () =>
+          import('../gateway/github-personal-publication-store.worker.js').then(
+            ({ personalPublicationRestartOperations }) => personalPublicationRestartOperations,
+          ),
+      };
+    `,
+  });
+  reject(
+    personal,
+    (source) => source.replace("githubPublications.personalRestart", "githubPublications.bypass"),
+    message,
+  );
+  reject(
+    publicationWorker,
+    `import { ${writer} } from '../gateway/github-personal-publication-store.worker.js';
+     function personalMutation() { ${writer}(); }`,
+    message,
+  );
+  reject(
+    registry,
+    (source) => source.replaceAll("personalPublicationRestartOperations", writer),
+    message,
+  );
+});
+
 it("counts the receipt deletion loop and lifecycle deletion as two reviewed sinks", () => {
   const file = "src/state/github-personal-publication-lifecycle.ts";
   const source = `export function deletePersonalGitHubSessionReceiptsInDatabase() {

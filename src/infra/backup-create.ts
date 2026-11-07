@@ -311,6 +311,7 @@ async function createBackupArchiveInScope(
     (await resolveBackupPlanFromDisk({
       includeWorkspace,
       excludeWorktreeTemplates: opts.excludeWorktreeTemplates,
+      localCompanion: opts.localCompanion,
       onlyConfig,
       nowMs,
     }));

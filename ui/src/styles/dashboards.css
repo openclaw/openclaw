@@ -73,19 +73,15 @@
   height: 17px;
 }
 
-.dashboards-search input,
-.dashboards-select select {
+.dashboards-search input {
+  width: 100%;
   min-height: var(--settings-control-height);
+  padding: 0 var(--space-3) 0 40px;
   border: 1px solid var(--field-border);
   border-radius: var(--field-radius);
   background-color: var(--field-bg);
   font-size: var(--field-font-size);
   outline: none;
-}
-
-.dashboards-search input {
-  width: 100%;
-  padding: 0 var(--space-3) 0 40px;
 }
 
 .dashboards-select {
@@ -105,7 +101,6 @@
 
 .dashboards-select select {
   min-width: 156px;
-  padding: 0 36px 0 var(--field-padding-inline);
 }
 
 .dashboards-results {
@@ -263,7 +258,7 @@
   margin: 0;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: var(--control-ui-text-base);
+  font-size: var(--control-ui-text-md);
   font-weight: 650;
   letter-spacing: -0.02em;
   line-height: 1.3;

@@ -8,7 +8,9 @@ import {
   CatalogDiscoverySection,
 } from "../../components/solid/catalog-discovery.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
+import { SettingsSection, SettingsUnavailable } from "../../components/solid/settings-ui.tsx";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PageReadResult } from "../../lib/page-request.ts";
@@ -46,6 +48,7 @@ export type PluginCatalogResultsProps = PluginDiscoveryState & {
   iconLoading?: (url: string) => boolean;
   pluginIconLoading?: (pluginId: string) => boolean;
   canInstall: boolean;
+  installTitle?: string;
   busy?: Readonly<Record<string, PluginMutationAction>>;
   installProgress?: ReadonlyMap<string, PluginInstallProgress>;
   /** Installed inventory; publishes local state before catalog pages are read again. */
@@ -174,6 +177,7 @@ function CatalogCard(props: {
                       }
                       pluginName={props.plugin.catalog.name}
                       busy={busy()}
+                      title={props.state.installTitle}
                       disabled={!canInstall()}
                       progress={progress()}
                       onInstall={() => props.state.onInstall(props.plugin.id)}
@@ -202,24 +206,16 @@ function CatalogCard(props: {
 
 function renderError(error: string, onRetry: () => void, warning = false): JSX.Element {
   return (
-    <div
-      class={[
-        "callout",
-        warning ? "warning" : "danger",
-        "oc-banner",
-        { "oc-banner-error": !warning },
-      ]}
-      role={warning ? "status" : "alert"}
+    <InlineAlert
+      tone={warning ? "warning" : "danger"}
+      action={
+        <button type="button" class="btn btn--sm" onClick={() => onRetry()}>
+          {t("pluginsPage.tryAgain")}
+        </button>
+      }
     >
-      <span>{formatUiExternalText(error)}</span>
-      <button
-        type="button"
-        class="btn btn--sm oc-action oc-action-secondary oc-banner-action"
-        onClick={() => onRetry()}
-      >
-        {t("pluginsPage.tryAgain")}
-      </button>
-    </div>
+      {formatUiExternalText(error)}
+    </InlineAlert>
   );
 }
 
@@ -422,7 +418,9 @@ function RawResults(props: CatalogResultsState): JSX.Element {
   return (
     <>
       {!props.connected ? (
-        <p class="plugin-catalog-results__empty">{t("pluginsPage.discoveryOffline")}</p>
+        <SettingsSection>
+          <SettingsUnavailable message={t("pluginsPage.discoveryOffline")} />
+        </SettingsSection>
       ) : items().length === 0 ? (
         renderCatalogEmptyState()
       ) : (
@@ -569,7 +567,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
       <CatalogDiscoverySearch>
         <input
           type="search"
-          class="oc-input"
+          class="settings-input"
           autofocus={focusOnArrival}
           aria-label={t("pluginsPage.searchPlugins")}
           placeholder={t("pluginsPage.searchPlugins")}

@@ -171,8 +171,8 @@ are rejected; they do not suppress validation of later options.
 
 A schema-valid but unset authorable path explains that the runtime default applies and suggests
 `openclaw config set`. For automatically managed metadata, such as `meta.lastTouchedVersion`,
-`meta.migrations.modelPolicyAllowlist`, `meta.migrations.utilityModelSeparation`, and
-`meta.migrations.skillWorkshopPlugin`, the message
+`meta.migrations.modelPolicyAllowlist`, `meta.migrations.utilityModelSeparation`,
+`meta.migrations.skillWorkshopPlugin`, and `meta.migrations.skillLibraryToolSplit`, the message
 instead explains that OpenClaw manages the values on config writes. Reading their unset parent
 paths (`meta` or `meta.migrations`) gives the same explanation, not a refused set command.
 An unknown path suggests `openclaw config schema`. With `--json`, unset and unknown paths use
@@ -429,7 +429,7 @@ Provider builder targets must use `secrets.providers.<alias>` as the path.
     - `--provider-no-output-timeout-ms <ms>`
     - `--provider-max-output-bytes <bytes>`
     - `--provider-json-only`
-    - `--provider-env <KEY=VALUE>` (repeatable)
+    - `--provider-env <KEY=VALUE>` (repeatable; keys `__proto__`, `constructor`, and `prototype` are reserved)
     - `--provider-pass-env <ENV_VAR>` (repeatable)
     - `--provider-trusted-dir <path>` (repeatable)
 
@@ -669,6 +669,9 @@ Unrelated edits leave provider catalogs unchanged. Catalog writes and changes to
 ## Write safety
 
 `openclaw config set` and other OpenClaw-owned config writers validate the full post-change config before committing it to disk. If the new payload fails schema validation or looks like a destructive clobber, the active config is left alone and the rejected payload is saved beside it as `openclaw.json.rejected.*`.
+
+Normal writes refuse malformed UTF-8 in the root config or an included source
+before staging backups, preserving the original source and recovery bytes.
 
 If staging a config save fails, the existing root or include backup ring is left
 untouched. OpenClaw prepares backup contents without blocking unrelated Gateway

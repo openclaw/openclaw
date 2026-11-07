@@ -1,0 +1,2 @@
+# Covers submitted MCP App references, persistence, redaction, retry identity, and popup import cancellation.
+240

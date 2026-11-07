@@ -14,6 +14,7 @@ import {
   hasOperatorReadAccess,
   hasOperatorWriteAccess,
 } from "../../app/operator-access.ts";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
@@ -25,12 +26,12 @@ import { listen } from "../../lib/reactive/listener.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
 import {
+  acceptSkillsReport,
   closeClawHubDetail,
   createSkillsChangeReloader,
   installFromClawHub,
   installSkill,
   loadClawHubDetail,
-  loadClawHubSecurityVerdicts,
   loadSkillCard,
   loadSkills,
   refreshSkills,
@@ -458,10 +459,11 @@ export function SkillsPage(props: SkillsPageProps) {
     routeDataEnabled = true;
     retireSkillsReads(data);
     data.skillsLoading = false;
-    data.skillsReport = route.report;
     data.skillsError = route.error;
     if (route.report) {
-      void loadClawHubSecurityVerdicts(data, route.report);
+      acceptSkillsReport(data, route.report);
+    } else {
+      data.skillsReport = null;
     }
     if (route.clawhubRef && route.clawhubRef !== data.clawhubDetailRef) {
       openClawHubDetail(route.clawhubRef);
@@ -592,7 +594,10 @@ export function SkillsPage(props: SkillsPageProps) {
     onSearch: () => navigateSkills("skills"),
     onWorkshop: () => context.navigate("skill-workshop"),
   };
-  const libraryPageMenu = () => <SkillLibraryPageMenu library={library} {...libraryNavigation} />;
+  const libraryPageMenu = () => {
+    const menu = () => <SkillLibraryPageMenu library={library} {...libraryNavigation} />;
+    return <FloatingHeaderActions fallback={menu()}>{menu()}</FloatingHeaderActions>;
+  };
   function navigateSkills(route: "skills" | "skill-settings") {
     context.navigate(route, {
       search: data.skillsAgentId ? `?agent=${encodeURIComponent(data.skillsAgentId)}` : "",

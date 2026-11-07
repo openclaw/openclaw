@@ -19,6 +19,7 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "./sqlite-readonly-worker.js";
+import { SQLITE_SNAPSHOT_PREFIX } from "./sqlite-snapshot-retirement.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import {
@@ -45,6 +46,7 @@ import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture
 const WORKER_STARTUP_PHASES = new Map<unknown, string>([
   ["versions", "schema inspection startup"],
   ["database-generations", "database generation verification"],
+  ["sqlite-generations", "SQLite generation verification"],
   ["database-backup", "database backup"],
   ["migration-filesystem-backup", "migration filesystem backup and verification"],
   ["database-restore-preparation", "database restore preparation"],
@@ -121,6 +123,10 @@ export async function runUpdateStateInspectionWorker(params: {
             : JSON.stringify({
                 ...params.input,
                 resultPath,
+                ...(params.root === undefined &&
+                path.basename(params.stagingRoot).startsWith(SQLITE_SNAPSHOT_PREFIX)
+                  ? { stagingTokenDirectory: params.stagingRoot }
+                  : {}),
                 includeLocalStoreVersions: true,
                 includeClientCredentialStoreVersion: true,
                 env: {
@@ -134,6 +140,9 @@ export async function runUpdateStateInspectionWorker(params: {
           baseEnv: params.sourceEnv,
           env: {
             XDG_CACHE_HOME: params.stagingRoot,
+            // Managed update snapshot selection prefers TMPDIR over XDG_CACHE_HOME.
+            // Keep native migration images inside the parent-owned cleanup tree.
+            ...(params.input.mode === "sqlite-generations" ? { TMPDIR: params.stagingRoot } : {}),
             ...(sourceTsconfigPath ? { TSX_TSCONFIG_PATH: sourceTsconfigPath } : {}),
           },
           killGraceMs: 500,
@@ -238,10 +247,19 @@ export async function readUpdateDatabaseGenerationPairIsolated(
   return inspectUpdateDatabaseGenerations(paths, options, true);
 }
 
+/** Native migration custody already owns SQLite selection; inspect its image without catalog classification. */
+export async function readUpdateSqliteDatabaseGenerationPairIsolated(
+  paths: readonly string[],
+  options: UpdateDatabaseGenerationReadOptions = {},
+): Promise<import("./update-database-generations.js").UpdateDatabaseGenerationPair> {
+  return inspectUpdateDatabaseGenerations(paths, options, true, "sqlite");
+}
+
 async function inspectUpdateDatabaseGenerations(
   paths: readonly string[],
   options: UpdateDatabaseGenerationReadOptions,
   paired: boolean,
+  engine: "physical" | "sqlite" = "physical",
 ): Promise<import("./update-database-generations.js").UpdateDatabaseGenerationPair> {
   const scope = getOpenClawDatabaseMaintenanceScope();
   const maintenanceOwner =
@@ -266,7 +284,7 @@ async function inspectUpdateDatabaseGenerations(
         sources: paths,
         ...(maintenanceOwner ? { ioBudget: "deadline" as const } : {}),
         input: {
-          mode: "database-generations",
+          mode: engine === "sqlite" ? "sqlite-generations" : "database-generations",
           generationFormat: paired ? "paired" : "committed",
           paths,
           ...(options.pluginOwners ? { pluginOwners: options.pluginOwners } : {}),

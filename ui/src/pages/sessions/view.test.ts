@@ -663,7 +663,7 @@ it("preserves the saved ultrafast override until explicitly changed", async () =
 });
 
 const render = (props: Partial<ReturnType<typeof buildProps>>) => renderView([], props);
-const unavailable = "Connect to the Gateway to search transcripts.";
+const unavailable = "Reconnect to search messages.";
 const connectionStatus = () => container.querySelector('.settings-section__desc [role="status"]');
 const transcriptTrigger = () =>
   container.querySelector<HTMLButtonElement>(".sessions-transcript-search__trigger");
@@ -738,7 +738,7 @@ describe("sessions transcript search view", () => {
           .querySelector(".sessions-transcript-search__form")
           ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       } else {
-        expect(trigger?.closest("openclaw-tooltip")).toBeNull();
+        expect(trigger?.closest("openclaw-tooltip")?.content).toBe(unavailable);
         render({ transcriptSearchAvailable: true });
         await Promise.resolve();
         expect(connectionStatus()).toBeNull();
@@ -850,8 +850,8 @@ describe("sessions view at phone width", () => {
     const onSearchChange = vi.fn();
     await renderSettled(
       [
-        createRow("agent:main:alpha", { label: "Alpha", updatedAt: Date.now() }),
-        createRow("agent:main:beta", { label: "Beta", updatedAt: Date.now() }),
+        createRow("agent:main:alpha", { label: "Alpha", updatedAt: 1 }),
+        createRow("agent:main:beta", { label: "Beta", updatedAt: 1 }),
       ],
       { onSearchChange },
     );
@@ -864,13 +864,38 @@ describe("sessions view at phone width", () => {
     search!.value = "alp";
     search!.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("alp");
+  });
 
-    const filters = { searchQuery: "alp", includeGlobal: true, limit: "50" };
-    renderView([], filters);
-    expect(getButton(".sessions-filter-popover__trigger")?.classList.contains("active")).toBe(
-      false,
-    );
-    renderView([], { ...filters, sortDir: "asc" });
+  it("sorts from the filter and shows a changed sort on the trigger", async () => {
+    const onSortChange = vi.fn();
+    document.body.append(container);
+    const defaults = { onSortChange, searchQuery: "alp", includeGlobal: true, limit: "50" };
+    await renderSettled([createRow("agent:main:alpha", { updatedAt: Date.now() })], defaults);
+    flush();
+    const trigger = getButton(".sessions-filter-popover__trigger");
+    // The toolbar shows the search itself, so only a changed sort lights the trigger.
+    expect(trigger?.classList.contains("active")).toBe(false);
+
+    trigger?.click();
+    flush();
+    const choose = (select: HTMLSelectElement, value: string) => {
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    const [, sort, direction] = queryAll<HTMLSelectElement>("#sessions-filter-popover select");
+    choose(sort!, "key");
+    expect(onSortChange).toHaveBeenLastCalledWith("key", "desc");
+    choose(direction!, "asc");
+    expect(onSortChange).toHaveBeenLastCalledWith("updated", "asc");
+    expect(text("#sessions-filter-popover .oc-sheet__title")).toBe("Filters");
+    expect(attr("#sessions-filter-popover .oc-sheet__close", "aria-label")).toBe("Close");
+
+    disposeSessionViews();
+    await renderSettled([createRow("agent:main:alpha", { updatedAt: Date.now() })], {
+      ...defaults,
+      sortDir: "asc",
+    });
+    flush();
     expect(getButton(".sessions-filter-popover__trigger")?.classList.contains("active")).toBe(true);
   });
 });

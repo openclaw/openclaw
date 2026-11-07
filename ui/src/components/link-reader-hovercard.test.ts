@@ -262,7 +262,7 @@ describe("openclaw-link-reader-hovercard-provider", () => {
       vi.fn().mockRejectedValue(new GatewayRequestError({ code: "UNAVAILABLE", message })),
     );
     await hover(anchor);
-    expect(card()?.textContent).toContain("Could not load preview");
+    expect(card()?.textContent).toContain("Couldn’t load preview");
     expect(card()?.textContent).toContain(message);
     const source = card()?.querySelector(".link-reader-hovercard__error-source");
     expect(source?.textContent?.trim()).toBe(scenario.label);
@@ -294,7 +294,7 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     const { anchor, provider } = createLink();
     connect(provider, vi.fn().mockResolvedValue(value));
     await hover(anchor);
-    expect(card()?.textContent).toContain("Could not load preview");
+    expect(card()?.textContent).toContain("Couldn’t load preview");
     expect(card()?.textContent).not.toContain("Wrong");
   });
 

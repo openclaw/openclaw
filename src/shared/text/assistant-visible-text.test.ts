@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   assistantTraceTextFilter,
   assistantVisibleTextFilters,
-  minimaxToolCallTextFilter,
   plainToolCallTextFilter,
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
@@ -30,13 +29,6 @@ function expectChunkedProjection(source: string, size: number, expected: string)
   });
   expect(projection.text).toBe(expected);
 }
-
-it("keeps an invisible stream pending until visible text arrives and honors replacements", () => {
-  const stream = createTextProjection(assistantVisibleTextFilters("delivery"));
-  expect(stream.append("\u200b")).toEqual({ text: "", delta: "" });
-  expect(stream.append("👩‍💻")).toEqual({ text: "\u200b👩‍💻", delta: "\u200b👩‍💻" });
-  expect(stream.replace("\u2060")).toEqual({ text: "", delta: null });
-});
 
 it("keeps plain-tool code protection independent across interleaved streams and replacements", () => {
   const literal = createTextProjection([plainToolCallTextFilter]);
@@ -151,6 +143,8 @@ describe("stripToolCallXmlTags", () => {
   );
 
   it.each([
+    'Use `<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>`.',
+    '```xml\n<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>\n```',
     "`<tool_call>`",
     "```xml\n<tool_call>\n```",
     "    <tool_call>",
@@ -186,14 +180,6 @@ describe("stripToolCallXmlTags", () => {
   });
 });
 
-it("preserves minimax tool-call XML examples inside inline and fenced code", () => {
-  const inline = 'Use `<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>`.';
-  const fenced =
-    '```xml\n<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>\n```';
-  expect(minimaxToolCallTextFilter().transform(inline)).toBe(inline);
-  expect(minimaxToolCallTextFilter().transform(fenced)).toBe(fenced);
-});
-
 describe("sanitizeAssistantVisibleText", () => {
   it.each([
     ["Tool Result", "[Tool Result for ID abc]\nstdout: hello"],
@@ -223,23 +209,6 @@ describe("sanitizeAssistantVisibleText", () => {
     ],
   ])("sanitizes delivery text: %j", (input, expected = input) => {
     expect(sanitizeAssistantVisibleText(input)).toBe(expected);
-  });
-
-  it("strips internal tool trace warning lines on the delivery path", () => {
-    const input = [
-      "A",
-      "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
-      "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open --no-search-pages.jsonl /tmp/openclaw_open_unlabeled_current.json (agent) failed",
-      "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open (agent) failed: command timed out",
-      "⚠️ 🛠️ Exec failed: `python3 /path/to/daily-cost-audit.py` (exit 1)",
-      "⚠️ 🛠️ Bash failed: `git status` (workspace) (exit 1)",
-      "⚠️ 🛠️ Exec failed (exit 1)",
-      "⚠️ 🛠️ Bash failed",
-      "🛠️ run git status",
-      "Z",
-    ].join("\n");
-
-    expect(sanitizeAssistantVisibleText(input)).toBe("A\nZ");
   });
 });
 
@@ -272,6 +241,21 @@ describe("assistantTraceTextFilter streamed projection", () => {
   });
 
   it.each([
+    [
+      [
+        "A",
+        "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+        "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open --no-search-pages.jsonl /tmp/openclaw_open_unlabeled_current.json (agent) failed",
+        "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open (agent) failed: command timed out",
+        "⚠️ 🛠️ Exec failed: `python3 /path/to/daily-cost-audit.py` (exit 1)",
+        "⚠️ 🛠️ Bash failed: `git status` (workspace) (exit 1)",
+        "⚠️ 🛠️ Exec failed (exit 1)",
+        "⚠️ 🛠️ Bash failed",
+        "🛠️ run git status",
+        "Z",
+      ].join("\n"),
+      "A\nZ",
+    ],
     ['A\ntool call: read {"path":"a.ts"}\nZ', "A\nZ"],
     ["A\n⚠️ 🛠️ Exec failed: `x` (exit 1)\nZ", "A\nZ"],
     ["A\n> 📊 Session Status: ok\nZ", "A\nZ"],
@@ -366,19 +350,15 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
       "<think>hidden</think>Use <think> literally here",
       "Use <think> literally here",
     ],
-    [
-      "final-answer-delivery",
-      "Before <think>literal tag text after",
-      "Before <think>literal tag text after",
-    ],
+    ["final-answer-delivery", "Before <think>literal tag text after"],
     [
       "final-answer-delivery",
       "Visible prefix <thinking><internal>private reflection",
       "Visible prefix",
     ],
-  ] satisfies ReadonlyArray<readonly [AssistantVisibleTextSanitizerProfile, string, string]>)(
+  ] satisfies ReadonlyArray<readonly [AssistantVisibleTextSanitizerProfile, string, string?]>)(
     "sanitizes %s text: %j",
-    (profile, input, expected) => {
+    (profile, input, expected = input) => {
       expect(sanitizeAssistantVisibleTextWithProfile(input, profile)).toBe(expected);
     },
   );

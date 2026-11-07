@@ -40,12 +40,33 @@ describe("context-window-guard", () => {
           cfg: modelConfig(provider, configId, { contextWindow, contextTokens }),
           provider,
           modelId,
-          modelContextTokens: 8_000,
           modelContextWindow: 8_000,
         }),
       ).toEqual({ source: "modelsConfig", tokens: expected });
     },
   );
+
+  it("keeps a reported active-input cap below a configured native window", () => {
+    // Live shape: ClawRouter reports contextTokens=272000; the user row sets only contextWindow.
+    const cfg = modelConfig("clawrouter", "openai/gpt-6.1-sol", { contextWindow: 1_050_000 });
+    expect(
+      resolve({
+        cfg,
+        provider: "clawrouter",
+        modelId: "openai/gpt-6.1-sol",
+        modelContextTokens: 272_000,
+        modelContextWindow: 1_050_000,
+      }),
+    ).toEqual({ source: "model", tokens: 272_000 });
+    expect(
+      resolve({
+        cfg,
+        provider: "clawrouter",
+        modelId: "openai/gpt-6.1-sol",
+        modelContextWindow: 400_000,
+      }),
+    ).toEqual({ source: "modelsConfig", tokens: 1_050_000 });
+  });
 
   it("blocks invalid guard token counts instead of silently passing", () => {
     expect(guardFor(Number.NaN)).toMatchObject({

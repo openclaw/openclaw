@@ -4,7 +4,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { inspectServiceRuntimeIntent } from "../cli/daemon-cli/status.runtime-intent.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import {
   ClientCredentialMigrationRequiredError,
@@ -19,6 +22,7 @@ import {
   storeDeviceAuthToken as seedDeviceAuthToken,
   loadDeviceAuthToken as readDeviceAuthTokenForTest,
 } from "../infra/device-auth-store.js";
+import { generateStoredDeviceIdentity } from "../infra/device-identity-material.js";
 import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
@@ -33,6 +37,7 @@ import {
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -264,6 +269,118 @@ describe("automatic client credential preparation", () => {
     expect(archives).toHaveLength(1);
     expect(fs.readFileSync(path.join(fixture.root, archives[0]!), "utf8")).toBe(source);
     expect(loadDeviceIdentityIfPresent({ env: fixture.env })).toEqual(fixture.identity);
+  });
+
+  it.each([false, true])(
+    "settles runtime intent before native startup after credential cutover (pin=%s)",
+    async (pinned) => {
+      const fixture = target();
+      const shared = path.join(fixture.root, "state", "openclaw.sqlite");
+      const identity = generateStoredDeviceIdentity(123);
+      const pin = {
+        state_key: "daemon-runtime-pin:" + "a".repeat(64),
+        value_json:
+          ' { "version": 1, "pin": { "runtime": "node", "path": "/fixture/operator-node" }, "definition": "retained" }\n',
+        updated_at_ms: 456,
+      };
+      fs.mkdirSync(path.dirname(shared), { recursive: true });
+      {
+        using database = new DatabaseSync(shared);
+        database.exec(
+          fs.readFileSync(
+            new URL("../../test/fixtures/sqlite/openclaw-state-schema-v24.sql", import.meta.url),
+            "utf8",
+          ),
+        );
+        database.exec(
+          "PRAGMA user_version = 24; INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at) VALUES ('primary', 'global', 24, 1, 1)",
+        );
+        database
+          .prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)")
+          .run(
+            "primary",
+            identity.deviceId,
+            identity.publicKeyPem,
+            identity.privateKeyPem,
+            123,
+            123,
+          );
+        database
+          .prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)")
+          .run(identity.deviceId, "node", "synthetic-upgrade-token", '["node.invoke"]', 123);
+        if (pinned) {
+          database
+            .prepare("INSERT INTO config_machine_state VALUES (?,?,?)")
+            .run(pin.state_key, pin.value_json, pin.updated_at_ms);
+        }
+      }
+      const status = () =>
+        inspectServiceRuntimeIntent({
+          kind: "gateway",
+          service: createMockGatewayService(),
+          command: null,
+          env: fixture.env,
+          serviceEnv: fixture.env,
+          inspectionKnown: true,
+        });
+      expect((await status()).runtimeIntent.status).toBe("migrationPending");
+      await fixture.prepare({ config: {}, prepareRuntimePins: true });
+      await closeOpenClawStateDatabaseAsync();
+      {
+        using database = new DatabaseSync(shared, { readOnly: true });
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_STATE_SCHEMA_VERSION,
+        );
+        expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
+      }
+      expect(loadDeviceIdentityIfPresent({ env: fixture.env })?.deviceId).toBe(identity.deviceId);
+      expect(
+        await readDeviceAuthTokenForTest({
+          env: fixture.env,
+          deviceId: identity.deviceId,
+          role: "node",
+        }),
+      ).toMatchObject({ token: "synthetic-upgrade-token" });
+      expect((await status()).runtimeIntent.status).toBe("known");
+      expect(
+        withDaemonRuntimePinStore(fixture.env, false, (db) =>
+          db.prepare("SELECT * FROM daemon_runtime_pins").all(),
+        ),
+      ).toEqual(pinned ? [pin] : []);
+      // A second native launch must not re-import or replace explicit runtime intent.
+      await fixture.prepare({ config: {}, prepareRuntimePins: true });
+      expect((await status()).runtimeIntent.status).toBe("known");
+    },
+  );
+
+  it("refuses conflicting runtime intent even when credential preparation already completed", async () => {
+    const fixture = await bootstrap();
+    const key = "daemon-runtime-pin:" + "b".repeat(64);
+    {
+      using database = new DatabaseSync(fixture.shared);
+      database.prepare("INSERT INTO config_machine_state VALUES (?,?,?)").run(key, "source", 1);
+    }
+    withDaemonRuntimePinStore(fixture.env, true, (db) => {
+      db.prepare("INSERT INTO daemon_runtime_pins VALUES (?,?,?)").run(key, "target", 2);
+    });
+    await expect(fixture.prepare({ config: {}, prepareRuntimePins: true })).rejects.toThrow(
+      "migration conflict",
+    );
+    expect(
+      withDaemonRuntimePinStore(fixture.env, false, (db) =>
+        db.prepare("SELECT value_json FROM daemon_runtime_pins WHERE state_key = ?").get(key),
+      ),
+    ).toEqual({ value_json: "target" });
+    await closeOpenClawStateDatabaseAsync();
+    {
+      using database = new DatabaseSync(fixture.shared, { readOnly: true });
+      expect(
+        database
+          .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+          .get(key),
+      ).toEqual({ value_json: "source" });
+    }
+    await expectCredentials(fixture);
   });
 
   it("leaves a fresh profile empty", async () => {

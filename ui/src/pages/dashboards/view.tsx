@@ -461,6 +461,7 @@ function DashboardList(props: {
             <label class="dashboards-select">
               <span>{t("dashboardsPage.authorFilter")}</span>
               <select
+                class="settings-select"
                 value={props.filters.ownerId}
                 onChange={(event) =>
                   props.handlers.onFilterChange({ ownerId: event.currentTarget.value })
@@ -475,6 +476,7 @@ function DashboardList(props: {
             <label class="dashboards-select">
               <span>{t("dashboardsPage.sortLabel")}</span>
               <select
+                class="settings-select"
                 value={props.filters.sort}
                 onChange={(event) => {
                   const sort = event.currentTarget.value;

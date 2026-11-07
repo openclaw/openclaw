@@ -123,7 +123,7 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
     find("account-option", value)!.click();
   };
   const chooseAccount = async () => {
-    await vi.waitFor(() => expect(blocked()).toContain("No provider credential"));
+    await vi.waitFor(() => expect(blocked()).toContain("No account is available for this model."));
     await waitForModelControl(control, context, "main", agent);
     find("account-group-toggle")!.click();
     await vi.waitFor(() => expect(draw().textContent).toContain(account.label));
@@ -242,7 +242,7 @@ it("does not complete a retained account preview before its replacement is accep
   const f = retainedAccountDraft();
   await f.connect();
   f.select("automatic");
-  await vi.waitFor(() => expect(f.blocked()).toContain("No provider credential"));
+  await vi.waitFor(() => expect(f.blocked()).toContain("No account is available for this model."));
   invalidateModelCatalogCache(f.context.gateway.snapshot.client!, {
     agentId: "main",
     authProfileId: f.account.authProfileId,
@@ -353,7 +353,7 @@ it("selects a usable retained account after refresh failure without changing sav
   expect(f.model()).toBe(`anthropic/model@${f.account.authProfileId}`);
   expect(f.control.selected).toBe("");
   f.select("automatic");
-  await vi.waitFor(() => expect(f.blocked()).toContain("No provider credential"));
+  await vi.waitFor(() => expect(f.blocked()).toContain("No account is available for this model."));
   expect(f.model()).toBe("");
   expect(f.find("account-group-toggle")?.textContent).toContain("Automatic");
   expect(f.savePreference).not.toHaveBeenCalled();
@@ -386,7 +386,7 @@ it("retires a pending personal-account preview when the user identity changes", 
   f.control.load(f.context, "main", true, { agent: f.agent });
   f.preview.resolve(f.connected);
   await completion;
-  await vi.waitFor(() => expect(f.blocked()).toContain("No provider credential"));
+  await vi.waitFor(() => expect(f.blocked()).toContain("No account is available for this model."));
   expect(f.model()).toBe("");
   expect(f.find("account-group-toggle")?.textContent).toContain("Automatic");
 });
@@ -403,18 +403,18 @@ it("retains its neutral auth gate through pending, rejected and failed refreshes
   );
   const client = context.gateway.snapshot.client!;
   load();
-  await vi.waitFor(() => expect(blocked()).toContain("No provider credential"));
+  await vi.waitFor(() => expect(blocked()).toContain("No account is available for this model."));
   const scope = { agentId: "main", sessionKey: "agent:main:locked" };
   const release = subscribeChatMetadata(client, scope, () => {});
   beginChatMetadataPublication(client, scope).publish({
     commands: [],
     models: [{ ...model, available: true, unavailableReason: undefined }],
   });
-  expect(blocked()).toContain("No provider credential");
+  expect(blocked()).toContain("No account is available for this model.");
   const pending = deferred<{ models: ModelCatalogEntry[] }>();
   request.mockReturnValueOnce(pending.promise);
   emitCatalogChanged();
-  expect(blocked()).toContain("No provider credential");
+  expect(blocked()).toContain("No account is available for this model.");
   pending.resolve({ models: [{ ...model, unavailableReason: "auth-failed" }] });
   await vi.waitFor(() => expect(blocked()).toContain("Authentication failed"));
   request.mockRejectedValueOnce(new Error("transport failed"));

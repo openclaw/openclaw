@@ -64,7 +64,7 @@ fi
 
 # End time in epoch seconds (integer, good enough for polling)
 start_epoch=$(date +%s)
-deadline=$((start_epoch + timeout))
+deadline=$((start_epoch + 10#$timeout))
 
 while true; do
   # -J joins wrapped lines, -S uses negative index to read last N lines

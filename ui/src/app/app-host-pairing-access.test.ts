@@ -476,7 +476,7 @@ describe("application shell pairing access", () => {
     await waitForSolid(() => expect(load).toHaveBeenCalledOnce());
     const message = settings
       ? "Settings navigation could not load."
-      : "Could not load the pairing dialog";
+      : "Couldn’t load the connection dialog";
     const target = () =>
       container.querySelector<HTMLElement>(settings ? ".settings-sidebar" : ".device-pair-setup");
     expect(target()?.getAttribute("aria-busy")).toBe("true");
@@ -530,7 +530,7 @@ describe("application shell pairing access", () => {
     button?.click();
     expect(writeText).toHaveBeenCalledWith("pair-mobile-secret");
 
-    await waitForFast(() => expect(button?.textContent?.trim()).toBe("Copy failed"));
+    await waitForFast(() => expect(button?.textContent?.trim()).toBe("Couldn’t copy. Try again."));
     expect(button?.getAttribute("aria-label")).toBeNull();
     expect(button?.querySelector("svg")).not.toBeNull();
     expect(execCommand).toHaveBeenCalledWith("copy");
