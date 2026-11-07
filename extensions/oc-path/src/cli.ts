@@ -147,7 +147,11 @@ async function loadOcPathFile(
     // fs failures (ENOENT/EACCES/EISDIR/EMFILE/...) escape the domain paths above;
     // keep them in the documented error envelope so the cause stays visible.
     const message = err instanceof Error ? err.message : String(err);
-    emitError(mode, `failed to read ${absPath}: ${message}`, "OC_PATH_FILE_UNREADABLE");
+    emitError(
+      mode,
+      `failed to read ${absPath}: ${message}. Check that the file exists and that you can read it, then retry.`,
+      "OC_PATH_FILE_UNREADABLE",
+    );
     process.exitCode = 2;
     return null;
   }
@@ -411,7 +415,13 @@ export function registerPathCli(program: Command): void {
     } catch (err) {
       // Write failures (ENOSPC/EACCES/...) stay in the documented envelope too.
       const message = err instanceof Error ? err.message : String(err);
-      emitError(mode, `failed to write ${fsPath}: ${message}`, "OC_PATH_WRITE_FAILED");
+      emitError(
+        mode,
+        `failed to write ${fsPath}: ${message}. Check that you can write the file and that the volume has ` +
+          "free space. A write that failed partway may have left the file incomplete, so restore it " +
+          "from a backup before retrying.",
+        "OC_PATH_WRITE_FAILED",
+      );
       process.exitCode = 2;
       return;
     }
