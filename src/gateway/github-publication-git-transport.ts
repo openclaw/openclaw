@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { githubRepositoryUrl } from "../agents/github-host.js";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -16,6 +17,7 @@ import {
   githubPublicationUnsafeConfigArgs,
   parseGitHubPublicationBaseRef,
 } from "./github-publication-base.js";
+import { GitHubPublicationApiError } from "./github-publication-failure.js";
 import { createGitHubPublicationGitError } from "./github-publication-git-error.js";
 
 type GitCommandOptions = {
@@ -84,6 +86,9 @@ export async function requirePublicationCommand(
 ): Promise<string> {
   const result = await runPublicationCommand(argv, options);
   if (result.code !== 0 || result.error) {
+    if (argv[0] === "gh") {
+      throw new GitHubPublicationApiError(result, options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS);
+    }
     throw createCommandError(
       argv[0] ?? "command",
       { ...result, stdout: Buffer.alloc(0) },
@@ -682,4 +687,11 @@ export function githubPublicationUpdateRefArgs(
     commit,
     previousHead,
   ];
+}
+
+export function gitHubPublicationObjectSha(value: unknown): string {
+  if (!isRecord(value) || typeof value.sha !== "string" || !/^[a-f0-9]{40}$/u.test(value.sha)) {
+    throw new Error("GitHub returned an invalid Git object identity.");
+  }
+  return value.sha;
 }

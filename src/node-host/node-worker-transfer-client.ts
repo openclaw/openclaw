@@ -37,22 +37,24 @@ import {
 import {
   nodeWorkspaceTransferBlobPath,
   NodeWorkerWorkspaceTransferError,
+  NodeWorkerPublicationConflictError,
   nodeWorkspaceTransferManifestPath,
   nodeWorkspaceTransferPackPath,
   nodeWorkspaceTransferReconcilePath,
   MAX_WORKSPACE_RESULT_GIT_PACK_BYTES,
-  type NodeWorkerWorkspaceTransferInput,
   type NodeWorkerWorkspaceTransferStage,
 } from "../worker/node-workspace-transfer-protocol.js";
-import {
-  prepareNodeWorkerWorkspaceOverlay,
-  type NodeWorkerPreparedWorkspaceTransfer,
-} from "./node-worker-prepared-workspace-transfer.js";
+import { prepareNodeWorkerWorkspaceOverlay } from "./node-worker-prepared-workspace-transfer.js";
+import { transferNodeRepositoryPublication } from "./node-worker-publication-merge.js";
 import {
   applyNodeRepositoryCheckpoint,
   readNodeRepositoryCheckpointBase,
   withNodeRepositoryPublication,
 } from "./node-worker-repository-transfers.js";
+import type {
+  WorkspaceTransferContext,
+  WorkspaceTransferOperation,
+} from "./node-worker-transfer-contract.js";
 import {
   requireNodeWorkerTransferOk as requireOk,
   downloadNodeWorkerTransferFile as downloadFile,
@@ -76,6 +78,7 @@ import {
   replaceNodeWorkerDirectory,
 } from "./node-worker-workspace-replacement.js";
 import { copyNodeWorkerProjectSeedObjects } from "./node-worker-workspace-seeds.js";
+export type { WorkspaceTransferOperation } from "./node-worker-transfer-contract.js";
 
 const TRANSFER_RESULT_MAX_BYTES = 64 * 1024;
 
@@ -84,31 +87,6 @@ export type NodeWorkerTransferGateway = {
   tlsFingerprint?: string;
   cloudflareAccess?: CloudflareAccessCredentials;
 };
-
-type WorkspaceTransferContext = {
-  seedsRoot?: string;
-  gatewayNamespace?: string;
-  gatewayUrl: string;
-  gatewayTlsFingerprint?: string;
-  gatewayCloudflareAccess?: CloudflareAccessCredentials;
-  environmentId: string;
-  workspaceDir: string;
-  manifestHome: string;
-  transfer: NodeWorkerWorkspaceTransferInput;
-  prepared?: NodeWorkerPreparedWorkspaceTransfer;
-  hashMemo?: WorkspaceHashMemo;
-  signal?: AbortSignal;
-};
-
-type WorkspaceTransferOperation<Direction extends NodeWorkerWorkspaceTransferInput["direction"]> =
-  Omit<WorkspaceTransferContext, "transfer"> & {
-    transfer: Extract<NodeWorkerWorkspaceTransferInput, { direction: Direction }>;
-    request: Pick<
-      NodeWorkerTransferHttpRequest,
-      "gatewayUrl" | "tlsFingerprint" | "cloudflareAccess" | "token" | "signal"
-    >;
-    setStage: (stage: NodeWorkerWorkspaceTransferStage) => void;
-  };
 
 async function downloadBuffer(params: NodeWorkerTransferHttpRequest, maxBytes: number) {
   return await withNodeWorkerTransferHttpRequest(
@@ -624,7 +602,7 @@ export async function runNodeWorkerWorkspaceTransfer(
     stage = next;
   };
   try {
-    if (!params.prepared) {
+    if (!params.prepared && params.transfer.direction !== "publication") {
       await recoverWorkspaceReplacement(params.workspaceDir);
     }
     const request = {
@@ -634,6 +612,12 @@ export async function runNodeWorkerWorkspaceTransfer(
       token: params.transfer.token,
       signal: params.signal,
     };
+    if (params.transfer.direction === "publication") {
+      return await transferNodeRepositoryPublication(
+        { ...params, transfer: params.transfer, request, setStage },
+        { download: downloadWorkspace, upload: uploadWorkspace },
+      );
+    }
     return params.transfer.direction === "download"
       ? await downloadWorkspace({
           ...params,
@@ -648,7 +632,10 @@ export async function runNodeWorkerWorkspaceTransfer(
           setStage,
         });
   } catch (error) {
-    if (error instanceof NodeWorkerWorkspaceTransferError) {
+    if (
+      error instanceof NodeWorkerWorkspaceTransferError ||
+      error instanceof NodeWorkerPublicationConflictError
+    ) {
       throw error;
     }
     if (error instanceof NodeWorkerTransferHttpError) {

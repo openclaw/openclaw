@@ -108,6 +108,7 @@ export type GitHubPublicationCoordinator = ReturnType<typeof createGitHubPublica
 export function createGitHubPublicationCoordinator(params: {
   placements: WorkerSessionPlacementStore;
   environments?: Parameters<typeof createRepositoryGitHubPublicationCoordinator>[0]["environments"];
+  prepareRepositoryIntegration?: import("./repository-publication-integration.js").PrepareRepositoryPublicationIntegration;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   assertCurrent?: () => void;
   signal?: AbortSignal;

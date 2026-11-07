@@ -552,6 +552,7 @@ it.each([
             disabled: { reason: disabledReason },
             workspace: {
               workspaceResultVersion: 2,
+              publicationIntegration: 1,
               ...((platform === "linux" || platform === "win32") && !bun
                 ? { workspaceQuiescence: 1 }
                 : {}),

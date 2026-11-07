@@ -34,6 +34,8 @@ import {
 } from "../gateway/github-publication-source.js";
 import {
   readGitHubPublicationRequestAsync,
+  readRepositoryGitHubPublicationInputAsync,
+  reopenRepositoryGitHubPublicationAsync,
   runGitHubPublicationMaintenanceAsync,
 } from "../gateway/github-publication-store-async.js";
 import { listRepositoryGitHubPublicationsInDatabase } from "../gateway/github-repository-publication-read.worker.js";
@@ -68,6 +70,7 @@ import {
   expectNoWorkerRequests,
   publicationCommand as command,
   repositoryRow,
+  preparePublicationSourceFixture,
   holdNextReceipt,
   holdNextReply,
   releaseHeldGitHubPublicationMessages,
@@ -82,7 +85,6 @@ import {
 } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
-import { createSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import {
   listUserGitHubConnectionsAsync,
   mutateUserGitHubConnection,
@@ -188,49 +190,14 @@ async function sourceFixture(
   assertCurrent = () => {},
   personalOwnerProfileId?: string,
 ) {
-  const row = repositoryRow(requestId);
-  row.session_id = requestId;
-  row.session_key = `agent:main:${requestId}`;
-  const result = runOpenClawStateWriteTransaction(
-    ({ db }) =>
-      createSessionRepositoryWorkspaceInDatabase(
-        db,
-        {
-          agentId: row.agent_id,
-          sessionKey: row.session_key,
-          url: "https://github.com/example/repository",
-          branch: row.branch,
-        },
-        1000,
-      ),
-    { path: context.admission.databasePath },
-  );
-  row.workspace_id = result.workspaceId;
-  const entry = await upsertSessionEntryCore(
-    { agentId: row.agent_id, sessionKey: row.session_key },
-    { sessionId: row.session_id, updatedAt: 1000, repositoryWorkspaceId: row.workspace_id },
-  );
-  if (!entry) {
-    throw new Error("Publication source session was not created");
-  }
-  row.session_lifecycle_revision = entry.lifecycleRevision ?? null;
-  row.request_digest = repositoryGitHubPublicationDigest(row);
-  const source = await prepareGitHubPublicationSource({
-    sourcePath: resolveOpenClawAgentSqlitePath({ agentId: row.agent_id }),
-    selector: {
-      agentId: row.agent_id,
-      sessionKey: row.session_key,
-      sessionId: row.session_id,
-      lifecycleRevision: row.session_lifecycle_revision,
-      repositoryWorkspaceId: row.workspace_id,
-      repositoryBranch: row.branch,
-      personalOwnerProfileId,
-    },
-    signal: new AbortController().signal,
+  const fixture = await preparePublicationSourceFixture(
+    context,
+    requestId,
     assertCurrent,
-  });
-  sources.add(source);
-  return { row, source };
+    personalOwnerProfileId,
+  );
+  sources.add(fixture.source);
+  return fixture;
 }
 
 it("creates the lazy shared schema and replaces a missing lifecycle binding on insert", async () => {
@@ -989,3 +956,64 @@ describe("retained publication lifecycle authority", () => {
     }
   });
 });
+
+it.each(["matched", "account", "checkpoint", "requester", "effect"] as const)(
+  "reopens captured input only with a matching observed publication (%s)",
+  async (change) => {
+    const { row, source } = await sourceFixture(randomUUID());
+    row.requester_authority_json = requesterJson;
+    row.status = "failed";
+    row.error_code = "push_rejected";
+    if (change === "effect") {
+      row.last_effect = "push";
+      row.effect_state = "dispatched";
+    }
+    row.request_digest = repositoryGitHubPublicationDigest(row);
+    seed(row);
+    const published: RepositoryPublicationRow = {
+      ...row,
+      request_id: randomUUID(),
+      idempotency_key: randomUUID(),
+      created_at_ms: row.created_at_ms + 1,
+      updated_at_ms: row.updated_at_ms + 1,
+      status: "published",
+      error_code: null,
+      head_commit: "b".repeat(40),
+      pushed_head_commit: "b".repeat(40),
+      pull_request_url: "https://github.com/example/repository/pull/1",
+      last_effect: "pull_request",
+      effect_state: "observed",
+    };
+    if (change === "account") {
+      published.identity_account_id += 1;
+    }
+    if (change === "checkpoint") {
+      published.workspace_tree = "f".repeat(40);
+    }
+    if (change === "requester") {
+      published.requester_authority_json = JSON.stringify({
+        ...requester,
+        scopes: ["operator.sessions.write"],
+      });
+    }
+    published.request_digest = repositoryGitHubPublicationDigest(published);
+    seed(published);
+    const matches = change === "matched" || change === "effect";
+    expect((await readRepositoryGitHubPublicationInputAsync(row))?.request_id).toBe(
+      matches ? published.request_id : undefined,
+    );
+    if (change === "matched") {
+      await expect(reopenRepositoryGitHubPublicationAsync(row, source)).resolves.toMatchObject({
+        status: "requested",
+        request_digest: row.request_digest,
+        checkpoint_ref: row.checkpoint_ref,
+        previous_head_commit: row.previous_head_commit,
+      });
+    } else {
+      await expect(reopenRepositoryGitHubPublicationAsync(row, source)).rejects.toThrow(
+        "not eligible for retry",
+      );
+      expectRows(row, [{ status: "failed", request_digest: row.request_digest }]);
+    }
+  },
+);

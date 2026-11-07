@@ -19,6 +19,8 @@ import {
 import {
   NODE_WORKSPACE_TRANSFER_ERROR_CODE,
   NodeWorkerWorkspaceTransferError,
+  NODE_WORKSPACE_PUBLICATION_CONFLICT_CODE,
+  NodeWorkerPublicationConflictError,
 } from "../../worker/node-workspace-transfer-protocol.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import { canInvokeNodeMcpLocally } from "../node-command-policy.js";
@@ -259,6 +261,9 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       }
       if (!result.ok) {
         const code = result.error?.code ?? "UNAVAILABLE";
+        if (code === NODE_WORKSPACE_PUBLICATION_CONFLICT_CODE) {
+          throw new NodeWorkerPublicationConflictError();
+        }
         if (code === NODE_WORKSPACE_TRANSFER_ERROR_CODE) {
           throw new NodeWorkerWorkspaceTransferError(
             boundedWorkerError(
@@ -340,6 +345,13 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       ...(readPreparation(entry) || entry.deviceFolder ? { sessionKey: getSessionKey() } : {}),
       descriptor: plan,
     });
+    const readWorkspaceCapabilities = async () => {
+      const { node } = await findNode(entry, entry.abortController.signal);
+      if (!isLiveEntry(entry)) {
+        throw new Error("node worker workspace authority closed");
+      }
+      return node.workerHost;
+    };
     const { validateRestoredWorkspace, getSessionKey, ...workspaceActions } =
       createNodeWorkerWorkspaceActions({
         environmentId: entry.environmentId,
@@ -352,20 +364,14 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         ownerSignal: entry.abortController.signal,
         isOwnerCurrent: () => isLiveEntry(entry),
         restoredWorkspace,
-        supportsNativeQuiescence: async () => {
-          const { node } = await findNode(entry, entry.abortController.signal);
-          if (!isLiveEntry(entry)) {
-            throw new Error("node worker workspace authority closed");
-          }
-          return node.workerHost.workspaceQuiescence === NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION;
-        },
-        supportsGitResults: async () => {
-          const { node } = await findNode(entry, entry.abortController.signal);
-          if (!isLiveEntry(entry)) {
-            throw new Error("node worker workspace authority closed");
-          }
-          return node.workerHost.workspaceResultVersion === NODE_WORKSPACE_RESULT_VERSION;
-        },
+        supportsNativeQuiescence: async () =>
+          (await readWorkspaceCapabilities()).workspaceQuiescence ===
+          NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
+        supportsPublicationIntegration: async () =>
+          (await readWorkspaceCapabilities()).publicationIntegration === 1,
+        supportsGitResults: async () =>
+          (await readWorkspaceCapabilities()).workspaceResultVersion ===
+          NODE_WORKSPACE_RESULT_VERSION,
         workspaceTransfer: options.workspaceTransfer,
         runWorkspaceCommand: (command) => runWorkspaceCommand(entry, command),
       });

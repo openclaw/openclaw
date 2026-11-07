@@ -1098,3 +1098,18 @@ it.each([
     ),
   );
 });
+
+it("permits repository reopening only through the current publication authority owner", () => {
+  const repository = "src/gateway/github-repository-publication-store.worker.ts";
+  const reject = allowedGraph({
+    [repository]:
+      "export function reopenRepositoryGitHubPublicationInDatabase() { db.updateTable('github_repository_publication_requests'); }",
+    [publicationWorker]:
+      "import { reopenRepositoryGitHubPublicationInDatabase } from '../gateway/github-repository-publication-store.worker.js'; function repositoryMutation() { reopenRepositoryGitHubPublicationInDatabase(); }",
+  });
+  reject(
+    publicationWorker,
+    (original) => original.replace("function repositoryMutation", "function bypass"),
+    "unreviewed GitHub publication writer reference",
+  );
+});

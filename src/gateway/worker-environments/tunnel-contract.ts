@@ -252,6 +252,11 @@ type WorkerTurnLaunchRequest = {
 };
 
 export type WorkerWorkspaceTunnelHandle = {
+  integratePublication?: (
+    input: import("../repository-publication-integration.js").RepositoryPublicationIntegrationInput,
+  ) => ReturnType<
+    import("../repository-publication-integration.js").PrepareRepositoryPublicationIntegration
+  >;
   environmentId: string;
   ownerEpoch: number;
   launchTurn?: never;

@@ -252,15 +252,26 @@ it("cannot record publication unavailability after its accepted checkpoint chang
 it.each(["topic", "refs/tags/release", { kind: "commit" }] as const)(
   "publishes unchanged pinned %j when its merge-base has a different tree",
   async (ref) => {
-    const f = await repositoryFixture(ref);
+    const f = await repositoryFixture(
+      ref,
+      undefined,
+      { "base.txt": "base\n" },
+      true,
+      (base, tree, git) => {
+        git(["read-tree", tree]);
+        const blob = git(["hash-object", "-w", "--stdin"], "source change\n");
+        git(["update-index", "--add", "--cacheinfo", `100644,${blob},topic.txt`]);
+        return git(["commit-tree", git(["write-tree"]), "-p", base], "topic source\n");
+      },
+    );
     await f.capture(null, "unchanged-pinned-source");
-    f.runtime.baseHead = "d".repeat(40);
-    f.runtime.baseHeadTree = "c".repeat(40);
-    f.runtime.mergeBase = "e".repeat(40);
-    f.runtime.mergeBaseTree = "c".repeat(40);
+    f.runtime.baseHead = f.git(["rev-parse", `${f.baseCommit}^`]);
+    f.runtime.baseHeadTree = f.git(["rev-parse", `${f.runtime.baseHead}^{tree}`]);
+    f.runtime.mergeBase = f.runtime.baseHead;
+    f.runtime.mergeBaseTree = f.runtime.baseHeadTree;
     const result = await f.publish("related-ref");
     expect(result.status).toBe("published");
-    expect(f.runtime.pr?.baseRef).toBe(ref === "topic" ? "topic" : "main");
+    expect(f.runtime.pr?.baseRef).toBe("main");
     expect(f.runtime.uploaded.size).toBe(0);
     expect(readReceipt(result.requestId)?.workspace_tree).toBe(f.baseTree);
     expect(f.casRequests[0]).toMatchObject({ beforeOid: "0".repeat(40), force: false });

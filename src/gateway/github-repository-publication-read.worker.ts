@@ -9,6 +9,7 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   checkRepositoryGitHubPublication,
+  matchesRepositoryGitHubPublicationInput,
   projectRepositoryGitHubPublicationStatus,
   type RepositoryGitHubPublicationFilter,
   type RepositoryGitHubPublicationPendingQuery,
@@ -76,4 +77,30 @@ export function readPendingRepositoryGitHubPublicationInDatabase(
     latest = checkRepositoryGitHubPublication(row);
   }
   return latest && projectRepositoryGitHubPublicationStatus(latest);
+}
+
+export function readRepositoryGitHubPublicationInputInDatabase(
+  db: EngineConnection,
+  { row, headCommit }: { row: RepositoryGitHubPublicationRow; headCommit?: string },
+): RepositoryGitHubPublicationRow | undefined {
+  if (!tableExists(db, table)) {
+    return undefined;
+  }
+  let selection = query(db)
+    .selectFrom(table)
+    .selectAll()
+    .where("workspace_id", "=", row.workspace_id)
+    .where("status", "=", "published")
+    .orderBy("updated_at_ms", "desc")
+    .orderBy("request_id", "desc");
+  if (headCommit !== undefined) {
+    selection = selection.where("pushed_head_commit", "=", headCommit);
+  }
+  for (const candidate of iterateSqliteQuerySync(db, selection)) {
+    const published = checkRepositoryGitHubPublication(candidate);
+    if (matchesRepositoryGitHubPublicationInput(row, published)) {
+      return published;
+    }
+  }
+  return undefined;
 }
