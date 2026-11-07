@@ -6,7 +6,7 @@
 // javaScriptResources includes completed modulepreloads absent from V8 coverage.
 // --cpu-profile-compare <baseline cpu-profile.json>: profile and diff against that report.
 // --selector-stats: ranked boot CSS selectors (instrumentation overhead included).
-// --viewport desktop|mobile: 1719×1179 (default) or 390×844 browser viewport.
+// --viewport desktop|mobile|1720x1180: default desktop, phone, or warm-reload proof size.
 // --allocations --untraced --live-events: collected-object renderer bytes per event.
 // --streaming-allocations: sampled allocation bytes including collected objects during deltas.
 // --streaming-content tool-code grows an expanded tool card and code fence together.
@@ -79,6 +79,7 @@ import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway
 import { resolveColdLoadLatency } from "./lib/control-ui-bench-latency.ts";
 import {
   persistColdLoadWarmState,
+  qualifyDetailsSubagentsWarmState,
   restoreColdLoadWarmState,
 } from "./lib/control-ui-bench-warm-state.ts";
 import {
@@ -491,11 +492,15 @@ if (colorScheme !== undefined && colorScheme !== "light" && colorScheme !== "dar
   throw new Error("Expected color-scheme light or dark");
 }
 const viewportName = values.viewport;
-if (viewportName !== "desktop" && viewportName !== "mobile") {
-  throw new Error("Expected viewport desktop or mobile");
+if (!["desktop", "mobile", "1720x1180"].includes(viewportName)) {
+  throw new Error("Expected viewport desktop, mobile, or 1720x1180");
 }
 const viewport =
-  viewportName === "mobile" ? { width: 390, height: 844 } : { width: 1719, height: 1179 };
+  viewportName === "mobile"
+    ? { width: 390, height: 844 }
+    : viewportName === "1720x1180"
+      ? { width: 1720, height: 1180 }
+      : { width: 1719, height: 1179 };
 if (values["filmstrip-only"] && cpuProfile) {
   throw new Error("filmstrip-only excludes CPU profiling");
 }
@@ -941,7 +946,7 @@ const fixture = createControlUiTeamScaleFixture({
   archivedSession: values["archived-session"],
   paneChromeFacts: values["pane-chrome-facts"],
   detailsSessionFacts: values["details-session-facts"],
-  detailsSubagentActivity: values["details-subagent-activity"] ? 1 : undefined,
+  detailsSubagentActivity: values["details-subagent-activity"] ? 3 : undefined,
   transcriptMessages,
   richTranscript: values["long-session"],
   longSessionScenario: values["long-session"] ? longSessionScenario : undefined,
@@ -2050,7 +2055,7 @@ try {
   };
   const qualifyDetails = async () => {
     if (!values["details-processes"] && !values["details-subagent-activity"]) {
-      return;
+      return null;
     }
     const details = page.locator(".chat-details:visible");
     if (!(await details.count())) {
@@ -2059,13 +2064,27 @@ try {
     if (values["details-processes"]) {
       await details.locator('[data-details-group="processes"] [data-process-id]').waitFor();
     }
-    if (values["details-subagent-activity"] && !values["archived-session"]) {
-      await details.locator(".chat-subagent-activity__row").first().waitFor();
-    }
     await details
       .locator('[data-details-group="automations"] .chat-summary__automation')
       .first()
       .waitFor();
+    if (values["details-subagent-activity"] && !values["archived-session"]) {
+      const rows = fixture.scenario.sessions!.flatMap((row) =>
+        row.parentSessionKey === fixture.selectedSessionKey &&
+        typeof row.label === "string" &&
+        row.label.startsWith("Synthetic child review ")
+          ? [{ key: row.key, label: row.label }]
+          : [],
+      );
+      const qualified = await page.waitForFunction(qualifyDetailsSubagentsWarmState, {
+        sessionKey: fixture.selectedSessionKey,
+        rows,
+      });
+      const receipt = await qualified.jsonValue();
+      await qualified.dispose();
+      return receipt;
+    }
+    return null;
   };
   const qualifyLateRowFacts = async () => {
     if (!fixture.lateRowFacts) {
@@ -2203,10 +2222,10 @@ try {
     }
     await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor({ state: "attached" });
     await qualifyLateRowFacts();
-    await qualifyDetails();
+    const detailsSubagentsWarmState = await qualifyDetails();
     const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
       persistColdLoadWarmState,
-      warmInput,
+      { ...warmInput, detailsSubagentsWarmState },
     );
     const passes = values["warm-reload"] ? 2 : 1;
     for (let index = 0; index < bundleSlots.length; index++) {
@@ -2241,11 +2260,11 @@ try {
         );
         await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
         await qualifyLateRowFacts();
-        await qualifyDetails();
-        const { storage: captured, ...saved } = await page.evaluate(
-          persistColdLoadWarmState,
-          warmInput,
-        );
+        const primedDetailsSubagentsWarmState = await qualifyDetails();
+        const { storage: captured, ...saved } = await page.evaluate(persistColdLoadWarmState, {
+          ...warmInput,
+          detailsSubagentsWarmState: primedDetailsSubagentsWarmState,
+        });
         qualifyLateRowSnapshot(saved, index);
         storage = captured;
         primes.push(saved);

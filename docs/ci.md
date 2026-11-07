@@ -146,6 +146,11 @@ Compact mocked Control UI E2E uses six 16-class jobs with four workers each,
 matching the four observed CPUs per runner and retaining 24 aggregate worker slots.
 Private source-server projects stay serial. The conditional browser-extension
 row, noncompact plans, and real-Gateway worker limits retain their existing rules.
+The Mantis chat recording runs in its dedicated evidence workflow and full release
+validation, or when its test changes; routine CI keeps the equivalent chat lifecycle
+assertions without recording the same scenario again.
+Sidebar cached-row parity screenshots and JSON require `OPENCLAW_CAPTURE_UI_PROOF=1`;
+the parity assertions still run during routine CI.
 Browser suites that only exercise the rendered UI borrow the invocation's
 production bundle. Private source servers are reserved for source-module
 interception, custom build identities, or development-server contracts.

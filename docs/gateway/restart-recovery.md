@@ -27,11 +27,12 @@ outcomes, or the existing expandable context notices.
 
 A crash or `SIGKILL` cannot write shutdown markers. Startup also recognizes the
 existing persisted nonterminal run identity when it has no live execution owner
-and its run started in the immediately preceding Gateway lifetime. The existing
-boot ledger supplies that lifetime's exact start and the next boot's start; session
+and its run started in a recorded, unrecovered Gateway crash lifetime. The existing
+boot ledger supplies each lifetime's exact start and the next boot's start; session
 update times and arbitrary freshness timeouts do not authorize recovery. A successfully
-completed shutdown uses its markers only. A forced stop or incomplete shutdown also
-recovers unfinished runs from that predecessor, even when other stores have markers.
+completed shutdown adds no crash interval; its own work uses shutdown markers. A forced
+stop or incomplete shutdown also recovers unfinished runs from that predecessor, even
+when other stores have markers.
 Older orphaned runs are recorded as stopped for restart and are
 not resumed. Missing boot history also prevents unmarked recovery. Files, external
 actions, and tool effects may already have changed, so the agent checks them
@@ -57,6 +58,38 @@ up and retires the legacy recovery fields when the session is terminal or archiv
 preserving its status, archive, current writer identities, and delivery notice
 without resuming it or replaying a pending final; startup reports an aggregate
 count per agent instead of repeating warnings for each such session.
+
+## Unexpected exits
+
+The Gateway records each run in its existing SQLite boot lifecycle. A graceful
+stop, drained `SIGTERM`, deployment handoff, or planned update restart closes the
+run. If the next startup finds that its predecessor did not close, it records
+one unexpected exit and logs `previous Gateway run ended unexpectedly`.
+
+The last ten crash records remain visible in `openclaw gateway status`, the
+`health` and `status` RPC results, and local or authenticated `/readyz` details.
+The Control UI's Debug health and status snapshots show these same records.
+Doctor shows a **Fix now** warning about any crash detected in the last 24 hours,
+or at least three detected in the last seven days, with a next step to inspect the
+recorded exits. This diagnostic does not trigger a repair or restart: a healthy
+successor remains ready. An unauthenticated remote readiness probe does not disclose it.
+
+Records include the previous PID, start time, and available version, build,
+runtime, and heartbeat facts. After startup, the Gateway performs bounded
+supervisor inspection for exit evidence. On systemd an indexed query reads structured
+exit records for the previous service run. A second query, limited to the final
+30 seconds and the previous PID and unit, checks for the exact self-recovery
+marker when a stalled main thread killed itself. Both queries share a one-second budget. On launchd it records the
+daemon's explicit last exit status and reason; an integer status is not treated
+as evidence of a signal. Missing evidence stays `cause unknown`;
+an ordinary fresh start is not evidence of a clean previous exit. The shared
+SQLite machine-state KV holds bounded diagnostic metadata alongside the existing
+boot receipt; there is no crash sidecar file or agent-database scan.
+
+Installed supervisors handle process restarts using their existing retry and
+crash-loop limits. Foreground `openclaw gateway` does not acquire an automatic
+restart loop. See [Gateway service and process troubleshooting](/gateway/troubleshooting/gateway-service-and-process#unexpected-gateway-exits)
+when crashes repeat.
 
 ## A wedged main thread
 
@@ -91,7 +124,7 @@ heartbeat observer works independently of the optional V8 flight recorder.
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | Conversations and transcripts                                     | Remain in the per-agent SQLite database                                         |
 | Running root session at graceful shutdown                         | Receives one resume input at the next startup                                   |
-| Root session left unfinished by the immediately preceding Gateway | Receives the same single resume input at the next startup                       |
+| Root session left unfinished in a pending crash-recovery interval | Receives the same single resume input at the next startup                       |
 | Accepted user input captured in that shutdown marker              | Runs after the resume input, in FIFO order, with its sender's current authority |
 | Running sub-agent                                                 | Stops quietly; its root requester receives the resume input                     |
 | Background process                                                | Ends with the old process; its root session receives the resume input           |
@@ -116,21 +149,37 @@ no schema migration.
 Crash recovery uses the nonterminal run marker committed with accepted plain
 chat input, before dispatch hooks or runtime start. The same commit records its
 writer identity; terminal settlement clears the run marker. Recovery is bounded
-by the recorded predecessor lifetime. Command persistence
+by the recorded crash intervals. Command persistence
 records activity only; commands gain recovery markers when their runs start.
 Commands that become runs, such as `/goal` or skill rewrites, remain unprotected
 between input persistence and runtime start. A plain message that a hook ends
 without starting a run can retain its marker and be retried after a crash.
-The same startup metadata read discovers both sources; there are no extra restart checkpoints or execution reconstruction.
+The same startup metadata read discovers both sources; recovery does not reconstruct execution.
 
-Startup recovers marked sessions in ready stores immediately. Before adopting
-unmarked crash work, it joins existing agent preparation. Failed preparation disables unmarked adoption.
-If a store is still undergoing
-inspection and preparation, its existing startup owner discovers retained work
-before admitting fresh inputs. Recovery runs after database preparation ends,
-under the session's current authority. An unrelated store's inspection does not
-hold up ready marked sessions. Refused databases keep their normal admission safeguards,
-and shutdown cancels pending recovery without consuming its markers.
+Startup recovers ready stores independently. Each physical agent's database
+admission owns its recovery pass, including delayed preparation and automatic
+preparation retries. An unavailable database records `resume deferred: agent
+database unavailable` with its agent ID; it does not suppress another agent's
+recovery. Recovery runs after database preparation ends, under the session's
+current authority, before that agent accepts fresh inputs. Another agent becoming
+available does not revoke an already admitted session's authority.
+
+The boot owner retains each agent's pending crash intervals in the existing shared
+SQLite machine-state store until its recovery pass completes, including an empty
+successful scan. An intermediate process that never admits that agent cannot erase
+its recovery window, even if that process shuts down cleanly. Separate crash
+intervals remain separate: clean intervening lifetimes never become eligible by
+joining the oldest start to the newest end. Consecutive crash intervals coalesce.
+The pending record survives boot-history pruning and is removed after recovery or
+when the agent's database registrations are removed. There is no schema migration
+or new configuration. Older binaries ignore this record and cannot provide delayed
+cross-restart recovery; upgrading again does not replay run identities already
+consumed by recovery.
+
+Refused databases keep their normal admission safeguards. Shutdown cancels pending
+recovery without consuming its markers or discarding its crash intervals. Recovery
+consumes each eligible persisted run identity once; retrying a retained interval
+cannot resume that same run again.
 
 The initial recovery pass keeps the existing external-input fence until its
 retained inputs own their ordinary queue slots. A store prepared later keeps its

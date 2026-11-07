@@ -24,6 +24,16 @@ check; positions and directions rotate. Split compound actions before attributin
 a gap. Fix validation requires 20 rotated pairs plus A/A and unchanged engines
 within the campaign's acceptance band.
 
+For the chat model picker, select `model-picker-first-open`, `model-picker-open`,
+`model-picker-search`, and `model-picker-search-paste` separately. Opening ends
+with mounted choices and focused search; paste uses one native edit, while search
+types the same query character by character. The compound
+`model-picker-first-open-search` retains the driver gaps between those phases.
+Use a separate WebKit `--trace` run to attribute layout and the first content
+paint; application time is not a paint timestamp. `sidebar-open` and
+`sidebar-close` split one activation on desktop and mobile and await the relevant
+navigation animations.
+
 Firefox retains the same browser-local application elapsed clock and boot/route
 readiness milestones. These measure neither CPU nor paint. CPU counters, native
 traces, throttling, forced GC, and heap snapshots are unavailable in this harness;
@@ -89,10 +99,19 @@ filters and reopens a 1,000-model picker whose rows share one synthetic image,
 checks that the images decode and selection stays unchanged, and reports image
 requests, blob reads and object URL lifetimes. Run it against a build supporting
 custom provider artwork; its instrumented timings are not performance evidence.
+The `-12` variant uses twelve models sharing the same image, separating a small
+local-provider catalog from the 1,000-model stress case. Counts describe actual
+rendered images and distinct assets, not a thousand simultaneously visible rows.
+The `provider-model-picker-artwork-open-12` and
+`provider-model-picker-artwork-reopen-12` scenarios measure decoded-image
+readiness without the blob/object-URL probe; omit `-12` for the stress catalog.
+Compare complete base/head builds with `--compare-bundle-dir`,
+`--control-bundle-dir`, and `--pairs 20` for rotated timing and A/A controls.
 
 ```sh
 node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
-  --steps provider-model-picker-artwork-cycles --engines chromium,webkit,firefox \
+  --steps provider-model-picker-artwork-cycles,provider-model-picker-artwork-cycles-12 \
+  --engines chromium,webkit,firefox \
   --viewport both --output .artifacts/provider-artwork
 ```
 

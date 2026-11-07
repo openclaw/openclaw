@@ -352,11 +352,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   line-height: 1.45;
 }
 
-.oc-banner-action {
-  margin-left: auto;
-  flex: 0 0 auto;
-}
-
 .oc-empty {
   display: grid;
   min-height: 12rem;
