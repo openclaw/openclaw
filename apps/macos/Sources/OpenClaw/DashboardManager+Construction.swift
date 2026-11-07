@@ -141,7 +141,8 @@ extension DashboardManager {
     nonisolated static let failureURL = URL(string: "about:blank")!
 
     func canFocusWithoutReload(_ controller: DashboardWindowController) -> Bool {
-        controller.documentHost.hasCurrentBrowserSession && !controller.isShowingFailurePage
+        controller.isSigningInToGateway ||
+            (controller.documentHost.hasCurrentBrowserSession && !controller.isShowingFailurePage)
     }
 
     func loadWindow(
