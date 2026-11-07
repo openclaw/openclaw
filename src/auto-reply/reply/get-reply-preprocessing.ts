@@ -195,10 +195,7 @@ export async function canReadReplyAttachmentPaths(params: {
       inheritRuntimeToolAllowlist: true,
       inputProvenance: sessionCtx.InputProvenance,
     });
-    return (
-      projectConversationToolNames({ capabilityProfile, toolNames: ["read"], warn: () => {} })
-        .length === 1
-    );
+    return projectConversationToolNames({ capabilityProfile, toolNames: ["read"] }).length === 1;
   }
   return false;
 }

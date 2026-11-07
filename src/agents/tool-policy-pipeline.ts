@@ -122,7 +122,8 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
 export function applyToolPolicyPipeline<TTool extends { name: string }>(params: {
   tools: TTool[];
   toolMeta: (tool: TTool) => { pluginId: string } | undefined;
-  warn: (message: string) => void;
+  /** Omit for silent policy probes so they do not consume diagnostic deduplication. */
+  warn?: (message: string) => void;
   steps: ToolPolicyPipelineStep[];
   declaredToolAllowlist?: DeclaredToolAllowlistContext;
   onFilter?: (event: ToolPolicyFilterEvent<TTool>) => void;
@@ -147,7 +148,7 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
 
     const policy = step.policy;
     const frozenAllow = isFrozenTemplateToolAllowPolicy(policy);
-    if (step.stripPluginOnlyAllowlist) {
+    if (step.stripPluginOnlyAllowlist && params.warn) {
       // Plugin-only allowlists are valid for deferred tools; warn only for entries that cannot match.
       // Read declarations per layer because callbacks can update the next layer.
       const resolved = analyzeAllowlistByToolType(
