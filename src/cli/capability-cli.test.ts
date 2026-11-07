@@ -2048,14 +2048,14 @@ describe("capability cli", () => {
           "fetch",
           "--url",
           "https://example.com",
-          ...(format ? ["--format", format] : []),
+          ...(format ? ["--format", format, "--max-chars", "512"] : []),
           "--json",
         ),
       );
 
       expect(execute).toHaveBeenCalledExactlyOnceWith(
         "infer-web-fetch",
-        { url: "https://example.com", extractMode: format },
+        { url: "https://example.com", extractMode: format, ...(format ? { maxChars: 512 } : {}) },
         scope.signal,
       );
       expect(firstJsonOutput()).toEqual(
@@ -2066,23 +2066,19 @@ describe("capability cli", () => {
     },
   );
 
-  it.each([undefined, "firecrawl"])(
-    "rejects disabled web fetch with provider %s",
-    async (provider) => {
-      mocks.loadConfig.mockReturnValue({ tools: { web: { fetch: { enabled: false } } } });
-
-      const args = [
-        "--url",
-        "https://example.com",
-        ...(provider ? ["--provider", provider] : []),
-        "--json",
-      ];
-      await expect(runCapability("web", "fetch", ...args)).rejects.toThrow("exit 1");
-
-      expect(runtimeErrorMessages().join("\n")).toContain("tools.web.fetch.enabled");
-      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    [[], "tools.web.fetch.enabled", 1],
+    [["--provider", "firecrawl"], "tools.web.fetch.enabled", 1],
+    [["--max-chars", "99"], "--max-chars must be at least 100", 0],
+  ] as const)("rejects invalid web fetch %j", async (args, message, secretCalls) => {
+    mocks.loadConfig.mockReturnValue({ tools: { web: { fetch: { enabled: false } } } });
+    await expect(
+      runCapability("web", "fetch", "--url", "https://example.com", ...args, "--json"),
+    ).rejects.toThrow("exit 1");
+    expect(runtimeErrorMessages().join("\n")).toContain(message);
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledTimes(secretCalls);
+  });
 
   it.each([
     {
@@ -2093,7 +2089,7 @@ describe("capability cli", () => {
     {
       action: "fetch",
       config: { tools: { web: { fetch: { enabled: true } } } },
-      args: ["--url", "https://example.com", "--format", "text"],
+      args: ["--url", "https://example.com", "--format", "text", "--max-chars", "100"],
     },
   ])(
     "resolves selected web $action provider SecretRefs before execution",
@@ -2145,7 +2141,7 @@ describe("capability cli", () => {
           providerId: "firecrawl",
         });
         expect(execute).toHaveBeenCalledExactlyOnceWith(
-          { url: "https://example.com", extractMode: "text" },
+          { url: "https://example.com", extractMode: "text", maxChars: 100 },
           { signal: undefined },
         );
       }
