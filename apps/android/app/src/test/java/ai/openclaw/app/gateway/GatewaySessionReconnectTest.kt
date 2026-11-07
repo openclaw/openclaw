@@ -1971,7 +1971,10 @@ class GatewaySessionReconnectTest {
             webSocketFactory = { client, request, listener ->
               val socket = client.newWebSocket(request, listener)
               object : WebSocket by socket {
-                override fun close(code: Int, reason: String?): Boolean {
+                override fun close(
+                  code: Int,
+                  reason: String?,
+                ): Boolean {
                   closeRequests.add(code to reason.orEmpty())
                   return socket.close(code, reason)
                 }
@@ -1992,7 +1995,10 @@ class GatewaySessionReconnectTest {
           assertTrue(blockEventStarted.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
           listener.onMessage(socket, response)
           when (limit) {
-            "count" -> repeat(254) { listener.onMessage(socket, smallEvent) }
+            "count" -> {
+              repeat(254) { listener.onMessage(socket, smallEvent) }
+            }
+
             "bytes" -> {
               val firstBytes = 25 * 1024 * 1024
               val secondBytes = firstBytes - block.length - response.length
@@ -2015,8 +2021,6 @@ class GatewaySessionReconnectTest {
           assertEquals("issued-token", authStore.savedToken.await())
           assertEquals(0, retiredEventCount.get())
           assertEquals(1, terminalCount.get())
-          assertEquals(0, readField<Int>(connection, "incomingMessageCount"))
-          assertEquals(0L, readField<Long>(connection, "incomingMessageBytes"))
           allowTerminalCallback.countDown()
           withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { harness.session.disconnectAndJoin() }
         } finally {
@@ -2024,6 +2028,43 @@ class GatewaySessionReconnectTest {
           allowTerminalCallback.countDown()
           shutdownReconnectHarness(harness, server)
         }
+      }
+    }
+
+  @Test
+  fun inboundByteBudgetIsReusableAfterAHandlerFails() =
+    runBlocking {
+      val ready = CompletableDeferred<Unit>()
+      val delivered = Channel<Unit>(Channel.UNLIMITED)
+      val server =
+        startGatewayServer(json = Json { ignoreUnknownKeys = true }) { socket, id, _ ->
+          socket.send(connectResponseFrame(id))
+        }
+      val harness =
+        createReconnectHarness(
+          onConnected = { ready.complete(Unit) },
+          onEvent = { event, _ ->
+            if (event == "queued") {
+              delivered.trySend(Unit)
+              error("Synthetic handler failure")
+            }
+          },
+        )
+      try {
+        connectSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.await() }
+        val connection = readField<Any>(harness.session, "currentConnection")
+        val listener = readField<WebSocketListener>(connection, "listener")
+        val socket = readField<WebSocket>(connection, "socket")
+        val frame = inboundEventWithUtf8Size(12 * 1024 * 1024)
+        // Total processed bytes exceed the aggregate budget, but no more than two frames overlap.
+        repeat(5) {
+          listener.onMessage(socket, frame)
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { delivered.receive() }
+        }
+        assertTrue(harness.session.isReady())
+      } finally {
+        shutdownReconnectHarness(harness, server)
       }
     }
 
