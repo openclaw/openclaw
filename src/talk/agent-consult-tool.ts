@@ -12,6 +12,11 @@ import type { RealtimeVoiceTool } from "./provider-types.js";
 
 /** Stable provider-facing tool name for realtime voice agent delegation. */
 export const REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME = "openclaw_agent_consult";
+/** Provenance of the hidden prompt every Talk hand-off route records for the backing agent. */
+export const REALTIME_VOICE_AGENT_CONSULT_INPUT_PROVENANCE = {
+  kind: "internal_system",
+  sourceTool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+} as const;
 export const REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES = [
   "safe-read-only",
   "owner",
