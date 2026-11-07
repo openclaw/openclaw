@@ -96,46 +96,21 @@ async function buildModelProviders(cfg: OpenClawConfig, agentId: string) {
 async function runModelAuthLogout(provider: string, agent: string) {
   const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
   const { resolveAgentDir } = await import("../../agents/agent-scope.js");
-  const { listProfilesForProvider, loadAuthProfileStoreForRuntimeAsync } =
+  const { ensureAuthProfileStoreWithoutExternalProfilesAsync, listProfilesForProvider } =
     await import("../../agents/auth-profiles.js");
-  const { updateAuthProfileStoreWithLock } =
-    await import("../../agents/auth-profiles/store-runtime.js");
+  const { removeModelAuthCredentials } = await import("../../commands/models/auth-logout.js");
+  const { refreshRunningGatewayAuthState } = await import("../../commands/models/auth-refresh.js");
   const cfg = await captureRuntimeConfigAsyncReader()();
   const agentDir = resolveAgentDir(cfg, agent);
-  const store = await loadAuthProfileStoreForRuntimeAsync(agentDir);
-  const profileIds = listProfilesForProvider(store, provider);
-  const updated = await updateAuthProfileStoreWithLock({
+  const store = await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
+  const result = await removeModelAuthCredentials({
+    cfg,
     agentDir,
-    updater: (nextStore) => {
-      let changed = false;
-      for (const profileId of profileIds) {
-        if (nextStore.profiles[profileId]) {
-          delete nextStore.profiles[profileId];
-          changed = true;
-        }
-        if (nextStore.usageStats?.[profileId]) {
-          delete nextStore.usageStats[profileId];
-          changed = true;
-        }
-      }
-      if (nextStore.order?.[provider]) {
-        delete nextStore.order[provider];
-        changed = true;
-      }
-      if (nextStore.lastGood?.[provider]) {
-        delete nextStore.lastGood[provider];
-        changed = true;
-      }
-      return changed;
-    },
-  });
-  if (!updated) {
-    throw new Error(`Failed to remove saved auth profiles for provider ${provider}.`);
-  }
-  return {
+    profileIds: listProfilesForProvider(store, provider),
     provider,
-    removedProfiles: profileIds,
-  };
+  });
+  await refreshRunningGatewayAuthState(agent, "logout", defaultRuntime);
+  return { provider, ...result };
 }
 
 export function registerModelCapabilityCommands(capability: Command): void {

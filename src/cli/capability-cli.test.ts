@@ -55,19 +55,8 @@ const mocks = await vi.hoisted(async () => ({
     throw new Error("no auth profile");
   }),
   resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agent-${agentId}`),
-  updateAuthProfileStoreWithLock: vi.fn(
-    async ({ updater }: { updater: (store: any) => boolean }) => {
-      const store = {
-        version: 1,
-        profiles: {},
-        order: {},
-        lastGood: {},
-        usageStats: {},
-      };
-      updater(store);
-      return store;
-    },
-  ),
+  removeModelAuthCredentials:
+    vi.fn<typeof import("../commands/models/auth-logout.js").removeModelAuthCredentials>(),
   resolveMemorySearchConfig: vi.fn<
     typeof import("../agents/memory-search.js").resolveMemorySearchConfig
   >(() => null),
@@ -326,6 +315,9 @@ vi.mock("../agents/auth-profiles.js", () => ({
     ...args: Parameters<typeof mocks.loadAuthProfileStoreForRuntime>
   ) => mocks.loadAuthProfileStoreForRuntime(...args),
   listProfilesForProvider: mocks.listProfilesForProvider,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: async (
+    ...args: Parameters<typeof mocks.loadAuthProfileStoreForRuntime>
+  ) => mocks.loadAuthProfileStoreForRuntime(...args),
 }));
 
 vi.mock("../agents/model-auth.js", () => ({
@@ -334,7 +326,6 @@ vi.mock("../agents/model-auth.js", () => ({
 
 vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
-  updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
   ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => ({
     version: 1,
     profiles: {},
@@ -347,6 +338,16 @@ vi.mock("../agents/memory-search.js", () => ({
 
 vi.mock("../commands/models/auth.js", () => ({
   modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
+}));
+
+// mock-isolation: Exercise CLI receipt and failure rendering without credential mutation.
+vi.mock("../commands/models/auth-logout.js", () => ({
+  removeModelAuthCredentials: mocks.removeModelAuthCredentials,
+}));
+
+// mock-isolation: Auth publication does not connect to an operator Gateway.
+vi.mock("../commands/models/auth-refresh.js", () => ({
+  refreshRunningGatewayAuthState: vi.fn(async () => "refreshed"),
 }));
 
 vi.mock("../commands/models/list.status-command.js", () => ({
@@ -1787,58 +1788,40 @@ describe("capability cli", () => {
     expectError: expectRuntimeErrorContains,
   });
 
-  it.each(["populated", "lock-failed"])(
-    "logs out provider profiles when the store is %s",
-    async (state) => {
-      const store = {
-        version: 1,
-        profiles: {
-          "openai:default": { id: "openai:default" },
-          "openai:secondary": { id: "openai:secondary" },
-          "anthropic:default": { id: "anthropic:default" },
-        },
-        order: { openai: ["openai:default", "openai:secondary"] },
-        lastGood: { openai: "openai:secondary" },
-        usageStats: {
-          "openai:default": { errorCount: 2 },
-          "openai:secondary": { errorCount: 1 },
-          "anthropic:default": { errorCount: 3 },
-        },
-      };
-      const profiles =
-        state === "populated" ? ["openai:default", "openai:secondary"] : ["openai:default"];
-      mocks.listProfilesForProvider.mockReturnValue(profiles);
-      if (state === "populated") {
-        mocks.loadAuthProfileStoreForRuntime.mockReturnValue(store as never);
-        mocks.updateAuthProfileStoreWithLock.mockImplementationOnce(async ({ updater }) => {
-          updater(store);
-          return store;
-        });
-      } else if (state === "lock-failed") {
-        mocks.updateAuthProfileStoreWithLock.mockResolvedValueOnce(null as never);
-      }
-      const run = runCapability("model", "auth", "logout", "--provider", "openai", "--json");
-      if (state === "lock-failed") {
-        await expect(run).rejects.toThrow("exit 1");
-        expectRuntimeErrorContains("Failed to remove saved auth profiles for provider openai.");
-        return;
-      }
-      await run;
+  it.each([undefined, "Restart the Gateway to apply the removal."])(
+    "reports the committed provider logout receipt with warning %j",
+    async (warning) => {
+      mocks.listProfilesForProvider.mockReturnValueOnce(["openai:shared"]);
+      mocks.removeModelAuthCredentials.mockResolvedValueOnce({
+        removedProfiles: ["openai:shared", "openai:local"],
+        ...(warning ? { warning } : {}),
+      });
+
+      await runCapability("model", "auth", "logout", "--provider", "openai", "--json");
+
+      expect(mocks.removeModelAuthCredentials).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: "openai", profileIds: ["openai:shared"] }),
+      );
       expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
         provider: "openai",
-        removedProfiles: profiles,
+        removedProfiles: ["openai:shared", "openai:local"],
+        ...(warning ? { warning } : {}),
       });
-      if (state === "populated") {
-        expect(store.profiles).toEqual({ "anthropic:default": { id: "anthropic:default" } });
-        expect(store.order).toEqual({});
-        expect(store.lastGood).toEqual({});
-        expect(store.usageStats).toEqual({ "anthropic:default": { errorCount: 3 } });
-        expect(mocks.updateAuthProfileStoreWithLock).toHaveBeenCalledWith(
-          expect.objectContaining({ agentDir: "/tmp/agent-main" }),
-        );
-      }
     },
   );
+
+  it("does not report successful logout when credential removal fails", async () => {
+    mocks.removeModelAuthCredentials.mockRejectedValueOnce(
+      new Error("Saved credentials could not be removed. Wait a moment and retry."),
+    );
+
+    await expect(
+      runCapability("model", "auth", "logout", "--provider", "openai", "--json"),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("Saved credentials could not be removed");
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["parent", "login", "beta", undefined],

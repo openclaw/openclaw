@@ -43,13 +43,11 @@ const mocks = vi.hoisted(() => ({
   ),
   resolveDefaultAgentId: vi.fn(() => "main"),
   ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(
-    (agentDir?: string): AuthProfileStore => {
-      void agentDir;
-      return { version: 1, profiles: {} };
-    },
+    (_agentDir?: string): AuthProfileStore => ({ version: 1, profiles: {} }),
   ),
   listProfilesForProvider: vi.fn((): string[] => []),
-  removeModelAuthCredentials: vi.fn(async () => {}),
+  removeModelAuthCredentials:
+    vi.fn<typeof import("../../commands/models/auth-logout.js").removeModelAuthCredentials>(),
   saveModelProviderApiKey:
     vi.fn<typeof import("../../commands/models/auth-api-key.js").saveModelProviderApiKey>(),
   setAuthProfileOrder: vi.fn(async (): Promise<AuthProfileStore | null> => ({
@@ -338,7 +336,7 @@ function resetAuthStatusMocks(): void {
     createAuthProfileStoreFixture({}),
   );
   mocks.listProfilesForProvider.mockReturnValue([]);
-  mocks.removeModelAuthCredentials.mockResolvedValue();
+  mocks.removeModelAuthCredentials.mockResolvedValue({ removedProfiles: [] });
   mocks.saveModelProviderApiKey.mockResolvedValue({ profileId: "openrouter:manual" });
   mocks.setAuthProfileOrder.mockResolvedValue({ version: 1, profiles: {} });
   mockHealthProviders([]);
@@ -779,6 +777,7 @@ describe("models.authStatus", () => {
     async (refreshUsage) => {
       mocks.removeModelAuthCredentials.mockImplementationOnce(async () => {
         setPreparedAuthStore({ version: 1, profiles: {} });
+        return { removedProfiles: [] };
       });
       const started = createDeferred();
       const usage = createDeferred<UsageSummary>();

@@ -85,7 +85,7 @@ const logout = (profileId: string) =>
 async function dispatchAuthLogout(
   cfg: OpenClawConfig,
   selection: { profileIds?: string[]; credentialType?: "api_key" },
-): Promise<void> {
+) {
   const respond = vi.fn<RespondFn>();
   await handleGatewayRequest({
     req: {
@@ -118,6 +118,7 @@ async function dispatchAuthLogout(
     "warning",
     "Credentials were removed, but the Gateway has not confirmed applying the change. Run `openclaw gateway restart` to apply it.",
   );
+  return payload;
 }
 
 type ConfigMutator = (
@@ -204,6 +205,38 @@ describe("models auth logout", () => {
     ).rejects.toThrow(expected);
     expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
   });
+
+  it("reports the fresh provider removal after a login follows the Gateway pre-read", () =>
+    withAuthProfileTestState("openclaw-auth-logout-receipt-", async ({ agentDirFor }) => {
+      const main = agentDirFor("main");
+      const oldId = "openai:old";
+      const newId = "openai:concurrent";
+      const controlId = "anthropic:control";
+      saveAuthProfileStore(
+        createAuthProfileStoreFixture({
+          [oldId]: createApiKeyCredential("openai", "synthetic-old"),
+          [controlId]: createApiKeyCredential("anthropic", "synthetic-control"),
+        }),
+        main,
+      );
+      const liveConfig = trackConfig(
+        authConfig({ [oldId]: { provider: "openai", mode: "api_key" } }),
+      );
+      usePersistedStore(main);
+      mocks.removeAuthProfilesAcrossOwnerStores.mockImplementation(async (params) => {
+        const store = loadAuthProfileStoreWithoutExternalProfiles(main);
+        store.profiles[newId] = createApiKeyCredential("openai", "synthetic-new");
+        saveAuthProfileStore(store, main);
+        return removeAuthProfilesAcrossOwnerStores({ ...params, agentDir: main });
+      });
+
+      const result = await dispatchAuthLogout(liveConfig(), {});
+
+      expect(result).toMatchObject({ removedProfiles: [oldId, newId] });
+      expect(Object.keys(loadAuthProfileStoreWithoutExternalProfiles(main).profiles)).toEqual([
+        controlId,
+      ]);
+    }));
 
   it("removes cached credential copies across agents without disabling another account", () =>
     withAuthProfileTestState("openclaw-auth-catalog-logout-", async ({ agentDirFor }) => {

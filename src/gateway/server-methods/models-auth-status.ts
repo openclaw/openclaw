@@ -290,7 +290,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const authProvider = resolveProviderIdForAuth(provider, { config: cfg });
       const store = await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
       const availableProfiles = listProfilesForProvider(store, provider);
-      const removedProfiles =
+      const profileIds =
         selection.profileIds ??
         availableProfiles.filter((profileId) => {
           const credential = store.profiles[profileId];
@@ -308,10 +308,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         return;
       }
       const { removeModelAuthCredentials } = await import("../../commands/models/auth-logout.js");
-      const configWarning = await removeModelAuthCredentials({
+      const { removedProfiles, warning: configWarning } = await removeModelAuthCredentials({
         cfg,
         agentDir,
-        profileIds: removedProfiles,
+        profileIds,
         ...(apiKeyOnly ? { apiKeyProvider: provider } : {}),
         ...(!apiKeyOnly && !selection.profileIds ? { provider } : {}),
       });
