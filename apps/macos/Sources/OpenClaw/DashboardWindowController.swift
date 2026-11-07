@@ -74,6 +74,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     let webView: DashboardWebView
     let documentHost: ControlUIDocumentHost
+    var connectionConsumer: MacGatewayConnectionFleet.Consumer?
     let nativeBrowser: DashboardNativeBrowserHost
     private let messageHandler: DashboardMessageHandler
     let deviceSettingsMessageHandler: DashboardDeviceSettingsMessageHandler
@@ -472,6 +473,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     func detachWindowForReplacement() -> NSWindow? {
         guard let window else { return nil }
+        self.connectionConsumer = nil
         // Route changes replace the privileged document, not its native shell;
         // detaching first transfers AppKit ownership without a close/focus cycle.
         self.reconnectTask?.task.cancel()
@@ -1097,6 +1099,7 @@ extension DashboardWindowController {
     }
 
     func windowWillClose(_: Notification) {
+        self.connectionConsumer = nil
         self.finishDocumentLoad(.failure(CancellationError()))
         self.reconnectTask?.task.cancel()
         self.reconnectTask = nil

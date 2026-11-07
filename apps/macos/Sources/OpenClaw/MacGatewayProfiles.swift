@@ -682,6 +682,45 @@ actor MacGatewayProfileStore {
 actor MacGatewayConnectionFleet {
     static let shared = MacGatewayConnectionFleet()
 
+    /// Pending opens and retained windows own demand independently of menu tracking.
+    final class Consumer: Sendable {
+        private let release: @Sendable () -> Void
+
+        fileprivate init(release: @escaping @Sendable () -> Void) {
+            self.release = release
+        }
+
+        deinit { self.release() }
+    }
+
+    private nonisolated let consumers = LockIsolated<[DashboardGatewayTarget: Int]>([:])
+    private let profileChatStoreID: @Sendable (String) async throws -> String
+    private let makeConnection: @Sendable (@escaping GatewayConnection.EndpointProvider) -> GatewayConnection
+
+    init(
+        profileChatStoreID: @escaping @Sendable (String) async throws -> String = {
+            try await MacGatewayProfileStore.shared.chatStoreID(profileID: $0)
+        },
+        makeConnection: @escaping @Sendable (@escaping GatewayConnection.EndpointProvider) -> GatewayConnection = {
+            GatewayConnection(endpointProvider: $0, supportsSharedEndpointRecovery: false)
+        })
+    {
+        self.profileChatStoreID = profileChatStoreID
+        self.makeConnection = makeConnection
+    }
+
+    nonisolated func retainConsumer(for target: DashboardGatewayTarget) -> Consumer? {
+        guard target != .primary else { return nil }
+        let consumers = self.consumers
+        consumers.withValue { $0[target, default: 0] += 1 }
+        return Consumer {
+            consumers.withValue {
+                let remaining = $0[target, default: 0] - 1
+                $0[target] = remaining > 0 ? remaining : nil
+            }
+        }
+    }
+
     struct Binding {
         let chatStoreID: String
         fileprivate let active: LockIsolated<Bool>
@@ -752,8 +791,10 @@ actor MacGatewayConnectionFleet {
         return binding
     }
 
-    func disconnectLocal(ifCurrent: @Sendable () -> Bool = { true }) async {
-        await self.connections["local"]?.connection.shutdown(ifCurrent: ifCurrent)
+    func disconnectLocal(onlyIfIdle: Bool = false, ifCurrent: @Sendable () -> Bool = { true }) async {
+        await self.connections["local"]?.connection.shutdown(ifCurrent: {
+            ifCurrent() && (!onlyIfIdle || self.consumers.value[.local] == nil)
+        })
     }
 
     func connection(profileID: String) async -> GatewayConnection {
@@ -767,7 +808,7 @@ actor MacGatewayConnectionFleet {
     func binding(profileID: String) async throws -> Binding {
         while true {
             let revision = self.ownerRevision
-            let chatStoreID = try await MacGatewayProfileStore.shared.chatStoreID(profileID: profileID)
+            let chatStoreID = try await self.profileChatStoreID(profileID)
             // A delayed lookup cannot retire an owner admitted after it began,
             // including remove/re-add cycles with the same principal.
             guard revision == self.ownerRevision else { continue }
@@ -779,15 +820,13 @@ actor MacGatewayConnectionFleet {
                 continue
             }
             let active = LockIsolated(true)
-            let connection = GatewayConnection(
-                endpointProvider: {
-                    guard active.value else { throw GatewayBrowserSessionError.superseded }
-                    let endpoint = try await MacGatewayProfileStore.shared.endpoint(
-                        profileID: profileID, expectedChatStoreID: chatStoreID)
-                    guard active.value else { throw GatewayBrowserSessionError.superseded }
-                    return endpoint
-                },
-                supportsSharedEndpointRecovery: false)
+            let connection = self.makeConnection {
+                guard active.value else { throw GatewayBrowserSessionError.superseded }
+                let endpoint = try await MacGatewayProfileStore.shared.endpoint(
+                    profileID: profileID, expectedChatStoreID: chatStoreID)
+                guard active.value else { throw GatewayBrowserSessionError.superseded }
+                return endpoint
+            }
             let binding = Binding(chatStoreID: chatStoreID, active: active, connection: connection)
             self.connections["profile:\(profileID)"] = binding
             self.ownerRevision &+= 1
@@ -806,9 +845,14 @@ actor MacGatewayConnectionFleet {
         return owner.connection
     }
 
-    func disconnect(profileID: String, ifCurrent: @Sendable () -> Bool = { true }) async {
+    func disconnect(
+        profileID: String, onlyIfIdle: Bool = false, ifCurrent: @Sendable () -> Bool = { true }) async
+    {
         // Renewals retain observers; changing principal retires the owner instead.
-        await self.connections["profile:\(profileID)"]?.connection.shutdown(ifCurrent: ifCurrent)
+        // Idle cleanup rechecks demand at the socket owner, not before the actor hop.
+        await self.connections["profile:\(profileID)"]?.connection.shutdown(ifCurrent: {
+            ifCurrent() && (!onlyIfIdle || self.consumers.value[.profile(profileID)] == nil)
+        })
     }
 
     func shutdown() async -> [GatewayConnection] {

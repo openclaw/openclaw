@@ -77,12 +77,7 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         self.store.facts[.local]?.health ?? .unknown
     }
 
-    private lazy var store = GatewayMenuStatusStore(disconnectLocal: { [weak self] in
-        await self?.disconnectIdleGateway(.local)
-    }, disconnectProfile: { [weak self] profileID in
-        await self?.disconnectIdleGateway(.profile(profileID))
-    })
-    private var windowOpens: [UUID: (target: DashboardGatewayTarget, task: Task<Void, Never>)] = [:]
+    private let store = GatewayMenuStatusStore()
     private let ownedMenu = NSMenu(title: String(localized: "Gateways"))
     private weak var topLevelItem: NSMenuItem?
     private var installed = false
@@ -315,38 +310,12 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
 
     @objc private func openGateway(_ sender: NSMenuItem) {
         guard let id = sender.identifier?.rawValue, let target = DashboardGatewayTarget(bridgeID: id) else { return }
-        self.trackWindowOpen(target: target, task: AppNavigationActions.openGateway(target))
+        _ = AppNavigationActions.openGateway(target)
     }
 
     @objc private func newGatewayWindow(_ sender: NSMenuItem) {
         guard let id = sender.identifier?.rawValue, let target = DashboardGatewayTarget(bridgeID: id) else { return }
-        self.trackWindowOpen(target: target, task: AppNavigationActions.openGateway(target, newWindow: true))
-    }
-
-    private func trackWindowOpen(target: DashboardGatewayTarget, task: Task<Void, Never>) {
-        let id = UUID()
-        self.windowOpens[id] = (target, task)
-        Task { [weak self] in
-            await task.value
-            self?.windowOpens[id] = nil
-        }
-    }
-
-    private func disconnectIdleGateway(_ target: DashboardGatewayTarget) async {
-        // AppKit closes tracking before dispatching an item action. A selected
-        // dashboard owns its connection while its async window setup finishes.
-        while let opening = self.windowOpens.first(where: { $0.value.target == target }) {
-            await opening.value.task.value
-            guard !Task.isCancelled else { return }
-            self.windowOpens[opening.key] = nil
-        }
-        guard !Task.isCancelled, Self.activeConsumerCount(for: target) == 0 else { return }
-        switch target {
-        case .primary: break
-        case .local: await MacGatewayConnectionFleet.shared.disconnectLocal(ifCurrent: { !Task.isCancelled })
-        case let .profile(profileID):
-            await MacGatewayConnectionFleet.shared.disconnect(profileID: profileID, ifCurrent: { !Task.isCancelled })
-        }
+        _ = AppNavigationActions.openGateway(target, newWindow: true)
     }
 
     /// Dashboard windows and native chat windows share a saved profile's fleet
