@@ -4,6 +4,7 @@ import {
   cleanupCommandErrorMessages,
   createCleanupCommandRuntime,
   gatewayService,
+  gatewayOwnerLease,
   removePath,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
@@ -85,6 +86,27 @@ describe("uninstallCommand", () => {
     expect(gatewayService.uninstall).toHaveBeenCalledOnce();
     expect(removeStateAndLinkedPaths).toHaveBeenCalledOnce();
     expect(removeWorkspaceDirs).toHaveBeenCalledOnce();
+  });
+
+  it("refuses uninstall while an unmanaged Gateway holds the state directory", async () => {
+    gatewayService.isLoaded.mockResolvedValue(false);
+    gatewayOwnerLease.readGatewayOwnerLease.mockReturnValue({
+      state: "live",
+      pid: 4242,
+      owner: "test-owner",
+      port: 4096,
+      mode: "foreground",
+      supervisor: null,
+      expired: false,
+      host: "local",
+      startedAt: 0,
+    });
+
+    await expectFailure({ all: true });
+    expectDataPreserved();
+    expect(cleanupCommandErrorMessages(runtime).join("\n")).toContain(
+      "A Gateway is still running (pid 4242)",
+    );
   });
 
   it("preserves workspace dirs during state-only uninstall", async () => {

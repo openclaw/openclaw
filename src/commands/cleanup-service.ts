@@ -2,6 +2,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { isNixMode } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 /** Settle managed service teardown before reset or uninstall may remove user data. */
@@ -42,8 +43,22 @@ export async function stopGatewayForCleanup(
       stopped = false;
       reportFailure("Gateway stop failed", err, "before retrying uninstall");
     }
-  } else if (uninstall) {
-    runtime.log(`Gateway service ${service.notLoadedText}.`);
+  } else {
+    // No managed service is loaded, but a Gateway may still be running outside
+    // the service lifecycle (e.g. `openclaw gateway run` in a foreground or
+    // container deployment). Destructive cleanup must not remove its state while
+    // it is live; the process keeps writing and would rebuild deleted paths.
+    const lease = readGatewayOwnerLease({ env: process.env });
+    if (lease?.state === "live") {
+      const verb = uninstall ? "uninstall OpenClaw" : "reset OpenClaw";
+      runtime.error(
+        `A Gateway is still running (pid ${lease.pid}). Stop it with ${formatCliCommand("openclaw gateway stop")} before you ${verb}, then retry.`,
+      );
+      return false;
+    }
+    if (uninstall) {
+      runtime.log(`Gateway service ${service.notLoadedText}.`);
+    }
   }
   if (uninstall) {
     // Removing registration still prevents relaunch when stopping the process failed.

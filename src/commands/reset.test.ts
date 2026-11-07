@@ -37,6 +37,37 @@ it("stops the managed Gateway before loading the destructive cleanup plan", asyn
   expect(cleanup.resolveCleanupPlanForRemoval).toHaveBeenCalledOnce();
 });
 
+it("refuses reset while an unmanaged Gateway holds the state directory", async () => {
+  cleanup.gatewayService.isLoaded.mockResolvedValue(false);
+  cleanup.gatewayOwnerLease.readGatewayOwnerLease.mockReturnValue({
+    state: "live",
+    pid: 4242,
+    owner: "test-owner",
+    port: 4096,
+    mode: "foreground",
+    supervisor: null,
+    expired: false,
+    host: "local",
+    startedAt: 0,
+  });
+
+  await expect(run()).rejects.toMatchObject({ name: "ExitError", code: 1 });
+  expect(cleanup.removeStateAndLinkedPaths).not.toHaveBeenCalled();
+  expect(cleanup.removeWorkspaceDirs).not.toHaveBeenCalled();
+  expect(cleanup.cleanupCommandErrorMessages(runtime).join("\n")).toContain(
+    "A Gateway is still running (pid 4242)",
+  );
+});
+
+it("proceeds with reset when no Gateway owns the state directory", async () => {
+  cleanup.gatewayService.isLoaded.mockResolvedValue(false);
+  cleanup.gatewayOwnerLease.readGatewayOwnerLease.mockReturnValue(undefined);
+
+  await run();
+
+  expect(cleanup.removeStateAndLinkedPaths).toHaveBeenCalledOnce();
+});
+
 it.each([
   ["config+creds+sessions", true],
   ["config", false],

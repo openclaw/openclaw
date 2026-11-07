@@ -16,6 +16,8 @@ const gatewayServiceState = vi.hoisted(() => ({
   uninstall: vi.fn(),
 }));
 export const gatewayService = gatewayServiceState;
+const gatewayOwnerLeaseState = vi.hoisted(() => ({ readGatewayOwnerLease: vi.fn() }));
+export const gatewayOwnerLease = gatewayOwnerLeaseState;
 const cleanupConfigState = vi.hoisted(() => ({ isNixMode: false }));
 
 vi.mock("../config/config.js", () => ({
@@ -27,6 +29,11 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => gatewayService,
+}));
+
+vi.mock("../infra/gateway-owner-lease.js", () => ({
+  readGatewayOwnerLease: (...args: unknown[]) =>
+    gatewayOwnerLeaseState.readGatewayOwnerLease(...args),
 }));
 
 vi.mock("./cleanup-plan.js", () => ({
@@ -65,6 +72,7 @@ export function resetCleanupCommandMocks() {
   gatewayService.isLoaded.mockReset().mockResolvedValue(true);
   gatewayService.stop.mockReset().mockResolvedValue(undefined);
   gatewayService.uninstall.mockReset().mockResolvedValue(undefined);
+  gatewayOwnerLeaseState.readGatewayOwnerLease.mockReset().mockReturnValue(undefined);
   cleanupConfigState.isNixMode = false;
 }
 
