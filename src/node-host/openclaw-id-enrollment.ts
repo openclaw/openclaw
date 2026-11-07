@@ -1,103 +1,23 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  assessFreshness,
   computeNodeRedemptionProof,
   deriveInviteProofKey,
-  descriptorEvidence,
-  DISCOVERY_ENDPOINTS,
-  DISCOVERY_SIGNATURE_HEADER,
   formatIrohEndpointKey,
   MAX_NODE_INVITE_LIFETIME_SECONDS,
   nodeVerificationCode,
-  parseClawDescriptor,
   parseStatement,
-  signDiscoveryRequest,
   signStatement,
-  verifyBindingForPin,
-  type ClawPin,
   type NodeDescription,
   type NodeJoinLink,
   type SendNodeMailRequest,
   type StatementSigner,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { sleepWithAbort } from "../../packages/retry/src/index.js";
-import { readResponseWithLimit } from "../infra/http-body.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import {
-  parseNodeHostOpenClawIdTarget,
-  type NodeHostOpenClawIdTarget,
-} from "./openclaw-id-target.js";
-
-const INVALID_DESCRIPTOR =
-  "Discovery returned an invalid node descriptor. Check --discovery-url with the claw owner, then join with a new link.";
-
-/** Only stable codes are surfaced; untrusted response messages may contain secrets or controls. */
-class NodeDiscoveryError extends Error {
-  constructor(
-    readonly code: string,
-    readonly retryAfterMs = 0,
-  ) {
-    super(`Discovery request failed (${code})`);
-  }
-}
-
-async function discoveryCall(params: {
-  origin: string;
-  signer: StatementSigner;
-  link: NodeJoinLink;
-  endpoint: "sendNodeMail" | "getNodeDescriptor";
-  body?: SendNodeMailRequest;
-  signal: AbortSignal;
-}): Promise<unknown> {
-  const spec = DISCOVERY_ENDPOINTS[params.endpoint];
-  const requestPath = spec.path.replace("{claw_id}", encodeURIComponent(params.link.claw_id));
-  const bytes = new TextEncoder().encode(params.body ? JSON.stringify(params.body) : "");
-  const signature = await signDiscoveryRequest(
-    {
-      method: spec.method,
-      path: requestPath,
-      body: bytes,
-      ts: Math.floor(Date.now() / 1000),
-    },
-    params.signer,
-  );
-  params.signal.throwIfAborted();
-  const host = new URL(params.origin).hostname;
-  const { response, release } = await fetchWithSsrFGuard({
-    url: new URL(requestPath, params.origin).href,
-    auditContext: "node-openclaw-id-enrollment",
-    signal: params.signal,
-    timeoutMs: 15_000,
-    maxRedirects: 0,
-    requireHttps: new URL(params.origin).protocol === "https:",
-    policy: { allowPrivateNetwork: true, allowedHostnames: [host], hostnameAllowlist: [host] },
-    init: {
-      method: spec.method,
-      headers: { [DISCOVERY_SIGNATURE_HEADER]: signature, "content-type": "application/json" },
-      ...(params.body ? { body: bytes } : {}),
-    },
-    capture: { sensitiveRequestHeaderNames: [DISCOVERY_SIGNATURE_HEADER] },
-  });
-  try {
-    const buffer = await readResponseWithLimit(response, 1024 * 1024, { signal: params.signal });
-    const raw: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
-    if (!response.ok) {
-      const error = isRecord(raw) && isRecord(raw.error) ? raw.error : undefined;
-      const code =
-        typeof error?.code === "string" && /^[a-z_]{1,40}$/.test(error.code)
-          ? error.code
-          : "unavailable";
-      const retry =
-        typeof error?.retry_after === "number" && Number.isFinite(error.retry_after)
-          ? Math.max(0, error.retry_after * 1000)
-          : 0;
-      throw new NodeDiscoveryError(code, retry);
-    }
-    return raw;
-  } finally {
-    await release();
-  }
-}
+  assessNodeDescriptor,
+  nodeDiscoveryCall,
+  NodeDiscoveryError,
+} from "./openclaw-id-discovery.js";
+import type { NodeHostOpenClawIdTarget } from "./openclaw-id-target.js";
 
 /** Mail W's signed declaration, then verify admitted-node evidence before saving or dialing. */
 export async function enrollNode(params: {
@@ -105,7 +25,10 @@ export async function enrollNode(params: {
   discoveryUrl: string;
   signer: StatementSigner;
   description: NodeDescription;
-  previousPin?: ClawPin;
+  previous?: {
+    target: NodeHostOpenClawIdTarget;
+    persist: (target: NodeHostOpenClawIdTarget) => Promise<unknown>;
+  };
   signal?: AbortSignal;
   log: (message: string) => void;
 }): Promise<NodeHostOpenClawIdTarget> {
@@ -136,10 +59,10 @@ export async function enrollNode(params: {
     throw new Error(`Cannot enroll this node's declared command surface: ${valid.detail}`);
   }
   const call = (endpoint: "sendNodeMail" | "getNodeDescriptor", body?: SendNodeMailRequest) =>
-    discoveryCall({
+    nodeDiscoveryCall({
       origin: params.discoveryUrl,
       signer: params.signer,
-      link: params.link,
+      clawId: params.link.claw_id,
       endpoint,
       body,
       signal,
@@ -177,60 +100,35 @@ export async function enrollNode(params: {
       signal.throwIfAborted();
       try {
         const raw = await call("getNodeDescriptor");
-        if (!isRecord(raw)) {
-          throw new Error(INVALID_DESCRIPTOR);
+        const previous = params.previous;
+        const sameClaw =
+          previous?.target.pin.claw_id === params.link.claw_id &&
+          previous.target.pin.root_fp === params.link.root_fp &&
+          previous.target.hostname === params.link.hostname;
+        const assessed = await assessNodeDescriptor(raw, {
+          hostname: params.link.hostname,
+          pin: sameClaw
+            ? previous.target.pin
+            : {
+                claw_id: params.link.claw_id,
+                root_fp: params.link.root_fp,
+                binding_seq: 0,
+              },
+          discoveryUrl: params.discoveryUrl,
+          stored: sameClaw ? previous.target.freshness : undefined,
+          peerKey: peer_key,
+          joining: true,
+        });
+        signal.throwIfAborted();
+        if (sameClaw) {
+          // Refusal must not erase stronger trust learned for an already configured claw.
+          await previous.persist(assessed.target);
         }
-        const parsed = parseClawDescriptor(raw.descriptor);
-        if (!parsed.ok) {
-          throw new Error(INVALID_DESCRIPTOR);
-        }
-        const evidence = descriptorEvidence(parsed.descriptor);
-        const checked = await verifyBindingForPin(
-          evidence,
-          {
-            claw_id: params.link.claw_id,
-            root_fp: params.link.root_fp,
-            binding_seq:
-              params.previousPin?.claw_id === params.link.claw_id &&
-              params.previousPin.root_fp === params.link.root_fp
-                ? params.previousPin.binding_seq
-                : 0,
-          },
-          { host: params.link.hostname, now: Math.floor(Date.now() / 1000) },
-        );
-        if (!checked.ok) {
-          throw new Error(
-            `Possible claw substitution: ${checked.code}. Do not approve; obtain a new link from the owner.`,
-          );
-        }
-        const freshness = await assessFreshness(
-          { snapshot: raw.snapshot },
-          {
-            binding: checked.binding,
-            stored: null,
-            now: Math.floor(Date.now() / 1000),
-            policy: "enforce",
-          },
-        );
-        if (!freshness.verdict.ok) {
-          throw new Error(
-            `Cannot verify current claw membership: ${freshness.verdict.code}. Ask the claw owner to check that their Gateway is online and connected to OpenClaw ID, then join with a new link.`,
-          );
-        }
-        const snapshot = parseStatement(raw.snapshot, "MembershipSnapshot");
-        if (!snapshot.ok || !snapshot.statement.body.node_peer_keys.includes(peer_key)) {
-          throw new Error(
-            "This node is not admitted in the verified claw membership; re-join this node.",
-          );
+        if (assessed.error) {
+          throw assessed.error;
         }
         signal.throwIfAborted();
-        return parseNodeHostOpenClawIdTarget({
-          hostname: params.link.hostname,
-          pin: checked.pin,
-          evidence,
-          relayUrl: parsed.descriptor.relay_url,
-          discoveryUrl: params.discoveryUrl,
-        });
+        return assessed.target;
       } catch (error) {
         if (
           !(error instanceof NodeDiscoveryError) ||
@@ -244,7 +142,7 @@ export async function enrollNode(params: {
     }
   } catch (error) {
     if (params.signal?.aborted) {
-      throw new Error("Node enrollment cancelled; no target was saved.", { cause: error });
+      throw new Error("Node enrollment cancelled.", { cause: error });
     }
     if (deadline.aborted) {
       throw new Error(

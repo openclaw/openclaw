@@ -144,6 +144,7 @@ vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath: vi.fn() }));
 
 vi.mock("./config.js", () => ({
   configureNodeHost: mocks.configureNodeHost,
+  refreshNodeHostOpenClawIdTarget: vi.fn(),
   loadNodeHostConfig: mocks.loadNodeHostConfig,
 }));
 

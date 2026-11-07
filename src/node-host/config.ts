@@ -14,6 +14,7 @@ import {
   type NodeHostGatewayConfig,
 } from "./config-shared.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
+import type { NodeHostOpenClawIdTarget } from "./openclaw-id-target.js";
 
 export type { NodeHostConfig, NodeHostGatewayConfig } from "./config-shared.js";
 
@@ -122,4 +123,31 @@ export async function configureNodeHost(params: {
     );
   }
   return config;
+}
+
+/** Commit verified reconnect facts without replacing unrelated node configuration. */
+export async function refreshNodeHostOpenClawIdTarget(params: {
+  nodeId: string;
+  expected: NodeHostOpenClawIdTarget;
+  target: NodeHostOpenClawIdTarget;
+  env?: NodeJS.ProcessEnv;
+}): Promise<NodeHostOpenClawIdTarget> {
+  const env = params.env ?? process.env;
+  assertNodeHostLegacyStateMigrated(env);
+  const worker = new NodeWorkerJournalWorker({ env });
+  const result = await worker.execute({
+    type: "nodeWorker.refreshOpenClawIdTarget",
+    input: [
+      {
+        nodeId: params.nodeId,
+        expected: params.expected,
+        target: params.target,
+        updatedAtMs: Date.now(),
+      },
+    ],
+  });
+  if (result.superseded) {
+    throw new Error("OpenClaw ID target advanced during refresh; resolve current authority again");
+  }
+  return result.target;
 }
