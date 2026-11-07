@@ -1,0 +1,2 @@
+# Cover the authHeader Bearer contract on simple-completion models (#192866).
+45

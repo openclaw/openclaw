@@ -89,8 +89,8 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal)
   getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshotMock,
 }));
 
-vi.mock("./model-auth.js", () => ({
-  applySecretRefHeaderSentinels: (model: unknown) => model,
+vi.mock("./model-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth.js")>()),
   formatMissingAuthError: vi.fn(
     (auth: { source: string; mode: string }, provider: string) =>
       `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
@@ -479,6 +479,50 @@ describe("prepareSimpleCompletionModel", () => {
     expect(result.model.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/anthropic");
     expect(looksLikeSecretSentinel(result.auth.apiKey ?? "")).toBe(true);
     expect(resolveSecretSentinel(result.auth.apiKey ?? "")).toBe("bedrock-runtime-token");
+  });
+
+  // Same header contract as agent runs: Bearer for authHeader providers, unless
+  // runtime auth exchanged the credential (the SDK then reads it from authStorage).
+  it.each([
+    { exchangedKey: undefined, authorization: "Bearer gateway-token" },
+    { exchangedKey: "exchanged-token", authorization: undefined },
+  ])("applies the authHeader Bearer header (exchanged: $exchangedKey)", async (testCase) => {
+    const baseUrl = "https://gateway.example.test/ai";
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: { provider: "gw", id: "claude-haiku-5-5", api: "anthropic-messages", baseUrl },
+      ...modelStores(),
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "gateway-token",
+      source: "models.providers.gw.apiKey",
+      mode: "api-key",
+    });
+    if (testCase.exchangedKey) {
+      hoisted.prepareProviderRuntimeAuthMock.mockResolvedValueOnce({
+        apiKey: testCase.exchangedKey,
+      });
+    }
+
+    const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
+      cfg: {
+        models: {
+          providers: {
+            gw: { baseUrl, api: "anthropic-messages", authHeader: true, models: [] },
+          },
+        },
+      },
+      provider: "gw",
+      modelId: "claude-haiku-5-5",
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expectPreparedModelResult(result);
+    const header = result.model.headers?.Authorization;
+    const token = header?.replace(/^Bearer /, "") ?? "";
+    expect(
+      header && `Bearer ${looksLikeSecretSentinel(token) ? resolveSecretSentinel(token) : token}`,
+    ).toBe(testCase.authorization);
   });
 });
 
