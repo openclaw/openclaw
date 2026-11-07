@@ -150,6 +150,7 @@ describe("effort selection", () => {
     const details = composer.querySelector("details")!;
     const trigger = details.querySelector("summary")!;
     const surface = details.querySelector<HTMLElement>("[data-anchored-overlay]")!;
+    const input = () => composer.querySelector<HTMLInputElement>("input[type=range]");
     const inputWrapper = document.createElement("div");
     inputWrapper.className = "agent-chat__composer-combobox";
     const textarea = document.createElement("textarea");
@@ -168,6 +169,8 @@ describe("effort selection", () => {
     textarea.focus();
     await page.elementLocator(trigger).click();
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
+    // The native surface opens before its lazy panel has mounted.
+    await expect.poll(() => input()?.checkVisibility() ?? false).toBe(true);
     expect(document.activeElement).toBe(textarea);
     await expect
       .poll(() => surface.getAnimations().every((animation) => animation.playState === "finished"))
@@ -176,6 +179,7 @@ describe("effort selection", () => {
     await expect.poll(() => details.open).toBe(false);
     await userEvent.keyboard("{Enter}");
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
+    await expect.poll(() => input()?.checkVisibility() ?? false).toBe(true);
     // macOS WebKit uses Option-Tab to traverse controls inside the open picker.
     await userEvent.keyboard(
       navigator.platform.includes("Mac") &&
@@ -184,7 +188,7 @@ describe("effort selection", () => {
         ? "{Alt>}{Tab}{/Alt}"
         : "{Tab}",
     );
-    await expect.poll(() => document.activeElement).toBe(host!.querySelector("input[type=range]"));
+    await expect.poll(() => document.activeElement).toBe(input());
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
     await expect.poll(() => surface.matches(":popover-open")).toBe(false);
