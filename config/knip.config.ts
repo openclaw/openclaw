@@ -205,6 +205,8 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-state-polling.mts!",
   "scripts/bench-codex-validators.mts!",
   "scripts/bench-control-ui-navigation.ts!",
+  // Per-method delay census and cross-engine readiness comparison.
+  "scripts/bench-control-ui-rpc-hostage.ts!",
   "scripts/bench-gateway-validators.mts!",
   "scripts/bench-ingress-polling.mts!",
   "scripts/bench-lobster-validators.mts!",
