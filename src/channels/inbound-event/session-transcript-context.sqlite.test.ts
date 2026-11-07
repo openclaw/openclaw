@@ -21,6 +21,65 @@ const chatWindow = (source: string, messages: object[]) => [
   { label: "Conversation context", source, type: "chat_window", payload: { messages } },
 ];
 
+it("keeps answered WhatsApp group turns out of the next inbound history", async () => {
+  const scope = {
+    agentId: "main",
+    sessionId: "whatsapp-group",
+    sessionKey: "agent:main:whatsapp:group:123",
+    storePath: path.join(sessionDirs.make(), "sessions.json"),
+  };
+  const sessionEntry = { sessionId: scope.sessionId, chatType: "group" as const, updatedAt: 1 };
+  await replaceSessionEntry(scope, sessionEntry);
+  await persistUserTurnTranscript({
+    ...scope,
+    sessionEntry,
+    input: {
+      text: "Is the report ready?",
+      timestamp: Date.now(),
+      transport: { channel: "whatsapp", messageId: "question-1" },
+    },
+  });
+  expect(
+    (
+      await mirrorReply({
+        ...scope,
+        text: "Yes, it is ready.",
+        deliveryMirror: {
+          kind: "message-tool-source-reply",
+          final: true,
+          sourceTurnId: "turn-1",
+          toolCallId: "send-1",
+        },
+      })
+    ).ok,
+  ).toBe(true);
+
+  const ctx: FinalizedMsgContext = {
+    Body: "Thanks",
+    Provider: "whatsapp",
+    ChatType: "group",
+    SessionKey: scope.sessionKey,
+    AgentId: scope.agentId,
+    CommandAuthorized: false,
+    Timestamp: Date.now() + 1_000,
+    InboundHistory: [
+      { messageId: "question-1", sender: "Alice", body: "Is the report ready?" },
+      { messageId: "question-2", sender: "Bob", body: "What happens next?" },
+    ],
+    SessionTranscriptContext: { historyLimit: 4, historyKind: "recent" },
+  };
+  await mergeSessionTranscriptContext({ ...scope, ctx });
+  const prompt = buildInboundUserContextPrefix(ctx);
+  expect(ctx.InboundHistory?.map((entry) => entry.messageId)).toEqual(["question-2"]);
+  expect(prompt).toContain("What happens next?");
+  expect(prompt).not.toContain("Is the report ready?");
+
+  ctx.InboundHistory = [{ messageId: "question-1", sender: "Alice", body: "Is the report ready?" }];
+  ctx.SessionTranscriptContext = { historyLimit: 4 };
+  await mergeSessionTranscriptContext({ ...scope, ctx });
+  expect(buildInboundUserContextPrefix(ctx)).toContain("Is the report ready?");
+});
+
 it.each([false, true])(
   "reconciles completed replies and recent requests (aborted: %s)",
   async (aborted) => {

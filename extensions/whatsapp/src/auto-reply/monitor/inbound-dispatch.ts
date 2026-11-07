@@ -279,6 +279,7 @@ export async function prepareWhatsAppInboundContext(params: {
       commandBody: params.command?.body ?? params.msg.payload.body,
     },
     sessionTranscript: {
+      historyKind: conversationKind === "group" ? "recent" : undefined,
       historyLimit:
         conversationKind === "group"
           ? (params.groupHistoryLimit ?? params.groupHistory?.length ?? 0)
