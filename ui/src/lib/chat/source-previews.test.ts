@@ -156,6 +156,27 @@ it("reads standalone JSON result text and completed inline tool results", () => 
   none([{ ...completed, ...live }]);
 });
 
+it("keeps inline and display math in source titles and search excerpts", () => {
+  const math = {
+    url: pageUrl,
+    title: wrap("Solve $x^2$"),
+    snippet: wrap("Area is $\\pi r^2$ here."),
+  };
+  expect(previews([tool(search([math]))])[0]).toMatchObject({
+    title: "Solve x^2",
+    excerpt: "Area is \\pi r^2 here.",
+  });
+  const display = {
+    url: pageUrl,
+    title: wrap("$$x^2$$"),
+    snippet: wrap("$$\n\\int_0^1 x\\,dx\n$$"),
+  };
+  expect(previews([tool(search([display]))])[0]).toMatchObject({
+    title: "x^2",
+    excerpt: "\\int_0^1 x\\,dx",
+  });
+});
+
 it("prefers a page excerpt and matches an observed redirect without repeating the source", () => {
   const final = answer(`[Original](${pageUrl}) and [redirect](${secondUrl}#details)`);
   const payload = fetched();

@@ -1353,6 +1353,8 @@
   "ui/src/components/markdown-link-boundary.ts",
   "ui/src/components/markdown-link-display.ts",
   "ui/src/components/markdown-live-loader.ts",
+  "ui/src/components/markdown-math-element.ts",
+  "ui/src/components/markdown-math.ts",
   "ui/src/components/markdown-parser.ts",
   "ui/src/components/markdown-raw-content.ts",
   "ui/src/components/markdown-render-options.ts",
