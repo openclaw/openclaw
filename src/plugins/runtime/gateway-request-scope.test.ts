@@ -334,6 +334,23 @@ describe("gateway request scope", () => {
     },
   );
 
+  it("rejects cyclic Gateway ownership without invoking execution resolvers", () => {
+    const first = vi.fn(() => TEST_SCOPE.context!);
+    const second = vi.fn(() => TEST_SCOPE.context!);
+    const root = vi.fn(() => TEST_SCOPE.context!);
+    const owner = {};
+    runtimeScope.bindGatewayContextResolver(owner, first);
+    runtimeScope.bindGatewayContextResolver(first, second);
+    runtimeScope.bindGatewayContextResolver(second, first);
+
+    expect(runtimeScope.hasGatewayContextOwner(owner, root)).toBe(false);
+    expect(runtimeScope.hasGatewayContextOwner(owner, second)).toBe(false);
+    expect(runtimeScope.hasGatewayContextOwner({}, root)).toBe(false);
+    expect(first).not.toHaveBeenCalled();
+    expect(second).not.toHaveBeenCalled();
+    expect(root).not.toHaveBeenCalled();
+  });
+
   it("isolates combined plugin identities across concurrent registry scopes", async () => {
     const parent = {
       ...TEST_SCOPE,

@@ -576,7 +576,6 @@ describe("loadGatewayPlugins", () => {
       sessionWorkerPlacementContext: context,
     });
   });
-
   test("captures retired plugin reply owners through their canonical Gateway binding", async () => {
     const { admitReplyTurn } = await import("../auto-reply/reply/reply-turn-admission.js");
     const { captureSessionControllerStop, stopSession } =
