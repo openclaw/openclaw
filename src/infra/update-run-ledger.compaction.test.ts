@@ -68,6 +68,10 @@ describe("update run ledger compaction", () => {
         "managed-service-executor-check",
         "managed-service-install",
         "managed-service-restart",
+        "managed-service update handoff",
+        "service-stop",
+        "service-start",
+        "service-running",
         "update-driver-handoff",
         "diagnostic:update-driver-handoff",
       ].map((step) => ({
