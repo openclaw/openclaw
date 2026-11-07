@@ -1,2 +1,0 @@
-37
-# Real transcript CLI regression includes dynamic headers in the final UTF-8 byte limit.

@@ -7,8 +7,7 @@ const USAGE =
   "Usage: node chat-transcript.mjs --input PATH --output-dir DIR --channel LABEL [--source-key KEY] [--max-bytes N]\n\n" +
   "Splits normalized chat JSONL (discrawl-normalize output) into one readable, line-stable transcript per UTC day,\n" +
   "with threads as sections. Days larger than --max-bytes (default 48000) split into parts at thread and message\n" +
-  "boundaries. A single message with its headers may exceed the limit.\n" +
-  "Writes <day>[-partN].txt, the day's rows as <day>.jsonl, and chunks.json describing every file.\n";
+  "boundaries. Writes <day>[-partN].txt, the day's rows as <day>.jsonl, and chunks.json describing every file.\n";
 /** Run the command; the help branch returns so stdout drains before Node exits. */
 async function run(argv) {
   if (argv.includes("--help") || argv.includes("-h")) {
