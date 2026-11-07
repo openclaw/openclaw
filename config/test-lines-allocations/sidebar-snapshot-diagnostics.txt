@@ -1,2 +1,2 @@
-# Retain sidebar snapshot receipt phases and exercise the owner and browser diagnostics.
-43
+# Prove a deferred first capture is saved and retain receipt failure diagnostics.
+65

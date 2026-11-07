@@ -174,6 +174,26 @@ describe("sidebar snapshot lifecycle", () => {
     return { ...test, store };
   }
 
+  it("saves when live readiness settles without another render capture", async () => {
+    const test = fixture();
+    disposers.push(() => test.snapshotOwner.disconnect());
+    test.snapshotOwner.connect();
+    test.publish();
+    await capture(test.snapshotOwner);
+    expect(test.capture).not.toHaveBeenCalled();
+    const saved = test.settle();
+    test.snapshotOwner.synchronize();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(test.capture).toHaveBeenCalledOnce();
+    await saved;
+    const store = new SessionSnapshotStore();
+    store.connect();
+    disposers.push(() => store.disconnect());
+    expect(await store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot)).toEqual(
+      model,
+    );
+  });
+
   it("diagnoses a blocked capture and an unfinished or rejected write", async () => {
     const write = createDeferred<boolean>();
     const persist = vi

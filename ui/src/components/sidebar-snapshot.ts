@@ -215,6 +215,9 @@ export function createSidebarSnapshot(host: {
       cancelHandoff();
       // Release before rendering so a failed refresh cannot leave cached controls painted.
       host.releaseSidebarSnapshot();
+    } else if (scope && !pending && !captured && host.sidebarSnapshotSettled()) {
+      // Readiness can settle without changing rows, so no render need follow this publication.
+      capture();
     }
   }
 
