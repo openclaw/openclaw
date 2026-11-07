@@ -2244,7 +2244,25 @@ describeLive("gateway live (Codex harness)", () => {
         const sources = catalog.catalogs.flatMap((entry) =>
           entry.hosts.flatMap((host) => host.sessions.map((session) => ({ host, session }))),
         );
-        expect(sources).toHaveLength(1);
+        expect(
+          sources,
+          JSON.stringify({
+            phase: "canonical-native-catalog",
+            seedExitCode: seeded.code,
+            catalogs: catalog.catalogs.map((entry) => ({
+              id: entry.id,
+              errorCode: entry.error?.code,
+              hosts: entry.hosts.map((host) => ({
+                kind: host.kind,
+                connected: host.connected,
+                pending: host.pending,
+                errorCode: host.error?.code,
+                sessionCount: host.sessions.length,
+                hasNextCursor: Boolean(host.nextCursor),
+              })),
+            })),
+          }),
+        ).toHaveLength(1);
         const { host, session } = sources[0]!;
         expect(session.modelProvider).toBe("openai");
         const source = await client.request<{ sessionKey: string }>("sessions.catalog.continue", {
