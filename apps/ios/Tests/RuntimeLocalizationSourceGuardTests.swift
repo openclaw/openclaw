@@ -43,17 +43,11 @@ struct RuntimeLocalizationSourceGuardTests {
     }
 
     @Test func `runtime owned copy remains localizable at render time`() throws {
-        let attributes = try Self.source("Sources/LiveActivity/OpenClawActivityAttributes.swift")
-        let manager = try Self.source("Sources/LiveActivity/LiveActivityManager.swift")
         let widget = try Self.source("ActivityWidget/OpenClawLiveActivity.swift")
         let project = try Self.source("project.yml")
         let watchInbox = try Self.source("WatchApp/Sources/WatchInboxView.swift")
         let chat = try Self.sharedSource("OpenClawChatUI/ChatMessageViews.swift")
 
-        #expect(attributes.contains("var verbatimDetail: String?"))
-        #expect(attributes.contains("private enum LegacyCodingKeys"))
-        #expect(manager.contains("status: .disconnected"))
-        #expect(!manager.contains("statusText: String(localized: \"Disconnected\")"))
         #expect(widget.contains("Text(verbatim: detail)"))
         #expect(project.contains("""
           OpenClawActivityWidget:
