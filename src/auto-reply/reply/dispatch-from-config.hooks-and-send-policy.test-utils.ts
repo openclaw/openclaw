@@ -417,12 +417,12 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.sendPolicyDenied).toBe(true);
   });
 
-  it("keeps the suppressed reply log preview UTF-16 safe", async () => {
+  it("logs suppressed reply metadata without private reply text", async () => {
     setNoAbort();
     globalMocks.logVerbose.mockClear();
     sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
-    const text = `${"y".repeat(159)}🚀`;
+    const text = "PRIVATE_REPLY_123";
 
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({ SessionKey: "test:session" }),
@@ -434,8 +434,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const suppressedLog = globalMocks.logVerbose.mock.calls.find(([message]) =>
       message.includes("final reply suppressed"),
     )?.[0];
-    expect(suppressedLog).toContain("textChars=161");
-    expect(suppressedLog).toContain(`textPreview=${JSON.stringify("y".repeat(159))}`);
+    expect(suppressedLog).toContain("textChars=17 media=0 rich=none");
+    expect(suppressedLog).not.toMatch(/PRIVATE_REPLY_123|textPreview/);
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 

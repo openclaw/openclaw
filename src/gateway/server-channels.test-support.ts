@@ -3,8 +3,20 @@ import type {
   ChannelId,
   ChannelPlugin,
 } from "../channels/plugins/types.public.js";
+import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
+import {
+  createSubsystemLogger,
+  type SubsystemLogger,
+  runtimeForLogger,
+} from "../logging/subsystem.js";
+import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
+import { requireActivePluginChannelRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { evaluateChannelHealth } from "./channel-health-policy.js";
+import { createChannelManager } from "./server-channels.js";
 
 export type TestAccount = {
   enabled?: boolean;
@@ -84,4 +96,87 @@ export function createTestPlugin(params?: {
     config,
     gateway,
   };
+}
+
+export function waitForAbort(signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
+export function installTestRegistry(
+  ...plugins: Array<
+    | ChannelPlugin<TestAccount>
+    | {
+        plugin: ChannelPlugin<TestAccount>;
+        origin: string;
+        resolveChannelRuntime?: () => PluginRuntime["channel"];
+      }
+  >
+) {
+  const registry = createEmptyPluginRegistry();
+  for (const candidate of plugins) {
+    const plugin = "plugin" in candidate ? candidate.plugin : candidate;
+    registry.channels.push({
+      pluginId: plugin.id,
+      ...("origin" in candidate ? { origin: candidate.origin as never } : {}),
+      ...(typeof candidate === "object" && "resolveChannelRuntime" in candidate
+        ? { resolveChannelRuntime: candidate.resolveChannelRuntime }
+        : {}),
+      source: "test",
+      plugin,
+    } as PluginRegistry["channels"][number]);
+  }
+  setActivePluginRegistry(registry);
+  return registry;
+}
+
+export function createTestChannelManager(options?: {
+  channelRuntime?: PluginRuntime["channel"];
+  resolveChannelRuntime?: () => PluginRuntime["channel"] | Promise<PluginRuntime["channel"]>;
+  getRuntimeConfig?: () => Record<string, unknown>;
+  channelIds?: ChannelId[];
+  startupTrace?: { measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T> };
+  deferStartupAccountStartsUntil?: Promise<void>;
+  ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
+  tryRecoverAutostartSuppression?: () => boolean;
+  isClosing?: () => boolean;
+  getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
+  getPluginRegistry?: () => PluginRegistry;
+}) {
+  const log = createSubsystemLogger("gateway/server-channels-test");
+  const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
+  const runtime = runtimeForLogger(log);
+  const channelRuntimeEnvs = { discord: runtime } as unknown as Record<ChannelId, RuntimeEnv>;
+  const channelIds = options?.channelIds ?? ["discord"];
+  for (const channelId of channelIds) {
+    channelLogs[channelId] ??= log.child(channelId);
+    channelRuntimeEnvs[channelId] ??= runtime;
+  }
+  const manager = createChannelManager({
+    scheduler: createTestGatewayScheduler(),
+    getRuntimeConfig: () => options?.getRuntimeConfig?.() ?? {},
+    getPluginRegistry: options?.getPluginRegistry ?? requireActivePluginChannelRegistry,
+    channelLogs,
+    channelRuntimeEnvs,
+    ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
+    ...(options?.resolveChannelRuntime
+      ? { resolveChannelRuntime: options.resolveChannelRuntime }
+      : {}),
+    ...(options?.startupTrace ? { startupTrace: options.startupTrace } : {}),
+    ...(options?.deferStartupAccountStartsUntil
+      ? { deferStartupAccountStartsUntil: options.deferStartupAccountStartsUntil }
+      : {}),
+    ...(options?.ambientAutostartSuppressedChannelIds
+      ? { ambientAutostartSuppressedChannelIds: options.ambientAutostartSuppressedChannelIds }
+      : {}),
+    ...(options?.tryRecoverAutostartSuppression
+      ? { tryRecoverAutostartSuppression: options.tryRecoverAutostartSuppression }
+      : {}),
+    ...(options?.isClosing ? { isClosing: options.isClosing } : {}),
+    ...(options?.getNativeApprovalRuntime
+      ? { getNativeApprovalRuntime: options.getNativeApprovalRuntime }
+      : {}),
+  });
+  return manager;
 }

@@ -13,6 +13,15 @@ Doctor applies known migrations before removing unrecognized config keys, includ
 during updates. Repairs use the normal config backup and write flow. Inputs retained
 for a deferred plugin migration remain untouched until their owner can migrate them.
 
+## Group allowlist fallback
+
+For channels that support legacy DM sender fallback, Doctor copies `allowFrom`
+into an absent `groupAllowFrom`. It preserves explicit lists, including `[]`, at
+channel and account scope, and accounts keep inherited explicit channel lists.
+The migration also leaves lists absent when the effective account, channel, or
+global-default `groupPolicy` disables groups. Explicit policy overrides still
+apply. Update-time Doctor repair follows the same rules.
+
 ## Channel ownership during an update
 
 When Doctor migrates a legacy `agents.list` roster without a `default: true` marker

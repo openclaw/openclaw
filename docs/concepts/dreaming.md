@@ -177,6 +177,10 @@ Light and REM phase hits recorded in SQLite-backed plugin state add a small rece
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep, deduped across the primary runtime workspace and any configured agent workspaces so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
 
+Reconciliation preserves a job paused by the operator or auto-disabled by cron,
+including its failure history. Use `openclaw cron enable <job-id>` to resume it;
+schedule and payload repairs still apply while it is stopped.
+
 Runtime reconciliation owns only jobs declared as
 `memory-core:memory-dreaming-promotion`. It uses Doctor's read-only classifier
 on the active jobs already listed to report historical rows. Recognized legacy

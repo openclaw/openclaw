@@ -2153,7 +2153,12 @@ describe("FRV publication source admission", () => {
         const result = await fixture(processFixture, check, { fault: "readme" });
         check(result.status, result.stderr).toBe(1);
         check(result.stderr).toContain("README.md must exist");
-        for (const id of ["normal_ci", "prepare_npm_package", "prepare_docker_release"]) {
+        for (const id of [
+          "normal_ci",
+          "prepare_npm_package",
+          "prepare_plugin_npm",
+          "prepare_docker_release",
+        ]) {
           const job = expectDefined(workflow.jobs[id], `${id} job`);
           check([job.needs].flat()).toContain("resolve_target");
           check(
@@ -2465,6 +2470,12 @@ describe("FRV publication source admission", () => {
         check(result.fact?.projection?.packages).toEqual([
           { name: "@openclaw/demo-plugin", version: "2026.9.9", targets: ["clawhub", "npm"] },
         ]);
+        check(result.steps.plugin_npm_preflight?.outputs).toEqual({
+          required: "true",
+          publish_scope: "selected",
+          plugins: "@openclaw/demo-plugin",
+          npm_dist_tag: "default",
+        });
         check(result.fact?.projection?.platforms).not.toContainEqual(
           expect.objectContaining({ id: "linux" }),
         );
@@ -2541,7 +2552,12 @@ describe("FRV publication source admission", () => {
   );
 
   publicationIt("keeps every expensive first-hop consumer behind successful resolution", () => {
-    for (const id of ["normal_ci", "prepare_npm_package", "prepare_docker_release"]) {
+    for (const id of [
+      "normal_ci",
+      "prepare_npm_package",
+      "prepare_plugin_npm",
+      "prepare_docker_release",
+    ]) {
       const job = expectDefined(workflow.jobs[id], `${id} job`);
       expect([job.needs].flat()).toContain("resolve_target");
       for (const result of ["success", "failure"]) {
@@ -2554,6 +2570,7 @@ describe("FRV publication source admission", () => {
                 result,
                 outputs: {
                   candidate_required: "true",
+                  plugin_npm_preflight_required: "true",
                   target_version: "2026.9.9",
                 },
               },

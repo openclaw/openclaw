@@ -147,6 +147,11 @@ export function createGatewayCredentialPlan(params: {
   // token refs do not get resolved for auth modes that cannot consume them.
   const localTokenCanWin =
     authMode !== "password" && authMode !== "none" && authMode !== "trusted-proxy";
+  // Remote client credentials must not deactivate a local ingress password ref.
+  const localPasswordCanWin =
+    authMode === "password" ||
+    authMode === "trusted-proxy" ||
+    (authMode !== "token" && authMode !== "none" && !(envToken || localToken.configured));
   const tokenCanWin = Boolean(envToken || localToken.configured || remoteToken.configured);
   const passwordCanWin =
     authMode === "password" ||
@@ -180,7 +185,7 @@ export function createGatewayCredentialPlan(params: {
     remoteToken,
     remotePassword,
     localTokenCanWin,
-    localPasswordCanWin: passwordCanWin,
+    localPasswordCanWin,
     localTokenSurfaceActive,
     tokenCanWin,
     passwordCanWin,

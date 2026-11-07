@@ -308,6 +308,15 @@ describe("update-cli child-owned deferred completion", () => {
 
   it.each([
     {
+      name: "refuses a fresh malformed snapshot without resurrecting stale backup channels",
+      prepare: async (configPath: string, preUpdateConfig: OpenClawConfig) => {
+        const updateStartedAtMs = Date.now();
+        await fs.writeFile(configPath + ".pre-update", '{"channels":{"whatsapp":');
+        await writeJsonFixture(configPath + ".bak", preUpdateConfig);
+        return { OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: String(updateStartedAtMs) };
+      },
+    },
+    {
       name: "does not restore stale backup channels when current pre-update snapshot has none",
       prepare: async (configPath: string, preUpdateConfig: OpenClawConfig) => {
         const updateStartedAtMs = Date.now();

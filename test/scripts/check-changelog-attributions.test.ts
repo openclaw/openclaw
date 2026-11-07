@@ -124,7 +124,7 @@ prepare_gates 123
 }
 
 describe("check-changelog-attributions", () => {
-  it("flags forbidden bot, org, and maintainer thanks attributions", () => {
+  it("flags forbidden bot and organization thanks attributions", () => {
     const content = [
       "- Internal cleanup. Thanks @codex.",
       "- Org-owned fix. Thanks @openclaw.",
@@ -138,7 +138,6 @@ describe("check-changelog-attributions", () => {
     expect(findForbiddenChangelogThanks(content)).toEqual([
       { line: 1, handle: "codex", text: "- Internal cleanup. Thanks @codex." },
       { line: 2, handle: "openclaw", text: "- Org-owned fix. Thanks @openclaw." },
-      { line: 3, handle: "steipete", text: "- Maintainer-owned fix. Thanks @steipete." },
       { line: 4, handle: "openclaw", text: "- Mixed credit. Thanks @contributor and @OpenClaw." },
       { line: 5, handle: "clawsweeper[bot]", text: "- Bot repair. Thanks @clawsweeper[bot]." },
       { line: 6, handle: "dependabot[bot]", text: "- Dependency bump. Thanks @dependabot[bot]." },
@@ -160,7 +159,7 @@ describe("check-changelog-attributions", () => {
     expect(isForbiddenChangelogThanksHandle("app/any-bot")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("codex")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("openclaw")).toBe(true);
-    expect(isForbiddenChangelogThanksHandle("steipete")).toBe(true);
+    expect(isForbiddenChangelogThanksHandle("steipete")).toBe(false);
     expect(isForbiddenChangelogThanksHandle("app/clawsweeper")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("clawsweeper")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("clawsweeper[bot]")).toBe(true);
@@ -209,10 +208,12 @@ describe("check-changelog-attributions", () => {
     }
   });
 
-  it("keeps non-bot forbidden contributors on the no-thanks fallback", () => {
-    const repo = createRepoWithPrChangelogDiff("- Maintainer repair (#123).");
+  it("accepts verified human maintainer credit", () => {
+    const repo = createRepoWithPrChangelogDiff("- Maintainer repair (#123). Thanks @steipete.");
     try {
-      expect(validateChangelogEntry(repo, "steipete")).toContain("skipping thanks check");
+      expect(validateChangelogEntry(repo, "steipete")).toContain(
+        "found PR #123 + thanks @steipete",
+      );
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -247,11 +248,11 @@ describe("check-changelog-attributions", () => {
 
   it.each([
     {
-      name: "initial release keeps maintainer exclusion",
+      name: "initial release includes the human maintainer",
       file: "2026.9.1.md",
       mirror: false,
       handle: "steipete",
-      rejected: true,
+      rejected: false,
     },
     {
       name: "docs mirror includes the maintainer",
@@ -268,11 +269,11 @@ describe("check-changelog-attributions", () => {
       rejected: true,
     },
     {
-      name: "frozen record retains initial policy",
+      name: "frozen record includes the human maintainer",
       file: "records/2026.9.1.md",
       mirror: true,
       handle: "steipete",
-      rejected: true,
+      rejected: false,
     },
   ])("$name", ({ file, mirror, handle, rejected }) => {
     const repo = createRepoWithChangelog("# Changelog\n\n<!-- openclaw:split-changelog -->\n");

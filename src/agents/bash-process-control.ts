@@ -10,7 +10,7 @@ export function cancelBackgroundExecSession(sessionId: string): boolean {
   if (!session.processActivity || session.processActivity.resultSettled) {
     return false;
   }
-  supervisor.cancel(sessionId, "manual-cancel");
   session.cancellationRequested = true;
+  supervisor.cancel(sessionId, "manual-cancel");
   return true;
 }

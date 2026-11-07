@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/onnx",
-  "version": "2026.9.36",
+  "version": "2026.9.37",
   "description": "Local ONNX decision models for OpenClaw",
   "repository": {
     "type": "git",
@@ -28,11 +28,11 @@
       "minHostVersion": ">=2026.9.6"
     },
     "compat": {
-      "pluginApi": ">=2026.9.36"
+      "pluginApi": ">=2026.9.37"
     },
     "build": {
       "bundledDist": false,
-      "openclawVersion": "2026.9.36",
+      "openclawVersion": "2026.9.37",
       "workerEntries": [
         "./src/inference.worker.ts"
       ],

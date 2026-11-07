@@ -33,6 +33,7 @@ import {
   verifyReleaseStateArtifacts,
   updateReleaseTransportEpisode,
 } from "../../scripts/full-release-validation-state.mjs";
+import { manifestContextFromEnvironment } from "../../scripts/lib/full-release-manifest.mjs";
 import { hasErrnoCode } from "../../src/infra/errno.js";
 import {
   fixtureReceiptClientSource,
@@ -800,6 +801,49 @@ describe("full release execution plan", () => {
         }),
       ]),
     );
+  });
+
+  it("retains the exact plugin descriptor with the required successful gate in the final manifest", () => {
+    const descriptor = {
+      repository: "openclaw/openclaw",
+      runId: 101,
+      runAttempt: 2,
+      workflowPath: ".github/workflows/plugin-npm-release.yml",
+      workflowEvent: "workflow_dispatch",
+      workflowHeadBranch: "release-ci/aaaaaaaaaaaa-77",
+      workflowSha: SHA,
+      artifactId: 456,
+      artifactName: `plugin-npm-prepared-${TARGET_SHA}-101-2`,
+      artifactDigest: "sha256:" + "c".repeat(64),
+      artifactSizeBytes: 123,
+    };
+    const sealed = executionPlan({
+      pluginNpmPreflightRequired: true,
+      pluginNpmPreparationResult: "success",
+    });
+    expect(sealed.gates).toContainEqual({
+      name: "Prepare exact plugin npm artifacts",
+      required: true,
+      result: "success",
+    });
+    expect(releasePlanGateFailures(sealed.gates)).toEqual([]);
+    const previous = process.env.PREPARED_PLUGIN_NPM_JSON;
+    try {
+      process.env.PREPARED_PLUGIN_NPM_JSON = JSON.stringify(descriptor);
+      const manifest = buildReleaseValidationManifest({
+        plan: sealed,
+        drain: { children: {} },
+        context: manifestContextFromEnvironment(),
+      });
+      expect(manifest.publicationArtifacts).toHaveProperty("pluginNpm", descriptor);
+      expect(manifest.executionPlanSha256).toBe(sealed.sha256);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.PREPARED_PLUGIN_NPM_JSON;
+      } else {
+        process.env.PREPARED_PLUGIN_NPM_JSON = previous;
+      }
+    }
   });
 
   it("keeps the admitted gate set while accepting recovered producer outcomes", () => {

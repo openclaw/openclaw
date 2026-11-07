@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  collectMessagingMediaUrlsFromRecord,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
 import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
 
 describe("extractToolResultMediaArtifact", () => {
+  it("preserves explicit message attachments independently of inspection privacy", () => {
+    expect(collectMessagingMediaUrlsFromRecord({ media: "/tmp/shared.png" })).toEqual([
+      "/tmp/shared.png",
+    ]);
+  });
+
   it("does not deliver explicitly private image results", () => {
     expect(
       extractToolResultMediaArtifact({
@@ -13,6 +20,14 @@ describe("extractToolResultMediaArtifact", () => {
         details: { path: "/tmp/browser-screenshot.png", media: { outbound: false } },
       }),
     ).toBeUndefined();
+  });
+
+  it.each([true, undefined])("preserves deliberate outbound media (outbound=%s)", (outbound) => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: { media: { mediaUrl: "/tmp/shared.png", outbound } },
+      }),
+    ).toEqual({ mediaUrls: ["/tmp/shared.png"] });
   });
 
   it("aligns generated attachment metadata with deduplicated media references", () => {

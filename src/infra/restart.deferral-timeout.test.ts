@@ -14,7 +14,7 @@ import {
   resetGatewayRestartStateForInProcessRestart,
   scheduleGatewayRestart,
   setPreRestartDeferralCheck,
-} from "./restart.js";
+} from "./restart-runtime.js";
 
 type RestartDeferralHooks = NonNullable<
   Parameters<typeof deferGatewayRestartUntilIdle>[0]["hooks"]
@@ -172,25 +172,34 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     root?.release();
   });
 
-  it("reopens admission when a blocked preparation is cancelled", async () => {
-    const { promise: preparation, resolve: releasePreparation } = createDeferred();
-    const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
-    const handle = deferGatewayRestartUntilIdle({
-      getPendingCount: () => 0,
-      emitHooks: {
-        beforeEmit: async () => await preparation,
-        emitRestart,
-      },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(isGatewayWorkAdmissionClosed()).toBe(true);
+  it.each(["beforeEmit", "prepareEmission"] as const)(
+    "cancels blocked %s without emitting after it settles",
+    async (preparationPhase) => {
+      const { promise: preparation, resolve: releasePreparation } = createDeferred();
+      const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
+      const handle = deferGatewayRestartUntilIdle({
+        getPendingCount: () => 0,
+        ...(preparationPhase === "prepareEmission"
+          ? { prepareEmission: async () => await preparation }
+          : {}),
+        emitHooks: {
+          ...(preparationPhase === "beforeEmit"
+            ? { beforeEmit: async () => await preparation }
+            : {}),
+          emitRestart,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(isGatewayWorkAdmissionClosed()).toBe(preparationPhase === "beforeEmit");
 
-    handle.cancel();
-    expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    releasePreparation?.();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(emitRestart).not.toHaveBeenCalled();
-  });
+      handle.cancel();
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
+      releasePreparation?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(emitRestart).not.toHaveBeenCalled();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    },
+  );
 
   it("reopens admission when a prepared restart is superseded", async () => {
     deferGatewayRestartUntilIdle({

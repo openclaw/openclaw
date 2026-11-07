@@ -61,6 +61,122 @@ function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]
   });
 }
 
+describe("completed host command with unconfirmed descendants", () => {
+  it.each([0, 3])("preserves exit %s and authoritative cleanup uncertainty", async (exitCode) => {
+    const cleanupScope = createAgentCleanupScope();
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+      ...runtimeManagedRun(input, "command output\n"),
+      cancel: () => input.onCancel?.("manual-cancel"),
+      wait: async () => createRunExit({ exitCode }),
+      waitForExtinction: async () => {
+        throw new Error("descendant extinction unconfirmed");
+      },
+    }));
+    await cleanupScope.run(async () => {
+      const run = await runTestExecProcess({});
+      const outcome = await run.promise;
+      expect(outcome).toMatchObject({ status: "completed", exitCode, exitReason: "exit" });
+      expect(outcome.aggregated).toContain("command output");
+      expect(outcome.aggregated).toContain("could not confirm");
+      expect(outcome.aggregated).toContain("background: true");
+      if (exitCode !== 0) {
+        expect(outcome.aggregated).toContain(`Command exited with code ${exitCode}`);
+      }
+      expect(run.session.finalizationFailed).toBe(true);
+      expect(run.session.cancellationRequested).not.toBe(true);
+    });
+    expect(cleanupScope.outcome).toBe("uncertain");
+  });
+
+  it.each([
+    "kill",
+    "kill without callback",
+    "operator revoke",
+    "supervisor cancellation",
+    "pre-spawn cancellation",
+  ])("does not preserve completion after %s during descendant cleanup", async (cancellation) => {
+    const entered = createDeferred();
+    const extinction = createDeferred();
+    let spawnInput: SpawnInput | undefined;
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
+      spawnInput = input;
+      if (cancellation === "pre-spawn cancellation") {
+        input.onCancel?.("manual-cancel");
+      }
+      return {
+        ...runtimeManagedRun(input),
+        cancel: () => {
+          if (cancellation !== "kill without callback") {
+            input.onCancel?.("manual-cancel");
+          }
+        },
+        waitForExtinction: async () => {
+          entered.resolve();
+          await extinction.promise;
+          throw new Error("descendant extinction unconfirmed");
+        },
+      };
+    });
+    const controller = new AbortController();
+    const authority = createAdmittedRunOperatorAuthority({
+      profileId: "cleanup-fixture",
+      scopes: ["operator.write"],
+      signal: controller.signal,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+    });
+    const run = await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:descendant-cleanup",
+        operatorAuthority: authority,
+      },
+      () => runTestExecProcess({}),
+    );
+    try {
+      await entered.promise;
+      if (cancellation === "kill" || cancellation === "kill without callback") {
+        run.kill();
+      } else if (cancellation === "operator revoke") {
+        controller.abort();
+      } else if (cancellation !== "pre-spawn cancellation") {
+        spawnInput?.onCancel?.("manual-cancel");
+      }
+      expect(run.session.cancellationRequested).toBe(true);
+      extinction.resolve();
+      expect(await run.promise).toMatchObject({ status: "failed", failureKind: "runtime-error" });
+      expect(run.session.finalizationFailed).toBe(true);
+    } finally {
+      extinction.resolve();
+      await run.promise;
+    }
+  });
+
+  it.each([
+    { exitCode: 127, reason: "exit" as const, timedOut: false },
+    { exitCode: null, reason: "overall-timeout" as const, timedOut: true },
+    { exitCode: null, reason: "manual-cancel" as const, timedOut: false },
+  ])("retains failed $reason / $exitCode and cleanup failure", async (exit) => {
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+      ...runtimeManagedRun(input),
+      cancel: () => input.onCancel?.("manual-cancel"),
+      wait: async () => createRunExit(exit),
+      waitForExtinction: async () => {
+        throw new Error("descendant extinction unconfirmed");
+      },
+    }));
+    const run = await runTestExecProcess({});
+    const outcome = await run.promise;
+    expect(outcome).toMatchObject({
+      status: "failed",
+      exitCode: exit.exitCode,
+      timedOut: exit.timedOut,
+      exitReason: exit.reason,
+    });
+    expect(outcome.aggregated).toContain("descendant extinction unconfirmed");
+    expect(run.session.finalizationFailed).toBe(true);
+  });
+});
+
 it.each([
   { reason: "manual-cancel" as const, cleanupFails: false, duringFinalize: false },
   { reason: "overall-timeout" as const, cleanupFails: true, duringFinalize: false },

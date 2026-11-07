@@ -129,14 +129,27 @@ async function createNodePhotoResult(params: {
     content.push({ type: "text", text: "No photos found." });
   }
   const mediaUrls = details.map((entry) => entry.path);
-  return await sanitizeToolResultImages(
+  const sanitized = await sanitizeToolResultImages(
     {
       content,
-      details: details.length > 0 ? { [params.kind]: details, media: { mediaUrls } } : [],
+      details:
+        details.length > 0 ? { [params.kind]: details, media: { mediaUrls, outbound: false } } : [],
     },
     params.kind === "snaps" ? "nodes:camera_snap" : "nodes:photos_latest",
     params.imageSanitization,
   );
+  // Vision results omit per-photo text; retain saved paths even if sanitization
+  // drops the images, without claiming that dropped images reached the model.
+  if (content.some((block) => block.type === "image") && details.length > 0) {
+    const retainedImageCount = sanitized.content.filter((block) => block.type === "image").length;
+    const savedPaths = details.map((entry) => JSON.stringify(entry.path)).join(", ");
+    const text =
+      retainedImageCount > 0
+        ? `Loaded ${retainedImageCount} photo${retainedImageCount === 1 ? "" : "s"} into private model context for inspection; not attached or sent to the user. Saved to ${savedPaths}. Share explicitly only when the user asks.`
+        : `Photo${details.length === 1 ? "" : "s"} saved to ${savedPaths}; not attached or sent to the user. Share explicitly only when the user asks.`;
+    return { ...sanitized, content: [...sanitized.content, { type: "text", text }] };
+  }
+  return sanitized;
 }
 
 async function executeCameraSnap({
@@ -397,6 +410,8 @@ async function executeScreenSnapshot({
       height: payload.height,
       media: {
         mediaUrl: written.path,
+        // Inspection is private; the FILE: path still supports explicit sharing.
+        outbound: false,
       },
     },
   };

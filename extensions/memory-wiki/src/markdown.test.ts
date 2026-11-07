@@ -143,34 +143,37 @@ describe("human Notes blocks", () => {
     expect(preserveHumanNotesBlock(rendered, existing)).toBe(existing);
   });
 
-  it("ignores source-body marker pairs when extracting and preserving actual Notes", () => {
-    const sourceWithMarkers = [
-      "# Source",
-      "",
-      "## Content",
-      "```text",
-      startMarker,
-      "Generated source annotation",
-      endMarker,
-      "```",
-      "",
-      "## Notes",
-      startMarker,
-      "Durable human annotation",
-      endMarker,
-      "",
-    ].join("\n");
+  it.each(["source content", "ChatGPT transcript"])(
+    "ignores %s marker examples when extracting and preserving actual Notes",
+    (section) => {
+      const sourceWithMarkers = [
+        "# Source",
+        "",
+        section === "source content" ? "## Content" : "## Active Branch Transcript",
+        "```text",
+        startMarker,
+        "Generated source annotation",
+        endMarker,
+        "```",
+        "",
+        "## Notes",
+        startMarker,
+        "Durable human annotation",
+        endMarker,
+        "",
+      ].join("\n");
 
-    expect(extractHumanNotesBlock(sourceWithMarkers)).toBe(
-      `${startMarker}\nDurable human annotation\n${endMarker}`,
-    );
-    expect(preserveHumanNotesBlock(rendered, sourceWithMarkers)).toBe(
-      rendered.replace(
-        `${startMarker}\n${endMarker}`,
+      expect(extractHumanNotesBlock(sourceWithMarkers)).toBe(
         `${startMarker}\nDurable human annotation\n${endMarker}`,
-      ),
-    );
-  });
+      );
+      expect(preserveHumanNotesBlock(rendered, sourceWithMarkers)).toBe(
+        rendered.replace(
+          `${startMarker}\n${endMarker}`,
+          `${startMarker}\nDurable human annotation\n${endMarker}`,
+        ),
+      );
+    },
+  );
 });
 
 describe("toWikiPageSummary", () => {

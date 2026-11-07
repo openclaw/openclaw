@@ -24,10 +24,6 @@ function normalizeAllowFrom(raw: unknown): string[] {
   return normalizeUniqueStringEntries(Array.isArray(raw) ? raw : []);
 }
 
-function readGroupAllowFrom(record: ChannelRecord): string[] {
-  return normalizeAllowFrom(record.groupAllowFrom);
-}
-
 function readDmAllowFrom(params: {
   channelName: string;
   account: ChannelRecord;
@@ -104,24 +100,25 @@ function migrateRecord(params: {
   canWriteGroupAllowFrom: boolean;
   channelName: string;
   changes: string[];
+  defaultGroupPolicy?: unknown;
   parent?: ChannelRecord;
   parentHadGroupAllowFrom?: boolean;
   prefix: string;
 }): boolean {
-  if (!params.canWriteGroupAllowFrom) {
-    return false;
-  }
-  if (readGroupAllowFrom(params.account).length > 0) {
-    return false;
-  }
-  if (params.parent && params.parentHadGroupAllowFrom) {
+  if (
+    !params.canWriteGroupAllowFrom ||
+    Array.isArray(params.account.groupAllowFrom) ||
+    params.parentHadGroupAllowFrom ||
+    (params.account.groupPolicy ?? params.parent?.groupPolicy ?? params.defaultGroupPolicy) ===
+      "disabled"
+  ) {
     return false;
   }
   const ownAllowFrom = readDmAllowFrom({
     channelName: params.channelName,
     account: params.account,
   });
-  if (params.parent && ownAllowFrom.length === 0 && readGroupAllowFrom(params.parent).length > 0) {
+  if (Array.isArray(params.parent?.groupAllowFrom) && ownAllowFrom.length === 0) {
     return false;
   }
   const allowFrom = readDmAllowFrom(params);
@@ -165,7 +162,7 @@ export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
       continue;
     }
 
-    const hadGroupAllowFrom = readGroupAllowFrom(channelConfig).length > 0;
+    const hadGroupAllowFrom = Array.isArray(channelConfig.groupAllowFrom);
     const canWriteChannelGroupAllowFrom = generatedSchemaAllowsGroupAllowFrom(
       channelName,
       CHANNEL_GROUP_ALLOW_FROM_PATH,
@@ -175,6 +172,7 @@ export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
       canWriteGroupAllowFrom: canWriteChannelGroupAllowFrom,
       channelName,
       changes,
+      defaultGroupPolicy: nextChannels.defaults?.groupPolicy,
       prefix: `channels.${channelName}`,
     });
 
@@ -196,6 +194,7 @@ export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
         canWriteGroupAllowFrom: canWriteAccountGroupAllowFrom,
         channelName,
         changes,
+        defaultGroupPolicy: nextChannels.defaults?.groupPolicy,
         parent: channelConfig,
         parentHadGroupAllowFrom: hadGroupAllowFrom,
         prefix: `channels.${channelName}.accounts.${accountId}`,

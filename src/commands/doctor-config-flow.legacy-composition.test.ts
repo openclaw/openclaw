@@ -33,6 +33,26 @@ async function repairConfig(configPath: string) {
 describe("Doctor legacy config composition", () => {
   afterEach(() => closeOpenClawStateDatabaseForTest());
 
+  it("preserves explicitly empty group allowlists through Doctor persistence", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const configPath = await writeOpenClawConfig(home, {
+          agents: { list: [{ id: "main" }] },
+          gateway: { mode: "local" },
+          channels: {
+            telegram: { allowFrom: ["123456789"], groupAllowFrom: [], groupPolicy: "allowlist" },
+          },
+          plugins: { enabled: false },
+        });
+        await repairConfig(configPath);
+        const first = await fs.readFile(configPath, "utf8");
+        expect(JSON.parse(first).channels.telegram.groupAllowFrom).toEqual([]);
+        expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
+        expect(await fs.readFile(configPath, "utf8")).toBe(first);
+      });
+    });
+  });
+
   it("preserves the July TTS preference locator before retiring its config keys", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       const prefsPath = path.join(home, "speech-preferences.json");

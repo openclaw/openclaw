@@ -84,6 +84,33 @@ function normalizer() {
 }
 
 describe("registered workspace outbound media", () => {
+  it.each(["global", "agent"] as const)(
+    "enforces %s read denial before staging native reply attachments",
+    async (scope) => {
+      const deny = { deny: ["read"] };
+      cfg = {
+        tools: scope === "global" ? deny : undefined,
+        agents: {
+          list: [
+            { id: "writer", workspace: workspaceDir, tools: scope === "agent" ? deny : undefined },
+          ],
+        },
+      };
+      const saved = await saveMediaBuffer(
+        Buffer.from("generated output"),
+        "text/plain",
+        "outbound",
+      );
+      const normalize = normalizer();
+      const blocked = await normalize({ mediaUrl: "output/report.txt" });
+      expect(blocked.mediaUrl).toBeUndefined();
+      expect(blocked.mediaUrls).toBeUndefined();
+      expect(await fs.readdir(path.dirname(saved.path))).toEqual([path.basename(saved.path)]);
+      const managed = await normalize({ mediaUrl: saved.path });
+      expect(await fs.readFile(managed.mediaUrl!, "utf8")).toBe("generated output");
+      expect(remoteRead).not.toHaveBeenCalled();
+    },
+  );
   it.each(["absolute", "relative"])(
     "stages Harness bytes for an ordinary %s reply path without using the document bridge",
     async (kind) => {

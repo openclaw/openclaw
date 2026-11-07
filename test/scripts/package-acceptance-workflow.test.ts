@@ -165,6 +165,14 @@ const FULL_RELEASE_CHILD_DISPATCHES = [
     workflow: "full-release-artifacts.yml",
   },
   {
+    jobName: "prepare_plugin_npm",
+    kind: "plugin-npm-preflight",
+    nonceSuffix: "-plugin-npm-preflight)",
+    runName: `Plugin NPM Artifact Preflight [beta] ${"b".repeat(40)} (`,
+    stepName: "Dispatch exact plugin npm artifact preflight",
+    workflow: "plugin-npm-release.yml",
+  },
+  {
     jobName: "prepare_docker_release",
     kind: "artifact-docker",
     nonceSuffix: "-artifacts-docker",
@@ -3556,9 +3564,13 @@ function expectTextToIncludeAll(text: string | undefined, snippets: string[]): v
 function runFullReleaseChildDispatch(
   child: (typeof FULL_RELEASE_CHILD_DISPATCHES)[number],
   overrides: Record<string, string> = {},
+  seal?: { run?: Record<string, unknown>; artifacts?: readonly unknown[]; recover?: boolean },
 ) {
   const job = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, child.jobName);
-  const step = workflowStep(job, child.stepName);
+  const step = workflowStep(
+    job,
+    seal ? "Resolve and seal exact plugin npm artifact descriptor" : child.stepName,
+  );
   const script = step.run;
   if (!script) {
     throw new Error(`Expected full release child dispatch script for ${child.jobName}`);
@@ -3578,12 +3590,16 @@ function runFullReleaseChildDispatch(
     CANDIDATE_ARTIFACT_JSON: "",
     CANDIDATE_REQUEST_JSON: '{"targetSha":"' + "b".repeat(40) + '"}',
     CHILD_WORKFLOW_KIND: child.kind,
-    CHILD_WORKFLOW_REF: "main",
+    CHILD_WORKFLOW_REF: seal ? `release-ci/${parentSha.slice(0, 12)}-77` : "main",
     CI_RELEASE_SCOPE: "full",
     CODEX_PLUGIN_SPEC: "",
     CROSS_OS_SUITE_FILTER: "",
+    DISPATCH_ID: `full-release-validation-77-1-${child.kind}`,
+    DISPATCH_RUN_ID: seal?.recover ? "" : "101",
+    DISPATCH_RUN_ATTEMPT: "1",
     EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
     QUALIFICATION_BASELINES_JSON: "",
+    QUALIFICATION_INPUTS_JSON: "",
     FAIL_FAST: "false",
     GH_TOKEN: "fixture-token",
     LIVE_SUITE_FILTER: "",
@@ -3596,6 +3612,8 @@ function runFullReleaseChildDispatch(
     PREPARED_NPM_BUNDLE_JSON: '{"schema":"openclaw.prepared-npm-bundle/v1"}',
     PHASE: child.jobName.endsWith("_candidate") ? "candidate" : "independent",
     PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: "[]",
+    PLUGIN_PUBLISH_SCOPE: "all-publishable",
+    PLUGINS: "",
     PROVIDER: "openai",
     PROVIDER_MODE: "mock-openai",
     RELEASE_PACKAGE_SPEC: "",
@@ -3610,7 +3628,7 @@ function runFullReleaseChildDispatch(
     LANE_WAIVER: "",
     TARGET_CONTEXT_REF: "",
     TARGET_REF: "main",
-    TARGET_SHA: "b".repeat(40),
+    TARGET_SHA: seal ? parentSha : "b".repeat(40),
   };
   const stepEnv = Object.fromEntries(
     Object.keys({ ...job.env, ...step.env }).map((name) => {
@@ -3628,7 +3646,7 @@ function runFullReleaseChildDispatch(
       "HTTP 5[0-9][0-9]",
     GITHUB_OUTPUT: resolve(workdir, "github-output"),
     GITHUB_REPOSITORY: "openclaw/openclaw",
-    GITHUB_RUN_ATTEMPT: "2",
+    GITHUB_RUN_ATTEMPT: seal?.recover ? "2" : child.kind === "plugin-npm-preflight" ? "1" : "2",
     GITHUB_RUN_ID: "77",
     GITHUB_STEP_SUMMARY: resolve(workdir, "github-summary"),
     MOCK_GH_CALLS: callsPath,
@@ -3645,8 +3663,22 @@ function runFullReleaseChildDispatch(
     MOCK_GH_RUN_ID: "101",
     MOCK_GH_RUN_PATH: `.github/workflows/${child.workflow}`,
     MOCK_GH_RUN_ATTEMPT: "1",
-    MOCK_GH_RUN_TITLE: `${child.runName} full-release-validation-77-2${child.nonceSuffix}`,
+    MOCK_GH_RUN_TITLE:
+      child.kind === "plugin-npm-preflight"
+        ? `Plugin NPM Artifact Preflight [beta] ${stepValues.TARGET_SHA} (${stepValues.DISPATCH_ID})`
+        : `${child.runName} full-release-validation-77-2${child.nonceSuffix}`,
     MOCK_GH_RUN_TITLES: "[]",
+    MOCK_GH_ARTIFACTS: JSON.stringify({
+      artifacts: seal?.artifacts ?? [
+        {
+          id: 456,
+          name: `plugin-npm-prepared-${stepValues.TARGET_SHA}-101-${Number(seal?.run?.run_attempt ?? 1)}`,
+          digest: "sha256:" + "c".repeat(64),
+          size_in_bytes: 123,
+          expired: false,
+        },
+      ],
+    }),
     MOCK_GH_RUN_WORKFLOW_ID: "789",
     MOCK_GH_STATUSES: '["completed"]',
     MOCK_GH_STATUS_POLLS: statusPath,
@@ -3661,6 +3693,8 @@ function runFullReleaseChildDispatch(
     { length: Math.max(statuses.length, titles.length, 1) },
     (_, index) =>
       JSON.stringify({
+        repository: { full_name: "openclaw/openclaw" },
+        head_repository: { full_name: "openclaw/openclaw" },
         conclusion: env.MOCK_GH_CONCLUSION,
         display_title:
           titles.length > 0 ? titles[Math.min(index, titles.length - 1)] : env.MOCK_GH_RUN_TITLE,
@@ -3673,8 +3707,13 @@ function runFullReleaseChildDispatch(
         run_attempt: Number(env.MOCK_GH_RUN_ATTEMPT),
         status: statuses[Math.min(index, statuses.length - 1)],
         workflow_id: Number(env.MOCK_GH_RUN_WORKFLOW_ID),
+        ...seal?.run,
       }),
   );
+  // Recovery finds the original dispatch, including a prior successful attempt;
+  // the current run endpoint below remains authoritative for the seal.
+  const originalRun = { ...JSON.parse(observations[0]!), run_attempt: 1, conclusion: "success" };
+  const recoveryRuns = JSON.stringify({ workflow_runs: [originalRun] });
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   writeFileSync(
     ghPath,
@@ -3691,6 +3730,9 @@ fi
 if [ "$1" = api ]; then
   for arg in "$@"; do
     case "$arg" in
+      */actions/runs/*/artifacts?*) printf '%s\\n' "$MOCK_GH_ARTIFACTS"; exit 0 ;;
+      */actions/workflows/*/runs?*) printf '%s\\n' ${quote(recoveryRuns)}; exit 0 ;;
+      */actions/runs/*/attempts/1) printf '%s\\n' ${quote(JSON.stringify(originalRun))}; exit 0 ;;
       */commits/*) printf '%s\\n' "$MOCK_GH_CURRENT_SHA"; exit 0 ;;
       */actions/workflows/*/runs) printf '%s\\n' "$MOCK_GH_MATCHES"; exit 0 ;;
       */actions/workflows/*) printf '%s\\n' "$MOCK_GH_WORKFLOW_ID"; exit 0 ;;
@@ -3729,7 +3771,8 @@ exit 2
     calls.push({ args: fields.slice(cursor, cursor + argc), childWorkflowRef, dispatchRunName });
     cursor += argc;
   }
-  return { calls, result };
+  const output = existsSync(env.GITHUB_OUTPUT) ? readFileSync(env.GITHUB_OUTPUT, "utf8") : "";
+  return { calls, result, output };
 }
 
 function fullReleaseChild(kind: string) {
@@ -5931,7 +5974,9 @@ esac
       );
       expect(planner["working-directory"]).toBeUndefined();
     }
-    expect(identity.if).toBe("github.event_name == 'workflow_dispatch'");
+    expect(identity.if).toBe(
+      "github.event_name == 'workflow_dispatch' && inputs.qualification_inputs_json == ''",
+    );
     expect(identity.env).toMatchObject({
       GH_TOKEN: "${{ github.token }}",
       WORKFLOW_FULL_REF: "${{ github.ref }}",
@@ -8911,7 +8956,12 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(releaseChecksWorkflow).toContain(
       "codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}",
     );
-    expect(workflow).toContain("full-release-validation-state.mjs verify");
+    expect(
+      workflowStep(
+        workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary"),
+        "Verify exact release state artifacts",
+      ).run,
+    ).toBe('node "$RELEASE_STATE_SCRIPT" verify');
     expect(workflow).toContain(
       'gh_with_retry api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}" --jq .sha',
     );
@@ -8967,7 +9017,7 @@ test "$package_manager" = "pnpm@12.1.0"
       "Release impact: selected execution failures are blocking",
     ]);
     expect(summaryStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
-    expect(summaryStep.run).toBe("node scripts/full-release-validation-state.mjs verify");
+    expect(summaryStep.run).toBe('node "$RELEASE_STATE_SCRIPT" verify');
     const manifestStep = workflowStep(
       workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary"),
       "Write release validation manifest",
@@ -8975,10 +9025,11 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(manifestStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
     expect(manifestStep.env?.STABLE_SOAK_WAIVER).toBeUndefined();
     expect(manifestStep.env?.GH_TOKEN).toBe("${{ github.token }}");
-    expect(manifestStep.env?.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR).toContain(
-      "qualification-verifier/scripts/release-ci-summary.mjs",
-    );
-    expect(manifestStep.run).toBe("node scripts/full-release-validation-state.mjs write-manifest");
+    expect(
+      workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary").env
+        ?.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR,
+    ).toContain("qualification-verifier/scripts/release-ci-summary.mjs");
+    expect(manifestStep.run).toBe('node "$RELEASE_STATE_SCRIPT" write-manifest');
   });
 
   it("routes publication controls through the trusted shared gate", () => {
@@ -9016,7 +9067,7 @@ test "$package_manager" = "pnpm@12.1.0"
       const job = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, child.jobName);
       const step = workflowStep(job, child.stepName);
       expect(step.env?.CHILD_WORKFLOW_KIND ?? job.env?.CHILD_WORKFLOW_KIND).toBe(child.kind);
-      if (child.kind.startsWith("artifact-")) {
+      if (child.kind.startsWith("artifact-") || child.kind === "plugin-npm-preflight") {
         expect(step.if).toBe("github.run_attempt == 1");
       } else {
         expect(job["timeout-minutes"]).toBe(15);
@@ -9043,6 +9094,142 @@ test "$package_manager" = "pnpm@12.1.0"
       expect(script).not.toContain("gh run cancel");
       expect(script).not.toContain("fail_fast_failed_jobs");
     }
+  });
+
+  it("dispatches plugin artifact qualification with exact source, selection and admitted inputs", () => {
+    const admissionInputs = JSON.stringify({ trusted_workflow_json: "original-envelope" });
+    const { calls, result } = runFullReleaseChildDispatch(
+      fullReleaseChild("plugin-npm-preflight"),
+      {
+        QUALIFICATION_INPUTS_JSON: admissionInputs,
+        PLUGIN_PUBLISH_SCOPE: "selected",
+        PLUGINS: "@openclaw/demo",
+        NPM_DIST_TAG: "extended-stable",
+        MOCK_GH_RUN_TITLE: `Plugin NPM Artifact Preflight [extended-stable] ${"b".repeat(40)} (full-release-validation-77-1-plugin-npm-preflight)`,
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const dispatch = calls.find(({ args }) => args[0] === "workflow")!;
+    expect(dispatch.args).toEqual(
+      expect.arrayContaining([
+        "plugin-npm-release.yml",
+        "ref=" + "b".repeat(40),
+        "publish_scope=selected",
+        "plugins=@openclaw/demo",
+        "preflight_only=true",
+        "trusted_publisher_preflight=false",
+        "qualification_inputs_json=" + admissionInputs,
+      ]),
+    );
+  });
+
+  it("wires the immutable plugin nonce and descriptor into the manifest", () => {
+    const job = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "prepare_plugin_npm");
+    expect(job.env?.DISPATCH_ID).toBe(
+      "full-release-validation-${{ github.run_id }}-1-plugin-npm-preflight",
+    );
+    expect(job.outputs?.descriptor_json).toBe("${{ steps.prepared.outputs.descriptor_json }}");
+    expect(
+      workflowStep(
+        workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary"),
+        "Write release validation manifest",
+      ).env?.PREPARED_PLUGIN_NPM_JSON,
+    ).toBe("${{ needs.prepare_plugin_npm.outputs.descriptor_json }}");
+  });
+
+  it("seals the exact successful plugin artifact producer tuple", () => {
+    const { result, output } = runFullReleaseChildDispatch(
+      fullReleaseChild("plugin-npm-preflight"),
+      {},
+      {},
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const descriptor = JSON.parse(output.split("descriptor_json=")[1]!.trim());
+    expect(descriptor).toEqual({
+      repository: "openclaw/openclaw",
+      runId: 101,
+      runAttempt: 1,
+      workflowPath: ".github/workflows/plugin-npm-release.yml",
+      workflowEvent: "workflow_dispatch",
+      workflowHeadBranch: "release-ci/aaaaaaaaaaaa-77",
+      workflowSha: "a".repeat(40),
+      artifactId: 456,
+      artifactName: `plugin-npm-prepared-${"a".repeat(40)}-101-1`,
+      artifactDigest: "sha256:" + "c".repeat(64),
+      artifactSizeBytes: 123,
+    });
+  });
+
+  it.each([
+    ["workflow path", { run: { path: ".github/workflows/ci.yml" } }, 1],
+    ["head repository", { run: { head_repository: { full_name: "other/fork" } } }, 1],
+    ["Q SHA", { run: { head_sha: "d".repeat(40) } }, 1],
+    ["missing artifact", { artifacts: [] }, 5],
+    ...["expired", "duplicate", "digest", "size"].map((fault) => {
+      const artifact = {
+        id: 456,
+        name: `plugin-npm-prepared-${"a".repeat(40)}-101-1`,
+        digest: fault === "digest" ? "sha256:invalid" : "sha256:" + "c".repeat(64),
+        size_in_bytes: fault === "size" ? 0 : 123,
+        expired: fault === "expired",
+      };
+      return [
+        fault,
+        { artifacts: fault === "duplicate" ? [artifact, { ...artifact, id: 457 }] : [artifact] },
+        fault === "expired" || fault === "duplicate" ? 5 : 1,
+      ] as const;
+    }),
+  ] as const)("rejects plugin artifact seal with %s", (_name, seal, exitCode) => {
+    const { result, output } = runFullReleaseChildDispatch(
+      fullReleaseChild("plugin-npm-preflight"),
+      {},
+      seal,
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.status, result.stderr).toBe(exitCode);
+    expect(output).not.toContain("descriptor_json=");
+  });
+
+  it("refuses a failed current attempt without falling back to prior success", () => {
+    const { result, output, calls } = runFullReleaseChildDispatch(
+      fullReleaseChild("plugin-npm-preflight"),
+      {},
+      { recover: true, run: { run_attempt: 2, conclusion: "failure" } },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("Plugin npm artifact preflight 101 failed.");
+    expect(output).not.toContain("descriptor_json=");
+    expect(calls.some(({ args }) => args.some((arg) => /\/attempts\/1(?:[/?]|$)/u.test(arg)))).toBe(
+      false,
+    );
+  });
+
+  it("recovers the original plugin dispatch nonce and seals its current successful attempt without redispatch", () => {
+    const { result, output, calls } = runFullReleaseChildDispatch(
+      fullReleaseChild("plugin-npm-preflight"),
+      {},
+      {
+        recover: true,
+        run: { run_attempt: 2 },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(calls.some(({ args }) => args[0] === "workflow")).toBe(false);
+    expect(
+      calls.some(({ args }) =>
+        args.some((arg) => arg.includes("/actions/workflows/plugin-npm-release.yml/runs?")),
+      ),
+    ).toBe(true);
+    const descriptor = JSON.parse(output.split("descriptor_json=")[1]!.trim());
+    expect(descriptor).toMatchObject({
+      runId: 101,
+      runAttempt: 2,
+      artifactName: `plugin-npm-prepared-${"a".repeat(40)}-101-2`,
+    });
+    expect(calls.some(({ args }) => args.some((arg) => arg.includes("/attempts/1")))).toBe(false);
   });
 
   it.each(
@@ -9230,6 +9417,7 @@ test "$package_manager" = "pnpm@12.1.0"
       "resolve_target",
       "prepare_npm_package",
       "qualify_npm_package",
+      "prepare_plugin_npm",
       "prepare_docker_release",
       "release_execution_plan",
     ];
@@ -9247,7 +9435,7 @@ test "$package_manager" = "pnpm@12.1.0"
       FULL_RELEASE_STATE_MODE: "drain",
     });
     expectTextToIncludeAll(decisionStep.run, [
-      'node scripts/full-release-validation-state.mjs "$FULL_RELEASE_STATE_MODE"',
+      'node "$RELEASE_STATE_SCRIPT" "$FULL_RELEASE_STATE_MODE"',
     ]);
     expect(planStep.run).toContain("FULL_RELEASE_PLAN_INPUTS_JSON");
     expect(planStep.env).toMatchObject({
@@ -9304,7 +9492,7 @@ test "$package_manager" = "pnpm@12.1.0"
       path: "${{ runner.temp }}/full-release-diagnostic-attempts",
       pattern: "full-release-diagnostics-${{ github.run_id }}-*",
     });
-    expect(selectState.run).toBe("node scripts/full-release-validation-state.mjs select");
+    expect(selectState.run).toBe('node "$RELEASE_STATE_SCRIPT" select');
     expect(summary.needs).toEqual(expect.arrayContaining(["release_decision", "diagnostic_drain"]));
     for (const jobId of [
       "normal_ci",
@@ -9881,6 +10069,9 @@ describe("package artifact reuse", () => {
       ...process.env,
       NPM_PREPARE_RESULT: "success",
       NPM_QUALIFY_RESULT: "success",
+      PLUGIN_NPM_REQUIRED: "false",
+      PLUGIN_NPM_PREPARE_RESULT: "skipped",
+      PREPARED_PLUGIN_NPM_JSON: "",
       QUALIFIED_NPM_BUNDLE_JSON: "{}",
       DOCKER_PREPARE_RESULT: "success",
       PREPARED_DOCKER_MANIFEST_SHA256: "a".repeat(64),
@@ -9902,6 +10093,24 @@ describe("package artifact reuse", () => {
           }).status,
         ).not.toBe(0);
       }
+    }
+    const selectedPlugins = {
+      ...env,
+      PLUGIN_NPM_REQUIRED: "true",
+      PLUGIN_NPM_PREPARE_RESULT: "success",
+      PREPARED_PLUGIN_NPM_JSON: "{}",
+    };
+    expect(spawnSync("bash", ["-c", gate.run ?? ""], { env: selectedPlugins }).status).toBe(0);
+    for (const missingPluginEvidence of [
+      { PLUGIN_NPM_PREPARE_RESULT: "failure" },
+      { PLUGIN_NPM_PREPARE_RESULT: "skipped" },
+      { PREPARED_PLUGIN_NPM_JSON: "" },
+    ]) {
+      expect(
+        spawnSync("bash", ["-c", gate.run ?? ""], {
+          env: { ...selectedPlugins, ...missingPluginEvidence },
+        }).status,
+      ).not.toBe(0);
     }
   });
 
@@ -13775,12 +13984,12 @@ describe("package artifact reuse", () => {
       NPM_TELEGRAM_SCENARIO: "${{ inputs.npm_telegram_scenario }}",
       SKIP_PACKAGE_TELEGRAM_E2E: "${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}",
     });
-    expect(manifestStep.run).toBe("node scripts/full-release-validation-state.mjs write-manifest");
+    expect(manifestStep.run).toBe('node "$RELEASE_STATE_SCRIPT" write-manifest');
     expect(verificationStep.env).toMatchObject({
       RELEASE_PROFILE: "${{ inputs.release_profile }}",
       RERUN_GROUP: "${{ inputs.rerun_group }}",
     });
-    expect(verificationStep.run).toBe("node scripts/full-release-validation-state.mjs verify");
+    expect(verificationStep.run).toBe('node "$RELEASE_STATE_SCRIPT" verify');
     expectTextToIncludeAll(dispatchStep.run, [
       'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-npm-telegram"',
       'dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"',
@@ -13802,7 +14011,7 @@ describe("package artifact reuse", () => {
       "cancel-in-progress: false",
       "FULL_RELEASE_PLAN_INPUTS_JSON",
       "full-release-validation-policy.mjs",
-      "full-release-validation-state.mjs verify",
+      'run: node "$RELEASE_STATE_SCRIPT" verify',
       'FAIL_FAST: "false"',
       "NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}",
     ]);

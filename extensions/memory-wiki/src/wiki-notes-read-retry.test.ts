@@ -5,7 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyMemoryWikiMutation } from "./apply.js";
-import { importChatGptConversations } from "./chatgpt-import.js";
+import { importChatGptConversations, rollbackChatGptImportRun } from "./chatgpt-import.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { buildSourcePage } from "./source-page.test-helpers.js";
@@ -52,7 +52,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
 
-async function createChatGptImportFixture(prefix: string) {
+async function createChatGptImportFixture(prefix: string, assistant = "Noted.") {
   const { rootDir, config } = await createVault({ prefix });
   const exportDir = path.join(rootDir, "chatgpt-export");
   await fs.mkdir(exportDir, { recursive: true });
@@ -78,7 +78,7 @@ async function createChatGptImportFixture(prefix: string) {
             parent: "user-1",
             message: {
               author: { role: "assistant" },
-              content: { parts: ["Noted."] },
+              content: { parts: [assistant] },
             },
           },
         },
@@ -460,34 +460,89 @@ describe("memory-wiki existing-page read retry", () => {
     expect(after).toContain(userNote);
   });
 
-  it("preserves chatgpt conversation notes containing replacement-pattern dollar sequences", async () => {
+  it("refreshes ChatGPT code examples while preserving exact Notes, Related, and rollback", async () => {
+    const transcript = (version: string) =>
+      [
+        "~~~html",
+        "<!-- openclaw:human:start -->",
+        `Code ${version}`,
+        "<!-- openclaw:human:end -->",
+        "~~~",
+        "Inline: `<!-- openclaw:human:start -->` and `<!-- openclaw:human:end -->`.",
+      ].join("\n");
     const { config, exportDir, pagePath } = await createChatGptImportFixture(
-      "memory-wiki-chatgpt-dollar-notes-",
+      "memory-wiki-chatgpt-code-notes-",
+      transcript("v1"),
     );
-    const userNote = "Energy identity $$E=mc^2$$ and match $& and prefix $` and suffix $' end.";
     const noteBlock = [
       "<!-- openclaw:human:start -->",
-      userNote,
+      "Energy identity $$E=mc^2$$ and match $& and prefix $` and suffix $' end.",
+      "Example marker: <!-- openclaw:human:end -->",
+      "Keep café 🦞 and this trailing handwritten note.",
       "<!-- openclaw:human:end -->",
     ].join("\n");
     const edited = (await fs.readFile(pagePath, "utf8")).replace(
-      "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-      () => noteBlock,
+      "## Notes\n<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+      () => `## Notes\n${noteBlock}`,
     );
     await fs.writeFile(pagePath, edited, "utf8");
+    const related = edited.slice(edited.indexOf("## Related\n"));
+    expect(related).toContain("<!-- openclaw:wiki:related:start -->");
 
-    const second = await importChatGptConversations({
-      config,
-      exportPath: exportDir,
-      nowMs: Date.UTC(2026, 3, 6, 12, 0, 0),
-    });
+    const exportPath = path.join(exportDir, "conversations.json");
+    await fs.writeFile(
+      exportPath,
+      (await fs.readFile(exportPath, "utf8")).replace("Code v1", "Code v2"),
+    );
+    await expect(
+      importChatGptConversations({ config, exportPath: exportDir, dryRun: true }),
+    ).resolves.toMatchObject({ createdCount: 0, updatedCount: 1, skippedCount: 0, dryRun: true });
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(edited);
 
+    const second = await importChatGptConversations({ config, exportPath: exportDir });
+    expect(second).toMatchObject({ createdCount: 0, updatedCount: 1, skippedCount: 0 });
     const after = await fs.readFile(pagePath, "utf8");
-    expect(second.createdCount).toBe(0);
-    expect(second.updatedCount).toBe(0);
-    expect(second.skippedCount).toBe(1);
-    expect(after).toContain(userNote);
+    expect(after).toContain(transcript("v2"));
+    expect(after).not.toContain("Code v1");
+    expect(after).toContain(`## Notes\n${noteBlock}`);
+    expect(after).toContain(related);
+    await expect(
+      importChatGptConversations({ config, exportPath: exportDir }),
+    ).resolves.toMatchObject({ createdCount: 0, updatedCount: 0, skippedCount: 1 });
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(after);
+
+    await expect(
+      rollbackChatGptImportRun({
+        config,
+        runId: expectDefined(second.runId, "updated ChatGPT import run"),
+      }),
+    ).resolves.toMatchObject({ restoredCount: 1, removedCount: 0, preservedPaths: [] });
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(edited);
   });
+
+  it.each(["opening", "closing", "both"])(
+    "refuses ChatGPT re-import with missing %s Notes markers despite transcript examples",
+    async (missing) => {
+      const { config, exportDir, pagePath } = await createChatGptImportFixture(
+        "memory-wiki-chatgpt-malformed-notes-",
+        "```html\n<!-- openclaw:human:start -->\nExample\n<!-- openclaw:human:end -->\n```",
+      );
+      const edited = (await fs.readFile(pagePath, "utf8")).replace(
+        "## Notes\n<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+        [
+          "## Notes",
+          ...(missing === "closing" ? ["<!-- openclaw:human:start -->"] : []),
+          "Keep this handwritten note.",
+          ...(missing === "opening" ? ["<!-- openclaw:human:end -->"] : []),
+        ].join("\n"),
+      );
+      await fs.writeFile(pagePath, edited, "utf8");
+      await expect(importChatGptConversations({ config, exportPath: exportDir })).rejects.toThrow(
+        "Memory Wiki human Notes are missing",
+      );
+      await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(edited);
+    },
+  );
 
   it("leaves a ChatGPT page unchanged after a persistent existing-page read failure", async () => {
     const { config, exportDir, pagePath } = await createChatGptImportFixture(

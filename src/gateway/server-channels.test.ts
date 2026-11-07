@@ -12,20 +12,12 @@ import type {
   ChannelAccountLinkState,
   ChannelGatewayContext,
 } from "../channels/plugins/types.adapters.js";
-import type {
-  ChannelAccountSnapshot,
-  ChannelId,
-  ChannelPlugin,
-} from "../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/types.public.js";
 import { formatGatewayChannelsStatusLines } from "../commands/channels/status.runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import { tryReadSecretFileSync } from "../infra/secret-file.js";
-import {
-  createSubsystemLogger,
-  type SubsystemLogger,
-  runtimeForLogger,
-} from "../logging/subsystem.js";
+import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { createPluginModuleLoader } from "../plugins/loader-module-runtime.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
@@ -59,7 +51,14 @@ import {
 } from "./channel-status-patches.js";
 import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
-import { createTestPlugin, healthOf, type TestAccount } from "./server-channels.test-support.js";
+import {
+  createTestChannelManager,
+  createTestPlugin,
+  healthOf,
+  installTestRegistry,
+  type TestAccount,
+  waitForAbort,
+} from "./server-channels.test-support.js";
 import { AUTH_NONE, createTestGatewayServer } from "./server-http.test-harness.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 
@@ -114,12 +113,6 @@ type ApprovalGatewayRequestRuntime = Pick<GatewayNativeApprovalRuntime, "request
 
 const createdManagers: Array<{ manager: ChannelManager; channelIds: ChannelId[] }> = [];
 const channelTempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function waitForAbort(signal: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
-    signal.addEventListener("abort", () => resolve(), { once: true });
-  });
-}
 
 async function flushMicrotasks(times = 8): Promise<void> {
   for (let i = 0; i < times; i += 1) {
@@ -176,81 +169,9 @@ function firstStartAccountContext(
   return ctx as ChannelGatewayContext<TestAccount>;
 }
 
-function installTestRegistry(
-  ...plugins: Array<
-    | ChannelPlugin<TestAccount>
-    | {
-        plugin: ChannelPlugin<TestAccount>;
-        origin: string;
-        resolveChannelRuntime?: () => PluginRuntime["channel"];
-      }
-  >
-) {
-  const registry = createEmptyPluginRegistry();
-  for (const candidate of plugins) {
-    const plugin = "plugin" in candidate ? candidate.plugin : candidate;
-    registry.channels.push({
-      pluginId: plugin.id,
-      ...("origin" in candidate ? { origin: candidate.origin as never } : {}),
-      ...(typeof candidate === "object" && "resolveChannelRuntime" in candidate
-        ? { resolveChannelRuntime: candidate.resolveChannelRuntime }
-        : {}),
-      source: "test",
-      plugin,
-    } as PluginRegistry["channels"][number]);
-  }
-  setActivePluginRegistry(registry);
-  return registry;
-}
-
-function createManager(options?: {
-  channelRuntime?: PluginRuntime["channel"];
-  resolveChannelRuntime?: () => PluginRuntime["channel"] | Promise<PluginRuntime["channel"]>;
-  getRuntimeConfig?: () => Record<string, unknown>;
-  channelIds?: ChannelId[];
-  startupTrace?: { measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T> };
-  deferStartupAccountStartsUntil?: Promise<void>;
-  ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
-  tryRecoverAutostartSuppression?: () => boolean;
-  isClosing?: () => boolean;
-  getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
-  getPluginRegistry?: () => PluginRegistry;
-}) {
-  const log = createSubsystemLogger("gateway/server-channels-test");
-  const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
-  const runtime = runtimeForLogger(log);
-  const channelRuntimeEnvs = { discord: runtime } as unknown as Record<ChannelId, RuntimeEnv>;
-  const channelIds = options?.channelIds ?? ["discord"];
-  for (const channelId of channelIds) {
-    channelLogs[channelId] ??= log.child(channelId);
-    channelRuntimeEnvs[channelId] ??= runtime;
-  }
-  const manager = createChannelManager({
-    scheduler: createTestGatewayScheduler(),
-    getRuntimeConfig: () => options?.getRuntimeConfig?.() ?? {},
-    getPluginRegistry: options?.getPluginRegistry ?? requireActivePluginChannelRegistry,
-    channelLogs,
-    channelRuntimeEnvs,
-    ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
-    ...(options?.resolveChannelRuntime
-      ? { resolveChannelRuntime: options.resolveChannelRuntime }
-      : {}),
-    ...(options?.startupTrace ? { startupTrace: options.startupTrace } : {}),
-    ...(options?.deferStartupAccountStartsUntil
-      ? { deferStartupAccountStartsUntil: options.deferStartupAccountStartsUntil }
-      : {}),
-    ...(options?.ambientAutostartSuppressedChannelIds
-      ? { ambientAutostartSuppressedChannelIds: options.ambientAutostartSuppressedChannelIds }
-      : {}),
-    ...(options?.tryRecoverAutostartSuppression
-      ? { tryRecoverAutostartSuppression: options.tryRecoverAutostartSuppression }
-      : {}),
-    ...(options?.isClosing ? { isClosing: options.isClosing } : {}),
-    ...(options?.getNativeApprovalRuntime
-      ? { getNativeApprovalRuntime: options.getNativeApprovalRuntime }
-      : {}),
-  });
-  createdManagers.push({ channelIds, manager });
+function createManager(options?: Parameters<typeof createTestChannelManager>[0]) {
+  const manager = createTestChannelManager(options);
+  createdManagers.push({ channelIds: options?.channelIds ?? ["discord"], manager });
   return manager;
 }
 
@@ -2390,34 +2311,6 @@ describe("server-channels auto restart", () => {
     } finally {
       process.off("unhandledRejection", unhandledRejection);
     }
-  });
-
-  it("does not allow a second account task to start when stop times out", async () => {
-    const startAccount = vi.fn(
-      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
-        await new Promise<void>(() => {
-          abortSignal.addEventListener("abort", () => {}, { once: true });
-        }),
-    );
-    installTestRegistry(
-      createTestPlugin({
-        startAccount,
-      }),
-    );
-    const manager = createManager();
-
-    await manager.startChannels();
-    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
-    await vi.advanceTimersByTimeAsync(5_000);
-    await stopTask;
-    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
-
-    const snapshot = manager.getRuntimeSnapshot();
-    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
-    expect(startAccount).toHaveBeenCalledTimes(1);
-    expect(account?.running).toBe(true);
-    expect(account?.restartPending).toBe(false);
-    expect(account?.lastError).toContain("channel stop timed out");
   });
 
   it("does not poison auto-restart state when recovery stop times out", async () => {

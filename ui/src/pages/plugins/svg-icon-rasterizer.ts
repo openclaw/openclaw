@@ -53,7 +53,7 @@ function isSafeSvgAttribute(attribute: Attr): boolean {
     case "stroke-linejoin":
       return /^(?:bevel|miter|round)$/u.test(value);
     case "transform":
-      return /^(?:\s*(?:matrix|rotate|scale|skewX|skewY|translate)\(\s*[0-9eE+.,\s-]+\)\s*)+$/u.test(
+      return /^(?:(?:matrix|rotate|scale|skewX|skewY|translate)\([0-9eE+.,\s-]+\)\s*)+$/u.test(
         value,
       );
     case "cx":

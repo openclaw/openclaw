@@ -1,6 +1,7 @@
 // Nodes tool tests cover gateway-scoped node actions, media payload writing,
 // numeric schema guardrails, and pairing approval scopes.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { extractToolResultMediaArtifact } from "../embedded-agent-tool-media.js";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
@@ -468,6 +469,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
       "/tmp/screen-snapshot.png",
       "ZmFrZQ==",
     );
+    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
     expect(result).toEqual({
       content: [{ type: "text", text: "FILE:/tmp/screen-snapshot.png" }],
       details: {
@@ -478,6 +480,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
         height: 1080,
         media: {
           mediaUrl: "/tmp/screen-snapshot.png",
+          outbound: false,
         },
       },
     });
@@ -602,6 +605,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
       ],
       media: {
         mediaUrls: ["/tmp/camera-front.jpg"],
+        outbound: false,
       },
     });
     expect(JSON.stringify(result?.content ?? [])).not.toContain("MEDIA:");
@@ -710,9 +714,43 @@ describe("createNodesTool screen_record duration guardrails", () => {
       ],
       media: {
         mediaUrls: ["/tmp/photo-1.jpg", "/tmp/photo-2.jpg"],
+        outbound: false,
       },
     });
     expect(JSON.stringify(result?.content ?? [])).not.toContain("MEDIA:");
+  });
+
+  it.each([
+    { modelHasVision: false, retained: false },
+    { modelHasVision: undefined, retained: false },
+    { modelHasVision: true, retained: false },
+    { modelHasVision: true, retained: true },
+  ])("keeps vision photo paths private: %j", async ({ modelHasVision, retained }) => {
+    const photo = {
+      base64: retained
+        ? "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+        : "ZmFrZQ==",
+      format: retained ? "png" : "jpg",
+      width: 1,
+      height: 1,
+    };
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { photos: [photo] } });
+    nodesCameraMocks.parseCameraSnapPayload.mockReturnValueOnce(photo);
+    const result = await createNodesTool({ modelHasVision }).execute("call-private", {
+      action: "photos_latest",
+      node: "macbook",
+    });
+    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
+    expect(result.content.filter((block) => block.type === "image")).toHaveLength(retained ? 1 : 0);
+    const text = result.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+    expect(text).toContain("/tmp/camera.jpg");
+    expect(text.includes("Loaded 1 photo into private model context")).toBe(retained);
+    if (!modelHasVision) {
+      expect(text).toBe("Library photo saved to /tmp/camera.jpg.");
+    }
   });
 
   it("rejects invalid photos_latest limit values before gateway invoke", async () => {

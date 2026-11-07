@@ -7,6 +7,7 @@ Release notes: https://docs.openclaw.ai/releases
 Each release has its complete changelog below. Audited contribution records are retained separately when available.
 
 - [Unreleased](CHANGELOG/Unreleased.md) · [Raw](https://github.com/openclaw/openclaw/raw/refs/heads/main/CHANGELOG/Unreleased.md)
+- [2026.9.37](CHANGELOG/2026.9.37.md) · [Raw](https://github.com/openclaw/openclaw/raw/refs/heads/main/CHANGELOG/2026.9.37.md)
 - [2026.9.36](CHANGELOG/2026.9.36.md) · [Raw](https://github.com/openclaw/openclaw/raw/refs/heads/main/CHANGELOG/2026.9.36.md)
 - [2026.9.35](CHANGELOG/2026.9.35.md) · [Raw](https://github.com/openclaw/openclaw/raw/refs/heads/main/CHANGELOG/2026.9.35.md)
 - [2026.9.34](CHANGELOG/2026.9.34.md) · [Raw](https://github.com/openclaw/openclaw/raw/refs/heads/main/CHANGELOG/2026.9.34.md)

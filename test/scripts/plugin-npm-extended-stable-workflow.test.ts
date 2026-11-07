@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { decodePublicationDispatchEnvelope } from "../../scripts/lib/full-release-publication-inputs.mjs";
 import { PLUGIN_NPM_RELEASE_AUTHORITY_PATHS } from "../../scripts/lib/plugin-publication-candidates.ts";
 import { validateActiveExtendedStableLine } from "../../scripts/openclaw-npm-extended-stable-release.mjs";
 import { createStablePluginNpmBootstrapApproval } from "../../scripts/plugin-npm-bootstrap-approval.mjs";
@@ -597,7 +598,7 @@ if (endpoint === "repos/openclaw/openclaw/compare/${toolingSha}...main") {
           `#!${nodeExecutable}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-const result = require("node:child_process").spawnSync(process.execPath, [process.env.NPM_CLI, "config", "get", "registry"], { env: process.env, encoding: "utf8", timeout: 10_000 });
+const result = require("node:child_process").spawnSync(process.env.NPM_CLI, ["config", "get", "registry"], { env: process.env, encoding: "utf8", timeout: 10_000 });
 if (result.status !== 0) { process.stderr.write(result.stderr); process.exit(result.status ?? 1); }
 fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, bytes: fs.readFileSync(args[1], "utf8"), token: Boolean(process.env.NPM_TOKEN || process.env.NODE_AUTH_TOKEN) }) + "\\n");
 `,
@@ -716,7 +717,88 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
         workflow().jobs?.preview_plugins_npm,
         "Verify trusted preflight or recovery tooling identity",
       ).if,
-    ).toBe("github.event_name == 'workflow_dispatch'");
+    ).toBe("github.event_name == 'workflow_dispatch' && inputs.qualification_inputs_json == ''");
+  });
+
+  it("admits only exact selected artifact qualification, never publication or OIDC", () => {
+    const preview = workflow().jobs?.preview_plugins_npm;
+    const admission = step(preview, "Verify admitted artifact-only qualification");
+    const script = admission
+      .run!.split("<<'NODE'\n")[1]!
+      .split("\nNODE")[0]!
+      .replace(/^import .*;$/gmu, "");
+    const sha = "b".repeat(40);
+    const ref = "release-ci/" + sha.slice(0, 12) + "-123";
+    const envelope = {
+      trustedWorkflow: { sha, ref, fullRef: "refs/heads/" + ref },
+      validationPurpose: "publish",
+      publicationSelection: {
+        route: "normal",
+        npmDistTag: "beta",
+        publishOpenclawNpm: false,
+        pluginPublishScope: "selected",
+        plugins: ["@openclaw/demo"],
+      },
+      qualificationAdmission: { artifactId: 456 },
+    };
+    const inputs = { rerun_group: "all", trusted_workflow_json: JSON.stringify(envelope) };
+    const env = {
+      QUALIFICATION_INPUTS_JSON: JSON.stringify(inputs),
+      PREFLIGHT_ONLY: "true",
+      TRUSTED_PUBLISHER_PREFLIGHT: "false",
+      SOURCE_SHA: sha,
+      RESOLVED_SOURCE_SHA: sha,
+      WORKFLOW_SHA: sha,
+      WORKFLOW_REF: ref,
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      PUBLISH_SCOPE: "selected",
+      RELEASE_PLUGINS: "@openclaw/demo",
+      NPM_DIST_TAG: "default",
+      PREPARED_ARTIFACT: "",
+      RELEASE_PUBLISH_RUN_ID: "",
+      RELEASE_PUBLISH_RUN_ATTEMPT: "",
+      RELEASE_CANDIDATE_BRANCH: "",
+      GITHUB_OUTPUT: "fixture-output",
+    };
+    const invoke = (overrides: Record<string, string> = {}, admissionRejected = false) => {
+      let verified = false;
+      let output = "";
+      runInNewContext(script, {
+        process: { env: { ...env, ...overrides } },
+        decodePublicationDispatchEnvelope,
+        verifyQualificationAdmission: (request: Record<string, unknown>) => {
+          if (admissionRejected) {
+            throw new Error("admission rejected");
+          }
+          expect(request).toMatchObject({
+            candidateSha: sha,
+            qualificationSha: sha,
+            workflowRef: ref,
+            inputs,
+          });
+          verified = true;
+        },
+        appendFileSync: (_path: string, value: string) => {
+          output += value;
+        },
+      });
+      expect(verified).toBe(true);
+      return output;
+    };
+    expect(invoke()).toBe("admitted=true\n");
+    expect(() => invoke({}, true)).toThrow("admission rejected");
+    const deniedOverrides: Array<Record<string, string>> = [
+      { PREFLIGHT_ONLY: "false" },
+      { TRUSTED_PUBLISHER_PREFLIGHT: "true" },
+      { RELEASE_PUBLISH_RUN_ID: "12" },
+      { PREPARED_ARTIFACT: "{}" },
+      { SOURCE_SHA: "a".repeat(40) },
+      { RELEASE_PLUGINS: "@openclaw/other" },
+      { NPM_DIST_TAG: "extended-stable" },
+    ];
+    for (const overrides of deniedOverrides) {
+      expect(() => invoke(overrides)).toThrow();
+    }
   });
 
   it("binds preflight to an exact source SHA without release-publish approval", () => {
@@ -730,6 +812,7 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
       "Checkout trusted planning tooling",
       "Resolve checked-out ref",
       "Verify trusted preflight or recovery tooling identity",
+      "Verify admitted artifact-only qualification",
       "Validate ref is on a trusted publish branch",
     ]) {
       const index = previewSteps.indexOf(step(preview, prerequisite));
@@ -771,6 +854,7 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
           github: { event_name: "workflow_dispatch", ref },
           inputs: {
             preflight_only: preflight,
+            qualification_inputs_json: "",
             npm_dist_tag: distTag,
             release_candidate_branch: candidateBranch,
           },

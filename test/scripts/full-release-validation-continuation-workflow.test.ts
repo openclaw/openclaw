@@ -23,6 +23,7 @@ type Workflow = {
     {
       if?: string;
       needs?: string[];
+      env?: Record<string, string>;
       steps: Array<Record<string, unknown>>;
       "timeout-minutes"?: number;
     }
@@ -62,6 +63,82 @@ function checkoutPath(checkout: Record<string, unknown>) {
 }
 
 describe("full release metadata checkouts", () => {
+  it("uses authenticated P for admitted aggregates and Q for historical routes", () => {
+    expect(workflow.jobs.resolve_target).toHaveProperty(
+      "outputs.qualification_verifier_sha",
+      "${{ fromJSON(steps.publication_admission.outputs.json || '{}').qualificationAdmission.workflowSha || '' }}",
+    );
+    const admitted =
+      "needs.resolve_target.result == 'success' && needs.resolve_target.outputs.qualification_verifier_sha != ''";
+    for (const job of [
+      "evidence_reuse",
+      "release_execution_plan",
+      "release_decision",
+      "diagnostic_drain",
+      "summary",
+    ]) {
+      const owner = workflow.jobs[job]!;
+      expect(owner.needs).toContain("resolve_target");
+      const checkout = step(job, "Checkout admitted qualification verifier");
+      expect(checkout).toMatchObject({
+        if: "${{ " + admitted + " }}",
+        with: {
+          ref: "${{ needs.resolve_target.outputs.qualification_verifier_sha }}",
+          path: "qualification-verifier",
+          "sparse-checkout": "scripts",
+          "sparse-checkout-cone-mode": false,
+          "fetch-depth": 1,
+          "persist-credentials": false,
+          submodules: false,
+        },
+      });
+      const fallback = job === "evidence_reuse" ? "workflow/scripts" : "scripts";
+      for (const [key, file] of [
+        ["RELEASE_STATE_SCRIPT", "full-release-validation-state.mjs"],
+        ["OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR", "release-ci-summary.mjs"],
+      ] as const) {
+        expect(owner.env?.[key]).toBe(
+          "${{ " +
+            admitted +
+            " && format('{0}/qualification-verifier/scripts/" +
+            file +
+            "', github.workspace) || format('{0}/" +
+            fallback +
+            "/" +
+            file +
+            "', github.workspace) }}",
+        );
+      }
+      const consumers = owner.steps.filter(
+        (entry) =>
+          typeof entry.run === "string" && entry.run.includes('node "$RELEASE_STATE_SCRIPT"'),
+      );
+      expect(consumers.length).toBeGreaterThan(0);
+      for (const consumer of consumers) {
+        expect(owner.steps.indexOf(checkout)).toBeLessThan(owner.steps.indexOf(consumer));
+        expect(consumer.env).not.toHaveProperty("OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR");
+      }
+      expect(
+        owner.steps.map((entry) => (typeof entry.run === "string" ? entry.run : "")).join("\n"),
+      ).not.toMatch(/node (?:workflow\/)?scripts\/full-release-validation-state\.mjs/);
+    }
+    const reuse = step("evidence_reuse", "Find reusable validation evidence");
+    expect(reuse.env).toMatchObject({
+      SOURCE_ADMISSION_JSON: "${{ needs.resolve_target.outputs.source_admission_json }}",
+      QUALIFICATION_INPUTS_JSON: "${{ toJSON(inputs) }}",
+    });
+    expect(String(reuse.run)).toContain('--workflow-sha "$GITHUB_SHA"');
+    expect(String(reuse.run)).toContain('--verifier-source-sha "$verifier_sha"');
+    expect(String(reuse.run)).toContain(
+      '--qualification-admission-json "$qualification_admission"',
+    );
+    expect(String(reuse.run)).toContain('--qualification-inputs-json "$QUALIFICATION_INPUTS_JSON"');
+    expect(String(reuse.run)).toContain('"${qualification_args[@]}"');
+    expect(String(reuse.run)).toContain(
+      "bash workflow/scripts/github/find-reusable-release-validation.sh",
+    );
+  });
+
   it.each([
     {
       job: "resolve_target",
@@ -444,16 +521,22 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
       expect.arrayContaining([
         "prepare_npm_package",
         "qualify_npm_package",
+        "prepare_plugin_npm",
         "prepare_docker_release",
       ]),
     );
-    // 2026.9.x prepares plugin npm at publication; the FRV parent has no plugin npm gate.
-    expect(source).not.toContain("prepare_plugin_npm");
+    expect(
+      step("release_execution_plan", "Seal immutable release execution plan").env,
+    ).toMatchObject({
+      PLUGIN_NPM_REQUIRED: "${{ needs.resolve_target.outputs.plugin_npm_preflight_required }}",
+      PLUGIN_NPM_PREPARATION_RESULT: "${{ needs.prepare_plugin_npm.result }}",
+    });
     for (const jobName of ["release_decision", "diagnostic_drain"]) {
       expect(workflow.jobs[jobName]?.needs).toEqual(
         expect.arrayContaining([
           "prepare_npm_package",
           "qualify_npm_package",
+          "prepare_plugin_npm",
           "prepare_docker_release",
         ]),
       );

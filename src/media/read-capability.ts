@@ -1,7 +1,10 @@
 // Media read capability helpers gate file reads by configured media access rules.
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveGroupToolPolicy } from "../agents/agent-tools.policy.js";
+import {
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+} from "../agents/agent-tools.policy.js";
 import { resolvePathFromInput } from "../agents/path-policy.js";
 import { resolveManagedMediaRoot } from "../agents/sandbox-paths.js";
 import { resolveSenderToolPolicy } from "../agents/sender-tool-policy.js";
@@ -62,7 +65,13 @@ function isAgentScopedMediaReadAllowedByToolPolicy(
     senderUsername: params.requesterSenderUsername,
     senderE164: params.requesterSenderE164,
   });
-  return isToolAllowedByPolicies("read", [groupPolicy, senderPolicy]);
+  const { globalPolicy, agentPolicy } = resolveEffectiveToolPolicy({
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  // Denial must remove workspace roots too: attachment loaders can fall back to native reads.
+  return isToolAllowedByPolicies("read", [globalPolicy, agentPolicy, groupPolicy, senderPolicy]);
 }
 
 /** Creates a host reader bound to the agent workspace and configured local-file safety checks. */

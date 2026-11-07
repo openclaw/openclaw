@@ -22,6 +22,13 @@ import { createConfigIO } from "./io.factory.js";
 import { withTempHome } from "./test-helpers.js";
 
 const { runRegisteredConfigCommand, withConfigFileHarness } = useConfigCliIntegrationHarness();
+const snapshotFs = {
+  writeFile: fs.writeFile,
+  rename: fs.rename,
+  rm: fs.rm,
+  readFile: fs.readFile,
+  existsSync: fsNode.existsSync,
+};
 
 async function expectRegularFile(filePath: string): Promise<void> {
   expect((await fs.stat(filePath)).isFile()).toBe(true);
@@ -71,14 +78,13 @@ describe("config backup rotation", () => {
           const raw = await fs.readFile(`${configPath}${suffix}`, "utf-8");
           return (JSON.parse(raw) as { gateway: { port: number } }).gateway.port;
         };
-        const { existsSync } = await import("node:fs");
         const manualBackupPath = `${configPath}.bak.20260808`;
         const manualBackupContent = '{"gateway":{"mode":"local","port":18000}}\n';
 
         await fs.writeFile(manualBackupPath, manualBackupContent, "utf-8");
         await createPreUpdateConfigSnapshot({
           configPath,
-          fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+          fs: snapshotFs,
         });
         for (let version = 1; version <= 6; version += 1) {
           await runRegisteredConfigCommand([
@@ -272,10 +278,9 @@ describe("config backup rotation", () => {
       await fs.writeFile(configPath, current, { mode: 0o600 });
       await fs.writeFile(snapshotPath, stale, { mode: 0o600 });
 
-      const { existsSync } = await import("node:fs");
       await createPreUpdateConfigSnapshot({
         configPath,
-        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+        fs: snapshotFs,
       });
       await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(current);
 
@@ -283,7 +288,7 @@ describe("config backup rotation", () => {
       await fs.writeFile(configPath, second);
       await createPreUpdateConfigSnapshot({
         configPath,
-        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+        fs: snapshotFs,
       });
       await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(current);
     });
@@ -292,11 +297,10 @@ describe("config backup rotation", () => {
   it("createPreUpdateConfigSnapshot is a no-op when config does not exist", async () => {
     await withTempHome(async () => {
       const configPath = resolveConfigPathFromTempState();
-      const { existsSync } = await import("node:fs");
 
       await createPreUpdateConfigSnapshot({
         configPath,
-        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+        fs: snapshotFs,
       });
 
       await expectPathMissing(`${configPath}.pre-update`);
@@ -306,7 +310,6 @@ describe("config backup rotation", () => {
   it("retries snapshot after transient read and write errors (#105431)", async () => {
     await withTempHome(async () => {
       const content = JSON.stringify({ plugins: { installs: ["slack"] } });
-      const { existsSync } = await import("node:fs");
       const rejectingReadFile = (async () => {
         throw new Error("EIO: transient read error");
       }) as typeof fs.readFile;
@@ -321,16 +324,16 @@ describe("config backup rotation", () => {
         await createPreUpdateConfigSnapshot({
           configPath,
           fs: {
+            ...snapshotFs,
             readFile: failingOperation === "read" ? rejectingReadFile : fs.readFile,
             writeFile: failingOperation === "write" ? rejectingWriteFile : fs.writeFile,
-            existsSync,
           },
         });
         await expectPathMissing(`${configPath}.pre-update`);
 
         await createPreUpdateConfigSnapshot({
           configPath,
-          fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+          fs: snapshotFs,
         });
 
         const snapshotPath = `${configPath}.pre-update`;

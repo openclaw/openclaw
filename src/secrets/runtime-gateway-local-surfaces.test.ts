@@ -1,5 +1,6 @@
 /** Tests local gateway credential surfaces and their active/inactive SecretRef states. */
 import { describe, expect, it } from "vitest";
+import { resolveGatewayAuth, resolveGatewayAuthForConfig } from "../gateway/auth-resolve.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
@@ -12,22 +13,6 @@ function expectWarningPaths(
   for (const expectedPath of expectedPaths) {
     expect(warningPaths.has(expectedPath)).toBe(true);
   }
-}
-
-async function expectInactiveGatewayPassword(config: unknown): Promise<void> {
-  const snapshot = await prepareSecretsRuntimeSnapshot({
-    config: asConfig(config),
-    env: {},
-    agentDirs: ["/tmp/openclaw-agent-main"],
-    loadAuthStore: () => ({ version: 1, profiles: {} }),
-  });
-
-  expect(snapshot.config.gateway?.auth?.password).toEqual({
-    source: "env",
-    provider: "default",
-    id: "GATEWAY_PASSWORD_REF",
-  });
-  expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.auth.password");
 }
 
 async function expectActiveGatewayPassword(config: unknown): Promise<void> {
@@ -176,19 +161,46 @@ describe("secrets runtime gateway local surfaces", () => {
     });
   });
 
-  it("treats gateway.auth.password ref as inactive when remote token is configured", async () => {
-    await expectInactiveGatewayPassword({
-      gateway: {
-        mode: "local",
-        auth: {
-          password: { source: "env", provider: "default", id: "GATEWAY_PASSWORD_REF" },
-        },
-        remote: {
-          token: "remote-token",
-        },
-      },
-    });
-  });
+  it.each([undefined, "env", "config"] as const)(
+    "prepares local ingress auth independently of remote token (local token: %s)",
+    async (tokenSource) => {
+      const password = { source: "env", provider: "default", id: "GATEWAY_PASSWORD_REF" };
+      const token = tokenSource ? "local-token" : undefined;
+      const env = {
+        OPENCLAW_GATEWAY_TOKEN: tokenSource === "env" ? token : undefined,
+        GATEWAY_PASSWORD_REF: "resolved-local-password",
+      };
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          gateway: {
+            mode: "local",
+            auth: { password, token: tokenSource === "config" ? token : undefined },
+            remote: { token: "remote-token" },
+          },
+        }),
+        env,
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      });
+
+      expect(resolveGatewayAuth({ authConfig: snapshot.config.gateway?.auth, env })).toMatchObject(
+        token
+          ? { mode: "token", token, password: undefined }
+          : { mode: "password", token: undefined, password: "resolved-local-password" },
+      );
+      expect(resolveGatewayAuthForConfig({ config: snapshot.config, env })).toMatchObject(
+        token
+          ? { mode: "token", token, password: undefined }
+          : { mode: "password", token: "remote-token", password: "resolved-local-password" },
+      );
+      expect(snapshot.config.gateway?.auth?.password).toEqual(
+        token ? password : "resolved-local-password",
+      );
+      expect(snapshot.warnings.some((warning) => warning.path === "gateway.auth.password")).toBe(
+        Boolean(token),
+      );
+    },
+  );
 
   it.each(["none", "trusted-proxy"] as const)(
     "treats gateway.remote refs as inactive in local mode when auth mode is %s",

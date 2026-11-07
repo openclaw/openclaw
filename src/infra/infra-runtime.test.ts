@@ -10,7 +10,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import * as errorFormatting from "./errors.js";
-type RestartModule = typeof import("./restart.js");
+type RestartModule = typeof import("./restart-runtime.js");
 const managedSuccessorOwner = {
   kind: "managed-update-handoff",
   handoffId: "managed-handoff",
@@ -118,7 +118,7 @@ describe("infra runtime", () => {
       restartLogWarnMock.mockReset();
       const restart = await importFreshModule<RestartModule>(
         import.meta.url,
-        `./restart.js?infra-runtime=${freshRestartModuleId++}`,
+        `./restart-runtime.js?infra-runtime=${freshRestartModuleId++}`,
       );
       ({
         consumeGatewayRestartAuthorization,

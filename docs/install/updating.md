@@ -81,6 +81,14 @@ Keep any normal `--profile` selector on every `openclaw` command. For a custom
 service or foreground Gateway, stop and start it through its actual owner
 instead of the managed-service commands above.
 
+## Update implementation contract
+
+Pre-update config copies publish through a temporary file and same-directory
+rename. An interrupted write preserves the previous `.pre-update` copy, and a
+later snapshot attempt can retry. Post-update recovery refuses malformed copies
+and leaves the current config intact. This repair must be present in the updater
+taking the snapshot; it does not establish power-loss durability.
+
 ## Recommended: `openclaw update`
 
 Detects your install type (npm, pnpm, Bun, or git), checks the new version while
@@ -329,6 +337,12 @@ Gateway can also report a plugin that did not load without turning the core upda
 into a failure. Individual plugin outcomes remain available in `--json` output.
 Failures to install core, repair required configuration or state, or start the
 updated Gateway remain update failures.
+
+Before post-core plugin work, the updater releases its temporary Doctor database
+ownership before rechecking profile-backed requester authority. Service custody
+remains with the updater; the next Doctor acquires its own database ownership.
+This avoids refusing the updater's own policy reads during its maintenance window.
+
 Local copies selected through `plugins.load.paths` are operator-managed. Updates
 and `openclaw update repair` retain the selected copy and any npm install it
 shadows, and record a `plugin-operator-managed` warning in the outcome and update

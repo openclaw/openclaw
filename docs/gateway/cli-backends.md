@@ -468,6 +468,11 @@ CLI backends do not receive OpenClaw tool calls directly, but a backend can opt 
 - `claude-cli`: generated strict MCP config file.
 - `google-gemini-cli`: generated Gemini system settings file.
 
+Generated Claude MCP config and Gemini settings can contain resolved credentials.
+If writing either temporary file fails, OpenClaw attempts to remove its temporary
+directory before reporting the original write error. Normal run cleanup still
+removes successfully written temporary files.
+
 When bundle MCP is enabled, OpenClaw:
 
 - spawns a loopback HTTP MCP server that exposes Gateway tools to the CLI process, authenticated with a per-run context grant (`OPENCLAW_MCP_TOKEN`) active only for the current execution attempt
@@ -485,6 +490,9 @@ socket as the server closes it after an idle timeout. The connection closes only
 when the response ends; long-running tool responses and SSE notification streams
 remain open until completion or shutdown. Each later request opens a new loopback
 TCP connection.
+
+If the listener closes unexpectedly, its grants are retired and the next CLI run
+starts a replacement. A warning records the closure in the Gateway log.
 
 After plugin replacement, new CLI turns resolve bridge tools against the current
 plugin generation without restarting the listener. Retired plugin instances remain
