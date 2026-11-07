@@ -1,9 +1,30 @@
 import { expect, it } from "vitest";
 import { chunkText, chunkTextRanges } from "./chunk-text.js";
+import { chunkMarkdownIR, markdownToIR } from "./ir.js";
 
 it("normalizes positive fractional limits without emitting empty chunks", () => {
   expect(chunkText("abc", 0.5)).toEqual(["a", "b", "c"]);
   expect(chunkText("😀😀", 0.5)).toEqual(["😀", "😀"]);
+});
+
+it("preserves text and ranges when the limit does not impose a size cap", () => {
+  const text = "😀 é\n\ntail ";
+  const ir = markdownToIR("**😀Hi** [é](https://example.com)");
+  for (const limit of [Number.NaN, Infinity, 0, -1, -Infinity]) {
+    expect.soft(chunkText(text, limit)).toEqual([text]);
+    for (const mode of ["hard", "preferred"] as const) {
+      expect.soft(chunkTextRanges(text, { limit, mode })).toEqual([{ start: 0, end: text.length }]);
+    }
+    expect.soft(chunkMarkdownIR(ir, limit)).toMatchObject([
+      {
+        text: "😀Hi é",
+        styles: [{ start: 0, end: 4, style: "bold" }],
+        links: [{ start: 5, end: 7, href: "https://example.com" }],
+      },
+    ]);
+    expect(chunkText("", limit)).toEqual([]);
+    expect(chunkTextRanges("", { limit })).toEqual([]);
+  }
 });
 
 it("keeps grapheme boundaries and surrogate-safe progress in each chunking mode", () => {
