@@ -77,7 +77,11 @@ export async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Pr
   );
 }
 
-export function seedPendingBacklog(stateDir: string, total: number): void {
+export function seedPendingBacklog(
+  stateDir: string,
+  total: number,
+  lane?: { laneKey: string; receivedAt: number },
+): void {
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
   const kysely = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">>(
     database.db,
@@ -88,12 +92,13 @@ export function seedPendingBacklog(stateDir: string, total: number): void {
     for (let index = offset; index < end; index += 1) {
       rows.push({
         queue_name: JSON.stringify(["test", "a"]),
-        event_id: `evt-${index}`,
+        event_id: lane ? `${lane.laneKey}-${index}` : `evt-${index}`,
         channel_id: "test",
         account_id: "a",
         status: "pending",
         payload_json: JSON.stringify({ text: `msg-${index}` }),
-        received_at: index,
+        lane_key: lane?.laneKey,
+        received_at: (lane?.receivedAt ?? 0) + index,
         updated_at: index,
       });
     }

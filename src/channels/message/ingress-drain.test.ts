@@ -613,6 +613,74 @@ describe("channel ingress drain", () => {
       }
     });
   });
+  it("starts a lane behind blocked busy lanes without reading their backlog", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir, { now: () => 1_000 });
+      seedPendingBacklog(stateDir, 5_000, { laneKey: "busy", receivedAt: 0 });
+      const peer = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => 1_000,
+        dispatchClaimedEvent: () => ({ kind: "deferred" }),
+      });
+      await peer.drainOnce();
+      seedPendingBacklog(stateDir, 5_000, { laneKey: "delayed", receivedAt: 5_000 });
+      const head = expectDefined(await queue.claim("delayed-0"), "delayed head");
+      await queue.release(head, { lastError: "retry", releasedAt: 1_000 });
+      await queue.enqueue("other", { text: "other" }, { laneKey: "other", receivedAt: 20_000 });
+      const listUnsettled = expectDefined(queue.listUnsettled, "listUnsettled").bind(queue);
+      let pendingRead = 0;
+      queue.listUnsettled = async (options) => {
+        const unsettled = await listUnsettled(options);
+        pendingRead += unsettled.pending.length;
+        return unsettled;
+      };
+      const dispatches: string[] = [];
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => 1_000,
+        retryPolicy: { baseMs: 60_000, maxMs: 60_000 },
+        dispatchClaimedEvent: async (event, lifecycle) => {
+          dispatches.push(event.id);
+          await lifecycle.onAdopted();
+        },
+      });
+
+      try {
+        await expect(drain.drainOnce()).resolves.toEqual({ started: 1 });
+        await drain.waitForIdle();
+        expect(dispatches).toEqual(["other"]);
+        expect(pendingRead).toBeLessThan(1_000);
+      } finally {
+        drain.dispose();
+        peer.dispose();
+      }
+    });
+  });
+
+  it("ends a pass when the queue ignores the page bounds", async () => {
+    await withTempState(async (stateDir) => {
+      const inner = createTestIngressQueue(stateDir, { now: () => 1_000 });
+      const listUnsettled = expectDefined(inner.listUnsettled, "listUnsettled").bind(inner);
+      const queue = { ...inner, listUnsettled: () => listUnsettled() };
+      seedPendingBacklog(stateDir, 100, { laneKey: "busy", receivedAt: 0 });
+      const head = expectDefined(await queue.claim("busy-0"), "busy head");
+      await queue.release(head, { lastError: "retry", releasedAt: 1_000 });
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => 1_000,
+        retryPolicy: { baseMs: 60_000, maxMs: 60_000 },
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          await lifecycle.onAdopted();
+        },
+      });
+
+      try {
+        await expect(drain.drainOnce()).resolves.toEqual({ started: 0 });
+      } finally {
+        drain.dispose();
+      }
+    });
+  });
 });
 
 describe("channel ingress drain ownership", () => {

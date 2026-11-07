@@ -595,46 +595,54 @@ export function listChannelIngressRowsInDatabase(
   db: EngineConnection,
   input: ChannelIngressListInput,
 ): ChannelIngressRow[] {
-  const select = selectQueueRows(db, input.queueName).where(
-    "status",
-    "in",
-    input.status === "unsettled" ? ["pending", "claimed"] : [input.status],
-  );
+  const select = selectQueueRows(db, input.queueName);
   if (input.status === "claimed" || input.status === "failed") {
+    const filtered = select.where("status", "=", input.status);
     const ordered = (
       input.status === "claimed"
-        ? select.orderBy("claimed_at", "asc").orderBy("received_at", "asc")
-        : select.orderBy("failed_at", (order) => order.asc().nullsFirst())
+        ? filtered.orderBy("claimed_at", "asc").orderBy("received_at", "asc")
+        : filtered.orderBy("failed_at", (order) => order.asc().nullsFirst())
     ).orderBy("event_id", "asc");
     return executeSqliteQuerySync(
       db,
       input.status === "failed" ? ordered.limit(normalizeLimit(input.limit)) : ordered,
     ).rows;
   }
-  const ordered =
+  const order = <T extends typeof select>(rows: T) =>
     input.orderBy === "id"
-      ? select.orderBy("event_id", "asc")
-      : select.orderBy("received_at", "asc").orderBy("event_id", "asc");
-  if (input.status === "unsettled") {
-    return executeSqliteQuerySync(db, ordered).rows;
+      ? rows.orderBy("event_id", "asc")
+      : rows.orderBy("received_at", "asc").orderBy("event_id", "asc");
+  const limit = input.status === "unsettled" ? input.pendingLimit : normalizeLimit(input.limit);
+  if (limit === undefined) {
+    return executeSqliteQuerySync(db, order(select.where("status", "in", ["pending", "claimed"])))
+      .rows;
   }
-  const limit = normalizeLimit(input.limit);
-  const result: ChannelIngressRow[] = [];
-  let last: ChannelIngressRow | undefined;
-  while (result.length < limit) {
+  // A bounded unsettled read returns every claim and one page of pending rows.
+  const result =
+    input.status === "unsettled"
+      ? executeSqliteQuerySync(db, order(select.where("status", "=", "claimed"))).rows
+      : [];
+  let pending = select.where("status", "=", "pending");
+  const excluded = input.excludeLaneKeys;
+  if (excluded?.length) {
+    pending = pending.where((eb) =>
+      eb.or([eb("lane_key", "is", null), eb("lane_key", "not in", excluded)]),
+    );
+  }
+  const ordered = order(pending);
+  let pendingCount = 0;
+  let last = input.after;
+  while (pendingCount < limit) {
     let page = ordered;
     if (last) {
       const cursor = last;
       page =
         input.orderBy === "id"
-          ? page.where("event_id", ">", cursor.event_id)
+          ? page.where("event_id", ">", cursor.id)
           : page.where((eb) =>
               eb.or([
-                eb("received_at", ">", cursor.received_at),
-                eb.and([
-                  eb("received_at", "=", cursor.received_at),
-                  eb("event_id", ">", cursor.event_id),
-                ]),
+                eb("received_at", ">", cursor.receivedAt),
+                eb.and([eb("received_at", "=", cursor.receivedAt), eb("event_id", ">", cursor.id)]),
               ]),
             );
     }
@@ -642,7 +650,8 @@ export function listChannelIngressRowsInDatabase(
     for (const row of rows) {
       if (baseRecord(row)) {
         result.push(row);
-        if (result.length === limit) {
+        pendingCount += 1;
+        if (pendingCount === limit) {
           break;
         }
       }
@@ -650,7 +659,8 @@ export function listChannelIngressRowsInDatabase(
     if (rows.length < LIST_PENDING_BATCH_SIZE) {
       break;
     }
-    last = rows.at(-1);
+    const lastRow = rows.at(-1)!;
+    last = { receivedAt: lastRow.received_at, id: lastRow.event_id };
   }
   return result;
 }

@@ -166,8 +166,20 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
     orderBy?: "received" | "id";
   }): Promise<Array<ChannelIngressQueueRecord<TPayload, TMetadata>>>;
   listClaims(): Promise<Array<ChannelIngressQueueClaim<TPayload, TMetadata>>>;
-  /** Coherent lane state; optional for existing external queue implementations. */
-  listUnsettled?(options?: { orderBy?: "received" | "id" }): Promise<{
+  /**
+   * Coherent lane state; optional for existing external queue implementations.
+   * `pendingLimit`, `after` and `excludeLaneKeys` bound the pending rows of one read; every
+   * claim is still returned. A queue may ignore them and return every unsettled row.
+   */
+  listUnsettled?(options?: {
+    orderBy?: "received" | "id";
+    /** At most this many pending rows. */
+    pendingLimit?: number;
+    /** Only pending rows that sort after this one in `orderBy` order. */
+    after?: { receivedAt: number; id: string };
+    /** Skip pending rows stored in these lanes; rows without a stored lane stay. */
+    excludeLaneKeys?: readonly string[];
+  }): Promise<{
     pending: Array<ChannelIngressQueueRecord<TPayload, TMetadata>>;
     claims: Array<ChannelIngressQueueClaim<TPayload, TMetadata>>;
   }>;
@@ -274,6 +286,10 @@ export type ChannelIngressListInput = {
   status: "pending" | "claimed" | "failed" | "unsettled";
   limit?: number | "all";
   orderBy?: "received" | "id";
+  /** Unsettled only: bound the pending rows; every claim is still returned. */
+  pendingLimit?: number;
+  after?: { receivedAt: number; id: string };
+  excludeLaneKeys?: readonly string[];
 };
 export type ChannelIngressClaimRequest = {
   queueName: string;

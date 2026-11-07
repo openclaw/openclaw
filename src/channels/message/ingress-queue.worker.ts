@@ -79,8 +79,12 @@ export const channelIngressOperations = {
   ) => {
     const read = ({ db }: Pick<OpenClawStateDatabase, "db">) => {
       const select = () => kernel.listChannelIngressRowsInDatabase(db, input);
-      // Pending listings paginate past corrupt payloads; other statuses use one SELECT.
-      return input.status === "pending" ? runSqliteReadSnapshotSync(db, select) : select();
+      // Pending listings paginate past corrupt payloads, and a bounded unsettled read adds
+      // its claims; other listings use one SELECT.
+      return input.status === "pending" ||
+        (input.status === "unsettled" && input.pendingLimit !== undefined)
+        ? runSqliteReadSnapshotSync(db, select)
+        : select();
     };
     return input.readOnly
       ? (withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, stateOptions()) ?? [])
