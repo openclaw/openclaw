@@ -4,6 +4,7 @@ import { en } from "./en.ts";
 const enChatMedia = {
   chat: {
     imageLightbox: {
+      compare: "Compare images",
       loadingDetail: "Loading sharper image…",
       detailFailed: "Couldn’t load a sharper image. Try again.",
       actions: "Image actions",

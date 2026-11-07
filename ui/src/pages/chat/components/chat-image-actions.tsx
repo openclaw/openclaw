@@ -1,75 +1,19 @@
-import { Show } from "solid-js";
+import { lazy, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
-import { beginClipboardCopy } from "../../../lib/clipboard.ts";
 import { downloadImageBlob } from "../../../lib/image-download.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
+import { copyImageToClipboard } from "./chat-image-clipboard.ts";
 
 registerEnglishCatalog(registerChatMediaEnglish);
 
+const ComparisonDialog = lazy(() => import("../../../components/image-comparison-dialog.tsx"), {
+  export: "ImageComparison",
+});
+
 let nextMenuId = 0;
-
-export async function convertImageBlobToPng(blob: Blob): Promise<Blob> {
-  if (blob.type === "image/png") {
-    return blob;
-  }
-  // SVG is decoded in image context, never executed as a document. The lightbox
-  // and clipboard receive raster bytes; the separate file download keeps the original.
-  const svg = blob.type.split(";", 1)[0] === "image/svg+xml";
-  const url = svg ? URL.createObjectURL(blob) : undefined;
-  let bitmap: ImageBitmap | HTMLImageElement;
-  try {
-    if (url) {
-      const image = new Image();
-      image.src = url;
-      await image.decode();
-      bitmap = image;
-    } else {
-      bitmap = await createImageBitmap(blob);
-    }
-  } catch (error) {
-    if (url) {
-      URL.revokeObjectURL(url);
-    }
-    throw error;
-  }
-  try {
-    const canvas = document.createElement("canvas");
-    canvas.width = bitmap instanceof HTMLImageElement ? bitmap.naturalWidth : bitmap.width;
-    canvas.height = bitmap instanceof HTMLImageElement ? bitmap.naturalHeight : bitmap.height;
-    const context = canvas.getContext("2d");
-    if (!context) {
-      throw new Error("image conversion context is unavailable");
-    }
-    context.drawImage(bitmap, 0, 0);
-    return await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(
-        (converted) =>
-          converted ? resolve(converted) : reject(new Error("image conversion failed")),
-        "image/png",
-      );
-    });
-  } finally {
-    if (bitmap instanceof ImageBitmap) {
-      bitmap.close();
-    }
-    if (url) {
-      URL.revokeObjectURL(url);
-    }
-  }
-}
-
-export async function copyImageToClipboard(readBlob: () => Promise<Blob>): Promise<void> {
-  beginClipboardCopy();
-  if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
-    throw new Error("image clipboard is unavailable");
-  }
-  const png = readBlob().then(convertImageBlobToPng);
-  void png.catch(() => {});
-  await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
-}
 
 export function ChatImageActions(props: {
   disabled?: boolean;
@@ -77,6 +21,27 @@ export function ChatImageActions(props: {
   readOriginalBlob: () => Promise<Blob>;
   overlay?: boolean;
 }) {
+  const lifetime = new AbortController();
+  onSettled(() => () => lifetime.abort());
+  let comparing = false;
+  const compare = async () => {
+    if (comparing || lifetime.signal.aborted) {
+      return;
+    }
+    comparing = true;
+    const readOriginalBlob = props.readOriginalBlob;
+    const title = props.title;
+    try {
+      const { showImageComparison } = await ComparisonDialog.preload();
+      await showImageComparison(readOriginalBlob, title, lifetime.signal);
+    } catch {
+      if (!lifetime.signal.aborted) {
+        showToast({ message: t("chat.imageLightbox.loadFailed"), severity: "error" });
+      }
+    } finally {
+      comparing = false;
+    }
+  };
   const download = async () => {
     if (props.disabled) {
       return;
@@ -122,6 +87,12 @@ export function ChatImageActions(props: {
           trigger={<Icon name="moreHorizontal" />}
           items={[
             {
+              id: "compare",
+              label: t("chat.imageLightbox.compare"),
+              class: "session-menu__item",
+              icon: <Icon name="image" />,
+            },
+            {
               id: "copy",
               label: t("chat.imageLightbox.copy"),
               class: "session-menu__item",
@@ -145,7 +116,7 @@ export function ChatImageActions(props: {
             },
           ]}
           onSelect={(item) => {
-            void (item.id === "copy" ? copy() : download());
+            void (item.id === "copy" ? copy() : item.id === "compare" ? compare() : download());
           }}
         />
       }
