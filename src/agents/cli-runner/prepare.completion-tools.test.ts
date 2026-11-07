@@ -157,7 +157,7 @@ describe("restricted CLI tool preparation", () => {
         sessionTarget: { ...fixture.session.sessionTarget, sessionKey },
         config,
       });
-      try {
+      await fixture.withPrepared(context, async () => {
         await runPlugin(context, async function* (execution) {
           await expect(
             requestNativeTool(execution, "Read", { file_path: stateFile }),
@@ -210,9 +210,7 @@ describe("restricted CLI tool preparation", () => {
           writeTool.execute("outside-create", { path: "../../new.txt", content: "changed" }),
         ).rejects.toThrow();
         expect(fs.existsSync(path.join(stateDir, "new.txt"))).toBe(false);
-      } finally {
-        await context.preparedBackend.cleanup?.();
-      }
+      });
     },
   );
 
@@ -228,7 +226,7 @@ describe("restricted CLI tool preparation", () => {
         agents: { entries: { main: { tools: { fs: { workspaceOnly: false } } } } },
       },
     });
-    try {
+    await fixture.withPrepared(context, async () => {
       await runPlugin(context, async function* (execution) {
         await expect(
           requestNativeTool(execution, "Read", {
@@ -237,9 +235,7 @@ describe("restricted CLI tool preparation", () => {
         ).resolves.toMatchObject({ behavior: "allow" });
         yield SUCCESS_RESULT;
       });
-    } finally {
-      await context.preparedBackend.cleanup?.();
-    }
+    });
   });
 
   it("retains an exact file-tool selection when applying workspace-only policy", async () => {
@@ -254,7 +250,7 @@ describe("restricted CLI tool preparation", () => {
       cliToolAvailability: { native: [], openClaw: ["write"] },
       config,
     });
-    try {
+    await fixture.withPrepared(context, async () => {
       const grant = mintGrant.mock.calls[0]?.[0]?.context;
       if (!grant) {
         throw new Error("expected workspace-only MCP tools");
@@ -265,9 +261,7 @@ describe("restricted CLI tool preparation", () => {
         admittedRunContext: context.params.admittedRunContext,
       });
       expect(scoped.tools.map((tool) => tool.name)).toEqual(["write"]);
-    } finally {
-      await context.preparedBackend.cleanup?.();
-    }
+    });
   });
 
   it.each(["agent", "side-question", "preparation-error"] as const)(
@@ -606,7 +600,7 @@ describe("restricted CLI tool preparation", () => {
             ? createPersistedCompletionHandoff(childSessionKey, "cache-prefix-child", sessionTarget)
             : {}),
         });
-        try {
+        const turn = await fixture.withPrepared(context, async () => {
           expect(context.executionTarget.kind).toBe("plugin");
           expect(context.promptContext?.appendContext).toBeTruthy();
           expect(context.systemPrompt).toContain("cache-fixture");
@@ -634,7 +628,7 @@ describe("restricted CLI tool preparation", () => {
           expect(context.preparedBackend.env?.ENABLE_TOOL_SEARCH).toBe(
             toolSearch === false ? "false" : "true",
           );
-          turns.push({
+          const observation = {
             availability: context.params.cliToolAvailability,
             systemPrompt: context.systemPrompt,
             toolsAllow: mintGrant.mock.lastCall?.[0]?.context.toolsAllow,
@@ -647,11 +641,11 @@ describe("restricted CLI tool preparation", () => {
               "--no-chrome",
               "--strict-mcp-config",
             ].filter((flag) => executionArgs.includes(flag)),
-          });
+          };
           expect(executionArgs).not.toContain("--plugin-dir");
-        } finally {
-          await context.preparedBackend.cleanup?.();
-        }
+          return observation;
+        });
+        turns.push(turn);
       }
       const discovery = toolSearch === false ? [] : ["ToolSearch"];
       expect(turns[0]?.availability).toEqual({
@@ -719,15 +713,13 @@ describe("restricted CLI tool preparation", () => {
               taskSuggestionDeliveryMode: "gateway" as const,
             }),
       });
-      try {
+      await fixture.withPrepared(context, async () => {
         turns.push({
           binding: createTestCliSessionBinding(context, "native-surface-session"),
           systemPrompt: context.systemPrompt,
           names: [...(mintGrant.mock.lastCall?.[0]?.context.toolsAllow ?? [])].toSorted(),
         });
-      } finally {
-        await context.preparedBackend.cleanup?.();
-      }
+      });
     }
     // The fixture really varies the caller surface: only these tools differ.
     const removed = turns[0]!.names.filter((name) => !turns[1]!.names.includes(name));
@@ -793,7 +785,7 @@ describe("restricted CLI tool preparation", () => {
         },
       },
     });
-    try {
+    await fixture.withPrepared(context, async () => {
       expect(context.params.cliToolAvailability?.native).toEqual(managedNativeTools);
       expect(context.systemPrompt).toContain(
         writeAllowed
@@ -801,9 +793,7 @@ describe("restricted CLI tool preparation", () => {
           : "this run cannot safely finish full BOOTSTRAP.md",
       );
       expect(context.systemPrompt.includes(content)).toBe(writeAllowed);
-    } finally {
-      await context.preparedBackend.cleanup?.();
-    }
+    });
   });
 
   it.each([false, undefined])(
@@ -879,7 +869,7 @@ describe("restricted CLI tool preparation", () => {
           sourceSessionKey: childSessionKey,
         },
       });
-      try {
+      await fixture.withPrepared(context, async () => {
         const grant = mintGrant.mock.calls[1]![0].context;
         expect(grant).toBeDefined();
         expect(context.params.cliToolAvailability?.native).toEqual([]);
@@ -943,9 +933,7 @@ describe("restricted CLI tool preparation", () => {
           mcpServers: Record<string, unknown>;
         };
         expect(Object.keys(bundle.mcpServers)).toEqual(["openclaw"]);
-      } finally {
-        await context.preparedBackend.cleanup?.();
-      }
+      });
     },
   );
 
@@ -994,11 +982,9 @@ describe("restricted CLI tool preparation", () => {
       disableTools: true,
       toolsAllow: ["write"],
     });
-    try {
+    await fixture.withPrepared(context, async () => {
       expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
       expect(context.params.toolsAllow).toBeUndefined();
-    } finally {
-      await context.preparedBackend.cleanup?.();
-    }
+    });
   });
 });

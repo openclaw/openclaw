@@ -338,36 +338,29 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
     false,
     getCliSessionBinding(loadSessionEntry(sessionTarget), "claude-cli"),
   );
-  let upgradedBinding: ReturnType<typeof getCliSessionBinding>;
-  try {
+  const upgradedBinding = await fixture.withPrepared(upgraded, async () => {
     expect(upgraded.reusableCliSession).toEqual({
       mode: "invalidate",
       invalidatedReason: "prompt-tools",
     });
     await executePreparedCliRun(upgraded);
-    upgradedBinding = createTestCliSessionBinding(upgraded, nativeSessionId);
-  } finally {
-    await upgraded.preparedBackend.cleanup?.();
-  }
+    return createTestCliSessionBinding(upgraded, nativeSessionId);
+  });
   // A verified completion then resumes that session with the same catalog.
   const completion = await prepareTurn(true, upgradedBinding);
-  try {
+  await fixture.withPrepared(completion, async () => {
     expect(completion.reusableCliSession).toEqual({ mode: "reuse", sessionId: nativeSessionId });
     expect(completion.promptToolNamesHash).toBe(upgraded.promptToolNamesHash);
     await executePreparedCliRun(completion, nativeSessionId);
-  } finally {
-    await completion.preparedBackend.cleanup?.();
-  }
+  });
 
   // Discovery changes only loading hints; it must not override safe prompt drift.
   config.tools = { ...config.tools, toolSearch: true };
   const drifted = await prepareTurn(false, upgradedBinding, true);
-  try {
+  await fixture.withPrepared(drifted, async () => {
     expect(drifted.reusableCliSession).toMatchObject({ mode: "reuse-with-drift" });
     await executePreparedCliRun(drifted, nativeSessionId);
-  } finally {
-    await drifted.preparedBackend.cleanup?.();
-  }
+  });
 
   expect(sent).toHaveLength(3);
   expect(sent[0]?.useResume).toBe(false);

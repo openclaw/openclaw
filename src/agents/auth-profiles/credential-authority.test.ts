@@ -79,7 +79,10 @@ const credential = (key: string): AuthProfileCredential => ({
   provider: "fixture",
   key,
 });
-const store = (key: string) => ({ version: 1, profiles: { [profileId]: credential(key) } });
+const store = (value: string | AuthProfileCredential) => ({
+  version: 1,
+  profiles: { [profileId]: typeof value === "string" ? credential(value) : value },
+});
 const nativeRuntime = createAuthProfileStoreRuntime(
   createExternalAuthRuntime(
     () => [],
@@ -112,10 +115,6 @@ function persistedCredential(
 
 function expectCredential(current: Fixture, key: string) {
   expect([current.readPersisted(), current.read()]).toEqual([credential(key), credential(key)]);
-}
-
-function expectDenied(authority: Fixture["authority"], message = "authority is unavailable") {
-  expect(() => authority.readCurrentCredential()).toThrow(message);
 }
 
 function withCommit(current: Fixture, observe: () => void, operation: () => void) {
@@ -186,8 +185,8 @@ function fixture(
   authority.observe(readPersisted());
   const transact = <T>(operation: Parameters<typeof runAuthProfileWriteTransaction<T>>[1]) =>
     runAuthProfileWriteTransaction(agentDir, operation, { env });
-  const write = (key: string) =>
-    transact(({ db }) => writeAuthProfileJsonCell(db, "store", kind, store(key)));
+  const write = (value: string | AuthProfileCredential) =>
+    transact(({ db }) => writeAuthProfileJsonCell(db, "store", kind, store(value)));
   const snapshot = () => captureAuthProfileStorePersistenceSnapshot(agentDir, { env });
   const save = (key: string, supplied = false) =>
     saveSdkAuthProfileStore(store(key), agentDir, saveOptions, supplied ? database : undefined);
@@ -453,7 +452,7 @@ it.each(["shared-state", "agent", "absent"] as const)(
     if (source !== "absent") {
       const cold = current.capture();
       cold.observe(current.readPersisted());
-      expectDenied(cold);
+      authorityReader(cold).denied();
     }
   },
 );
@@ -502,10 +501,7 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
       () => runOutcome(() => current.sdk(writer, "sdk-committed"), outcome, "cancelled SDK commit"),
     );
     expect(observed).toEqual(outcome === "commit" ? credential("sdk-committed") : undefined);
-    expect(current.readPersisted()).toEqual(
-      credential(outcome === "commit" ? "sdk-committed" : "original"),
-    );
-    expect(current.read()).toEqual(current.readPersisted());
+    expectCredential(current, outcome === "commit" ? "sdk-committed" : "original");
     expect(fs.existsSync(marker)).toBe(false);
     expectRetainedCustody(rootPath, false);
   });
@@ -658,7 +654,7 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
         current.denied();
         const cold = current.capture();
         cold.observe(credential("unknown"));
-        expectDenied(cold);
+        authorityReader(cold).denied();
       } finally {
         commit.mockRestore();
         lease?.release();
@@ -750,13 +746,8 @@ describe("prepared persisted credential readers", () => {
             expires: Date.now() + 3_600_000,
             copyToAgents: true,
           },
-        ]) {
-          shared.transact(({ db }) =>
-            writeAuthProfileJsonCell(db, "store", "shared-state", {
-              version: 1,
-              profiles: { [profileId]: excluded },
-            }),
-          );
+        ] satisfies AuthProfileCredential[]) {
+          shared.write(excluded);
           expect(read?.()).toBeUndefined();
         }
         shared.write("original");
@@ -783,33 +774,14 @@ describe("prepared persisted credential readers", () => {
   );
 });
 
-it("refuses a saved credential replaced while CLI admission waits", async () => {
-  const current = fixture("agent");
-  useReaderEnvironment(current);
-  const agentDir = expectDefined(current.agentDir, "credential fixture agent");
-  const guard = await prepareCliCredentialUseCheck(profileId, agentDir, {
-    expectedCredential: credential("original"),
-  });
-  const publication = beginAuthProfileCredentialBatch(current.context);
-  const admission = guard.prepareAfter(async () => {});
-  const refused = expect(admission).rejects.toThrow("saved CLI account changed during preparation");
-  try {
-    await Promise.resolve();
-    current.write("replacement");
-  } finally {
-    publication.finish(true);
-  }
-  await refused;
-  expect(current.read()).toEqual(credential("replacement"));
-});
-
 it.for([
+  { kind: "replacement", secret: { key: "original" } },
   {
     kind: "structured ref",
     secret: { keyRef: { source: "env", provider: "default", id: "OPENCLAW_TEST_REF" } },
   },
   { kind: "env shorthand", secret: { key: "${OPENCLAW_TEST_REF}" } },
-] as const)("refuses a pending publication for a saved $kind", async ({ secret }) => {
+] as const)("refuses unsafe $kind during CLI admission", async ({ kind, secret }) => {
   const current = fixture("agent");
   useReaderEnvironment(current);
   const agentDir = expectDefined(current.agentDir, "credential fixture agent");
@@ -818,23 +790,30 @@ it.for([
     provider: "fixture",
     ...secret,
   } satisfies AuthProfileCredential;
-  current.transact(({ db }) =>
-    writeAuthProfileJsonCell(db, "store", "agent", {
-      version: 1,
-      profiles: { [profileId]: stored },
-    }),
-  );
+  if (kind !== "replacement") {
+    current.write(stored);
+  }
   const guard = await prepareCliCredentialUseCheck(profileId, agentDir, {
     expectedCredential: stored,
   });
   const publication = beginAuthProfileCredentialBatch(current.context);
   const admission = guard.prepareAfter(async () => {});
-  const refused = expect(admission).rejects.toBeInstanceOf(
-    AuthProfileCredentialPublicationPendingError,
-  );
-  await Promise.resolve();
-  publication.finish(true);
+  const refused =
+    kind === "replacement"
+      ? expect(admission).rejects.toThrow("saved CLI account changed during preparation")
+      : expect(admission).rejects.toBeInstanceOf(AuthProfileCredentialPublicationPendingError);
+  try {
+    await Promise.resolve();
+    if (kind === "replacement") {
+      current.write("replacement");
+    }
+  } finally {
+    publication.finish(true);
+  }
   await refused;
+  if (kind === "replacement") {
+    expect(current.read()).toEqual(credential("replacement"));
+  }
 });
 
 it.each(["commit", "rollback"])(
@@ -888,12 +867,10 @@ it.each(["commit", "rollback"])(
         }
         return result;
       });
-    const { port1, port2 } = new MessageChannel();
-    const owner: SqliteWorkerOperationContext = { port: port1 };
     try {
-      const transact = () =>
-        currentSqliteWorkerOperationAdmission.run({ active: true, port: port1, owner }, () =>
-          runWithSqliteWorkerStateContext(current.context, () =>
+      const owner = withWorker(current.context, (admitted) => {
+        runOutcome(
+          () =>
             machineStateOperations["machineState.write"](
               { key: "authProfiles.store", value: next },
               {
@@ -903,14 +880,15 @@ it.each(["commit", "rollback"])(
                 writeAdmitted: write,
               },
             ),
-          ),
+          outcome,
+          "synthetic rollback",
         );
+        return admitted;
+      });
       if (outcome === "rollback") {
-        expect(transact).toThrow("synthetic rollback");
         expect(owner.committed).toBeUndefined();
         expect(current.read()).toEqual(credential("original"));
       } else {
-        transact();
         expect(owner.committed).toMatchObject({
           facts: {
             authCredentials: { facts: new Map([["store", { kind: "postimage", value: next }]]) },
@@ -920,8 +898,6 @@ it.each(["commit", "rollback"])(
       }
     } finally {
       writer.mockRestore();
-      port1.close();
-      port2.close();
     }
   },
 );

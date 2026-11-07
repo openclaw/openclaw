@@ -138,7 +138,7 @@ describe("direct CLI command continuity", () => {
             ? { requireExplicitMessageTarget: false }
             : {}),
         });
-        try {
+        await cli.withPrepared(previous, async () => {
           expect(previous.messageToolPolicyHash).toBe(
             sessionState === "published-explicit-false"
               ? "92a8de91722cbb4fe1a7fd6892245e359c339d96cafe8db3a08738ffda913d71"
@@ -150,9 +150,7 @@ describe("direct CLI command continuity", () => {
             updatedAt: Date.now(),
             cliSessionBindings: { "test-cli": publishedBinding },
           });
-        } finally {
-          await previous.preparedBackend.cleanup?.();
-        }
+        });
       }
       const runtime = createThrowingTestRuntime();
       const ordinary = await prepareAgentCommandExecution(
@@ -175,7 +173,7 @@ describe("direct CLI command continuity", () => {
         cliSessionBinding: publishedBinding,
       });
       const binding = nativeBinding(first);
-      try {
+      await cli.withPrepared(first, async () => {
         if (isPublished) {
           expect(first.reusableCliSession).toEqual({
             mode: "reuse",
@@ -185,9 +183,7 @@ describe("direct CLI command continuity", () => {
             "3ae4a9801e78dd74aa01b3ccad9fb6ab5628c39000b88276f651ed7fb9bdb555",
           );
         }
-      } finally {
-        await first.preparedBackend.cleanup?.();
-      }
+      });
       await replaceSessionEntry(target, {
         sessionId: ordinary.sessionId,
         updatedAt: Date.now(),
@@ -215,14 +211,12 @@ describe("direct CLI command continuity", () => {
         config,
         cliSessionBinding: binding,
       });
-      try {
+      await cli.withPrepared(resumed, async () => {
         expect(resumed.reusableCliSession).toEqual({
           mode: "reuse",
           sessionId: "native-cli-session",
         });
-      } finally {
-        await resumed.preparedBackend.cleanup?.();
-      }
+      });
     },
   );
 

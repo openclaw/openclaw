@@ -528,13 +528,11 @@ describe("CLI durable session context", () => {
       });
     });
     const context = await history.prepare({ sessionKey: sessionTarget.sessionKey });
-    try {
+    await fixture.withPrepared(context, async () => {
       expect(wait).toHaveBeenCalledExactlyOnceWith(sessionTarget.sessionKey);
       expect(context.params.prompt).toContain("FACT_AFTER_MAINTENANCE");
       expect(context.params.transcriptPrompt).toBe("latest ask");
-    } finally {
-      await context.preparedBackend.cleanup?.();
-    }
+    });
   });
 
   it.each([
@@ -595,7 +593,7 @@ describe("CLI durable session context", () => {
           : {}),
       });
       const denied = Boolean(testCase.account || testCase.callerMemory);
-      try {
+      await fixture.withPrepared(context, async () => {
         const logicalPrompt = context.promptForHooks ?? context.params.prompt;
         if (denied) {
           expect(logicalPrompt).not.toContain("RESULT-1234");
@@ -638,9 +636,7 @@ describe("CLI durable session context", () => {
           }
         }
         expect(context.openClawHistoryPrompt).toBeUndefined();
-      } finally {
-        await context.preparedBackend.cleanup?.();
-      }
+      });
     },
   );
 

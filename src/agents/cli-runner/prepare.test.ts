@@ -3301,7 +3301,7 @@ describe("prepareCliRunContext", () => {
     };
     try {
       const context = await prepareCliRunContext(params);
-      try {
+      await fixture.withPrepared(context, async () => {
         // Ring-zero runs never touch the loopback surface (no message tools).
         expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
         expect(context.mcpDeliveryCapture).toBeUndefined();
@@ -3329,9 +3329,7 @@ describe("prepareCliRunContext", () => {
           OPENCLAW_TOOLS_MCP_TOOLS: "openclaw",
           OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE: "cli",
         });
-      } finally {
-        await context.preparedBackend.cleanup?.();
-      }
+      });
     } finally {
       admission.close();
     }
