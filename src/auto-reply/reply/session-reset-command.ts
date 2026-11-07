@@ -10,7 +10,7 @@ import {
   HISTORY_CONTEXT_MARKER,
   RECENT_HISTORY_CONTEXT_MARKER,
 } from "./history.js";
-import { stripMentions } from "./mentions.js";
+import { stripCommandAddressingMentions, stripMentions } from "./mentions.js";
 
 type ResolvedSessionResetCommand = {
   matchedResetTriggerLower?: string;
@@ -192,7 +192,7 @@ function resolveCommandTextForSession(
   const anchored =
     messageStart === undefined ? params.commandText.trim() : params.commandText.slice(messageStart);
   const withoutMentions = params.isGroup
-    ? stripMentions(anchored, params.ctx, params.cfg, params.agentId)
+    ? stripCommandAddressingMentions(anchored, params.ctx, params.cfg, params.agentId)
     : anchored;
   return withoutMentions.replace(/\\n/g, " ").trim();
 }

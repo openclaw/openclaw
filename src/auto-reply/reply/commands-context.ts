@@ -8,7 +8,7 @@ import type { CommandAuthorization } from "../command-auth.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import type { MsgContext } from "../templating.js";
 import type { CommandContext, HandleCommandsParams } from "./commands-types.js";
-import { stripMentions } from "./mentions.js";
+import { stripCommandAddressingMentions } from "./mentions.js";
 
 /** Selection and execution must bind to the same channel, including origin-routed turns. */
 export function resolveCommandChannel(ctx: MsgContext): string {
@@ -59,7 +59,9 @@ export function buildCommandContext(
     (channel ? (channel as CommandContext["channelId"]) : undefined);
   const rawBodyNormalized = triggerBodyNormalized;
   const commandBodyNormalized = normalizeCommandBody(
-    isGroup ? stripMentions(rawBodyNormalized, ctx, cfg, agentId) : rawBodyNormalized,
+    isGroup
+      ? stripCommandAddressingMentions(rawBodyNormalized, ctx, cfg, agentId)
+      : rawBodyNormalized,
     { botUsername: ctx.BotUsername },
   );
 
