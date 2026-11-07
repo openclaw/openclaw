@@ -5,6 +5,7 @@ import {
   commitInternalToolTurnInput,
   getInternalToolTurnCompletion,
   getInternalToolTurnInputScope,
+  setInternalToolTurnCompletion,
 } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { captureAgentToolInputScope } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
@@ -12,7 +13,7 @@ import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
 
 type Route = Omit<
   Parameters<typeof installMessageToolTerminalHook>[0],
-  "agent" | "onDeliveredSourceReply"
+  "agent" | "onDeliveredSourceReply" | "onCompletedSourceReply"
 >;
 type HookResult = Awaited<ReturnType<NonNullable<Agent["afterToolCall"]>>>;
 type CallInput = {
@@ -31,11 +32,18 @@ function fixture(
     : undefined;
   const agent = { afterToolCall: previousAfterToolCall } as unknown as Agent;
   const onDeliveredSourceReply = vi.fn();
-  installMessageToolTerminalHook({ agent, ...route, onDeliveredSourceReply });
+  const onCompletedSourceReply = vi.fn();
+  installMessageToolTerminalHook({
+    agent,
+    ...route,
+    onDeliveredSourceReply,
+    onCompletedSourceReply,
+  });
   return {
     agent,
     previousAfterToolCall,
     onDeliveredSourceReply,
+    onCompletedSourceReply,
     invoke: (input: CallInput = {}) => agent.afterToolCall?.(createAfterToolCallContext(input)),
   };
 }
@@ -245,8 +253,35 @@ describe("message-tool-only source replies", () => {
         }),
       ).resolves.toEqual(terminates ? { terminate: true } : undefined);
       expect(f.onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+      expect(f.onCompletedSourceReply).toHaveBeenCalledTimes(terminates ? 1 : 0);
     },
   );
+
+  it.each<[string, CallInput]>([
+    ["legacy delivery", {}],
+    ["progress delivery", { args: { final: false }, result: settledResult(true) }],
+    [
+      "partial delivery",
+      {
+        isError: true,
+        result: {
+          content: [],
+          details: {
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: true,
+              createdThreadIds: [],
+              sourceReplyDelivered: true,
+            },
+          },
+        },
+      },
+    ],
+  ])("does not record %s as completed custody", async (_label, input) => {
+    const f = fixture();
+    await f.invoke({ ...input, args: { action: "send", message: "Visible reply", ...input.args } });
+    expect(f.onCompletedSourceReply).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["the exact source route", {}, true],
@@ -286,6 +321,7 @@ describe("message-tool-only source replies", () => {
         result: settledResult(true),
       }),
     ).resolves.toEqual({ ...failure, terminate: true });
+    expect(f.onCompletedSourceReply).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])(
@@ -293,6 +329,7 @@ describe("message-tool-only source replies", () => {
     async (newInput) => {
       const context = createAfterToolCallContext({
         args: { action: "send", message: "Delivered once.", final: true },
+        result: settledResult(true),
       });
       const publicationError = new Error("presentation failed");
       const f = fixture(undefined, async () => {
@@ -308,6 +345,10 @@ describe("message-tool-only source replies", () => {
       captureAgentToolInputScope(context, getInternalToolTurnInputScope(completion));
       await expect(f.agent.afterToolCall?.(context)).rejects.toBe(publicationError);
       expect(f.onDeliveredSourceReply).toHaveBeenCalledOnce();
+      expect(f.onCompletedSourceReply).toHaveBeenCalledOnce();
+      // Stream teardown restores the previous hook; it does not revoke a committed reply.
+      setInternalToolTurnCompletion(f.agent, undefined);
+      expect(f.onCompletedSourceReply.mock.calls[0]?.[0]?.()).toBe(!newInput);
       expect(
         completion({
           message: context.assistantMessage,

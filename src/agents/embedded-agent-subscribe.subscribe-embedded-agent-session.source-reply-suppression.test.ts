@@ -24,6 +24,7 @@ function createBlockReplyHarness(
     | "sourceReplyDeliveryMode"
     | "hasDeliveredMessageToolOnlySourceReply"
     | "onDeliveredMessageToolOnlySourceReply"
+    | "onCompletedMessageToolOnlySourceReply"
     | "reasoningMode"
     | "onReasoningEnd"
     | "onReasoningStream"
@@ -320,9 +321,11 @@ describe("subscribeEmbeddedAgentSession", () => {
     "keeps source progress distinct from final receipts for $action (final=$final, mode=$mode)",
     async ({ action, final, mode }) => {
       const onDeliveredMessageToolOnlySourceReply = vi.fn();
+      const onCompletedMessageToolOnlySourceReply = vi.fn();
       const { emit, subscription, onBlockReply, receipt } = createBlockReplyHarness("message_end", {
         sourceReplyDeliveryMode: mode as "automatic" | "message_tool_only",
         onDeliveredMessageToolOnlySourceReply,
+        onCompletedMessageToolOnlySourceReply,
       });
       startTool(emit, "message", "source-send", {
         action,
@@ -347,6 +350,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         expect(onBlockReply).not.toHaveBeenCalled();
       }
       expect(onDeliveredMessageToolOnlySourceReply).toHaveBeenCalledOnce();
+      expect(onCompletedMessageToolOnlySourceReply).toHaveBeenCalledTimes(final ? 1 : 0);
       onBlockReply.mockClear();
 
       emit({

@@ -1,5 +1,14 @@
 import { expect, it, vi } from "vitest";
+import {
+  commitInternalToolTurnInput,
+  getInternalToolTurnCompletion,
+  getInternalToolTurnInputScope,
+} from "../../../packages/agent-core/src/internal-hooks.js";
+import { captureAgentToolInputScope } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { installMessageToolTerminalHook } from "../../agents/embedded-agent-runner/run/message-tool-terminal.js";
+import type { AfterToolCallContext, Agent } from "../../agents/runtime/index.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -9,6 +18,7 @@ import {
   createFollowupRun,
   fallbackAttemptOptions,
   initialFallbackAttemptOptions,
+  runFallbackCandidate,
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import type {
@@ -219,4 +229,174 @@ it("keeps progress callbacks active after message-tool-only reads", async () => 
   expect(onCommandOutput).toHaveBeenCalledWith(
     expect.objectContaining({ output: "failed command output", status: "failed" }),
   );
+});
+
+async function emitSyntheticSourceReply(
+  params: EmbeddedAgentParams,
+  kind: "completed" | "progress" | "partial",
+  newInput = false,
+): Promise<void> {
+  const agent = {} as Agent;
+  installMessageToolTerminalHook({
+    agent,
+    sourceReplyDeliveryMode: "message_tool_only",
+    onCompletedSourceReply: params.onCompletedSourceReplyDelivered,
+  });
+  const args = {
+    action: "send",
+    message: kind === "completed" ? "Completed answer" : "Still working",
+    ...(kind === "progress" ? { final: false } : {}),
+  };
+  const context = {
+    assistantMessage: makeAgentAssistantMessage({ content: [] }),
+    toolCall: { name: "message", arguments: args },
+    args,
+    result: {
+      content: [],
+      details: {
+        messageDelivery: {
+          status: "settled",
+          partialDelivery: kind === "partial",
+          createdThreadIds: [],
+          sourceReplyDelivered: true,
+        },
+      },
+    },
+    isError: kind === "partial",
+  } as unknown as AfterToolCallContext;
+  const completion = getInternalToolTurnCompletion(agent);
+  if (!completion) {
+    throw new Error("Message completion owner missing");
+  }
+  captureAgentToolInputScope(context, getInternalToolTurnInputScope(completion));
+  await agent.afterToolCall?.(context);
+  if (newInput) {
+    commitInternalToolTurnInput(completion);
+  }
+}
+
+function fallbackAfterPrimary(
+  allowed: boolean,
+  expectedError?: string,
+  primaryRoute: readonly [string, string] = ["anthropic", "primary"],
+  fallbackProvider = "xai",
+) {
+  state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+    let primary: Awaited<ReturnType<typeof runFallbackCandidate>> | undefined;
+    try {
+      primary = await runFallbackCandidate(params, ...primaryRoute);
+    } catch (error) {
+      expect(error).toMatchObject({ message: expectedError });
+      expect(params.canFallbackAfterError?.()).toBe(allowed);
+      if (!allowed) {
+        throw error;
+      }
+    }
+    expect(params.canFallbackAfterError?.()).toBe(allowed);
+    if (primary && !allowed) {
+      return primary;
+    }
+    return runFallbackCandidate(
+      params,
+      fallbackProvider,
+      "fallback",
+      fallbackAttemptOptions(params, "unknown"),
+    );
+  });
+}
+
+it.each([
+  [
+    "does not fallback or surface an error after a completed source reply",
+    "completed",
+    false,
+    false,
+  ],
+  ["keeps fallback available after unfinished source progress", "progress", false, true],
+  ["keeps fallback available after unfinished source partial delivery", "partial", false, true],
+  ["keeps fallback available after unfinished source steered input", "completed", true, true],
+] as const)("%s", async (_label, kind, newInput, allowed) => {
+  const failure = "candidate failed after source delivery";
+  state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+    await emitSyntheticSourceReply(params, kind, newInput);
+    throw new Error(failure);
+  });
+  if (allowed) {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Fallback answer" }],
+      meta: {},
+    });
+  } else {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("401 Unauthorized"));
+  }
+  fallbackAfterPrimary(allowed, failure);
+
+  const result = await executeAgentTurn(messageTurn());
+
+  expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(allowed ? 2 : 1);
+  expect(result).toMatchObject(
+    allowed
+      ? { kind: "success", runResult: { payloads: [{ text: "Fallback answer" }] } }
+      : { kind: "final", payload: { text: "NO_REPLY" } },
+  );
+});
+
+it.each([
+  {
+    label: "does not fallback after a plugin harness returns a completed source receipt",
+    evidence: { sourceReplyDelivered: true },
+    primaryRoute: ["codex", "gpt-5.4"] as const,
+    allowed: false,
+  },
+  {
+    label: "keeps fallback available after a plugin harness returns source progress",
+    evidence: {
+      sourceReplyDelivered: true,
+      messagingToolSentTargets: [{ sourceReplyFinal: false }],
+    },
+    primaryRoute: ["codex", "gpt-5.4"] as const,
+    allowed: true,
+  },
+  {
+    label:
+      "keeps fallback available after a plugin harness returns historical source delivery after steering",
+    evidence: {
+      sourceReplyDelivered: true,
+      sourceReplyDeliveryState: "missing",
+      messagingToolSentTargets: [{ sourceReplyFinal: true }],
+    },
+    primaryRoute: ["codex", "gpt-5.4"] as const,
+    allowed: true,
+  },
+  {
+    label: "keeps fallback available for legacy-only plugin delivery evidence",
+    evidence: { sourceReplyDeliveryState: "delivered" },
+    primaryRoute: ["legacy", "primary"] as const,
+    allowed: true,
+  },
+])("$label", async ({ evidence, primaryRoute, allowed }) => {
+  state.runEmbeddedAgentMock.mockResolvedValueOnce({
+    payloads: [{ text: "NO_REPLY" }],
+    ...evidence,
+    meta: { error: { message: "native finalization failed after delivery" } },
+  });
+  if (allowed) {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Fallback answer" }],
+      meta: {},
+    });
+  } else {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("401 Unauthorized"));
+  }
+  fallbackAfterPrimary(allowed, undefined, primaryRoute, "openai");
+
+  const result = await executeAgentTurn(messageTurn());
+
+  expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(allowed ? 2 : 1);
+  expect(result).toMatchObject({
+    kind: "success",
+    runResult: allowed
+      ? { payloads: [{ text: "Fallback answer" }] }
+      : { payloads: [{ text: "NO_REPLY" }], sourceReplyDelivered: true },
+  });
 });

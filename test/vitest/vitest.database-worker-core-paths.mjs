@@ -29,6 +29,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/tools/message-tool.scheduled-lifetime.test.ts",
   "test/telegram-lifecycle-notice-send.test.ts",
   "test/discord-live-policy.integration.test.ts",
+  "test/discord-message-tool-terminal.integration.test.ts",
   "src/commands/startup-config-preflight.fresh-profiles.test.ts",
   "src/channels/message-access/x-requester.test.ts",
   "src/channels/message/ingress-drain.handoff.test.ts",

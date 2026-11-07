@@ -356,6 +356,7 @@ function prepareStream(
     thinkingLevel: attempt.thinkLevel,
     hasDeliveredMessageToolOnlySourceReply: agentSession.hasDeliveredSourceReply,
     onDeliveredMessageToolOnlySourceReply: agentSession.markSourceReplyDelivered,
+    onCompletedMessageToolOnlySourceReply: attempt.onCompletedSourceReplyDelivered,
     trajectoryRecorder: input.trajectoryRecorder,
     onBlockReply: input.onBlockReply,
     onBlockReplyFlush: input.onBlockReplyFlush,

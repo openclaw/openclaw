@@ -191,6 +191,8 @@ export type RunEmbeddedAgentParams = Pick<
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string; backend?: string }) => unknown;
+  /** Reports canonical completion of a settled current-source message-tool reply. */
+  onCompletedSourceReplyDelivered?: (isCurrent?: () => boolean) => void;
   onExecutionPhase?: (info: EmbeddedAgentExecutionPhaseInfo) => void;
   onLaneWait?: (info: { waitMs: number; queuedAhead: number; waiting?: boolean }) => void;
   onRunProgress?: (info: {

@@ -9,7 +9,6 @@ import { appendSessionYieldContext } from "openclaw/plugin-sdk/session-transcrip
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
-  collectTerminalAssistantText,
   isInvalidCodexImagePayloadError,
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
@@ -20,7 +19,7 @@ import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-l
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import {
-  emitCodexAppServerEvent,
+  emitCodexTerminalAssistantSnapshot,
   runCodexAgentEndHook,
   shouldKeepCodexSharedAbortOpen,
 } from "./run-attempt-lifecycle.js";
@@ -59,11 +58,11 @@ export async function finalizeCodexAttempt(
   notifications: CodexAttemptNotificationController,
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
   activeTurn: CodexAttemptActiveTurn,
+  onResultProjected?: (result: EmbeddedRunAttemptResult) => void,
 ): Promise<EmbeddedRunAttemptResult> {
   const { prompt, state: resourceState, trajectoryRecorder } = resources;
   const { context, systemPromptReport } = prompt;
-  const { runtime, attemptTools, activeTranscriptTarget, hookContext } = context;
-  const { hookRunner } = context;
+  const { runtime, attemptTools, activeTranscriptTarget, hookContext, hookRunner } = context;
   const { connection, preparedAuthBinding } = runtime;
   const { effectiveRuntimeProviderId, effectiveRuntimeModelId } = runtime;
   const {
@@ -147,6 +146,8 @@ export async function finalizeCodexAttempt(
           : ("missing" as const),
       });
     }
+    // Preserve this receipt before later finalization work can fail.
+    onResultProjected?.(result);
     const terminalAssistantSource = result.messagesSnapshot.find(
       (message) => readMirrorIdentity(message) === `${activeTurnId}:assistant`,
     );
@@ -613,30 +614,13 @@ export async function finalizeCodexAttempt(
       promptError: normalizeCodexTrajectoryError(finalPromptError),
     });
     resourceState.trajectoryEndRecorded = true;
-    const terminalAssistantText = collectTerminalAssistantText(result);
-    const terminalAssistantItemId = assistantTranscriptIdempotencyKey ?? terminalSourceKey;
-    if (
-      terminalAssistantText &&
-      (assistantTranscriptIdempotencyKey ||
-        ((!streamState.eventEmitted || streamState.needsTerminalSnapshot) &&
-          !finalAborted &&
-          !finalPromptError))
-    ) {
-      void emitCodexAppServerEvent(params, {
-        stream: "assistant",
-        data: {
-          text: terminalAssistantText,
-          // Source identity survives a receipt wait timeout without claiming durability.
-          ...(terminalAssistantItemId
-            ? {
-                itemId: terminalAssistantItemId,
-                replace: true,
-                replaceable: true,
-              }
-            : {}),
-        },
-      });
-    }
+    emitCodexTerminalAssistantSnapshot(params, result, {
+      streamState,
+      finalAborted,
+      finalPromptError,
+      assistantTranscriptIdempotencyKey,
+      terminalSourceKey,
+    });
     // Preserve the exact result identity carrying host-issued TTS delivery provenance.
     const finalizedResult: EmbeddedRunAttemptResult = Object.assign(result, {
       ...(runtimeModelSelection ? { runtimeModelSelection } : {}),

@@ -244,6 +244,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     messageToolFinalByDefault: attempt.messageToolFinalByDefault,
     onDeliveredSourceReply: markSourceReplyDelivered,
+    onCompletedSourceReply: attempt.onCompletedSourceReplyDelivered,
     config: attempt.config,
     currentProvider: attempt.messageChannel ?? attempt.messageProvider,
     currentAccountId: attempt.agentAccountId,
