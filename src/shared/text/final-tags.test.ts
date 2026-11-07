@@ -1,6 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { stripFinalTags } from "./final-tags.js";
-
 describe("stripFinalTags", () => {
   it.each([
     'Example:\n```xml\n<final data-model="demo">payload</final>\n```',
@@ -13,20 +12,22 @@ describe("stripFinalTags", () => {
   ])("preserves literal final tags in Markdown code: %s", (input) => {
     expect(stripFinalTags(input)).toBe(input);
   });
-
   it("strips outside markers without removing their answer or code examples", () => {
     const example = "```xml\n<final>payload</final>\n```";
     expect(stripFinalTags(`<final>Outside answer</final>\n${example}\n<final/>Done`)).toBe(
       `Outside answer\n${example}\nDone`,
     );
+    const matchAll = vi.spyOn(String.prototype, "matchAll");
+    const html = `<div><span>`.repeat(10_000) + `<${"x".repeat(20_000)}>`;
+    expect(stripFinalTags(html)).toBe(html);
+    expect(matchAll).not.toHaveBeenCalled();
+    matchAll.mockRestore();
   });
-
   it("preserves many ordered code regions while removing interleaved outside markers", () => {
     const example = "`<final>literal</final>`";
     const input = `${example}<final>visible</final> `.repeat(2_000);
     expect(stripFinalTags(input)).toBe(`${example}visible `.repeat(2_000));
   });
-
   it.each([
     ["Unclosed `<final>Hello</final>", "Unclosed `Hello"],
     ["<final-result>Hello</final-result>", "<final-result>Hello</final-result>"],
