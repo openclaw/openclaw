@@ -57,6 +57,8 @@ describe("telegram actions contract", () => {
     ] as const) {
       const actions = describeActions(cfg, accountId)?.actions;
       expect(actions?.includes("send")).toBe(sends);
+      // Dice has no gate of its own, so it appears and disappears with sendMessage.
+      expect(actions?.includes("dice")).toBe(sends);
       expect(actions).not.toContain("poll");
     }
   });
