@@ -354,6 +354,30 @@ export async function runControlUiFirstRunFlow(
       `${reply} p`,
     );
 
+    const assistantGroup = ".chat-pane-cache__pane--active .chat-group.assistant";
+    const previousReplies = await page.locator(assistantGroup).evaluateAll((groups) =>
+      groups.map((group) => {
+        const key = group.getAttribute("data-chat-row-key");
+        if (!key) {
+          throw new Error("Assistant reply must have a transcript row key");
+        }
+        return key;
+      }),
+    );
+    const nextReply = `${assistantGroup}${previousReplies.map((key) => `:not([data-chat-row-key=${JSON.stringify(key)}])`).join("")} .chat-text p`;
+    await page.locator(composer).fill("Say hello again in one short sentence.");
+    await wait(`${send}:not([disabled])`);
+    await measure(
+      "second-message-reply",
+      async () => {
+        await page.locator(send).click();
+        await page.locator(nextReply).waitFor();
+        assert.equal(await page.locator(nextReply).innerText(), "Synthetic first-run reply.");
+        await wait(`${composer}:not([disabled])`);
+      },
+      nextReply,
+    );
+
     return {
       onboarding,
       onboardingRestart,
