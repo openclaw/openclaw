@@ -143,7 +143,7 @@ export type ScheduledSessionAutomation = {
     sessionModelOverrideSource?: "auto" | "user";
   };
   operatorAuthority?: AdmittedRunOperatorAuthority;
-  /** Original Control UI admin classification, revalidated by the restored operator source. */
+  /** Original authenticated UI admin delegation, revalidated by the restored operator source. */
   automationAdmin?: true;
   admissionSource: NonNullable<AdmittedRunContext["admissionSource"]>;
   executionIdentity?: import("../../cron/service/state.js").CronExecutionIdentityAdmission;

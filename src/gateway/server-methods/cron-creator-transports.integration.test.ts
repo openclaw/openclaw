@@ -541,6 +541,7 @@ it.each(["admin", "caller", "non-admin", "revoked"] as const)(
     };
     setRuntimeConfigSnapshot(config);
     const client = createOperatorClient({
+      profileId: CREATOR.id,
       scopes: [scenario === "non-admin" ? "operator.write" : "operator.admin"],
     });
     client.connect.client = {

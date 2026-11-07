@@ -75,7 +75,7 @@ export async function captureCronJobTurnTarget(params: {
         }
       },
     });
-    // As for the job's in-session runs, a restored source is an owner only when it was a
+    // As for the job's in-session runs, a restored source is an owner only when it was an
     // authenticated UI administrator; otherwise it is the job's non-owner requester.
     const target = await capture({
       operatorAuthority: operator.authority,

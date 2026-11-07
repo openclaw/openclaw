@@ -1,5 +1,4 @@
 import { isNativeAppUiClient } from "../../packages/gateway-protocol/src/client-info.js";
-import type { GatewayClient } from "./server-methods/shared-types.js";
 
 export const ADMIN_SCOPE = "operator.admin" as const;
 export const READ_SCOPE = "operator.read" as const;
@@ -53,7 +52,13 @@ export function normalizeOperatorScopeList(
 
 /** Authenticated UI administration is separate from browser identity and local execution. */
 export function resolveGatewayUiAdminSource(
-  client: GatewayClient | null | undefined,
+  client:
+    | {
+        connect: { scopes?: readonly string[]; client: { id?: string; mode?: string } };
+        internal?: { controlUiAdmin?: boolean; authenticatedOperator?: boolean };
+      }
+    | null
+    | undefined,
 ): "control-ui-admin" | "native-app-admin" | undefined {
   if (!hasGatewayAdminScope(client)) {
     return undefined;
