@@ -117,6 +117,8 @@ deduplication; results preserve input order and the first payload for each event
 ID. Acknowledgments run after that commit, before the drain can dispatch the batch.
 If an acknowledgment fails, the committed rows remain recoverable and transport
 replays deduplicate normally. This does not add a buffering or coalescing window.
+Core keeps each lane's arrival order inside a batch, across admissions and across
+restarts, and may raise a caller-supplied `receivedAt` to do so.
 Plugin-supplied queues can implement optional `enqueueBatch(events)` with the same
 atomic contract; queues exposing only `enqueue` retain individual admission.
 

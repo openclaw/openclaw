@@ -431,12 +431,16 @@ export async function streamContainerEvents(params: {
         const text = data.toString();
         const envelope = JSON.parse(text) as SignalReceivePayload;
         if (envelope) {
-          // WebSocket callbacks are synchronous. Chain async durable appends so
-          // transport delivery order and receive-handler failures are preserved.
-          eventChain = eventChain.then(async () => {
-            await params.onEvent(envelope);
-          });
+          // Hand each frame on in arrival order without waiting for earlier ones:
+          // the receive handler batches durable appends, and the container drops
+          // messages for a client that stops reading. The chain only joins them
+          // for close and failure.
+          const accepted = Promise.resolve().then(() => params.onEvent(envelope));
+          eventChain = Promise.all([eventChain, accepted]).then(() => undefined);
           void eventChain.catch((err: unknown) => {
+            if (settled) {
+              return;
+            }
             logError(`[signal-ws] receive handler failed: ${coerceErrorMessage(err)}`);
             rejectOnce(err);
             ws.close();
@@ -469,7 +473,7 @@ export async function streamContainerEvents(params: {
         // close, whose final eventChain owns every accepted durable admission.
         shutdownDrainTimer = setTimeout(() => {
           logError(
-            "[signal-ws] shutdown timed out draining accepted receive events; messages may be lost",
+            "[signal-ws] shutdown stopped waiting for received events; stopping ingress still stores every event already read",
           );
           ws.terminate();
           resolveOnce();

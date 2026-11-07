@@ -16,6 +16,11 @@ import type { SignalReceivePayload } from "./monitor/event-handler.types.js";
 import { getOptionalSignalRuntime } from "./runtime.js";
 
 const SIGNAL_INGRESS_DRAIN_INTERVAL_MS = 1_000;
+// Bounds one append transaction, which holds the shared state writer: 10k rows commit
+// in about 0.4 s, and a 100k burst still lands in about 8 s.
+const SIGNAL_INGRESS_BATCH_MAX_EVENTS = 10_000;
+// About 200 MiB of decoded messages; a burst that SQLite keeps up with stays below it.
+const SIGNAL_INGRESS_BACKLOG_WARN_EVENTS = 50_000;
 
 type SignalIngressEnvelope = {
   sourceNumber?: unknown;
@@ -206,12 +211,60 @@ export async function startSignalIngressMonitor(params: {
   });
   monitor.start();
 
+  // Group commit: events that arrive while one append runs share the next transaction,
+  // so a burst moves into the durable queue at SQLite speed instead of one write each.
+  // Receive settles at the durable append; claiming and dispatch run on the drain.
+  type Waiter = {
+    event: SignalPreparedIngressEvent;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  };
+  const waiting: Waiter[] = [];
+  let flushing: Promise<void> | undefined;
+  let backlogWarned = false;
+  const flush = async () => {
+    while (waiting.length > 0) {
+      const batch = waiting.splice(0, SIGNAL_INGRESS_BATCH_MAX_EVENTS);
+      try {
+        await monitor.admitBatch(batch.map((waiter) => waiter.event));
+        batch.forEach((waiter) => waiter.resolve());
+      } catch {
+        // Keep every good event of a failed batch: admit them one by one, so only the
+        // event that cannot be appended (or all of them, if the store is down) rejects.
+        await Promise.all(
+          batch.map((waiter) => monitor.admit(waiter.event).then(waiter.resolve, waiter.reject)),
+        );
+      }
+      if (backlogWarned && waiting.length < SIGNAL_INGRESS_BACKLOG_WARN_EVENTS) {
+        backlogWarned = false;
+      }
+    }
+    // Cleared in the same turn as the empty check, so no receive can be left unflushed.
+    flushing = undefined;
+  };
+
   return {
-    receive: async (event) => {
-      await monitor.admit([event, undefined]);
-      await monitor.waitForPumpIdle();
+    receive: (event) =>
+      new Promise<void>((resolve, reject) => {
+        waiting.push({ event: [event, undefined], resolve, reject });
+        // Accepted edge: a store that stalls keeps later events in memory, as before
+        // durable batching. Nothing is dropped; the warning makes the stall visible.
+        if (!backlogWarned && waiting.length >= SIGNAL_INGRESS_BACKLOG_WARN_EVENTS) {
+          backlogWarned = true;
+          params.runtime.error?.(
+            `signal ingress: ${waiting.length} received messages are waiting in memory for the state database; if this persists, check disk space and database health`,
+          );
+        }
+        flushing ??= flush();
+      }),
+    // Graceful stop keeps every event the socket already read: append them, then stop.
+    stop: async () => {
+      await flushing;
+      await monitor.stop();
     },
-    stop: monitor.stop,
-    waitForIdle: monitor.waitForIdle,
+    waitForIdle: async () => {
+      await flushing;
+      await monitor.waitForIdle();
+    },
   };
 }

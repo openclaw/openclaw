@@ -23,6 +23,7 @@ import {
   retainRetiredIngressClaim,
 } from "./ingress-claim-owner.js";
 import { createIngressWriter } from "./ingress-claim-writes.js";
+import { readIngressBacklogPages, readIngressUnsettled } from "./ingress-drain-backlog.js";
 import type { ChannelIngressDispatchLifecycle } from "./ingress-drain-lifecycle.js";
 import {
   activeClaimKey,
@@ -329,15 +330,6 @@ export function createChannelIngressDrainOwner<
       .catch(() => undefined);
   };
 
-  // A release between separate reads can hide a lane's head from both collections.
-  const readUnsettled = async () =>
-    queue.listUnsettled
-      ? await queue.listUnsettled({ orderBy })
-      : {
-          pending: await queue.listPending({ limit: "all", orderBy }),
-          claims: await queue.listClaims(),
-        };
-
   const createLifecycle = (
     state: ActiveHandlerState<TPayload, TMetadata>,
   ): ChannelIngressDispatchLifecycle => {
@@ -348,7 +340,7 @@ export function createChannelIngressDrainOwner<
     return {
       abortSignal: state.abortController.signal,
       readLaneBacklog: async () => {
-        const { pending, claims } = await readUnsettled();
+        const { pending, claims } = await readIngressUnsettled(queue, { orderBy });
         const waiting = [
           ...pending.filter((row) => retry.delay(row, options.retryPolicy, now()) <= 0),
           ...claims.filter((claim) => {
@@ -624,115 +616,123 @@ export function createChannelIngressDrainOwner<
       await recoverStaleClaims();
     }
 
-    const { pending, claims } = await readUnsettled();
-    const activeLaneKeys = new Set(laneOwnerByKey.keys());
-    const claimedLaneKeys = new Set(
-      claims
-        .filter((claim) => {
-          const state = activeByClaim.get(activeClaimKey(claim));
-          // A failed deferral still owns the lane until its release/backoff commits.
-          return !(
+    // Derived lanes, supersede and priority select from the whole snapshot.
+    const paged =
+      orderBy === "received" &&
+      queue.listUnsettled !== undefined &&
+      !options.deriveLaneKey &&
+      !options.shouldSupersedePending &&
+      !prioritizePending;
+    const blockedLaneKeys = new Set<string>(laneOwnerByKey.keys());
+    const pendingLaneKeys = new Set<string>();
+    const currentTime = now();
+    let retryAt: number | undefined;
+    let started = 0;
+    const pages = readIngressBacklogPages(queue, { orderBy, paged, blockedLaneKeys });
+    for await (const { pending, claims, lastPage } of pages) {
+      for (const claim of claims) {
+        const state = activeByClaim.get(activeClaimKey(claim));
+        // A failed deferral still owns the lane until its release/backoff commits.
+        if (
+          !(
             state?.phase === "deferred" &&
             !state.occupiesLane &&
             !state.settlement &&
             !state.settlementFailure &&
             !state.guillotined &&
             !state.superseded
-          );
-        })
-        .map(laneKeyFor),
-    );
-    const retryDelayedLaneKeys = new Set<string>();
-    const pendingLaneKeys = new Set<string>();
-    const retryDelayed = new Uint8Array(pending.length);
-    const currentTime = now();
-    let retryAt: number | undefined;
-    // The ordered snapshot owns selection for this pass. A delayed head blocks its lane.
-    for (const [index, event] of pending.entries()) {
-      const laneKey = laneKeyFor(event);
-      if (retry.delay(event, options.retryPolicy, now()) > 0) {
-        retryDelayed[index] = 1;
-        if (!pendingLaneKeys.has(laneKey)) {
-          retryDelayedLaneKeys.add(laneKey);
-          const delay = retry.delay(event, options.retryPolicy, currentTime);
-          retryAt = Math.min(retryAt ?? Infinity, currentTime + delay);
+          )
+        ) {
+          blockedLaneKeys.add(laneKeyFor(claim));
         }
       }
-      pendingLaneKeys.add(laneKey);
-    }
-    options.onRetryAt?.(retryAt);
-
-    // Keep claimed and retry-delayed lanes out of this pass.
-    const blockedLaneKeys = new Set<string>([
-      ...activeLaneKeys,
-      ...claimedLaneKeys,
-      ...retryDelayedLaneKeys,
-    ]);
-
-    // Optional supersede scan: pending events may abort unadopted same-lane work.
-    // Free the lane so this pass can take the superseding event.
-    for (const event of pending) {
-      if (shouldStop()) {
-        break;
+      const retryDelayed = new Uint8Array(pending.length);
+      // The ordered snapshot owns selection for this pass. A delayed head blocks its lane.
+      for (const [index, event] of pending.entries()) {
+        const laneKey = laneKeyFor(event);
+        if (retry.delay(event, options.retryPolicy, now()) > 0) {
+          retryDelayed[index] = 1;
+          if (!pendingLaneKeys.has(laneKey)) {
+            blockedLaneKeys.add(laneKey);
+            const delay = retry.delay(event, options.retryPolicy, currentTime);
+            retryAt = Math.min(retryAt ?? Infinity, currentTime + delay);
+          }
+        }
+        pendingLaneKeys.add(laneKey);
       }
-      const laneKey = laneKeyFor(event);
-      if (await supersedeActiveIfNeeded(event, laneKey)) {
-        blockedLaneKeys.delete(laneKey);
+      // Only a pass that saw every delayed head may replace the retry timer. A pass stops
+      // early for started or active work, and its settlement requests the next pass.
+      if (lastPage) {
+        options.onRetryAt?.(retryAt);
       }
-    }
 
-    const candidates = prioritizePending
-      ? pending
-          .map((event, index) => [index, event, Number(prioritizePending(event))] as const)
-          .toSorted((left, right) => right[2] - left[2])
-      : pending.entries();
-    let started = 0;
-    for (const [index, event] of candidates) {
+      // Optional supersede scan: pending events may abort unadopted same-lane work.
+      // Free the lane so this pass can take the superseding event.
+      for (const event of pending) {
+        if (shouldStop()) {
+          break;
+        }
+        const laneKey = laneKeyFor(event);
+        if (await supersedeActiveIfNeeded(event, laneKey)) {
+          blockedLaneKeys.delete(laneKey);
+        }
+      }
+
+      const candidates = prioritizePending
+        ? pending
+            .map((event, index) => [index, event, Number(prioritizePending(event))] as const)
+            .toSorted((left, right) => right[2] - left[2])
+        : pending.entries();
+      for (const [index, event] of candidates) {
+        if (shouldStop() || started >= startLimit) {
+          break;
+        }
+        const selectedLaneKey = laneKeyFor(event);
+        if (retryDelayed[index] === 1 || blockedLaneKeys.has(selectedLaneKey)) {
+          continue;
+        }
+        // The drain already selected this ordered lane head. The pending-only
+        // update arbitrates competing claimants without rereading the backlog.
+        // Scheduling lanes may be per-event; only reconciliation may replace
+        // an existing transport identity checked by the monitor before delivery.
+        const claimLaneKey =
+          event.laneKey === undefined
+            ? options.deriveLaneKey?.(event)
+            : options.reconcileStoredLaneKey
+              ? selectedLaneKey
+              : event.laneKey;
+        const claimed = await queue.claim(event.id, {
+          ownerId,
+          laneKey: claimLaneKey,
+        });
+        if (!claimed) {
+          // A competing owner may still hold the head; its tail waits for the next pass.
+          blockedLaneKeys.add(selectedLaneKey);
+          continue;
+        }
+        if (shouldStop()) {
+          await queue.release(claimed, { recordAttempt: false });
+          break;
+        }
+        const laneKey = laneKeyFor(claimed);
+        const existing = laneOwnerByKey.get(laneKey);
+        if (existing && existing.phase !== "settled") {
+          if (await supersedeActiveIfNeeded(claimed, laneKey)) {
+            blockedLaneKeys.delete(laneKey);
+          }
+          if (laneOwnerByKey.has(laneKey)) {
+            await queue.release(claimed, { recordAttempt: false });
+            blockedLaneKeys.add(laneKey);
+            continue;
+          }
+        }
+        runClaimed(claimed, laneKey);
+        blockedLaneKeys.add(laneKey);
+        started += 1;
+      }
       if (shouldStop() || started >= startLimit) {
         break;
       }
-      const selectedLaneKey = laneKeyFor(event);
-      if (retryDelayed[index] === 1 || blockedLaneKeys.has(selectedLaneKey)) {
-        continue;
-      }
-      // The drain already selected this ordered lane head. The pending-only
-      // update arbitrates competing claimants without rereading the backlog.
-      // Scheduling lanes may be per-event; only reconciliation may replace
-      // an existing transport identity checked by the monitor before delivery.
-      const claimLaneKey =
-        event.laneKey === undefined
-          ? options.deriveLaneKey?.(event)
-          : options.reconcileStoredLaneKey
-            ? selectedLaneKey
-            : event.laneKey;
-      const claimed = await queue.claim(event.id, {
-        ownerId,
-        laneKey: claimLaneKey,
-      });
-      if (!claimed) {
-        // A competing owner may still hold the head; its tail waits for the next pass.
-        blockedLaneKeys.add(selectedLaneKey);
-        continue;
-      }
-      if (shouldStop()) {
-        await queue.release(claimed, { recordAttempt: false });
-        break;
-      }
-      const laneKey = laneKeyFor(claimed);
-      const existing = laneOwnerByKey.get(laneKey);
-      if (existing && existing.phase !== "settled") {
-        if (await supersedeActiveIfNeeded(claimed, laneKey)) {
-          blockedLaneKeys.delete(laneKey);
-        }
-        if (laneOwnerByKey.has(laneKey)) {
-          await queue.release(claimed, { recordAttempt: false });
-          blockedLaneKeys.add(laneKey);
-          continue;
-        }
-      }
-      runClaimed(claimed, laneKey);
-      blockedLaneKeys.add(laneKey);
-      started += 1;
     }
     return { started };
   };

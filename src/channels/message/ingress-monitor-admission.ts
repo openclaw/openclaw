@@ -1,6 +1,7 @@
 /** Per-admission preparation and durable enqueue; the monitor retains scheduling and drain custody. */
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readIngressUnsettled } from "./ingress-drain-backlog.js";
 import type { createChannelIngressDrainOwner } from "./ingress-drain.js";
 import { appendIngressWithRetry } from "./ingress-monitor-tasks.js";
 import type {
@@ -44,17 +45,57 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
   options: ChannelIngressAdmissionOptions<TRaw, TBody, TStoredPayload, TMetadata>,
 ) {
   type Queue = ChannelIngressQueue<TStoredPayload, TMetadata>;
+  type LaneTail = { receivedAt: number; id: string };
+  // Pending rows drain by (receivedAt, eventId), so rows that share an arrival time sort by
+  // id, and a lane's arrival order need not be its id order (group lanes mix senders' ids).
+  // Each event keeps its arrival time unless an earlier admission had a later one, or it
+  // would sort ahead of its lane's last row; then it steps 1 ms past that row. Stepped rows
+  // can run ahead of wall time, so the lane tails are read from the queue once, before the
+  // first admission, and a restart cannot let a new event overtake older rows of its lane.
+  // Admissions run one at a time. Tails behind the arrival time cannot be overtaken, so
+  // only lanes stepped ahead stay in memory.
+  let laneTails: Map<string, LaneTail> | undefined;
+  let lastArrivalAt = -Infinity;
+  const readLaneTails = async () => {
+    const { pending, claims } = await readIngressUnsettled(options.getQueue(), {
+      orderBy: "received",
+    });
+    const tails = new Map<string, LaneTail>();
+    for (const { laneKey, receivedAt, id } of [...pending, ...claims]) {
+      const tail = laneKey === undefined ? undefined : tails.get(laneKey);
+      if (laneKey === undefined || (tail && !sortsAfter({ receivedAt, id }, tail))) {
+        continue;
+      }
+      tails.set(laneKey, { receivedAt, id });
+    }
+    return tails;
+  };
   return async (rawEvents: readonly TRaw[], admitOptions: ChannelIngressAdmissionContext) => {
     const prepared: Array<{
       raw: TRaw;
       facts: ChannelIngressMonitorFacts;
+      receivedAt: number;
       payload: TStoredPayload;
       index: number;
       assertCurrent?: () => void;
     }> = [];
     const results: ChannelIngressMonitorAdmissionResult<Awaited<ReturnType<Queue["enqueue"]>>>[] =
       [];
-    const { receivedAt } = admitOptions;
+    try {
+      laneTails ??= await readLaneTails();
+    } catch (error) {
+      for (const raw of rawEvents) {
+        await options.onAdmissionFailure?.(raw, error);
+      }
+      throw error;
+    }
+    const arrivalAt = Math.max(admitOptions.receivedAt, lastArrivalAt);
+    lastArrivalAt = arrivalAt;
+    for (const [laneKey, tail] of laneTails) {
+      if (tail.receivedAt < arrivalAt) {
+        laneTails.delete(laneKey);
+      }
+    }
     for (const raw of rawEvents) {
       try {
         const facts = admitOptions.facts ?? (await options.inspect(raw));
@@ -62,6 +103,12 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
           results.push({ kind: "ignored" });
           continue;
         }
+        const tail = laneTails.get(facts.laneKey);
+        const receivedAt =
+          !tail || sortsAfter({ receivedAt: arrivalAt, id: facts.eventId }, tail)
+            ? arrivalAt
+            : tail.receivedAt + 1;
+        laneTails.set(facts.laneKey, { receivedAt, id: facts.eventId });
         const transformed = await options.prepareAdmission?.(raw, {
           facts,
           receivedAt,
@@ -87,6 +134,7 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
         prepared.push({
           raw: preparedRaw,
           facts,
+          receivedAt,
           payload,
           index: results.length,
           assertCurrent: transformed?.assertCurrent,
@@ -115,7 +163,7 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
         !hasPolicy && prepared.length === 1 && enqueueAndClaim ? options.getIdleDrain() : undefined;
       const ownerId = idleDrain?.idleOwnerId();
       if (idleDrain && ownerId && enqueueAndClaim) {
-        const { facts, payload } = prepared[0]!;
+        const { facts, payload, receivedAt } = prepared[0]!;
         let admitted: Awaited<ReturnType<typeof enqueueAndClaim>>;
         try {
           admitted = await appendIngressWithRetry(
@@ -164,7 +212,7 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
         queueResults = await appendIngressWithRetry(
           () =>
             enqueueAuthorized(
-              prepared.map(({ facts, payload }) => ({
+              prepared.map(({ facts, payload, receivedAt }) => ({
                 id: facts.eventId,
                 payload,
                 receivedAt,
@@ -178,7 +226,7 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
         queueResults = await appendIngressWithRetry(
           () =>
             enqueueBatch(
-              prepared.map(({ facts, payload }) => ({
+              prepared.map(({ facts, payload, receivedAt }) => ({
                 id: facts.eventId,
                 payload,
                 receivedAt,
@@ -194,7 +242,10 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
       }
       throw error;
     }
-    for (const [index, { raw, facts, payload, index: resultIndex }] of prepared.entries()) {
+    for (const [
+      index,
+      { raw, facts, payload, receivedAt, index: resultIndex },
+    ] of prepared.entries()) {
       try {
         // Shipped plugin-supplied queues may implement only individual admission.
         const enqueue = () => {
@@ -232,4 +283,13 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
     }
     return results;
   };
+}
+
+function sortsAfter(
+  row: { receivedAt: number; id: string },
+  tail: { receivedAt: number; id: string },
+) {
+  return (
+    row.receivedAt > tail.receivedAt || (row.receivedAt === tail.receivedAt && row.id > tail.id)
+  );
 }

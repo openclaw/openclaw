@@ -113,6 +113,7 @@ describe("container receive lifecycle", () => {
     abort.abort();
     await vi.advanceTimersByTimeAsync(10);
     expect(finished).not.toHaveBeenCalled();
+    expect(timestamps).toEqual([1, 2]);
     delivery.resolve();
     await stream;
     expect(timestamps).toEqual([1, 2]);
@@ -133,7 +134,7 @@ describe("container receive lifecycle", () => {
     delivery.reject(error);
     await rejected;
   });
-  it("bounds a stalled drain and reports accepted-message loss risk", async () => {
+  it("bounds a stalled drain and reports that ingress stop keeps read events", async () => {
     const { abort, error, finished, stream } = buffered(() => new Promise<void>(() => {}), 0);
     await vi.advanceTimersByTimeAsync(0);
     abort.abort();
@@ -142,7 +143,7 @@ describe("container receive lifecycle", () => {
     expect(error).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await stream;
-    expect(error).toHaveBeenCalledWith(expect.stringMatching(/receive events.*may be lost/i));
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/stopped waiting.*still stores/i));
     expect(state.terminations).toBe(1);
     expect(vi.getTimerCount()).toBe(0);
   });

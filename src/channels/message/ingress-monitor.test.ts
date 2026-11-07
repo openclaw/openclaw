@@ -462,13 +462,15 @@ describe("channel ingress monitor", () => {
         if (mode === "released") {
           const listUnsettled = queue.listUnsettled!.bind(queue);
           let gateNextScan = true;
+          // Hold the first drain scan that sees the row; admission also reads lane tails.
           queue.listUnsettled = async (...args) => {
-            if (gateNextScan) {
+            const unsettled = await listUnsettled(...args);
+            if (gateNextScan && unsettled.pending.length > 0) {
               gateNextScan = false;
               scanStarted.resolve();
               await scanGate.promise;
             }
-            return await listUnsettled(...args);
+            return unsettled;
           };
         }
         const monitor = createMonitor(queue, deliver, {
