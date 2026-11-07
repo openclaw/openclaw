@@ -21,7 +21,8 @@ import {
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
-const RESERVATION_SETTLEMENT_ATTEMPTS = 5;
+// Outlast the census window, so a poller's next short-lived child cannot refuse settlement.
+const RESERVATION_SETTLEMENT_ATTEMPTS = 20;
 
 const receiptSchema = z.object({
   nonce: z.string(),
