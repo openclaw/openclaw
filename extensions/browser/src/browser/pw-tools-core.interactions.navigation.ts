@@ -19,6 +19,7 @@ import {
   wasBrowserNavigationSourcePreservedAfterPolicyDenial,
   withPageNavigationRequestGuard,
 } from "./pw-session.js";
+import { translateCrashedPageError } from "./pw-session-crash-state.js";
 import { toAIFriendlyError } from "./pw-tools-core.shared.js";
 
 export type InteractionTargetOptions = {
@@ -421,7 +422,11 @@ export async function awaitActionWithAbort<T>(
   onActionResolvedAfterAbort?: () => void,
 ): Promise<T> {
   if (!signal) {
-    return await actionPromise;
+    try {
+      return await actionPromise;
+    } catch (err) {
+      throw translateCrashedPageError(err) ?? err;
+    }
   }
   try {
     return await racePromiseWithAbortSignal(actionPromise, signal, ({ reason }) =>
@@ -433,7 +438,7 @@ export async function awaitActionWithAbort<T>(
       () => onActionResolvedAfterAbort?.(),
       () => {},
     );
-    throw err;
+    throw translateCrashedPageError(err) ?? err;
   }
 }
 

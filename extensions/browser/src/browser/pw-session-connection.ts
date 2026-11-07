@@ -18,7 +18,7 @@ import {
 import { getChromeWebSocketEndpoint } from "./chrome.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
 import type { BrowserEngineId } from "./engines/types.js";
-import { BrowserTabNotFoundError } from "./errors.js";
+import { BrowserTabNotFoundError, CrashedBrowserTargetError } from "./errors.js";
 import type { RelayOperationReference } from "./extension-relay/owner-client.js";
 import {
   connectRelayBrowser,
@@ -45,6 +45,7 @@ import {
   markConnectionScopedBrowser,
   pageTargetInfo,
 } from "./pw-session-page-target.js";
+import { isPageCrashed } from "./pw-session-crash-state.js";
 import {
   bindRoleRefsTarget,
   ensurePageState,
@@ -581,6 +582,9 @@ async function getPageForTargetIdOnce(opts: {
     ? accessible.find((entry) => entry.targetId === opts.targetId)
     : accessible[0];
   if (found) {
+    if (isPageCrashed(found.page)) {
+      throw new CrashedBrowserTargetError();
+    }
     bindRoleRefsTarget(found.page, opts.cdpUrl, found.targetId);
     if (!engine || engine === "chromium") {
       await prepareMeetPlaybackObservation(found.page);

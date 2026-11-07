@@ -23,6 +23,7 @@ import {
   type BrowserNavigationPolicyOptions,
 } from "./navigation-guard.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
+import { isPageCrashed } from "./pw-session-crash-state.js";
 import {
   clearBlockedPageRef,
   clearBlockedPageRefsForCdpUrl,
@@ -426,6 +427,7 @@ export async function listPagesViaPlaywright(opts: {
                       title: targetInfo.title,
                       url: page.url(),
                       type: "page" as const,
+                      ...(isPageCrashed(page) ? { crashed: true } : {}),
                     },
                   };
                 }),

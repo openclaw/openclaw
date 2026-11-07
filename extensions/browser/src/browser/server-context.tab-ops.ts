@@ -215,6 +215,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             url: p.url,
             type: p.type,
           };
+          if (p.crashed) {
+            tab.crashed = true;
+          }
           if (webExtensionTabId !== undefined) {
             tab.webExtensionTabId = webExtensionTabId;
           }
