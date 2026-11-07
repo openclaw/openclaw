@@ -802,6 +802,17 @@ plugin-included resources nested inside a template remain protected. The dry-run
 plan and archive manifest report existing omitted templates as `regenerable`.
 This flag does not delete or modify local templates.
 
+Archives include Doctor's retained pre-migration originals
+(`<database>.pre-startup-migration-<id>.bak` and `.scoped.bak`) by default,
+because they are the only way to return a database to the generation before its
+last migration. Use `--exclude-migration-backups` to omit them when you keep a
+separate pre-upgrade backup. It matches only Doctor's exact names beside the
+shared state database and each agent database; similar files stay included.
+The dry-run plan, JSON result, and archive manifest list each omitted original
+as `excluded`. The live databases are still captured as usual. A restored archive cannot roll back the last migration with
+those originals. This flag does not delete or modify them; `openclaw update
+cleanup` still owns their retention.
+
 `--only-config` skips state, agent, credentials-directory, workspace, and
 plugin-resource discovery and archives only the active config file path.
 
