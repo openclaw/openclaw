@@ -87,6 +87,7 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
   it("filters browser-internal and non-page targets from raw CDP tab listing", async () => {
     const { remote } = rawList([
       rawTab("OMNI", "chrome://omnibox-popup.top-chrome/"),
+      rawTab("SEARCH", "chrome-search://most-visited/single.html"),
       rawTab("UNTRUSTED", "chrome-untrusted://foo/"),
       rawTab("WORKER", "https://example.com/worker.js", "worker"),
       rawTab("T1", "https://example.com"),
