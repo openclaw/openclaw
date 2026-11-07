@@ -11,7 +11,7 @@ import {
   type MailboxMessage,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { applyMailboxMessage, startMailboxReader } from "./mailbox-reader.js";
-import { linkedClaw } from "./openclaw-id.test-support.js";
+import { linkedClaw, redemptionMail } from "./openclaw-id.test-support.js";
 
 const rootMail: MailboxMessage = {
   message_id: "m1",
@@ -148,6 +148,46 @@ describe("mailbox reader callbacks", () => {
       stop.signal,
     );
     expect(submit).toHaveBeenCalledTimes(1);
+  });
+});
+
+it("settles accountless member redemptions as refused without blocking the next valid message", async () => {
+  const { message } = await redemptionMail({
+    clawId: "a".repeat(32),
+    inviteId: "b".repeat(32),
+    proofKey: new Uint8Array(32),
+    accountId: "acct-bob",
+    email: "bob@example.test",
+  });
+  const accountless: MailboxMessage = {
+    ...message,
+    from: {
+      ...message.from,
+      account_id: null,
+      email: null,
+      display_name: null,
+      device_fp: "fp:node",
+    },
+  };
+  const refused = {
+    ok: false,
+    code: "audience_mismatch",
+    detail: "redeeming account is not the invite audience",
+  };
+  const accepted = { ok: true as const, status: "pending" as const, events: [] };
+  const redeem = vi.fn(async () => accepted);
+  const submit = vi.fn();
+  const settle = vi.fn(async () => {});
+  expect(await applyMailboxMessage(accountless, { redeem, submit }, settle)).toEqual([refused]);
+  expect(settle).toHaveBeenCalledWith(refused);
+  expect(redeem).not.toHaveBeenCalled();
+  expect(submit).not.toHaveBeenCalled();
+  expect(await applyMailboxMessage(message, { redeem, submit }, settle)).toEqual([accepted]);
+  expect(redeem).toHaveBeenCalledExactlyOnceWith(message.payload.redemption, {
+    account_id: "acct-bob",
+    email: "bob@example.test",
+    display_name: "Bob",
+    location_hint: message.location_hint,
   });
 });
 

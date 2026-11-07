@@ -34,7 +34,11 @@ import {
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { verifyBinding } from "./binding-check.js";
-import { needsAllowlistUpgrade, upgradeToAllowlist } from "./claw-migration.js";
+import {
+  needsAllowlistUpgrade,
+  upgradeNodeCollections,
+  upgradeToAllowlist,
+} from "./claw-migration.js";
 import {
   assertSameClawIdentity,
   assertStoredClawText,
@@ -153,6 +157,7 @@ export function createOpenClawIdAuthority(
     let current = needsAllowlistUpgrade(stored)
       ? await upgradeToAllowlist(stored, nowSeconds())
       : stored;
+    current = upgradeNodeCollections(current);
     if (
       Object.keys(current.authority?.members ?? {}).some(
         (id) => !Object.hasOwn(current.member_approved_at ?? {}, id),

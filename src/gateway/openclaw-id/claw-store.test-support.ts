@@ -30,6 +30,8 @@ export function fullClaw(text = TEXT): StoredClaw {
     owner_devices: {},
     members: {},
     invites: {},
+    nodes: {},
+    node_invites: {},
   };
   const peers: string[] = [];
   for (let d = 0; d < MAX_OWNER_DEVICES; d += 1) {
