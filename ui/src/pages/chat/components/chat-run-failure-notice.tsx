@@ -57,12 +57,10 @@ export function ChatRunFailureNotice(props: {
   const detail = createMemo(() => formatWebUiIconErrorText(props.summary).trim());
   const concise = createMemo(() => {
     const firstLine = detail().split(/\r?\n/u)[0] ?? "";
-    return firstLine.length <= 240 ? firstLine : t("chat.recovery.failedHelp");
+    return firstLine.length <= 240 ? firstLine : undefined;
   });
   // The well always holds the full error, so a one-line error is not repeated above it.
-  const lead = createMemo(() =>
-    concise() === detail() || concise() === t("chat.recovery.failedHelp") ? undefined : concise(),
-  );
+  const lead = createMemo(() => (concise() === detail() ? undefined : concise()));
   const logRef = createScrollStateRef(
     (log, state) => {
       log.toggleAttribute("data-fade-top", !state.atStart);
@@ -136,12 +134,11 @@ export function ChatRunFailureNotice(props: {
             setOpen(next);
           }}
         >
-          <p class="chat-run-failure__summary">
-            <Show when={lead()}>
-              <bdi>{lead()}</bdi>{" "}
-            </Show>
-            {t("chat.recovery.failedHelp")}
-          </p>
+          <Show when={lead()}>
+            <p class="chat-run-failure__summary">
+              <bdi>{lead()}</bdi>
+            </p>
+          </Show>
           {/* Logs are technical strings, so they stay left to right in every locale. */}
           <div class="chat-run-failure__well" dir="ltr">
             <pre
