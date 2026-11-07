@@ -157,6 +157,11 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     : undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   try {
+    for (const diagnostic of bundleMcpRuntime?.diagnostics ?? []) {
+      log.warn(
+        `MCP server "${diagnostic.serverName}" tools may be unavailable for this turn: ${diagnostic.message}`,
+      );
+    }
     phases.mark("attempt.bundle-tools.lsp");
     const bundleLspEnabled = shouldCreateBundleLspRuntimeForAttempt({
       toolsEnabled: auxiliaryToolsEnabled,

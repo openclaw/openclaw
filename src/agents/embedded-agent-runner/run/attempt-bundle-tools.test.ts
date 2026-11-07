@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
@@ -12,6 +12,7 @@ import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 import { listPersistedRuntimeToolSchemaQuarantines } from "../../tool-schema-quarantine-health.js";
 import { withRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
+import { log } from "../logger.js";
 
 const mocks = vi.hoisted(() => ({
   createBundleLspToolRuntime: vi.fn(),
@@ -101,6 +102,31 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       function: { name, parameters: { type: "object" as const } },
     }));
   }
+
+  it("warns on each turn when an OAuth server is unavailable while retaining other tools", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    onTestFinished(() => warn.mockRestore());
+    mockMcp();
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+      tools: [createStubTool("healthy__read")],
+      diagnostics: [
+        {
+          serverName: "remote",
+          safeServerName: "remote",
+          launchSummary: "Streamable HTTP",
+          message: 'MCP server "remote" requires OAuth authorization. Sign in from Settings → MCP.',
+        },
+      ],
+    });
+    for (let turn = 0; turn < 2; turn++) {
+      const result = await prepare(createInput([], [createStubTool("read")]));
+      expect(toolNames(result.uncompactedEffectiveTools)).toEqual(["read", "healthy__read"]);
+      expect(warn).toHaveBeenNthCalledWith(
+        turn + 1,
+        'MCP server "remote" tools may be unavailable for this turn: MCP server "remote" requires OAuth authorization. Sign in from Settings → MCP.',
+      );
+    }
+  });
 
   function setAllow(input: ReturnType<typeof createInput>, allow: string[]) {
     input.attempt.toolsAllow = allow;
