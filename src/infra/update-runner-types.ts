@@ -12,7 +12,7 @@ export type { UpdateRunResult } from "./update-run-result.js";
 
 export type CommandRunner = (
   argv: string[],
-  options: CommandOptions,
+  options: CommandOptions & { onUpdateProgress?: (message: string) => void },
 ) => Promise<
   Pick<SpawnResult, "stdout" | "stderr" | "code" | "outputLimitExceeded"> &
     Partial<Pick<SpawnResult, "signal" | "killed" | "termination">>
@@ -31,6 +31,7 @@ export type UpdateStepProgress = {
   onRollbackOutcome?: (outcome: NonNullable<UpdateRunResult["rollbackOutcome"]>) => void;
   onHeartbeat?: () => void;
   onStepStart?: (step: UpdateStepInfo) => void | Promise<void>;
+  onStepProgress?: (step: UpdateStepInfo & { message: string }) => void;
   onStepComplete?: (step: UpdateStepCompletion) => void | Promise<void>;
 };
 
