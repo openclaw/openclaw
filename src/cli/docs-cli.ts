@@ -2,6 +2,7 @@ import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { formatErrorMessage, readErrorCause } from "../infra/errors.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -121,6 +122,13 @@ export function registerDocsCli(program: Command) {
         } catch (error) {
           if (signal?.aborted) {
             return;
+          }
+          // fetch rejects with a bare "fetch failed"; the cause names the network failure.
+          if (error instanceof TypeError && error.message === "fetch failed") {
+            throw new Error(
+              `Docs search failed: ${formatErrorMessage(readErrorCause(error) ?? error)}. Check your network connection and retry.`,
+              { cause: error },
+            );
           }
           const message = error instanceof Error ? error.message : String(error);
           throw new Error(`Docs search failed: ${message}`, { cause: error });

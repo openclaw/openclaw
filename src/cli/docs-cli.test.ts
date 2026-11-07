@@ -178,6 +178,18 @@ it("rejects oversized docs search responses", async () => {
   );
   expect(cancel).toHaveBeenCalledOnce();
 });
+it("names the network failure when the docs search cannot connect", async () => {
+  const cause = Object.assign(new Error("getaddrinfo ENOTFOUND docs.openclaw.ai"), {
+    code: "ENOTFOUND",
+  });
+  fetchMock.mockRejectedValueOnce(new TypeError("fetch failed", { cause }));
+  await search(["gateway"]);
+  expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+    "Docs search failed: getaddrinfo ENOTFOUND docs.openclaw.ai. Check your network connection and retry.",
+  );
+  expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+  expect(runtime.log).not.toHaveBeenCalled();
+});
 it.each([503, 200])("settles a retained HTTP %i body on error or interruption", async (status) => {
   const scope = new AsyncWorkScope();
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
