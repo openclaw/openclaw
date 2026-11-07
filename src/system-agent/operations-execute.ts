@@ -543,6 +543,11 @@ export async function executeSystemAgentOperation(
       await healthCommand({ timeoutMs: 10_000 }, runtime);
       return { applied: false };
     }
+    case "backup-status": {
+      const { backupStatusCommand } = await import("../commands/backup-status.js");
+      await backupStatusCommand(runtime);
+      return { applied: false };
+    }
     case "gateway-status": {
       const overview = await loadOverviewForOperation(opts.deps);
       runtime.log(formatGatewayStatusLine(overview));

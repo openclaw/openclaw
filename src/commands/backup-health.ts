@@ -51,10 +51,11 @@ function buildBackupDoctorHint(freshness: BackupRunFreshness): string | null {
 }
 
 /** Emit non-repairing freshness hints; configuration and ledger reads never probe destinations. */
-export async function noteBackupDoctorHint(
+/** Backup doctor hints, ordered for one-pass output; the note sink stays separate. */
+export async function buildBackupDoctorHints(
   env: NodeJS.ProcessEnv,
   cfg?: OpenClawConfig,
-): Promise<void> {
+): Promise<string[]> {
   const runs = await readBackupRuns(env);
   const hint = buildBackupDoctorHint(summarizeBackupFreshness(runs));
   const hints = hint ? [hint] : [];
@@ -94,6 +95,14 @@ export async function noteBackupDoctorHint(
       }),
     );
   }
+  return hints;
+}
+
+export async function noteBackupDoctorHint(
+  env: NodeJS.ProcessEnv,
+  cfg?: OpenClawConfig,
+): Promise<void> {
+  const hints = await buildBackupDoctorHints(env, cfg);
   if (hints.length) {
     note(hints.join("\n\n"), "Backups");
   }

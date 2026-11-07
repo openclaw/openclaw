@@ -93,14 +93,15 @@ describe("openclaw tool", () => {
       expect.objectContaining({ approved: false }),
     );
 
-    // `health` is discoverable in the schema and advertised as a free read.
+    // `health` and `backup_status` are discoverable in the schema and advertised as free reads.
     const actionEnum = (
       tool.parameters as {
         properties: { action: { enum: string[] } };
       }
     ).properties.action.enum;
     expect(actionEnum).toContain("health");
-    expect(tool.description).toMatch(/Read now:.*health/);
+    expect(actionEnum).toContain("backup_status");
+    expect(tool.description).toMatch(/Read now:.*health.*backup_status/);
   });
 
   it("routes action:overview through the canonical overview executor", async () => {
