@@ -86,9 +86,14 @@ if [[ "$scan_all" == true ]]; then
     exit 1
   fi
 
-  shopt -s nullglob
-  sockets=("$socket_dir"/*)
-  shopt -u nullglob
+  shopt -s nullglob dotglob
+  sockets=()
+  for sock in "$socket_dir"/*; do
+    if [[ -S "$sock" ]]; then
+      sockets+=("$sock")
+    fi
+  done
+  shopt -u nullglob dotglob
 
   if [[ "${#sockets[@]}" -eq 0 ]]; then
     echo "No sockets found under $socket_dir" >&2
@@ -97,9 +102,6 @@ if [[ "$scan_all" == true ]]; then
 
   exit_code=0
   for sock in "${sockets[@]}"; do
-    if [[ ! -S "$sock" ]]; then
-      continue
-    fi
     list_sessions "socket path '$sock'" -S "$sock" || exit_code=$?
   done
   exit "$exit_code"
