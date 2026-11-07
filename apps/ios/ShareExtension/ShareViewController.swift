@@ -214,7 +214,8 @@ final class ShareViewController: UIViewController {
         let json = String(bytes: data, encoding: .utf8)!
         let eventData = try JSONEncoder().encode(NodeEventParams(event: "agent.request", payloadjson: json))
         let nodeEventParams = String(bytes: eventData, encoding: .utf8)!
-        _ = try await gateway.request(method: "node.event", paramsJSON: nodeEventParams, timeoutSeconds: 25)
+        let result = try await gateway.request(method: "node.event", paramsJSON: nodeEventParams, timeoutSeconds: 25)
+        try ShareSendAdmissionError.requireAccepted(result)
     }
 
     private static func gatewayError(_ code: Int, message: String) -> NSError {

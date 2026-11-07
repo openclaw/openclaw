@@ -41,8 +41,7 @@ import {
   createGatewayStartupOperations,
   prepareGatewayRestartIteration,
   prepareGatewayRunLoop,
-  type GatewayRunLoopStartOptions,
-  type GatewayRestartStartupFailureHandler,
+  type GatewayRunLoopParams,
 } from "./run-loop-startup.js";
 import {
   createGatewayRunTerminal,
@@ -56,21 +55,7 @@ import { GatewayUpdateSuccessor } from "./update-successor.js";
 const gatewayLog = createSubsystemLogger("gateway");
 const HARD_EXIT_WATCHDOG_GRACE_MS = 2_000;
 
-export async function runGatewayLoop(params: {
-  start: (
-    params?: GatewayRunLoopStartOptions,
-  ) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
-  /** Grants this run loop authority over the process it exclusively owns. */
-  ownsProcessLifecycle?: boolean;
-  lockPort?: number;
-  lifecycleLockDeadlineMs?: number;
-  healthHost?: string;
-  beginBoot?: (startedAtMs: number) => void | Promise<void>;
-  completeBoot?: (completion: GatewayBootLifecycleCompletion) => void | Promise<void>;
-  /** Reports terminal cleanup disposition, never mere invocation or exit intent. */
-  onProcessResourcesSettled?: (outcome: "drained" | "retained") => void;
-  onRestartStartupFailure?: GatewayRestartStartupFailureHandler;
-}): Promise<number> {
+export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<number> {
   startDiagnosticsTimeline(params.ownsProcessLifecycle === true);
   // macOS/BSD process inspection reports process.title instead of the original
   // argv. Give the long-running Gateway a verifiable identity for lock readers.
@@ -1150,7 +1135,10 @@ export async function runGatewayLoop(params: {
         }
         startupStartedAt = Date.now();
         startupWork = measureGatewayBootstrapStep("cli.bootstrap.boot-lifecycle", () =>
-          params.beginBoot?.(startupStartedAt),
+          params.beginBoot?.(
+            startupStartedAt,
+            isRestartIteration ? undefined : lock?.previousOwner,
+          ),
         );
         await cleanup.waitForStartup(startupWork, startupSignal);
         startupWork = undefined;

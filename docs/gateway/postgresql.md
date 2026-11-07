@@ -21,8 +21,9 @@ into the server. Review the [support matrix](#support-matrix) before deployment.
 Supported means the named flow has PostgreSQL conformance or live acceptance
 proof. It does not promise identical search ranking or latency across engines.
 Full conformance covers PostgreSQL 16–18 with UTF8 and the search extensions
-below. The additional-major qualification uses local Homebrew servers; Linux CI
-continues to run PostgreSQL 17. See the [qualification evidence](#server-major-qualification).
+below. Linux CI runs PostgreSQL 17 daily and PostgreSQL 16 and 18 weekly;
+manual qualification can run all three majors. See the
+[qualification evidence](#server-major-qualification) for the earlier Homebrew runs.
 
 | Family or surface                                 | Status                                  | Scope or remaining proof                                                                                                                                                                                                       |
 | ------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

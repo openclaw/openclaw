@@ -86,9 +86,11 @@ export function classifyControlUiRequest(params: {
         return { kind: "not-control-ui" };
       }
     }
-    // API and join namespaces, including disabled OpenAI endpoints, never serve the SPA.
+    // API, OAuth, and join namespaces retain their runtime owners, including browser GETs.
     if (
-      ["/api", "/j", "/v1"].some((root) => pathname === root || pathname.startsWith(`${root}/`))
+      ["/api", "/j", "/v1", "/oauth"].some(
+        (root) => pathname === root || pathname.startsWith(`${root}/`),
+      )
     ) {
       return { kind: "not-control-ui" };
     }

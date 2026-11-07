@@ -35,7 +35,7 @@ import {
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { createMsFormatter } from "../../lib/format.ts";
+import { createCompactMsFormatter, createMsFormatter } from "../../lib/format.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -115,9 +115,9 @@ export function ApprovalsPage() {
       // Refresh the system timezone with history, not unrelated grants or loading notices.
       historyItems();
       getLocale();
-      // History is a rolling 30-day window, so the row can drop the year.
+      // History is a rolling 30-day window: the row drops the year, and today's date.
       return {
-        short: createMsFormatter({
+        short: createCompactMsFormatter({
           month: "short",
           day: "numeric",
           hour: "numeric",

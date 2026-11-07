@@ -506,6 +506,8 @@ consecutive user turns on the Messages API; Bedrock Converse still merges
 consecutive user turns. Those carriers contain the delimited context body,
 with interpretation guidance once in the stable system prompt. Routes without
 either capability keep transient carriers and normal user-turn merging.
+Fallback attempts keep the same route-specific context format without repeating
+the original user message or attachments.
 Transient carriers remain the cheaper shape on routes without in-history
 system updates when thinking does not bind the prefix: old carriers consume no
 later context or repeated cache-read charges.

@@ -596,6 +596,41 @@ describe("Control UI performance budgets", () => {
     },
   );
 
+  it.each(["report-only", "over-budget base"])(
+    "annotates document and total CSS overages in Actions with %s",
+    (mode) => {
+      const fixture = createCliFixture();
+      fixture.writeHtml(
+        startupHtml +
+          Array.from({ length: 1024 }, (_, index) =>
+            createHash("sha256").update(String(index)).digest("hex"),
+          ).join(""),
+      );
+      for (let index = 0; index < 32; index++) {
+        fixture.writeAsset("extra-" + index + ".css", 53_000, 10_500);
+      }
+      const summary = path.join(fixture.rootDir, "summary.md");
+      const args = mode === "report-only" ? ["--report-only"] : ["--base-dist", fixture.distDir];
+      const result = fixture.run(["--json", ...args], {
+        GITHUB_ACTIONS: "true",
+        GITHUB_STEP_SUMMARY: summary,
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      const report = JSON.parse(result.stdout);
+      if (mode === "over-budget base") {
+        expect(report.violations).toEqual([]);
+      }
+      expect(result.stderr).toContain("::warning file=");
+      const stepSummary = fs.readFileSync(summary, "utf8");
+      for (const metric of ["document gzip", "total CSS gzip", "total CSS raw"]) {
+        expect(report.report).toContain(`warning: ${metric}`);
+        expect(result.stderr).toContain(`${metric} is `);
+        expect(stepSummary).toContain(`${metric} is `);
+      }
+    },
+  );
+
   it("checks an over-budget locale independently when the largest locale shrinks", () => {
     const base = createCliFixture();
     const head = createCliFixture();
