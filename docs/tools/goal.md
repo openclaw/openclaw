@@ -242,6 +242,11 @@ scanner. A saved active goal alone does not start a new process or create a
 schedule after shutdown; normal session recovery or another admitted turn
 provides the next execution opportunity.
 
+Local built-in and Codex continuations retain the admitted source's permissions;
+channel Goals do not require optional Gateway operator-role configuration just
+to continue locally. Codex cloud-worker continuations still require current
+operator authority and supported worker placement.
+
 ## Control UI
 
 Select **Goal** from the command picker with Enter, Tab, or a click, then type
