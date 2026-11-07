@@ -73,13 +73,25 @@ function collectFailureReportIssues(
   );
   const issues = new Map<string, DoctorSessionSqliteIssue>();
   for (const issue of [...target.issues, ...(recoveryTarget?.issues ?? [])]) {
-    issues.set(JSON.stringify([issue.code, issue.message, issue.sessionKey]), issue);
+    issues.set(failureIssueKey(issue), issue);
   }
-  const sanitize = (issue: DoctorSessionSqliteIssue): DoctorSessionSqliteIssue => ({
-    code: issue.code,
-    message: sanitizeFailureIssueMessage(issue, target),
-    sessionKey: issue.sessionKey ? redactSessionKey(issue.sessionKey) : undefined,
-  });
+  // A finding recorded in both sections is the same evidence: sanitize each unique finding once
+  // instead of repeating the work for every report section that renders it.
+  const sanitized = new Map<string, DoctorSessionSqliteIssue>();
+  const sanitize = (issue: DoctorSessionSqliteIssue): DoctorSessionSqliteIssue => {
+    const key = failureIssueKey(issue);
+    const cached = sanitized.get(key);
+    if (cached) {
+      return cached;
+    }
+    const value: DoctorSessionSqliteIssue = {
+      code: issue.code,
+      message: sanitizeFailureIssueMessage(issue),
+      sessionKey: issue.sessionKey ? redactSessionKey(issue.sessionKey) : undefined,
+    };
+    sanitized.set(key, value);
+    return value;
+  };
   return {
     issues: [...issues.values()].map(sanitize),
     recoveryIssues: recoveryTarget?.issues.map(sanitize),
@@ -118,7 +130,7 @@ export function createSessionSqliteMigrationFailureIssue(
           createFailureReportTarget(target, {
             issues: target.issues.map((issue) => ({
               code: issue.code,
-              message: sanitizeFailureIssueMessage(issue, target),
+              message: sanitizeFailureIssueMessage(issue),
             })),
           }),
         ),
@@ -314,19 +326,21 @@ function shortenFailureReportPath(filePath: string): string {
   return filePath;
 }
 
-function sanitizeFailureIssueMessage(
-  issue: DoctorSessionSqliteIssue,
-  target: SessionSqliteMigrationTargetManifest,
-): string {
+function failureIssueKey(issue: DoctorSessionSqliteIssue): string {
+  return JSON.stringify([issue.code, issue.message, issue.sessionKey]);
+}
+
+/**
+ * Redacts private detail from one recorded finding.
+ *
+ * Findings are not matched against the target's planned and completed move paths. That scan only
+ * ever rewrote paths below the home directory into their `~` form, which `redactAbsoluteHomePaths`
+ * already applies to every occurrence in the message; paths outside the home directory were
+ * replaced with themselves. Walking the whole move list per finding made report preparation
+ * O(findings x moves) and left recovery spinning for hours on large session states.
+ */
+function sanitizeFailureIssueMessage(issue: DoctorSessionSqliteIssue): string {
   let message = issue.message;
-  for (const filePath of [
-    target.storePath,
-    target.sqlitePath,
-    ...target.plannedMoves.flatMap((move) => [move.sourcePath, move.archivePath]),
-    ...target.completedMoves.flatMap((move) => [move.sourcePath, move.archivePath]),
-  ]) {
-    message = message.split(filePath).join(shortenFailureReportPath(filePath));
-  }
   if (issue.sessionKey) {
     message = message.split(issue.sessionKey).join(redactSessionKey(issue.sessionKey));
   }

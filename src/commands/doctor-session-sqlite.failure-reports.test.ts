@@ -11,6 +11,7 @@ import {
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
+import { createDoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
   importLegacyStore,
@@ -437,6 +438,79 @@ describe("runDoctorSessionSqlite", () => {
       jsonPath: expectedJsonPath,
       markdownPath: expectedMarkdownPath,
     });
+  });
+
+  it("sanitizes a large recovery report without rescanning every recorded move per issue", () => {
+    const store = createLegacyStore();
+    const manifestPath = path.join(store.tempDir, "large-report.json");
+    const target = trustedMigrationTarget(store);
+    const sessionsDir = path.dirname(target.storePath);
+    const archiveDir = path.join(path.dirname(sessionsDir), "session-sqlite-import-archive");
+    const home = process.env.HOME ?? "/Users/example";
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const moveCount = 1_000;
+    const issueCount = 5_000;
+    const moves = Array.from({ length: moveCount }, (_, index) => ({
+      archivePath: path.join(archiveDir, `session-${index}.jsonl.imported-1`),
+      kind: "transcript" as const,
+      sessionKey: `agent:main:main:${index}`,
+      sourcePath: path.join(sessionsDir, `session-${index}.jsonl`),
+    }));
+    const issues = Array.from({ length: issueCount }, (_, index) => {
+      const move = moves[index % moveCount]!;
+      return {
+        code: "historical_transcript_deferred",
+        message: `ENOENT: no such file or directory, lstat '${move.archivePath}' (finding ${index}, config ${configPath}) token=supersecret`,
+        sessionKey: move.sessionKey,
+      };
+    });
+    const manifest = failureManifest(store, "large-report", {
+      targets: [
+        {
+          ...target,
+          completedMoves: moves,
+          issues,
+          plannedMoves: moves,
+          validationBeforeArchive: "failed",
+        },
+      ],
+    });
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+
+    const startedAt = Date.now();
+    const { jsonPath, markdownPath } = writeSessionSqliteMigrationFailureReports(manifestPath, {
+      reason: "doctor recover completed with remaining issues",
+      recoveryTargets: [createDoctorSessionSqliteTargetReport({ ...target, issues })],
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    // A 100k-finding recovery used to spend hours here: every issue re-scanned every recorded move.
+    expect(elapsedMs).toBeLessThan(5_000);
+    const json = fs.readFileSync(jsonPath, "utf8");
+    const markdown = fs.readFileSync(markdownPath, "utf8");
+    const payload = JSON.parse(json) as {
+      targets: Array<{
+        issues: Array<{ code: string; message: string; sessionKey?: string }>;
+        recoveryIssues?: Array<{ code: string; message: string; sessionKey?: string }>;
+      }>;
+    };
+    // Complete evidence: every recorded and current finding survives sanitization.
+    expect(payload.targets[0]?.issues).toHaveLength(issueCount);
+    expect(payload.targets[0]?.recoveryIssues).toHaveLength(issueCount);
+    expect(markdown).toContain(`- Current recovery issues: ${issueCount}`);
+    expect(markdown).toContain(`- Recorded migration and recovery evidence: ${issueCount}`);
+    expect(payload.targets[0]?.issues[0]).toMatchObject({
+      code: "historical_transcript_deferred",
+      message: expect.stringContaining(moves[0]!.archivePath),
+    });
+    // Privacy: session keys, secrets, and absolute home paths stay redacted in both formats.
+    for (const rendered of [json, markdown]) {
+      expect(rendered).not.toContain("agent:main:main:");
+      expect(rendered).not.toContain("supersecret");
+      expect(rendered).toContain("[redacted-session-key:");
+      expect(rendered).not.toContain(home);
+      expect(rendered).toContain(`~${path.sep}.openclaw${path.sep}openclaw.json`);
+    }
   });
 
   it("keeps bounded GitHub issue bodies on a valid UTF-16 boundary", () => {
