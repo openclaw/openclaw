@@ -569,7 +569,9 @@ it.for(["agent removal", "database move", "deletion", "shutdown"] as const)(
       expect(refusal?.code).toBe(
         outcome === "shutdown"
           ? "agent-database-inspection-pending"
-          : "agent-database-inspection-failed",
+          : outcome === "deletion"
+            ? "agent-deletion"
+            : "agent-database-inspection-failed",
       );
       expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());
       if (outcome !== "shutdown") {
