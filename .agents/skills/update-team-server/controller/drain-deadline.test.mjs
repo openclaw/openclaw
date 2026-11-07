@@ -15,7 +15,7 @@ function ownerFunction(name) {
 // Execute maintained deadline, RPC-budget, and lease-proof control flow with a
 // virtual clock and inert transport. This does not exercise GNU timeout itself.
 function deadlinePoll(t, { firstExit = 124, fresh = "draining", interrupt = 1, generation = 0,
-  expireBeforeRpc = false, firstMalformed = false, firstPayload = "", firstFailures = 1, elapsed = 30, freshExit = 0, second = null, drainBudget, leaseMs = 45_000 } = {}) {
+  expireBeforeRpc = false, firstMalformed = false, firstPayload = "", firstFailures = 1, elapsed = 30, freshExit = 0, second = null, drainBudget, leaseMs = 45_000, postDrainPollSeconds = 0 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "team-drain-deadline-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const library = join(root, "release-lib.mjs");
@@ -97,7 +97,8 @@ poll_suspension() {
   poll_count=$((poll_count + 1))
   if fixture_poll_suspension "$@"; then result=0; else result=$?; fi
   # The first transport consumed the remainder of the graceful deadline.
-  if ((poll_count == 1)); then SECONDS="$ELAPSED"; fi
+  if ((poll_count == 1)); then SECONDS="$ELAPSED";
+  else SECONDS=$((SECONDS + POST_DRAIN_POLL_SECONDS)); fi
   return "$result"
 }
 prepare_suspension /fixture
@@ -109,6 +110,7 @@ prepare_suspension /fixture
       ...(drainBudget === undefined ? {} : { OPENCLAW_TEAM_DRAIN_BUDGET: String(drainBudget) }),
       FIXTURE_LIB: library, EVENTS: join(root, "events"),
       EXPIRE_BEFORE_RPC: String(Number(expireBeforeRpc)), ELAPSED: String(elapsed), FRESH_EXIT: String(freshExit),
+      POST_DRAIN_POLL_SECONDS: String(postDrainPollSeconds),
       INTERRUPT: String(interrupt), FIRST_FAILURES: String(firstFailures), FIRST_EXIT: String(firstExit), GENERATION_EXIT: String(generation),
       PREPARED: JSON.stringify(prepared), FIRST_PAYLOAD: firstMalformed ? "{}" : firstPayload,
       SECOND_PAYLOAD: second ? JSON.stringify(second(expiry)) : "",
@@ -201,6 +203,19 @@ test("write custody held past the bounded window still refuses interruption", (t
   assert.match(result.stdout, /WAITING transient write custody/);
   assert.match(result.stderr, /SUSPENSION_CHECK_FAILED stage=policy exit=1 state=DRAINING activeCount=1 blockers=session-mutation:1 custody=held/);
   assert.doesNotMatch(result.stdout, /INTERRUPTING/);
+});
+
+test("expired custody wait is reported without dispatching another status RPC", (t) => {
+  const { result, events } = deadlinePoll(t, {
+    firstFailures: 0, fresh: "custody", postDrainPollSeconds: 3,
+  });
+  assert.equal(result.status, 75, result.stderr + result.stdout);
+  assert.match(result.stdout, /WAITING transient write custody/);
+  assert.match(result.stdout, /DEFERRED bounded interruption write custody wait expired activeCount=1 blockers=session-mutation:1/);
+  assert.doesNotMatch(result.stdout, /INTERRUPTING/);
+  assert.equal(events.filter((event) => event.startsWith("status")).length, 2);
+  assert.doesNotMatch(result.stderr, /SUSPENSION_POLL_FAILED|SUSPENSION_CHECK_FAILED stage=status/,
+    "Both dispatched status calls succeeded; the custody deadline expired during the next sleep.");
 });
 
 const transportFailure = (kind, code) => JSON.stringify({ ok: false,

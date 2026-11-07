@@ -18,7 +18,7 @@ import { agentList, sessionList } from "./compact.test-support.ts";
 import { settleRoster } from "./roster.test-support.ts";
 import "../../components/app-sidebar.tsx";
 
-await import("../../components/viewer-facepile.ts");
+await import("../../components/solid/viewer-facepile.tsx");
 
 const MAIN = "agent:main:main";
 const RESEARCH = "agent:research:main";
@@ -62,17 +62,25 @@ async function mountNavigation(
   return { ...mounted, setSessionKey, onNavigate };
 }
 
-it("follows the deployment flag without using the old invitation dismissal", async () => {
-  const { sidebar, context, find } = await mountAgentSidebar(undefined, null);
+it("honors deployment policy and existing Community dismissals", async () => {
   localStorage.setItem("openclaw:control-ui:community-invite:v2", "dismissed");
+  const { sidebar, context, find } = await mountAgentSidebar(undefined, null);
   const fetch = vi.spyOn(globalThis, "fetch");
   try {
     for (const enabled of [true, false]) {
       fetch.mockResolvedValue(Response.json({ serverVersion: "test", communityInvite: enabled }));
       await context.config.refresh();
       await sidebar.updateComplete;
-      expect(Boolean(find(".sidebar-community__entry"))).toBe(enabled);
+      expect(find(".community-invite-card")).toBeNull();
     }
+    localStorage.removeItem("openclaw:control-ui:community-invite:v2");
+    fetch.mockResolvedValue(Response.json({ serverVersion: "test", communityInvite: true }));
+    await context.config.refresh();
+    await sidebar.updateComplete;
+    expect(find(".community-invite-card")).not.toBeNull();
+    find<HTMLButtonElement>(".invite__close")!.click();
+    await sidebar.updateComplete;
+    expect(find(".community-invite-card")).toBeNull();
   } finally {
     fetch.mockRestore();
     localStorage.removeItem("openclaw:control-ui:community-invite:v2");
@@ -105,7 +113,7 @@ it.each(["chip", "roster"] as const)(
     find<HTMLButtonElement>(".sidebar-rail .sidebar-brand__search")?.click();
     expect(onToggleSidebar).toHaveBeenCalledOnce();
     expect(onOpenPalette).toHaveBeenCalledOnce();
-    expect(newSessionLink?.getAttribute("aria-label")).toBe("New conversation");
+    expect(newSessionLink?.getAttribute("aria-label")).toBe("New session");
     expect(newSessionLink).toBeInstanceOf(HTMLAnchorElement);
     expect(newSessionLink?.getAttribute("aria-disabled")).toBe("true");
     expect(newSessionLink?.hasAttribute("href")).toBe(false);
@@ -116,7 +124,7 @@ it.each(["chip", "roster"] as const)(
     sidebar.connected = true;
     await sidebar.updateComplete;
     const link = find<HTMLAnchorElement>(".sidebar-rail .sidebar-new-session")!;
-    expect(link.getAttribute("aria-label")).toBe("New conversation");
+    expect(link.getAttribute("aria-label")).toBe("New session");
     expect(link.getAttribute("href")).toBe("/control/new?agent=research");
     expect(link.hasAttribute("aria-disabled")).toBe(false);
     for (const modifiers of [
@@ -267,7 +275,7 @@ it("switches the Skills owner without opening an agent conversation", async () =
   expect(onNavigate).not.toHaveBeenCalled();
 });
 
-it("keeps the identity card available offline with reconnect and retry actions", async () => {
+it("keeps the identity card available during recovery and offers retry only offline", async () => {
   const { sidebar, find } = await mountAgentSidebar(undefined, null);
   const onRetryConnect = vi.fn();
   sidebar.onRetryConnect = onRetryConnect;
@@ -295,7 +303,16 @@ it("keeps the identity card available offline with reconnect and retry actions",
   card?.click();
   await sidebar.updateComplete;
   const menu = find<HTMLElement>(".sidebar-identity-menu");
+  expect(menu).not.toBeNull();
+  expect(menu?.querySelector('[data-value="command:retry-connect"]')).toBeNull();
+  expect(onRetryConnect).not.toHaveBeenCalled();
+
+  sidebar.connectionStatus = "offline";
+  await sidebar.updateComplete;
+  expect(find(".sidebar-identity-card")).toBe(card);
+  expect(card?.getAttribute("data-connection-status")).toBe("offline");
   const retry = menu?.querySelector<HTMLElement>('[data-value="command:retry-connect"]');
+  expect(retry).not.toBeNull();
   retry?.click();
   await vi.waitFor(() => expect(onRetryConnect).toHaveBeenCalledOnce());
 
@@ -422,7 +439,7 @@ it("keeps main-session activity on its agent header without duplicate main or su
   expect(findAll('[data-agent-id="main"][href="/chat/main"]')).toHaveLength(1);
   expect(find(`[data-session-key="${key}"]`)).toBeNull();
   expect(find(`[data-child-session-toggle="${key}"]`)).toBeNull();
-  expect(find("[data-session-key=CHILD]")).toBeNull();
+  expect(find(`[data-session-key="${CHILD}"]`)).toBeNull();
   expect(find(`${header} .session-glyph__ring[aria-label="Active run"]`)).not.toBeNull();
 
   const result = harness.sessions.state.result!;
@@ -449,13 +466,5 @@ it("keeps main-session activity on its agent header without duplicate main or su
   expect(findAll(header)).toHaveLength(1);
   expect(find(`[data-session-key="${key}"]`)).toBeNull();
   expect(find(`${header} .session-glyph__ring`)).toBeNull();
-  const attention = find(`${header} [data-session-attention="error"]`)!;
-  expect(attention).not.toBeNull();
-  await attention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
-    .updateComplete;
-  const description = (attention.getAttribute("aria-describedby") ?? "")
-    .split(/\s+/u)
-    .map((id) => attention.ownerDocument.getElementById(id)?.textContent ?? "")
-    .join(" ");
-  expect(description).toContain("Child session Spawned thread failed: Review failed");
+  expect(find(`${header} [data-session-attention="error"]`)).toBeNull();
 });

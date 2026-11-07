@@ -1,7 +1,6 @@
-import { listAgentIds, tryResolveSoleAgentId } from "../agents/agent-scope.js";
 import {
   maybeRepairOwnedChromeExtensionNativeHosts,
-  noteChromeMcpBrowserReadiness,
+  collectBrowserReadinessFindings,
 } from "../commands/doctor-browser.js";
 import { hasConfiguredCommandOwners } from "../commands/doctor-command-owner.js";
 import {
@@ -25,16 +24,18 @@ import {
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
-import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
-import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
 import { acpAgentModelCheck } from "./doctor-acp-agent-model-check.js";
 import { finalConfigValidationCheck } from "./doctor-config-validation-check.js";
+import { bootstrapSizeCheck } from "./doctor-core-bootstrap-size-check.js";
+import { cronInferenceCheck, legacyCronStoreCheck } from "./doctor-cron-checks.js";
 import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
 import { gatewayServicesExtraCheck } from "./doctor-gateway-services-check.js";
 import type { DoctorHealthCheckContext } from "./doctor-health-contribution-types.js";
 import { legacyOwnedRepair } from "./doctor-health-contribution.js";
+import { legacyOutputCapCheck } from "./doctor-legacy-output-cap-check.js";
 import { modelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
+import { sessionArchiveCacheCheck } from "./doctor-session-archive-cache-check.js";
 import { runtimeToolSchemaCheck } from "./doctor-tool-schema-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import { securityAuditFindingToHealthFinding } from "./health-check-adapter.js";
@@ -48,7 +49,6 @@ const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
   "core/doctor/telegram-general-topic-conversations";
-const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
 
 const gatewayConfigCheck: CoreHealthCheck = {
   id: "core/doctor/gateway-config",
@@ -58,6 +58,8 @@ const gatewayConfigCheck: CoreHealthCheck = {
     if (!ctx.cfg.gateway?.mode) {
       findings.push({
         checkId: "core/doctor/gateway-config",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/gateway/configuration",
         severity: "warning",
         message: "gateway.mode is unset; gateway start will be blocked.",
         path: "gateway.mode",
@@ -68,6 +70,8 @@ const gatewayConfigCheck: CoreHealthCheck = {
     if (ctx.cfg.gateway?.mode !== "remote" && hasAmbiguousGatewayAuthModeConfig(ctx.cfg)) {
       findings.push({
         checkId: "core/doctor/gateway-config",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/gateway/configuration",
         severity: "warning",
         message:
           "gateway.auth.token and gateway.auth.password are both configured while gateway.auth.mode is unset; auth selection is ambiguous.",
@@ -90,6 +94,8 @@ const commandOwnerCheck: CoreHealthCheck = {
     return [
       {
         checkId: "core/doctor/command-owner",
+        category: "recommended",
+        docsUrl: "https://docs.openclaw.ai/tools/slash-commands",
         severity: "info",
         message:
           "No command owner is configured. Owner-only commands (/diagnostics, /export-trajectory, /config, exec approvals) have no allowed sender.",
@@ -98,34 +104,6 @@ const commandOwnerCheck: CoreHealthCheck = {
           "Set commands.ownerAllowFrom to your channel user id, e.g. `openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'`.",
       },
     ];
-  },
-};
-
-const skillWorkshopToolPolicyCheck: CoreHealthCheck = {
-  id: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
-  description: "Autonomous Skill Workshop capture has a callable review tool.",
-  async detect(ctx) {
-    const workshopEnabled = resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off";
-    const listedAgentIds = listAgentIds(ctx.cfg);
-    const diagnostics = (listedAgentIds.length > 0 ? listedAgentIds : [undefined]).flatMap(
-      (agentId) => {
-        const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
-          config: ctx.cfg,
-          workshopEnabled,
-          ...(agentId ? { agentId } : {}),
-        });
-        return diagnostic ? [diagnostic] : [];
-      },
-    );
-    return diagnostics.map((diagnostic) => ({
-      checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
-      severity: "warning",
-      message: diagnostic.detail,
-      path: diagnostic.source,
-      target: diagnostic.agentId,
-      requirement: "Autonomous Skill Workshop review requires the skill_workshop tool.",
-      fixHint: diagnostic.fix,
-    }));
   },
 };
 
@@ -143,6 +121,8 @@ const hooksModelCheck: CoreHealthCheck = {
     return (await collectHooksModelIssues(ctx.cfg)).map(({ kind, model }): HealthFinding => {
       const finding: HealthFinding = {
         checkId: "core/doctor/hooks-model",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/automation/cron-jobs/gmail",
         severity: "warning",
         path: "hooks.gmail.model",
         message:
@@ -151,15 +131,11 @@ const hooksModelCheck: CoreHealthCheck = {
             : kind === "not-allowed"
               ? `hooks.gmail.model "${model}" is not allowed by agents.defaults.modelPolicy.allow.`
               : `hooks.gmail.model "${model}" is not in the model catalog.`,
+        fixHint:
+          kind === "not-allowed"
+            ? "Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or remove hooks.gmail.model."
+            : "Run `openclaw models list` and set hooks.gmail.model to a configured provider/model, or remove the override to use the agent default.",
       };
-      if (kind !== "unresolved") {
-        Object.assign(finding, {
-          fixHint:
-            kind === "not-allowed"
-              ? "Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or remove hooks.gmail.model."
-              : "Choose a model from the configured provider catalog.",
-        });
-      }
       return finding;
     });
   },
@@ -172,7 +148,7 @@ const legacyStateCheck: CoreHealthCheck = {
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../infra/state-migrations.doctor.js");
     const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
-    const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
+    const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config: ctx.cfg });
     const detected = await detectLegacyStateMigrations({
       cfg: ctx.cfg,
       doctorOnlyStateMigrations: true,
@@ -181,6 +157,8 @@ const legacyStateCheck: CoreHealthCheck = {
     return [
       ...detected.preview.map((line): HealthFinding => ({
         checkId: "core/doctor/legacy-state",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/state-migrations",
         severity: "warning",
         message: line.replace(/^- /, ""),
         path: detected.stateDir,
@@ -188,6 +166,8 @@ const legacyStateCheck: CoreHealthCheck = {
       })),
       ...detected.warnings.map((warning): HealthFinding => ({
         checkId: "core/doctor/legacy-state",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/state-migrations",
         severity: "warning",
         message: warning,
         path: detected.stateDir,
@@ -197,78 +177,13 @@ const legacyStateCheck: CoreHealthCheck = {
   },
 };
 
-const bootstrapSizeCheck: CoreHealthCheck = {
-  id: "core/doctor/bootstrap-size",
-  description: "Workspace bootstrap files fit within configured injection limits.",
-  async detect(ctx) {
-    if (!ctx.cwd) {
-      return [];
-    }
-    const { collectBootstrapFileSize } = await import("../commands/doctor-bootstrap-size.js");
-    const { isFixedUserCapFile } = await import("../agents/bootstrap-budget.js");
-    const { USER_BOOTSTRAP_MAX_CHARS } =
-      await import("../agents/embedded-agent-helpers/bootstrap.js");
-    const workspaceDir = ctx.cwd;
-    const { analysis } = await collectBootstrapFileSize(
-      ctx.cfg,
-      workspaceDir,
-      tryResolveSoleAgentId(ctx.cfg),
-    );
-    // USER.md's fixed cap makes per-file tuning advice a dead end: name the cap
-    // and the compaction action instead, matching the interactive Doctor note.
-    const fixedCapHint = `Reduce the file size; USER.md has a fixed ${USER_BOOTSTRAP_MAX_CHARS.toLocaleString("en-US")}-character bootstrap cap that \`bootstrapMaxChars\` cannot raise.`;
-    const findings: HealthFinding[] = [];
-    for (const file of analysis.truncatedFiles) {
-      let fixHint =
-        "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.";
-      if (file.causes.includes("per-file-limit") && isFixedUserCapFile(file)) {
-        fixHint = fixedCapHint;
-        if (file.causes.includes("total-limit")) {
-          fixHint +=
-            " Also reduce total bootstrap size or tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.";
-        }
-      }
-      findings.push({
-        checkId: "core/doctor/bootstrap-size",
-        severity: "warning",
-        message: `${file.name} exceeds bootstrap limits and will be truncated.`,
-        path: file.path,
-        fixHint,
-      });
-    }
-    for (const file of analysis.nearLimitFiles) {
-      if (file.truncated) {
-        continue;
-      }
-      findings.push({
-        checkId: "core/doctor/bootstrap-size",
-        severity: "info",
-        message: `${file.name} is near the configured bootstrap file limit.`,
-        path: file.path,
-        fixHint: isFixedUserCapFile(file)
-          ? fixedCapHint
-          : "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
-      });
-    }
-    if (analysis.totalNearLimit) {
-      findings.push({
-        checkId: "core/doctor/bootstrap-size",
-        severity: analysis.hasTruncation ? "warning" : "info",
-        message: "Total bootstrap context is near the configured total limit.",
-        path: workspaceDir,
-        fixHint:
-          "Reduce bootstrap file sizes or tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.",
-      });
-    }
-    return findings;
-  },
-};
-
 function noteTextToFinding(params: {
   checkId: string;
   severity: HealthFinding["severity"];
   text: string;
   target?: string;
+  category?: HealthFinding["category"];
+  docsUrl?: string;
 }): HealthFinding {
   const lines = params.text.split("\n");
   const first = (lines[0] ?? params.text).replace(/^- /, "").trim();
@@ -276,6 +191,8 @@ function noteTextToFinding(params: {
   return {
     checkId: params.checkId,
     severity: params.severity,
+    ...(params.category ? { category: params.category } : {}),
+    ...(params.docsUrl ? { docsUrl: params.docsUrl } : {}),
     message: first,
     ...(params.target ? { target: params.target } : {}),
     ...(rest ? { fixHint: rest } : {}),
@@ -374,6 +291,8 @@ const openAIOAuthTlsCheck: CoreHealthCheck = {
     return [
       noteTextToFinding({
         checkId: "core/doctor/oauth-tls",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/help/troubleshooting",
         severity: "warning",
         text: fix,
       }),
@@ -395,21 +314,12 @@ const legacyWhatsAppCrontabCheck: CoreHealthCheck = {
     return [
       noteTextToFinding({
         checkId: "core/doctor/legacy-whatsapp-crontab",
+        category: "recommended",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
         severity: "warning",
         text: warning,
       }),
     ];
-  },
-};
-
-const legacyCronStoreCheck: CoreHealthCheck = {
-  id: "core/doctor/legacy-cron-store",
-  description: "Legacy cron store, run-log, and payload state is normalized.",
-  defaultEnabled: false,
-  async detect(ctx) {
-    const { collectLegacyCronStoreHealthFindings } =
-      await import("../commands/doctor/cron/index.js");
-    return collectLegacyCronStoreHealthFindings({ cfg: ctx.cfg });
   },
 };
 
@@ -467,12 +377,14 @@ const telegramGeneralTopicConversationsCheck: CoreHealthCheck = {
   async detect(ctx) {
     const { detectTelegramGeneralTopicConversationRepairs } =
       await import("../commands/doctor-telegram-general-topic-conversations.js");
-    const repairs = detectTelegramGeneralTopicConversationRepairs({
+    const repairs = await detectTelegramGeneralTopicConversationRepairs({
       cfg: ctx.cfg,
       ...(ctx.env ? { env: ctx.env } : {}),
     });
     return repairs.map((repair) => ({
       checkId: TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID,
+      category: "fix-now",
+      docsUrl: "https://docs.openclaw.ai/channels/telegram",
       severity: "warning" as const,
       message: `Agent ${repair.agentId} has a stale Telegram General-topic conversation identity.`,
       target: repair.agentId,
@@ -518,6 +430,8 @@ const gatewayPlatformNotesCheck: CoreHealthCheck = {
     return warnings.map((warning) =>
       noteTextToFinding({
         checkId: "core/doctor/gateway-services/platform-notes",
+        category: "recommended",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/recovery",
         severity: "warning",
         text: warning,
       }),
@@ -539,9 +453,7 @@ const browserCheck: CoreHealthCheck = {
   id: "core/doctor/browser",
   description: "Browser readiness is captured as structured findings.",
   async detect(ctx) {
-    const collector = createNoteCollector("core/doctor/browser");
-    await noteChromeMcpBrowserReadiness(ctx.cfg, { noteFn: collector.noteFn });
-    return collector.findings;
+    return await collectBrowserReadinessFindings(ctx.cfg);
   },
   async repair(ctx) {
     if (ctx.dryRun === true) {
@@ -623,6 +535,8 @@ const skillsReadinessCheck: CoreHealthCheck = {
 function unavailableSkillToFinding(skill: SkillStatusEntry): HealthFinding {
   return {
     checkId: "core/doctor/skills-readiness",
+    category: "recommended",
+    docsUrl: "https://docs.openclaw.ai/tools/skills",
     severity: "warning",
     message: `${skill.name} is allowed but unavailable: ${formatMissingSkillSummary(skill)}.`,
     path: skillReadinessPath(skill),
@@ -691,6 +605,8 @@ const workspaceSuggestionsCheck: CoreHealthCheck = {
         return notes.map((text) =>
           noteTextToFinding({
             checkId: "core/doctor/workspace-suggestions",
+            category: "recommended",
+            docsUrl: "https://docs.openclaw.ai/concepts/agent-workspace",
             severity: "info",
             text: `${prefix}${text}`,
             ...(labelAgent ? { target: agentId } : {}),
@@ -709,8 +625,10 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     gatewayAuthCheck,
     legacyStateCheck,
     removedWorkspacesStateCheck,
+    sessionArchiveCacheCheck,
     legacyWhatsAppCrontabCheck,
     legacyCronStoreCheck,
+    cronInferenceCheck,
     staleRuntimeBuildCheck,
     codexSessionRoutesCheck,
     telegramGeneralTopicConversationsCheck,
@@ -740,6 +658,22 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     },
     nodeRuntimeCheck,
     {
+      id: "core/doctor/runtime-capabilities",
+      description: "Report capabilities of the Doctor process without executing optional features.",
+      async detect() {
+        const { collectRuntimeCapabilities, formatRuntimeCapabilities } =
+          await import("../infra/runtime-capabilities.js");
+        return [
+          {
+            checkId: "core/doctor/runtime-capabilities",
+            severity: "info",
+            source: "doctor-process",
+            message: `Runtime capabilities (Doctor process)\n${formatRuntimeCapabilities(collectRuntimeCapabilities())}`,
+          },
+        ];
+      },
+    },
+    {
       id: "core/doctor/security",
       updateReadiness: "post-plugin",
       description: "Security posture checks produce structured findings.",
@@ -755,6 +689,7 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     bootstrapSizeCheck,
     modelReferenceCheck,
     acpAgentModelCheck,
+    legacyOutputCapCheck,
     {
       id: "core/doctor/provider-catalog-projection",
       description: "Provider catalog hooks project into unified text model catalog rows.",
@@ -775,7 +710,6 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     },
     runtimeToolSchemaCheck,
     workspaceSuggestionsCheck,
-    skillWorkshopToolPolicyCheck,
     commandOwnerCheck,
     skillsReadinessCheck,
     finalConfigValidationCheck,
@@ -786,4 +720,3 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
 }
 
 export const CORE_HEALTH_CHECKS: readonly DoctorHealthCheck[] = createCoreHealthChecks();
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

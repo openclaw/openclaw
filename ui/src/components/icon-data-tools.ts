@@ -1,4 +1,5 @@
 import { neutralMarkData } from "./icon-data-neutral.ts";
+import { statusIconPaths } from "./icon-data-status.ts";
 import { strokeIconData, strokePathData, type IconData, type IconNode } from "./icon-data-types.ts";
 
 export const keyboardIconData = {
@@ -177,6 +178,10 @@ export const toolIconData = {
     ["path", { d: "m16 9 6 6" }],
   ]),
   bookmark: strokePathData("m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"),
+  circlePlus: strokeIconData([
+    ["circle", { cx: "12", cy: "12", r: "9" }],
+    ["path", { d: "M8 12h8M12 8v8" }],
+  ]),
   plus: strokePathData("M5 12h14M12 5v14"),
   gitBranch: strokeIconData([
     ["circle", { cx: "6", cy: "5", r: "2" }],
@@ -329,7 +334,7 @@ export const toolIconData = {
     "M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z",
     "m9 12 2 2 4-4",
   ),
-  refresh: strokePathData("M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8M21 3v5h-5"),
+  refresh: strokePathData(...statusIconPaths.refresh),
   history: strokePathData(
     "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
     "M3 3v5h5",
@@ -358,6 +363,10 @@ export const toolIconData = {
   ]),
   // Session chrome has its own approved silhouettes; generic panel icons stay unchanged.
   sessionMenu: strokePathData("M4 8h16M4 16h10"),
+  // Lucide message-circle opened at the lower right for the plus overlay.
+  sessionNew: strokePathData(
+    "M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092A10 10 0 0 0 11.981 22M22 11.981A10 10 0 1 0 2.992 16.342M18.5 15v7M15 18.5h7",
+  ),
   sessionPanels: strokeIconData([
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
     ["path", { d: "M15 3v18", "stroke-width": "1.8" }],

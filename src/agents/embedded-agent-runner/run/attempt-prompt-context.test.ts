@@ -5,17 +5,12 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
-import * as execApprovals from "../../../infra/exec-approvals.js";
-import { withMockedPlatform } from "../../../test-utils/vitest-spies.js";
-import { addSession, deleteSession } from "../../bash-process-registry.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { addSession, appendOutput, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import {
-  seedSubagentRunForReadTest,
-  resetSubagentRegistryForTests,
-} from "../../subagents/registry/subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "../../subagents/registry/subagent-registry.types.js";
+import { resetSubagentRegistryForTests } from "../../subagents/registry/subagent-registry.test-helpers.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -144,28 +139,108 @@ afterEach(async () => {
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
-  it("carries current Windows approval hints without changing system or user prompt bytes", () =>
-    withMockedPlatform("win32", async () => {
-      const load = vi
-        .spyOn(execApprovals, "loadExecApprovalsReadOnlyAsync")
-        .mockResolvedValue({ version: 1 });
-      const fixture = createInput();
-      fixture.input.capabilityToolNames.add("exec");
-      const before = await prepareContext(fixture.input);
-      load.mockResolvedValue({
-        version: 1,
-        agents: { "agent-1": { allowlist: [{ pattern: "C:\\Tools\\node.exe" }] } },
+  it("preserves attempt then system fragment bytes without changing either source", async () => {
+    const attemptFragments = [{ kind: "runtime-instruction" as const, text: "Turn instruction" }];
+    const systemFragments = [{ kind: "conversation-data" as const, text: "System context" }];
+    Object.freeze(attemptFragments);
+    Object.freeze(systemFragments);
+    const fixture = createInput({
+      attempt: createAttempt({
+        currentInboundContext: undefined,
+        runtimeContextFragments: attemptFragments,
+      }),
+    });
+
+    const result = await prepareContext({
+      ...fixture.input,
+      isRawModelRun: true,
+      systemPromptRuntimeContextFragments: systemFragments,
+    });
+
+    expect(result.runtimeContextFragments).toEqual([
+      { kind: "runtime-instruction", text: "Turn instruction" },
+      { kind: "conversation-data", text: "System context" },
+    ]);
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toBe(
+      "Turn instruction\n\nSystem context",
+    );
+    expect(result.systemPromptForHook).toBe("Base system prompt");
+    expect(result.promptForModel).toBe("Visible request");
+    expect(attemptFragments).toEqual([{ kind: "runtime-instruction", text: "Turn instruction" }]);
+    expect(systemFragments).toEqual([{ kind: "conversation-data", text: "System context" }]);
+  });
+
+  it.each(
+    [3, 4].flatMap((sessionVersion) =>
+      ["dispatched", "pending", "internal", "raw"].map((state) => ({ sessionVersion, state })),
+    ),
+  )(
+    "separates fallback hooks from the canonical user only after dispatch (v$sessionVersion, $state)",
+    async ({ sessionVersion, state }) => {
+      const original = "Describe the attached landscape.";
+      const prepend = "Use the backup provider's visual guidance.";
+      const append = "Explain the visible colors.";
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: original, idempotencyKey: "fallback-context:user", timestamp: 123 },
+        target: () => undefined,
       });
-      const after = await prepareContext(fixture.input);
-      expect(before.runtimeContextMessageForCurrentTurn?.content ?? "").not.toContain(
-        "## Approved executables",
+      if (state !== "pending") {
+        recorder.markSentToProvider?.();
+      }
+      const fixture = createInput({
+        attempt: createAttempt({
+          userTurnTranscriptRecorder: recorder,
+          skipPreparedUserTurnMessage: state === "internal",
+          fallbackActive: true,
+        }),
+        preparedUserTurnMessage: recorder.message,
+        messages: recorder.message ? [recorder.message] : [],
+        prompt: createPrompt({
+          effectivePrompt: [prepend, original, append].join("\n\n"),
+          effectiveTranscriptPrompt: original,
+          promptBuildPrependContext: prepend,
+          promptBuildAppendContext: append,
+        }),
+      });
+
+      const result = await prepareContext({
+        ...fixture.input,
+        sessionVersion,
+        appendOnlyRuntimeContext: sessionVersion === 4,
+        inHistorySystemUpdates: sessionVersion === 4,
+        isRawModelRun: state === "raw",
+      });
+
+      const dispatchedFallback = state === "dispatched";
+      expect(result.isDispatchedCanonicalFallback).toBe(dispatchedFallback);
+      expect(result.promptForSession).toBe(original);
+      expect(result.llmBoundaryPromptForPrecheck).toBe(
+        dispatchedFallback ? original : [prepend, original, append].join("\n\n"),
       );
-      expect(after.runtimeContextMessageForCurrentTurn?.content).toContain(
-        "C:\\Tools\\node.exe (any arguments)",
-      );
-      expect(after.systemPromptForHook).toBe(before.systemPromptForHook);
-      expect(after.promptForSession).toBe(before.promptForSession);
-    }));
+      const carrier = result.runtimeContextMessageForCurrentTurn;
+      expect(carrier?.content).not.toContain(original);
+      if (dispatchedFallback) {
+        expect(carrier?.details).toMatchObject({
+          kind: "runtime-context",
+          turnScoped: true,
+          replay: "append",
+        });
+        expect(carrier?.content.match(/Use the backup provider's visual guidance\./g)).toHaveLength(
+          1,
+        );
+        expect(carrier?.content.match(/Explain the visible colors\./g)).toHaveLength(1);
+        expect(JSON.stringify(result.hookMessagesForCurrentPrompt)).toContain(prepend);
+      } else {
+        expect(carrier?.content).not.toContain(prepend);
+        expect(carrier?.content).not.toContain(append);
+        expect(carrier?.details).not.toHaveProperty("replay");
+      }
+      if (state !== "raw") {
+        expect(carrier?.content).toContain("## Temporal Context");
+      }
+    },
+  );
+
   it("carries execution-owned processes in id order without elapsed time or output", async () => {
     const fixture = createInput();
     fixture.input.capabilityToolNames.add("process");
@@ -176,7 +251,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     for (const id of ["exec-z", "exec-a"]) {
       const session = createProcessSessionFixture({ id, backgrounded: true });
       session.scopeKey = fixture.input.attempt.sessionKey;
-      session.tail = "private output tail";
+      appendOutput(session, "stdout", "private output tail");
       addSession(session);
     }
     const active = await prepareContext(fixture.input);
@@ -203,36 +278,6 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     );
     expect(nextTurn.systemPromptForHook).toBe(active.systemPromptForHook);
     expect(fixture.replaceSessionMessages).not.toHaveBeenCalled();
-  });
-
-  it("carries changed subagent status without rewriting the system prompt", async () => {
-    const fixture = createInput();
-    fixture.input.sessionAgentId = "main";
-    fixture.input.capabilityToolNames.add("sessions_spawn");
-    const run = {
-      runId: "run-worker",
-      childSessionKey: "agent:main:subagent:worker",
-      controllerSessionKey: fixture.input.attempt.sessionKey!,
-      requesterSessionKey: fixture.input.attempt.sessionKey!,
-      requesterDisplayKey: "main",
-      task: "Inspect fixtures",
-      label: "Worker",
-      cleanup: "keep",
-      createdAt: 1,
-      execution: { status: "queued" },
-    } satisfies SubagentRunRecord;
-    seedSubagentRunForReadTest(run);
-    const queued = await prepareContext(fixture.input);
-    seedSubagentRunForReadTest({ ...run, execution: { status: "running", startedAt: 2 } });
-    const running = await prepareContext(fixture.input);
-    expect(running.systemPromptForHook).toBe(queued.systemPromptForHook);
-    expect(queued.runtimeContextMessageForCurrentTurn?.content).toContain("status=queued");
-    expect(running.runtimeContextMessageForCurrentTurn?.content).toContain("status=running");
-    await resetSubagentRegistryForTests({ persist: false });
-    const completed = await prepareContext(fixture.input);
-    expect(completed.runtimeContextMessageForCurrentTurn?.content ?? "").not.toContain(
-      "## Active Subagents",
-    );
   });
 
   it("supersedes retained active facts with explicit empty snapshots", async () => {

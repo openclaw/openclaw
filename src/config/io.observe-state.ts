@@ -14,7 +14,7 @@ import {
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import { resolveConfigStatMetadata } from "./io.write-safety.js";
 
-type ConfigFingerprintDeps = Pick<NormalizedConfigIoDeps, "fs" | "json5">;
+type ConfigFingerprintDeps = Pick<NormalizedConfigIoDeps, "fs">;
 
 export function readConfigHealthEntry(
   state: ConfigHealthState,
@@ -29,11 +29,10 @@ export function createConfigHealthFingerprint(params: {
   parsed: unknown;
   resolved?: unknown;
   stat: fs.Stats | null;
-  hash?: string;
   observedAt?: string;
 }): ConfigHealthFingerprint {
   return {
-    hash: params.hash ?? hashConfigRaw(params.raw),
+    hash: hashConfigRaw(params.raw),
     bytes: Buffer.byteLength(params.raw, "utf-8"),
     mtimeMs: params.stat?.mtimeMs ?? null,
     ctimeMs: params.stat?.ctimeMs ?? null,
@@ -45,11 +44,10 @@ export function createConfigHealthFingerprint(params: {
 }
 
 function createConfigFingerprintFromRead(params: {
-  deps: ConfigFingerprintDeps;
   raw: string;
   stat: fs.Stats | null;
 }): ConfigHealthFingerprint {
-  const parsed = parseConfigJson5(params.raw, params.deps.json5);
+  const parsed = parseConfigJson5(params.raw);
   return createConfigHealthFingerprint({
     raw: params.raw,
     parsed: parsed.ok ? parsed.parsed : {},
@@ -64,7 +62,7 @@ export async function readConfigFingerprintForPath(
   try {
     const raw = await deps.fs.promises.readFile(configPath, "utf-8");
     const stat = await deps.fs.promises.stat(configPath).catch(() => null);
-    return createConfigFingerprintFromRead({ deps, raw, stat });
+    return createConfigFingerprintFromRead({ raw, stat });
   } catch {
     return null;
   }
@@ -82,7 +80,7 @@ export function readConfigFingerprintForPathSync(
     } catch {
       // Metadata is diagnostic only; readable backup bytes remain authoritative.
     }
-    return createConfigFingerprintFromRead({ deps, raw, stat });
+    return createConfigFingerprintFromRead({ raw, stat });
   } catch {
     return null;
   }

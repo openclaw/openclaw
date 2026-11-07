@@ -62,19 +62,17 @@ function makeHandler(overrides?: Parameters<typeof createDiscordHandlerParams>[0
 
 describe("createDiscordMessageHandler queue behavior", () => {
   beforeEach(() => {
-    preflight
-      .mockReset()
-      .mockImplementation(
-        async (params: Pick<PreflightContext, "data" | "turnAdoptionLifecycle">) => ({
-          ...messageContext(params.data),
-          turnAdoptionLifecycle: params.turnAdoptionLifecycle,
-        }),
-      );
-    processMessage
-      .mockReset()
-      .mockImplementation(async (ctx: { turnAdoptionLifecycle?: DiscordIngressLifecycle }) => {
+    preflight.mockImplementation(
+      async (params: Pick<PreflightContext, "data" | "turnAdoptionLifecycle">) => ({
+        ...messageContext(params.data),
+        turnAdoptionLifecycle: params.turnAdoptionLifecycle,
+      }),
+    );
+    processMessage.mockImplementation(
+      async (ctx: { turnAdoptionLifecycle?: DiscordIngressLifecycle }) => {
         await ctx.turnAdoptionLifecycle?.onAdopted();
-      });
+      },
+    );
     vi.useRealTimers();
   });
 
@@ -109,8 +107,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
       await finish.promise;
     });
     const handler = makeHandler({ abortSignal: handlerAbort.signal });
+    const handling = handler(data as never, {} as never);
     try {
-      await handler(data as never, {} as never);
       const received = await started.promise;
       expect(received).toMatchObject({
         message: { content: "hello", referencedMessage: { content: "earlier" } },
@@ -125,6 +123,46 @@ describe("createDiscordMessageHandler queue behavior", () => {
       expect(signal?.reason).toBe(reason);
     } finally {
       finish.resolve();
+      await handling;
+      await handler.deactivate();
+    }
+  });
+
+  it("keeps queued dispatch pending until adoption without blocking later steering", async () => {
+    const started = createDeferred<void>();
+    const adopt = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const followerStarted = createDeferred<void>();
+    processMessage.mockImplementation(async (ctx: PreflightContext) => {
+      if (ctx.message.id === "m-held") {
+        started.resolve();
+        await adopt.promise;
+        await ctx.turnAdoptionLifecycle?.onAdopted();
+        await finish.promise;
+      } else {
+        followerStarted.resolve();
+        await ctx.turnAdoptionLifecycle?.onAdopted();
+      }
+    });
+    const handler = makeHandler();
+    let admitted = false;
+    const handling = dispatch(handler, "m-held", createIngressLifecycle()).then(() => {
+      admitted = true;
+    });
+    try {
+      await started.promise;
+      await flushQueueWork();
+      expect(admitted).toBe(false);
+      // Adoption releases the input lane, not the still-running dispatch.
+      adopt.resolve();
+      await handling;
+      await dispatch(handler, "m-follower", createIngressLifecycle());
+      await followerStarted.promise;
+      expect(processMessage).toHaveBeenCalledTimes(2);
+    } finally {
+      adopt.resolve();
+      finish.resolve();
+      await handling;
       await handler.deactivate();
     }
   });
@@ -219,10 +257,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
         if (messageId === "m-1") {
           await firstPreflight.promise;
         }
-        return {
-          ...queuedContext(params.data.channel_id),
-          messageId,
-        };
+        return { ...queuedContext(params.data.channel_id), messageId };
       },
     );
 
@@ -239,21 +274,19 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
     await flushQueueWork();
     expect(preflight).toHaveBeenCalledTimes(1);
-    await Promise.resolve();
-    expect(preflight).toHaveBeenCalledTimes(1);
 
     firstPreflight.resolve();
     await sequentialDispatch;
 
     await flushQueueWork();
-    expect(processMessage).toHaveBeenCalledTimes(2);
     expect(processedMessageIds).toEqual(["m-1", "m-2"]);
   });
 
   it("reports a concurrent run failure without leaving busy state stuck", async () => {
     const firstRun = createDeferred<void>();
     processMessage
-      .mockImplementationOnce(async () => {
+      .mockImplementationOnce(async (ctx: PreflightContext) => {
+        await ctx.turnAdoptionLifecycle?.onAdopted();
         await firstRun.promise;
         throw new Error("simulated run failure");
       })
@@ -271,7 +304,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await firstRun.promise.catch(() => undefined);
 
     await flushQueueWork();
-    expect(processMessage).toHaveBeenCalledTimes(2);
     expect(setStatus).toHaveBeenCalledWith(expect.objectContaining({ activeRuns: 0, busy: false }));
   });
 

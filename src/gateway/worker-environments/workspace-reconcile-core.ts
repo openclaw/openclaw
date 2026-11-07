@@ -2,9 +2,15 @@ import fs from "node:fs/promises";
 import { FsSafeError, root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
 import { activeWorkspaceHashContext, withWorkspaceHashMemo } from "./workspace-hash-memo.js";
-import { hasPathAncestor, manifestNodes, sameEntry } from "./workspace-manifest-comparison.js";
+import {
+  hasPathAncestor,
+  manifestNodes,
+  sameEntry,
+  type WorkspaceReconciliationPreparation,
+} from "./workspace-manifest-comparison.js";
 import {
   captureWorkspaceManifest,
+  captureWorkspaceManifestReference,
   preflightWorkspaceApply,
   readWorkspaceNodes,
 } from "./workspace-manifest-worker.js";
@@ -60,7 +66,7 @@ export async function inspectAcceptedWorkerWorkspace(params: {
   root: string;
   expectedManifestRef: string;
   allowAdvancedLocalState?: boolean;
-  base: WorkerWorkspaceManifest;
+  reconciliation: WorkspaceReconciliationPreparation;
   current: WorkerWorkspaceManifest;
   additionalPaths?: ReadonlySet<string>;
 }): Promise<WorkerWorkspaceApplyResult | undefined> {
@@ -72,17 +78,15 @@ export async function inspectAcceptedWorkerWorkspace(params: {
       params.current.buildCacheInputs,
     ),
   );
-  const includePaths = params.current.baseCommit
-    ? new Set([...manifestNodes(params.base).keys(), ...manifestNodes(params.current).keys()])
-    : undefined;
-  params.additionalPaths?.forEach((entryPath) => includePaths?.add(entryPath));
+  const { preflight: preflightInput, includePaths: preparedPaths } = params.reconciliation;
+  const includePaths =
+    preparedPaths && params.additionalPaths?.size
+      ? new Set([...preparedPaths, ...params.additionalPaths])
+      : preparedPaths;
   const buildCacheInputs =
-    params.base.buildCacheInputs === undefined && params.current.buildCacheInputs === undefined
+    preflightInput.buildCacheInputs === undefined
       ? undefined
-      : new Set([
-          ...(params.base.buildCacheInputs ?? []),
-          ...(params.current.buildCacheInputs ?? []),
-        ]);
+      : new Set(preflightInput.buildCacheInputs);
   const actual = await captureWorkspaceManifest({
     root,
     baseCommit: params.current.baseCommit,
@@ -95,8 +99,7 @@ export async function inspectAcceptedWorkerWorkspace(params: {
   }
   const preflight = await preflightWorkspaceApply({
     root,
-    base: params.base,
-    current: params.current,
+    ...preflightInput,
   });
   const conflictPaths = params.allowAdvancedLocalState
     ? retainedConflictPaths(preflight)
@@ -123,8 +126,8 @@ export async function assertActualWorkspaceManifest(params: {
   includePaths?: ReadonlySet<string>;
   buildCacheInputs?: ReadonlySet<string>;
 }): Promise<void> {
-  const actual = await captureWorkspaceManifest(params);
-  if (actual.manifestRef !== params.expectedRef) {
+  const actual = await captureWorkspaceManifestReference(params);
+  if (actual !== params.expectedRef) {
     throw new ConcurrentWorkspacePathError("Gateway workspace changed after cloud reconciliation");
   }
 }
@@ -139,8 +142,8 @@ export function createWorkspaceManifestVerifier(
 
 export async function applyWorkspaceDirectoryChanges(params: {
   root: string;
-  base: WorkerWorkspaceManifest;
-  current: WorkerWorkspaceManifest;
+  baseNodes: ReturnType<typeof manifestNodes>;
+  currentNodes: ReturnType<typeof manifestNodes>;
   applyPaths: ReadonlySet<string>;
   assertCurrent?: () => void;
 }): Promise<void> {
@@ -148,8 +151,7 @@ export async function applyWorkspaceDirectoryChanges(params: {
     mode: 0o700,
     assertBeforeMutation: params.assertCurrent,
   });
-  const baseNodes = manifestNodes(params.base);
-  const currentNodes = manifestNodes(params.current);
+  const { baseNodes, currentNodes } = params;
   const directoryPaths = [...params.applyPaths].filter(
     (entryPath) =>
       baseNodes.get(entryPath)?.type === "directory" ||

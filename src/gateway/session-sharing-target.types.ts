@@ -37,6 +37,9 @@ export type SessionFactsRequest = {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
+  followLifecycle?: boolean;
+  followTranscript?: boolean;
+  sessionAccessOnly?: boolean;
   preserveQualifiedAddress?: boolean;
   storageReady?: Promise<void>;
 };

@@ -227,7 +227,7 @@ it(
       await inContext(() => backend[SQLITE_WORKER_PREPARE_COMMAND]?.("authProfiles.readSources"));
       let rows: unknown;
       // Corruption/eviction is under test; consume the real paired field transport in-process.
-      const handoff = vi
+      using _ = vi
         .spyOn(sqliteAdmission, "requestSqliteWorkerOperationAdmission")
         .mockImplementation(({ stage: admissionStage, facts }) => {
           if (
@@ -240,26 +240,19 @@ it(
           }
           rows = receiveAuthProfileUpdateValue(facts.port);
         });
-      try {
-        inContext(() =>
-          backend.execute({
-            type: "authProfiles.readSources",
-            input: {
-              artifactPreserving: false,
-              sources: [{ kind: "shared-state", databasePath }],
-            },
-          }),
-        );
-      } finally {
-        handoff.mockRestore();
-      }
+      inContext(() =>
+        backend.execute({
+          type: "authProfiles.readSources",
+          input: { artifactPreserving: false, sources: [{ kind: "shared-state", databasePath }] },
+        }),
+      );
       expect(injected).toBe(true);
       expect(rows).toMatchObject({
         [databasePath]: { store: { status: "unreadable" }, cacheable: false },
       });
-      expect(
-        openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path) === database,
-      ).toBe(false);
+      expect(openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).not.toBe(
+        database,
+      );
     } finally {
       fault.mockRestore();
       await backend.close();

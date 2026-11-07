@@ -7,7 +7,7 @@ import { BrandIcon, Icon } from "../../components/solid/icon.tsx";
 import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import "../../styles/apps.css";
-import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
+import { COMMUNITY_DISCORD_URL, OFFICIAL_SUPPORT_URL } from "../../lib/product-links.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerAppsEnglish);
@@ -211,6 +211,11 @@ const APP_SECTIONS: readonly AppSection[] = [
 const COMMUNITY_LINKS: ReadonlyArray<{ href: string; icon: () => JSX.Element; labelKey: string }> =
   [
     {
+      href: OFFICIAL_SUPPORT_URL,
+      icon: () => <Icon name="messageSquare" />,
+      labelKey: "appsPage.linkSupport",
+    },
+    {
       href: COMMUNITY_DISCORD_URL,
       icon: () => <BrandIcon name="discord" />,
       labelKey: "appsPage.linkDiscord",
@@ -314,7 +319,7 @@ function AppCardView(props: { card: AppCard; options: AppsProps }) {
 function AppSectionView(props: { section: AppSection; options: AppsProps }) {
   return (
     <section class="apps-section" aria-label={t(props.section.labelKey)}>
-      <h2 class="apps-section__heading">{t(props.section.labelKey)}</h2>
+      <h2 class="settings-section__heading">{t(props.section.labelKey)}</h2>
       <div class="apps-grid">
         <For each={props.section.cards}>
           {(card) => <AppCardView card={card} options={props.options} />}
@@ -336,14 +341,14 @@ export function Apps(props: AppsProps) {
   return (
     <div class="apps-page">
       <section class="apps-hero">
-        <h1 class="apps-hero__title">{t("appsPage.heroTitle")}</h1>
+        <h2 class="apps-hero__title">{t("appsPage.heroTitle")}</h2>
         <p class="apps-hero__tagline">{t("appsPage.heroTagline")}</p>
       </section>
       <For each={APP_SECTIONS}>
         {(section) => <AppSectionView section={section} options={props} />}
       </For>
       <section class="apps-section" aria-label={t("appsPage.sectionCommunity")}>
-        <h2 class="apps-section__heading">{t("appsPage.sectionCommunity")}</h2>
+        <h2 class="settings-section__heading">{t("appsPage.sectionCommunity")}</h2>
         <nav class="apps-community" aria-label={t("appsPage.sectionCommunity")}>
           <For each={COMMUNITY_LINKS}>
             {(link) => (

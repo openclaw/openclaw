@@ -37,7 +37,7 @@ function progressText(payload: ClickClackItemEventPayload): string {
     ...payload,
     event: "item",
     itemKind: payload.kind,
-  })?.text?.trim();
+  })?.text;
   if (line) {
     return line;
   }
@@ -117,11 +117,7 @@ export function createClickClackAgentProgressPublisher(params: {
       return drainPromise;
     }
     drainPromise = (async () => {
-      while (queue.length > 0) {
-        const frame = queue.shift();
-        if (!frame) {
-          continue;
-        }
+      for (let frame = queue.shift(); frame; frame = queue.shift()) {
         try {
           await params.client.publishEphemeral({
             ...params.target,

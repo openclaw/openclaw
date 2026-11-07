@@ -1,9 +1,11 @@
+import { note } from "../../packages/terminal-core/src/note.js";
 import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { gmailGogCheck } from "./doctor-gmail-gog-check.js";
 import { runInitialConfigWriteHealth } from "./doctor-health-contribution-runners.config.js";
 import {
   runClaudeCliHealth,
@@ -87,11 +89,23 @@ export function resolveInitialDoctorHealthContributions(params: {
         await runCoreHealthFindingNote(ctx, "core/doctor/node-runtime");
       },
     }),
+    createDoctorHealthContribution("doctor:runtime-capabilities", "Runtime capabilities", {
+      healthCheckIds: ["core/doctor/runtime-capabilities"],
+      async run() {
+        const { collectRuntimeCapabilities, formatRuntimeCapabilities } =
+          await import("../infra/runtime-capabilities.js");
+        note(
+          formatRuntimeCapabilities(collectRuntimeCapabilities()),
+          "Runtime capabilities (Doctor process)",
+        );
+      },
+    }),
     createDoctorHealthContribution("doctor:gateway-config", "Gateway config", {
       healthCheckIds: ["core/doctor/gateway-config"],
       run: params.runGatewayConfigHealth,
     }),
     createDoctorHealthContribution("doctor:database-engine", "Database engines", {
+      updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
         description: "Selected database engines, physical store health, and recovery guidance.",
         async detect(ctx) {
@@ -125,6 +139,10 @@ export function resolveInitialDoctorHealthContributions(params: {
       updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/claude-cli"],
       run: runClaudeCliHealth,
+    }),
+    createDoctorHealthContribution("doctor:gmail-gog", "Gmail Gog", {
+      updateWork: { kind: "inspection", scope: "run" },
+      healthChecks: gmailGogCheck,
     }),
     createDoctorHealthContribution("doctor:gateway-auth", "Gateway auth", {
       healthCheckIds: ["core/doctor/gateway-auth"],
@@ -162,7 +180,11 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
     ),
     createDoctorHealthContribution("doctor:legacy-state", "Legacy state", {
-      healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
+      healthCheckIds: [
+        "core/doctor/legacy-state",
+        "core/doctor/removed-workspaces-state",
+        "core/doctor/session-archive-read-cache",
+      ],
       run: params.runLegacyStateHealth,
     }),
     createDoctorHealthContribution("doctor:session-transcripts", "Session transcripts", {
@@ -281,7 +303,6 @@ export function resolveInitialDoctorHealthContributions(params: {
           }
           const { maybeRunConfiguredPluginInstallReleaseStep } =
             await import("../commands/doctor/shared/release-configured-plugin-installs.js");
-          const { note } = await import("../../packages/terminal-core/src/note.js");
           const { VERSION } = await import("../version.js");
           const result = await maybeRunConfiguredPluginInstallReleaseStep({
             cfg: ctx.cfg,
@@ -295,7 +316,7 @@ export function resolveInitialDoctorHealthContributions(params: {
           if (result.postInstallDoctorResult) {
             ctx.postInstallDoctorResult = result.postInstallDoctorResult;
           }
-          noteDoctorRepairResult(result, note);
+          noteDoctorRepairResult(result);
           if (!result.touchedConfig) {
             return;
           }
@@ -407,10 +428,10 @@ export function resolveInitialDoctorHealthContributions(params: {
       healthChecks: {
         description: "Low disk space around the OpenClaw state directory is a finding.",
         defaultEnabled: false,
-        async detect() {
+        async detect(ctx) {
           const { collectDiskSpaceHealthFindings } =
             await import("../commands/doctor-disk-space.js");
-          return collectDiskSpaceHealthFindings();
+          return collectDiskSpaceHealthFindings(ctx.env);
         },
       },
       async run() {
@@ -583,7 +604,11 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
     }),
     createDoctorHealthContribution("doctor:legacy-cron", "Legacy cron", {
-      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab", "core/doctor/legacy-cron-store"],
+      healthCheckIds: [
+        "core/doctor/legacy-whatsapp-crontab",
+        "core/doctor/legacy-cron-store",
+        "core/doctor/cron-inference-accounts",
+      ],
       run: runLegacyCronHealth,
     }),
     createDoctorHealthContribution("doctor:sandbox", "Sandbox", {
@@ -624,7 +649,8 @@ export function resolveInitialDoctorHealthContributions(params: {
           }
           maintenance.assertOwnerCurrent();
         });
-        await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
+        const imageWarnings = await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
+        recordDoctorHealthWarnings(ctx, [], imageWarnings);
         noteSandboxScopeWarnings(ctx.cfg);
       },
     }),

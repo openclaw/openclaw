@@ -9,6 +9,7 @@ import type {
 } from "../../config/sessions/types.js";
 import type { AgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
+import type { AgentTerminalSnapshot } from "../agent-terminal-snapshot.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 import type { AgentRuntimeCredentialSource } from "../runtime-plan/credential-source.types.js";
@@ -27,6 +28,9 @@ export type EmbeddedAgentMeta = {
     provider?: string;
     category?: string;
     review?: ProviderRefusalReview;
+    /** Physical request facts used only to retry the same model and account. */
+    accessProgram?: "standard" | "daybreak_blue" | "daybreak_red";
+    authProfileId?: string;
     nativeThreadId?: string;
     nativeTurnId?: string;
   };
@@ -133,6 +137,8 @@ export type EmbeddedRunTerminalToolFailure = {
 };
 
 export type EmbeddedAgentRunMeta = {
+  /** Optional content-free facts from the selected failed agent attempt. */
+  agentTerminal?: AgentTerminalSnapshot;
   durationMs: number;
   agentMeta?: EmbeddedAgentMeta;
   aborted?: boolean;
@@ -151,6 +157,8 @@ export type EmbeddedAgentRunMeta = {
   livenessState?: EmbeddedRunLivenessState;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
+  /** Target of a fallback/restoration notice confirmed by the transcript writer for this run. */
+  modelFallbackTranscriptToModel?: string;
   /** Producer-owned terminal cause; the fallback owner decides whether a chain was stopped. */
   modelFallbackStopReason?:
     | "agent_run_terminal_timeout"

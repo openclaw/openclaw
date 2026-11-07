@@ -11,8 +11,8 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.types.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
@@ -20,6 +20,7 @@ import {
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   SessionTranscriptWriterClaimReboundError,
@@ -35,7 +36,6 @@ import type { StopReason, Usage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
 import { resolveCliTranscriptUsage, type CliTranscriptUsage } from "../cli-transcript-usage.js";
 import {
@@ -160,6 +160,8 @@ export async function persistCliAssistantTranscript(params: {
   turnUsage?: CliUsage;
   stopReason: StopReason;
   yielded?: true;
+  /** The native Claude row this message mirrors; the history merge joins them by it. */
+  nativeIdentity?: { cliSessionId: string; externalId: string };
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -200,6 +202,7 @@ export async function persistCliAssistantTranscript(params: {
         const message = runAgentHarnessBeforeMessageWriteHook({
           ...write,
           message: projectAgentHarnessTranscriptMessageForDisplay({
+            runId: runParams.runId,
             hidden: runParams.privateCompletion === true,
             inputProvenance: runParams.inputProvenance,
             message: write.message,
@@ -208,6 +211,7 @@ export async function persistCliAssistantTranscript(params: {
         });
         return message
           ? projectAgentHarnessTranscriptMessageForDisplay({
+              runId: runParams.runId,
               hidden: runParams.privateCompletion === true,
               inputProvenance: runParams.inputProvenance,
               message,
@@ -215,6 +219,9 @@ export async function persistCliAssistantTranscript(params: {
           : null;
       },
       message: {
+        ...(params.nativeIdentity
+          ? { __openclaw: { importedFrom: "claude-cli", ...params.nativeIdentity } }
+          : {}),
         ...buildAssistantMessage({
           model: {
             api: "cli",
@@ -487,7 +494,9 @@ export async function persistCliRunBlock(
           write.readScope,
           write.assertCurrent,
           async () => {
-            const manager = await SessionManager.openAsync(write.readScope);
+            const manager = await withSessionTranscriptHydrationCaller("cli-context", () =>
+              SessionManager.openAsync(write.readScope),
+            );
             write.assertCurrent();
             await manager.appendMessageAsync(redactedUserMessage);
           },
@@ -550,7 +559,6 @@ export async function finalizeCliContextEngineTurn(params: {
           params.output.terminalInterruption !== undefined ||
           runParams.abortSignal?.aborted === true,
         yieldAborted: false,
-        isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
         runtimeContext: {
           provider: runParams.modelProvider ?? runParams.provider,
           modelId: context.modelId,
@@ -590,7 +598,6 @@ export async function finalizeCliContextEngineTurn(params: {
       sessionKey: runParams.sessionKey,
       sessionTarget: runParams.sessionTarget,
       sessionFile: runParams.sessionFile,
-      isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
       messagesSnapshot: [...prePromptMessages, ...turnMessages],
       prePromptMessageCount: prePromptMessages.length,
       sessionManager: runParams.sessionManager,

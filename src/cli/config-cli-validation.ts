@@ -9,6 +9,7 @@ import { assertDeferredPluginMigrationConfigEditAllowed } from "../config/deferr
 import { configFailureHeading } from "../config/io.invalid-config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
+import { formatConfigFilePath } from "../config/logging.js";
 import type { ConfigValidationIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -39,7 +40,6 @@ import {
 } from "../secrets/ref-contract.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
-import { shortenHomePath } from "../utils.js";
 import type { ConfigMutationOptions, ConfigSetOperation } from "./config-cli-input.js";
 import { getAtPath } from "./config-cli-path.js";
 import { formatInvalidConfigRepairHint } from "./config-recovery-hints.js";
@@ -59,7 +59,7 @@ export function ensureValidConfigSnapshotForCli(
     writeInvalidConfigCliJson(runtime, snapshot);
     exitCliAfterOutput(runtime, 1);
   }
-  runtime.error(`${configFailureHeading(snapshot)}: ${shortenHomePath(snapshot.path)}`);
+  runtime.error(`${configFailureHeading(snapshot)}: ${formatConfigFilePath(snapshot.path)}`);
   for (const line of renderConfigValidationIssueLines(snapshot)) {
     runtime.error(line);
   }
@@ -198,50 +198,6 @@ function selectConfigMutationSecrets(config: OpenClawConfig, operations: ConfigS
   };
 }
 
-async function collectDryRunResolvabilityErrors(params: {
-  refs: SecretRef[];
-  config: OpenClawConfig;
-}): Promise<ConfigSetDryRunError[]> {
-  const { resolveSecretRefValue } = await import("../secrets/resolve.js");
-  const failures: ConfigSetDryRunError[] = [];
-  for (const ref of params.refs) {
-    try {
-      await resolveSecretRefValue(ref, { config: params.config, env: process.env });
-    } catch (err) {
-      failures.push({
-        kind: "resolvability",
-        message: formatErrorMessage(err),
-        ref: `${ref.source}:${ref.provider}:${ref.id}`,
-      });
-    }
-  }
-  return failures;
-}
-
-function collectDryRunStaticErrorsForSkippedExecRefs(params: {
-  refs: SecretRef[];
-  config: OpenClawConfig;
-}): ConfigSetDryRunError[] {
-  return params.refs.flatMap((ref): ConfigSetDryRunError[] => {
-    const id = ref.id.trim();
-    const refLabel = `${ref.source}:${ref.provider}:${id}`;
-    let message: string | undefined;
-    if (!id) {
-      message = "Error: Secret reference id is empty.";
-    } else if (!isValidExecSecretRefId(id)) {
-      message = `Error: ${formatExecSecretRefIdValidationMessage()} (ref: ${refLabel}).`;
-    } else {
-      const providerConfig = params.config.secrets?.providers?.[ref.provider];
-      if (!providerConfig) {
-        message = `Error: Secret provider "${ref.provider}" is not configured (ref: ${refLabel}).`;
-      } else if (providerConfig.source !== ref.source) {
-        message = `Error: Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`;
-      }
-    }
-    return message ? [{ kind: "resolvability", message, ref: refLabel }] : [];
-  });
-}
-
 function collectStrictConfigErrors(
   config: OpenClawConfig,
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
@@ -362,7 +318,11 @@ export async function validateConfigMutation(params: {
   const policyIssues = formatConfigIssueLines(collectUnsupportedSecretRefPolicyIssues(config), "", {
     normalizeRoot: true,
   }).map((line) => line.trim());
-  const selection = selectConfigMutationSecrets(config, operations);
+  // Database-only custody cannot read plugin state; its secret targets are core-owned.
+  const selection = selectConfigMutationSecrets(
+    params.databaseOnly ? { database: config.database, secrets: config.secrets } : config,
+    operations,
+  );
   const providerErrors = formatConfigIssueLines(
     await collectConfigSecretProviderErrors({ config, selection }),
     "",
@@ -444,9 +404,37 @@ export async function validateConfigMutation(params: {
   }
   if (checksRefs) {
     errors.push(
-      ...collectDryRunStaticErrorsForSkippedExecRefs({ refs: skippedExecRefs, config }),
-      ...(await collectDryRunResolvabilityErrors({ refs: refsToResolve, config })),
+      ...skippedExecRefs.flatMap((ref): ConfigSetDryRunError[] => {
+        const id = ref.id.trim();
+        const refLabel = `${ref.source}:${ref.provider}:${id}`;
+        let message: string | undefined;
+        if (!id) {
+          message = "Error: Secret reference id is empty.";
+        } else if (!isValidExecSecretRefId(id)) {
+          message = `Error: ${formatExecSecretRefIdValidationMessage()} (ref: ${refLabel}).`;
+        } else {
+          const providerConfig = config.secrets?.providers?.[ref.provider];
+          if (!providerConfig) {
+            message = `Error: Secret provider "${ref.provider}" is not configured (ref: ${refLabel}).`;
+          } else if (providerConfig.source !== ref.source) {
+            message = `Error: Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`;
+          }
+        }
+        return message ? [{ kind: "resolvability", message, ref: refLabel }] : [];
+      }),
     );
+    const { resolveSecretRefValue } = await import("../secrets/resolve.js");
+    for (const ref of refsToResolve) {
+      try {
+        await resolveSecretRefValue(ref, { config, env: process.env });
+      } catch (err) {
+        errors.push({
+          kind: "resolvability",
+          message: formatErrorMessage(err),
+          ref: `${ref.source}:${ref.provider}:${ref.id}`,
+        });
+      }
+    }
   }
   const failures = dedupeByKey(errors, (error) =>
     error.kind === "resolvability"

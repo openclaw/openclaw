@@ -1,11 +1,10 @@
 import { createMemo, For } from "solid-js";
 import { LobsterSvg } from "../../../components/lobster-pet-artwork.tsx";
 import { lobsterPetSeed } from "../../../components/lobster-pet-contract.ts";
-import { createLobsterPetLook } from "../../../components/lobster-pet-look.ts";
+import { createLobsterPetLook } from "../../../components/lobster-pet-identity.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { DREAM_PHRASE_KEYS } from "./dreaming.ts";
 import type { DreamingProps } from "./view-types.ts";
-
-const DREAM_PHASES = ["light", "deep", "rem"] as const;
 
 const STARS: {
   top: number;
@@ -28,7 +27,13 @@ const STARS: {
   { top: 88, left: 18, size: 2, delay: 2.3, hue: "neutral" },
 ];
 
-export function renderScene(props: DreamingProps, dreamText: () => string) {
+export function DreamingScene(props: DreamingProps) {
+  // A word joiner after each hyphen keeps compounds whole when the phrase wraps.
+  const dreamText = () =>
+    t(DREAM_PHRASE_KEYS[props.viewState.dreamIndex] ?? DREAM_PHRASE_KEYS[0]).replaceAll(
+      "-",
+      "-\u2060",
+    );
   // Keep the sleeper's seeded identity consistent with this agent's sidebar pet.
   const look = createMemo(() => createLobsterPetLook(lobsterPetSeed(props.selectedAgentId)));
   const style = () => `--lob-shell:${look().palette.shell};--lob-claw:${look().palette.claw}`;
@@ -57,14 +62,8 @@ export function renderScene(props: DreamingProps, dreamText: () => string) {
           <div class="dreams__bubble">
             <span class="dreams__bubble-text">{dreamText()}</span>
           </div>
-          <div
-            class="dreams__bubble-dot"
-            style="top: calc(50% - 160px); left: calc(50% - 120px); width: 12px; height: 12px; animation-delay: 0.2s;"
-          />
-          <div
-            class="dreams__bubble-dot"
-            style="top: calc(50% - 120px); left: calc(50% - 90px); width: 8px; height: 8px; animation-delay: 0.4s;"
-          />
+          <div class="dreams__bubble-dot dreams__bubble-dot--far" />
+          <div class="dreams__bubble-dot dreams__bubble-dot--near" />
         </>
       ) : undefined}
 
@@ -75,65 +74,6 @@ export function renderScene(props: DreamingProps, dreamText: () => string) {
       <span class="dreams__z">z</span>
       <span class="dreams__z">z</span>
       <span class="dreams__z">Z</span>
-
-      <div class="dreams__status">
-        <span class="dreams__status-label">
-          {props.active ? t("dreaming.status.active") : t("dreaming.status.idle")}
-        </span>
-        <div class="dreams__status-detail">
-          <div class="dreams__status-dot" />
-          <span>
-            {props.promotedCount} {t("dreaming.status.promotedSuffix")}
-            {props.nextCycle ? (
-              <>
-                {" "}
-                · {t("dreaming.status.nextSweepPrefix")} {props.nextCycle}{" "}
-              </>
-            ) : undefined}
-            {props.timezone ? <> · {props.timezone} </> : undefined}
-          </span>
-        </div>
-      </div>
-
-      <div class="dreams__phases">
-        <For each={DREAM_PHASES}>
-          {(phaseId) => {
-            const phase = () => props.phases?.[phaseId];
-            const enabled = () => phase()?.enabled === true;
-            const status = () => {
-              const current = phase();
-              if (!current) {
-                return "—";
-              }
-              if (!current.enabled) {
-                return t("dreaming.phase.off");
-              }
-              return current.nextRunAtMs
-                ? new Date(current.nextRunAtMs).toLocaleTimeString([], {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  })
-                : "—";
-            };
-            return (
-              <div
-                class={[
-                  "dreams__phase",
-                  { "dreams__phase--off": phase() !== undefined && !enabled() },
-                ]}
-              >
-                <div class={["dreams__phase-dot", { "dreams__phase-dot--on": enabled() }]} />
-                <span class="dreams__phase-name">{t(`dreaming.phase.${phaseId}`)}</span>
-                <span class="dreams__phase-next">{status()}</span>
-              </div>
-            );
-          }}
-        </For>
-      </div>
-
-      {props.statusError ? (
-        <div class="dreams__controls-error">{props.statusError}</div>
-      ) : undefined}
     </section>
   );
 }

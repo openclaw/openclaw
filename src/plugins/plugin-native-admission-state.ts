@@ -10,6 +10,10 @@ import type {
 } from "./installed-plugin-index-types.js";
 import { resolveRetainedManagedNpmInstallPackageInfo } from "./managed-npm-retention.js";
 import { safeRealpathSync } from "./path-safety.js";
+import type {
+  InspectionNativeEsmPolicy,
+  InspectionNativeEsmRetention,
+} from "./plugin-cache-artifacts.js";
 import { getPluginCache } from "./plugin-cache.js";
 import type { PluginCache } from "./plugin-cache.types.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
@@ -51,10 +55,27 @@ export type AdmissionState = {
   publications: Map<string, { data: PluginSourceAdmissionPublication; run(): Promise<void> }>;
   publishing: Set<string>;
   borrowers: Set<object>;
+  inspectionNativeEsm?: InspectionNativeEsmRetention;
 };
 const admissions = new WeakMap<PluginCache, Map<string, AdmissionState>>();
 const admissionScopes = new WeakMap<PluginCache, Set<AdmissionState>>();
 export const snapshotOwners = new WeakMap<NativeSnapshot, Set<object>>();
+
+/** Publication bounds reusable code to the installed entries and configured workspaces. */
+export function publishInspectionNativeEsmPolicy(
+  cache: PluginCache,
+  policy: InspectionNativeEsmPolicy,
+): void {
+  const prepared = (cache.inspectionNativeEsmPolicy ??= {
+    ...policy,
+    viewKeys: new Set([resolveAdmissionViewKey(false), resolveAdmissionViewKey(true)]),
+  });
+  for (const state of admissions.get(cache)?.values() ?? []) {
+    if (prepared.viewKeys.has(state.viewKey)) {
+      state.inspectionNativeEsm ??= { ...prepared };
+    }
+  }
+}
 
 export type PluginNativeAdmissionTransfer = {
   receipts: Map<string, PluginSourceAdmissionReceipt>;
@@ -185,6 +206,7 @@ function bindAdmissionState(cache: PluginCache, state: AdmissionState): Admissio
           if (owned.borrowers.size > 0) {
             continue;
           }
+          await owned.inspectionNativeEsm?.dispose?.();
           await settlePluginNativeAdmissionState(owned);
           for (const release of owned.pins.values()) {
             release();
@@ -247,6 +269,9 @@ export function nativeAdmissionStateFor(cache = getPluginCache()): AdmissionStat
       publications: new Map(),
       publishing: new Set(),
       borrowers: new Set(),
+      inspectionNativeEsm: cache.inspectionNativeEsmPolicy?.viewKeys.has(viewKey)
+        ? { ...cache.inspectionNativeEsmPolicy }
+        : undefined,
     })
   );
 }
@@ -257,6 +282,7 @@ export function inheritPluginNativeAdmissions(
   targetCache: PluginCache,
 ): void {
   if (sourceCache !== targetCache) {
+    targetCache.inspectionNativeEsmPolicy = sourceCache.inspectionNativeEsmPolicy;
     bindAdmissionState(targetCache, nativeAdmissionStateFor(sourceCache));
   }
 }

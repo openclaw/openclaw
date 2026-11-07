@@ -3,8 +3,15 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveInlineCommandMatch } from "../infra/shell-inline-command.js";
 import { POSIX_SHELL_WRAPPERS } from "../infra/shell-wrapper-resolution.js";
+import { detectRespawnSupervisor } from "../infra/supervisor-markers.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { isSecretEgressProxyEnv } from "../secrets/egress-proxy/environment.js";
+import {
+  auditGatewayNodeVersionChange,
+  GATEWAY_NODE_PREFIX_SKEW,
+  GATEWAY_NODE_VERSION_INSPECT_FAILED,
+  GATEWAY_NODE_VERSION_MISSING,
+} from "./node-version-prefix.js";
 import { auditLaunchdDefinition } from "./service-audit-launchd.js";
 import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
 import { auditGatewayRuntime, SERVICE_RUNTIME_AUDIT_CODES } from "./service-audit-runtime.js";
@@ -17,12 +24,16 @@ import type {
   ServiceDefinitionDrift,
 } from "./service-audit-types.js";
 import { getMinimalServicePathPartsFromEnv, SERVICE_PROXY_ENV_KEYS } from "./service-env.js";
+import { resolveServiceEntrypoint } from "./service-layout.js";
 import {
   collectInlineManagedServiceEnvKeys,
   collectInlineServiceEnvKeys,
   hasInlineEnvironmentSource,
   isEnvironmentFileOnlySource,
+  normalizeServiceEnvKey,
+  normalizeServiceEnvKeys,
   readEnvironmentValueSource,
+  readManagedServiceEnvKeysFromEnvironment,
 } from "./service-managed-env.js";
 import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./service-path-policy.js";
 import { resolveManagedGatewayServiceCommand } from "./service-types.js";
@@ -46,6 +57,9 @@ export const SERVICE_AUDIT_CODES = {
   ...SYSTEMD_SERVICE_AUDIT_CODES,
   gatewayCommandMissing: "gateway-command-missing",
   gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
+  gatewayNodePrefixSkew: GATEWAY_NODE_PREFIX_SKEW,
+  gatewayNodeVersionMissing: GATEWAY_NODE_VERSION_MISSING,
+  gatewayNodeVersionInspectFailed: GATEWAY_NODE_VERSION_INSPECT_FAILED,
   gatewayPathMissing: "gateway-path-missing",
   gatewayPathMissingDirs: "gateway-path-missing-dirs",
   gatewayPathNonMinimal: "gateway-path-nonminimal",
@@ -57,6 +71,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayProxyEnvEmbedded: "gateway-proxy-env-embedded",
   gatewayTokenMismatch: "gateway-token-mismatch",
   gatewayTokenDrift: "gateway-token-drift",
+  gatewayEnvDrift: "gateway-env-drift",
 } as const;
 
 /** Returns whether audit issues require migrating a daemon to a stable Node runtime. */
@@ -335,6 +350,60 @@ export function checkTokenDrift(params: {
   return null;
 }
 
+/** Compare recorded managed snapshots without changing supervisor precedence. */
+export function checkManagedServiceEnvDrift(params: {
+  command: GatewayServiceCommand;
+  durableEnvironment: Record<string, string | undefined> | undefined;
+  secretRefKeys?: Iterable<string>;
+  platform?: NodeJS.Platform;
+}): ServiceConfigIssue | null {
+  const { command, durableEnvironment } = params;
+  if (
+    !command?.environment ||
+    !durableEnvironment ||
+    ((params.platform ?? process.platform) === "linux" &&
+      detectRespawnSupervisor(command.environment, "linux") === "systemd")
+  ) {
+    return null;
+  }
+  const normalizeEnvironment = (environment: Record<string, string | undefined>) => {
+    const values = new Map<string, string | undefined>();
+    for (const [rawKey, value] of Object.entries(environment)) {
+      const key = normalizeServiceEnvKey(rawKey);
+      if (key && !values.has(key)) {
+        values.set(key, value);
+      }
+    }
+    return values;
+  };
+  const installed = normalizeEnvironment(command.environment);
+  const durable = normalizeEnvironment(durableEnvironment);
+  const excluded = new Set([
+    "OPENCLAW_GATEWAY_TOKEN",
+    "OPENCLAW_SERVICE_VERSION",
+    "OPENCLAW_SERVICE_MANAGED_ENV_KEYS",
+  ]);
+  const secretRefs = normalizeServiceEnvKeys(params.secretRefKeys ?? []);
+  const driftedKeys = [...readManagedServiceEnvKeysFromEnvironment(command.environment)]
+    .filter(
+      (key) =>
+        !excluded.has(key) &&
+        installed.get(key) !== undefined &&
+        !(durable.get(key) === undefined && secretRefs.has(key)) &&
+        installed.get(key) !== durable.get(key),
+    )
+    .toSorted();
+  return driftedKeys.length === 0
+    ? null
+    : {
+        code: SERVICE_AUDIT_CODES.gatewayEnvDrift,
+        message: `Durable service environment differs from service definition for managed keys (${driftedKeys.join(", ")}). The daemon will use the old environment after restart.`,
+        detail: `drifted keys: ${driftedKeys.join(", ")}`,
+        environmentKeys: driftedKeys,
+        level: "recommended",
+      };
+}
+
 export async function auditGatewayServiceConfig(params: {
   env: Record<string, string | undefined>;
   command: GatewayServiceCommand;
@@ -344,6 +413,7 @@ export async function auditGatewayServiceConfig(params: {
   expectedManagedServiceEnvKeys?: Iterable<string>;
   expectedServicePath?: string;
   expectedPort?: number;
+  expectedDurableEnvironment?: Record<string, string | undefined>;
   timeoutMs?: number;
 }): Promise<ServiceConfigAudit> {
   const issues: ServiceConfigIssue[] = [];
@@ -399,6 +469,14 @@ export async function auditGatewayServiceConfig(params: {
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);
   auditGatewayPassword(params.command, issues);
   auditGatewayServicePath(params.command, issues, params.env, platform, params.expectedServicePath);
+  const envDrift = checkManagedServiceEnvDrift({
+    command: params.command,
+    durableEnvironment: params.expectedDurableEnvironment,
+    platform,
+  });
+  if (envDrift) {
+    issues.push(envDrift);
+  }
   const runtimeNote = await auditGatewayRuntime(
     params.env,
     params.command,
@@ -406,6 +484,15 @@ export async function auditGatewayServiceConfig(params: {
     platform,
     params.timeoutMs,
   );
+  if (params.command) {
+    const nodeVersionChange = await auditGatewayNodeVersionChange({
+      nodePath: params.command.programArguments[0],
+      entrypointPath: resolveServiceEntrypoint(params.command),
+    });
+    if (nodeVersionChange) {
+      issues.push(nodeVersionChange);
+    }
+  }
 
   if (platform === "linux") {
     definitionDriftError = await auditSystemdUnit(

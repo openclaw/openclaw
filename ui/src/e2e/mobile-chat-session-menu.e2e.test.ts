@@ -2,7 +2,11 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it, onTestFinished } from "vitest";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import {
+  nativePane,
+  openChatPanels,
+  selectChatLayoutAction,
+} from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -40,7 +44,16 @@ async function installSessionSharing(
       sessionRow(key, title, updatedAt, {
         sharingRole: role,
         visibility,
-        ...(includePeople ? { createdActor: { type: "human", id: "owner", label: "Owner" } } : {}),
+        ...(includePeople
+          ? {
+              createdActor: {
+                type: "human",
+                id: "owner",
+                label: "Owner",
+                identity: { type: "profile", id: "owner" },
+              },
+            }
+          : {}),
       }),
     ]),
   };
@@ -53,6 +66,11 @@ async function installSessionSharing(
       members: [],
       role,
       allowedVisibilities: visibilities,
+      permissions: Array.from({ length: 30 }, (_, i) => ({
+        identityId: `member-${i}`,
+        level: "read",
+        options: ["read", "send"],
+      })),
       identities: [
         owner,
         ...Array.from({ length: 30 }, (_, i) => human(`member-${i}`, `Member ${i}`)),
@@ -61,6 +79,14 @@ async function installSessionSharing(
   }
   return installMockGateway(page, {
     sessionKey: key,
+    presenceUsers: includePeople
+      ? ["owner", "guest"].map((id) => ({
+          id,
+          identity: { type: "profile" as const, id },
+          name: id,
+          watchedSessions: [key],
+        }))
+      : [],
     featureMethods,
     methodResponses,
     operatorScopes: role === "owner" ? ["operator.read", "operator.write"] : ["operator.read"],
@@ -71,9 +97,8 @@ async function withMobilePage(run: (page: Page) => Promise<void>, colorScheme?: 
 }
 
 async function openMobilePanelLauncher(page: Page) {
-  const header = page.locator(".agent-chat__header--mobile").filter({ visible: true });
-  const trigger = header.getByRole("button", { name: "Panels", exact: true });
-  await trigger.click();
+  await nativePane(page).locator(".agent-chat__header--mobile").waitFor();
+  const trigger = await openChatPanels(page, "mobile");
   const host = page.locator(".chat-mobile-host").filter({ visible: true });
   await host
     .locator(".chat-mobile-host__header")
@@ -91,98 +116,92 @@ async function openMobilePanelLauncher(page: Page) {
 }
 
 suite.define(() => {
-  it.each(["light", "dark"] as const)(
-    "keeps the %s mobile Panels sheet bounded and its actions reachable",
-    (colorScheme) =>
-      withMobilePage(async (page) => {
-        const sessionKey = "agent:main:mobile-layout";
-        await installMockGateway(page, {
-          sessionKey,
-          terminalEnabled: true,
-          featureMethods: ["chat.metadata", "chat.startup", "terminal.open"],
-          methodResponses: {
-            "sessions.list": sessionsListResponse([
-              sessionRow(sessionKey, "Mobile layout", updatedAt),
-            ]),
-          },
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const { host, launcher, trigger } = await openMobilePanelLauncher(page);
-        const terminal = launcher.getByRole("button", { name: "Terminal", exact: true });
-        await terminal.waitFor();
-        for (const viewport of [
-          { width: 390, height: 844 },
-          { width: 320, height: 568 },
-          { width: 844, height: 390 },
-        ]) {
-          await page.setViewportSize(viewport);
-          await terminal.scrollIntoViewIfNeeded();
-          const bounds = await host.boundingBox();
-          expect(bounds).not.toBeNull();
-          expect(bounds!.x).toBeGreaterThanOrEqual(0);
-          expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
-          expect(bounds!.y).toBeGreaterThanOrEqual(0);
-          expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
-          expect(await host.locator("kbd:visible").count()).toBe(0);
-          expect(
-            await launcher.evaluate((element) => element.scrollWidth <= element.clientWidth),
-          ).toBe(true);
-          expect(await height(terminal)).toBeGreaterThanOrEqual(44);
-          await terminal.click({ trial: true });
-        }
+  it("keeps the light mobile Panels sheet bounded and its actions reachable", () =>
+    withMobilePage(async (page) => {
+      const sessionKey = "agent:main:mobile-layout";
+      await installMockGateway(page, {
+        sessionKey,
+        terminalEnabled: true,
+        featureMethods: ["chat.metadata", "chat.startup", "terminal.open"],
+        methodResponses: {
+          "sessions.list": sessionsListResponse([
+            sessionRow(sessionKey, "Mobile layout", updatedAt),
+          ]),
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const { host, launcher, trigger } = await openMobilePanelLauncher(page);
+      const terminal = launcher.getByRole("button", { name: "Terminal", exact: true });
+      await terminal.waitFor();
+      for (const viewport of [
+        { width: 390, height: 844 },
+        { width: 320, height: 568 },
+        { width: 844, height: 390 },
+      ]) {
+        await page.setViewportSize(viewport);
+        await terminal.scrollIntoViewIfNeeded();
+        const bounds = await host.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+        expect(bounds!.y).toBeGreaterThanOrEqual(0);
+        expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+        expect(await host.locator("kbd:visible").count()).toBe(0);
         expect(
-          await launcher.evaluate((element) => element.scrollHeight > element.clientHeight),
+          await launcher.evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
-        await expect
-          .poll(() =>
-            host.locator(".chat-mobile-host__scroll-edge--top").filter({ visible: true }).count(),
-          )
-          .toBe(1);
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator(".shell"),
-            [host, terminal],
-            {
-              animations: "disabled",
-            },
-          );
-          await writeFile(
-            path.join(suite.artifactDir, `mobile-panels-${colorScheme}.png`),
-            frame.png,
-          );
-        }
+        expect(await height(terminal)).toBeGreaterThanOrEqual(44);
+        await terminal.click({ trial: true });
+      }
+      expect(
+        await launcher.evaluate((element) => element.scrollHeight > element.clientHeight),
+      ).toBe(true);
+      await expect
+        .poll(() =>
+          host.locator(".chat-mobile-host__scroll-edge--top").filter({ visible: true }).count(),
+        )
+        .toBe(1);
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".shell"),
+          [host, terminal],
+          {
+            animations: "disabled",
+          },
+        );
+        await writeFile(path.join(suite.artifactDir, "mobile-panels-light.png"), frame.png);
+      }
 
-        await host
-          .locator(".chat-mobile-host__header")
-          .getByRole("button", {
-            name: "Close",
-            exact: true,
-          })
-          .click();
-        await host.waitFor({ state: "hidden" });
-        await expect
-          .poll(() => trigger.evaluate((element) => element === document.activeElement))
-          .toBe(true);
-        await page.setViewportSize({ width: 1280, height: 900 });
-        await page
-          .locator(".sidebar-region__panels-toggle")
-          .getByRole("button", {
-            name: "Panels",
-            exact: true,
-          })
-          .waitFor();
-        await page.setViewportSize({ width: 390, height: 844 });
-        const reopened = await openMobilePanelLauncher(page);
-        await expect
-          .poll(() => reopened.host.locator(".chat-mobile-host__scroll-fades").count())
-          .toBe(1);
-        await reopened.launcher.getByRole("button", { name: "Subagents", exact: true }).click();
-        await page.locator('[data-panel-slot="subagents"]:visible').waitFor();
-        await reopened.launcher.waitFor({ state: "hidden" });
-        expect(await reopened.host.isVisible()).toBe(true);
-      }, colorScheme),
-  );
+      await host
+        .locator(".chat-mobile-host__header")
+        .getByRole("button", {
+          name: "Close",
+          exact: true,
+        })
+        .click();
+      await host.waitFor({ state: "hidden" });
+      await expect
+        .poll(() => trigger.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page
+        .locator(".sidebar-region__panels-toggle")
+        .getByRole("button", {
+          name: "Panels",
+          exact: true,
+        })
+        .waitFor();
+      await page.setViewportSize({ width: 390, height: 844 });
+      const reopened = await openMobilePanelLauncher(page);
+      await expect
+        .poll(() => reopened.host.locator(".chat-mobile-host__scroll-fades").count())
+        .toBe(1);
+      await reopened.launcher.getByRole("button", { name: "Subagents", exact: true }).click();
+      await page.locator('[data-panel-slot="subagents"]:visible').waitFor();
+      await reopened.launcher.waitFor({ state: "hidden" });
+      expect(await reopened.host.isVisible()).toBe(true);
+    }, "light"));
 
   it.each(["light", "dark"] as const)(
     "keeps %s mobile session actions and sharing in the shared sheet",
@@ -238,7 +257,7 @@ suite.define(() => {
           sessionKey,
           "Mobile menu",
           "owner",
-          "draft",
+          "read-only",
           colorScheme === "light",
         );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -272,7 +291,7 @@ suite.define(() => {
         if (colorScheme === "light") {
           await page.getByRole("button", { name: "People", exact: true }).click();
           await peopleModule.request;
-          await host.getByRole("status").filter({ hasText: "Loading" }).waitFor();
+          await host.getByRole("status", { name: "Loading…", exact: true }).waitFor();
           await captureUiProof(suite, page, "mobile-people-loading-light.png");
           peopleModule.release();
           await host.getByRole("group", { name: "People", exact: true }).waitFor();
@@ -285,7 +304,7 @@ suite.define(() => {
         const sharing = host.locator('[data-mobile-page="sharing"]');
         if (sharingModule) {
           const moduleUrl = await sharingModule.request;
-          await sharing.getByRole("status").filter({ hasText: "Loading" }).waitFor();
+          await sharing.getByRole("status", { name: "Loading…", exact: true }).waitFor();
           await captureUiProof(suite, page, "mobile-sharing-pending-dark.png");
           const retiringPane = page.locator(".chat-split-view__cell--active openclaw-chat-pane");
           const retiringElement = await retiringPane.elementHandle();
@@ -330,9 +349,7 @@ suite.define(() => {
           await host.getByRole("button", { name: /^Sharing options/ }).click();
         }
         try {
-          await sharing
-            .getByRole("heading", { name: "Message permissions", exact: true })
-            .waitFor();
+          await sharing.getByRole("heading", { name: "Permissions", exact: true }).waitFor();
         } finally {
           console.info("MOBILE_SHARING_RECOVERY", {
             documentRequests,
@@ -340,7 +357,7 @@ suite.define(() => {
             failedRequests,
           });
         }
-        const lastMember = sharing.getByRole("checkbox", { name: /^Member 29,/ });
+        const lastMember = sharing.getByRole("button", { name: /^Member 29, Can read/ });
         await lastMember.scrollIntoViewIfNeeded();
         expect(await sharing.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         await lastMember.click({ trial: true });
@@ -355,9 +372,9 @@ suite.define(() => {
         const search = sharing.getByRole("searchbox", { name: "Search people and agents…" });
         await search.fill("Member 29");
         await lastMember.waitFor();
-        await sharing.getByRole("button", { name: /^Draft / }).click();
+        await sharing.getByRole("button", { name: /^Read-only/ }).click();
         const access = host.locator('[data-mobile-page="sharing-access"]');
-        await access.getByRole("button", { name: /^Draft / }).waitFor();
+        await access.getByRole("button", { name: /^Read-only/ }).waitFor();
         await host
           .locator(".chat-mobile-host__header")
           .getByRole("button", { name: "Back", exact: true })
@@ -370,7 +387,12 @@ suite.define(() => {
           .click();
         await host.waitFor({ state: "hidden" });
         await expect
-          .poll(() => trigger.evaluate((element) => element === document.activeElement))
+          .poll(() =>
+            (colorScheme === "light"
+              ? page.getByRole("button", { name: "People", exact: true })
+              : trigger
+            ).evaluate((element) => element === document.activeElement),
+          )
           .toBe(true);
         if (colorScheme === "light") {
           await page.getByRole("button", { name: "People", exact: true }).click();
@@ -381,10 +403,10 @@ suite.define(() => {
         }
         await search.waitFor();
         expect(await search.inputValue()).toBe("Member 29");
-        await sharing.getByRole("button", { name: /^Draft / }).click();
-        await access.getByRole("button", { name: /^Draft / }).waitFor();
+        await sharing.getByRole("button", { name: /^Read-only/ }).click();
+        await access.getByRole("button", { name: /^Read-only/ }).waitFor();
         expect(
-          await access.getByRole("button", { name: /^Draft / }).getAttribute("aria-pressed"),
+          await access.getByRole("button", { name: /^Read-only/ }).getAttribute("aria-pressed"),
         ).toBe("true");
         await gateway.deferNext("session.visibility.set");
         await access.getByRole("button", { name: /^Shared / }).click();

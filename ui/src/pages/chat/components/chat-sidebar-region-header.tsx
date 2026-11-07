@@ -1,13 +1,4 @@
-import {
-  For,
-  Show,
-  createMemo,
-  createUniqueId,
-  createSignal,
-  onSettled,
-  mapArray,
-  onCleanup,
-} from "solid-js";
+import { For, Show, createMemo, createUniqueId, createSignal, onSettled, mapArray } from "solid-js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { readPanelHostedTabs, type PanelHostedTab } from "../../../components/panel-hosted-tabs.ts";
 import {
@@ -23,13 +14,14 @@ import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { KeyboardShortcut } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import "../../../components/tooltip.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { TabFocus } from "../../../lib/tabs.ts";
 import { showToast } from "../../../lib/toast.ts";
-import { readLinkFavicon } from "../link-favicon-cache.ts";
 import {
   sidebarActivePanel,
   sidebarSidePanels,
@@ -39,6 +31,7 @@ import {
   type SidebarSlotId,
 } from "../sidebar-layout.ts";
 import { ChatPanelHeaderActions } from "./chat-header-panel-actions.tsx";
+import { HostedPanelIcon, PanelIcon } from "./chat-panel-icon.tsx";
 import { DesktopFrameControls } from "./chat-sidebar-desktop-frame-controls.tsx";
 import type {
   SidebarPanelDefinition,
@@ -79,6 +72,7 @@ type RegionTab = SolidPanelTabStripTab & {
   hostedTab?: PanelHostedTab;
   conversationAvatar?: AgentIdentity;
   iconName?: IconName;
+  iconSvg?: string;
 };
 
 export function readRegionHostedTabs(host: RegionElement, panel: SidebarPanel) {
@@ -97,9 +91,15 @@ export function PanelTypeOption(props: { type: SidebarPanelDefinition }) {
   return (
     <>
       <span class="side-panel-type-option__icon" aria-hidden="true">
-        <Icon name={props.type.icon} />
+        <PanelIcon icon={props.type.icon} iconSvg={props.type.iconSvg} />
       </span>
-      <span class="side-panel-type-option__label">{props.type.label}</span>{" "}
+      <span
+        ref={createTextOverflow(() => props.type.label)}
+        class="side-panel-type-option__label"
+        title={props.type.label}
+      >
+        {props.type.label}
+      </span>{" "}
       <Show when={props.type.shortcut}>
         {(shortcut) => (
           <KeyboardShortcut combo={shortcut()} class="side-panel-type-option__shortcut" />
@@ -117,6 +117,7 @@ export function SidebarPanelLauncher(props: {
   const quickSlots: SidebarSlotId[] = ["companion", "workspace", "browser"];
   const exploreSlots: SidebarSlotId[] = [
     "detail",
+    "context",
     "link-reader",
     "dashboard",
     "subagents",
@@ -214,8 +215,23 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
             return current().label;
           },
           class: "side-panel-type-menu__item session-menu__item",
-          icon: <Icon name={current().icon} class="side-panel-type-option__icon" />,
+          icon: (
+            <PanelIcon
+              icon={current().icon}
+              iconSvg={current().iconSvg}
+              class="side-panel-type-option__icon"
+            />
+          ),
           labelClass: "side-panel-type-option__label",
+          content: (
+            <span
+              ref={createTextOverflow(() => current().label)}
+              style="display:block;overflow:hidden"
+              title={current().label}
+            >
+              {current().label}
+            </span>
+          ),
           details: (
             <Show when={current().shortcut}>
               {(shortcut) => (
@@ -234,7 +250,7 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
       id={`side-panel-type-${id}`}
       class="side-panel-type-menu"
       panelClass="side-panel-type-menu__panel"
-      triggerClass="rail-header__action side-panel-type-menu__trigger"
+      triggerClass="oc-icon-button oc-icon-button--28 rail-header__action side-panel-type-menu__trigger"
       triggerAttributes={{ title: t("chat.sidePanel.addTab") }}
       placement="bottom-start"
       label={t("chat.sidePanel.addTab")}
@@ -260,28 +276,26 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
     />
   );
 }
-function HostedIcon(props: SidebarRegionHeaderProps & { tab: PanelHostedTab }) {
-  const favicon = () => {
-    props.hostedRevision();
-    if (props.tab.favicon) {
-      return props.tab.favicon;
-    }
-    const hostname = props.tab.url ? URL.parse(props.tab.url)?.hostname : "";
-    return hostname && props.fetchFavicon
-      ? readLinkFavicon(hostname, props.fetchFavicon, props.refreshHostedTabs)
-      : null;
-  };
-  return (
-    <Show when={favicon()} fallback={props.tab.icon}>
-      {(src) => <img class="tabstrip-tab__favicon" src={src()} alt="" />}
-    </Show>
-  );
-}
 
 export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
-  onCleanup(() => props.headerRef(null));
   const desktop = () => props.presentation === "desktop";
-  const [closing, setClosing] = createSignal(false);
+  const panelScope = createMemo(() => props.panelIdPrefix);
+  const mobileHostScope = createMemo(() => props.mobileHost?.scopeKey);
+  const closeScope = createMemo(() => {
+    const initialScope = panelScope();
+    const initialMobileScope = mobileHostScope();
+    const [closing, setClosing] = createSignal(false);
+    return {
+      closing,
+      setClosing,
+      current: () =>
+        props.host.isConnected &&
+        props.host.panelIdPrefix === initialScope &&
+        props.host.mobileHost?.scopeKey === initialMobileScope,
+    };
+  });
+  const closing = () => closeScope().closing();
+  let activeClose: ReturnType<typeof closeScope> | undefined;
   const state = createMemo(() => {
     props.hostedRevision();
     const column = props.layout.columns[0];
@@ -356,7 +370,14 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
           onActivate:
             canRestore && tab.id === hosted.element.activeHostedTabId
               ? () => props.callbacks?.togglePanelExpanded(panel.id)
-              : undefined,
+              : tab.onActivate
+                ? () => {
+                    if (column?.activePanelId !== panel.id) {
+                      props.callbacks?.activatePanel(panel.id);
+                    }
+                    tab.onActivate?.();
+                  }
+                : undefined,
         }));
       }
       const type = sidebarPanelType(props.panelDefinitions, panel.slot);
@@ -387,6 +408,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
             : undefined,
           conversationAvatar: conversation?.avatar,
           iconName: conversation ? undefined : type.icon,
+          iconSvg: conversation ? undefined : type.iconSvg,
           closeLabel: t("chat.sidebarColumns.close", { panel: type.label }),
           closable: !(desktop() && panel.slot === "conversation"),
           draggable: !(desktop() && panel.slot === "conversation"),
@@ -418,8 +440,8 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
     const mobileScope = props.mobileHost?.scopeKey;
     const current = () =>
       props.host.isConnected &&
-      props.panelIdPrefix === scope &&
-      props.mobileHost?.scopeKey === mobileScope;
+      props.host.panelIdPrefix === scope &&
+      props.host.mobileHost?.scopeKey === mobileScope;
     if (!current()) {
       return false;
     }
@@ -477,16 +499,15 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
     return !hasPanel(panel.id);
   }
   async function closeAll() {
-    if (closing() || !props.callbacks?.newTab) {
+    const view = closeScope();
+    if (activeClose?.current() || !view.current() || !props.callbacks?.newTab) {
       return;
     }
-    setClosing(true);
-    const scope = props.panelIdPrefix;
-    const mobileScope = props.mobileHost?.scopeKey;
-    const current = () =>
-      props.host.isConnected &&
-      props.panelIdPrefix === scope &&
-      props.mobileHost?.scopeKey === mobileScope;
+    activeClose = view;
+    // This owner must publish and settle every close before admitting the next one.
+    // Keeping its busy state outside an action lets those intermediate commits finish.
+    view.setClosing(true);
+    const current = view.current;
     try {
       const panels = sidebarSidePanels(props.layout).filter(
         (panel) => panel.slot !== "conversation",
@@ -520,9 +541,14 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
       }
       props.callbacks?.newTab?.finishCloseAll();
     } catch (error) {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
     } finally {
-      setClosing(false);
+      if (activeClose === view) {
+        activeClose = undefined;
+      }
+      if (view.current()) {
+        view.setClosing(false);
+      }
     }
   }
   const hostedActions = () =>
@@ -544,7 +570,12 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
   });
   return (
     <header
-      ref={props.headerRef}
+      ref={[
+        elementRef<HTMLElement>((element) => {
+          props.headerRef(element);
+          return () => props.headerRef(null);
+        }),
+      ]}
       class={[
         "rail-header side-panel__header",
         { "side-panel__header--occupied": state().tabs.length > 0 },
@@ -562,25 +593,29 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
               fallback={
                 <Show
                   when={tab().conversationAvatar}
-                  fallback={<Show when={tab().iconName}>{(name) => <Icon name={name()} />}</Show>}
+                  fallback={
+                    <Show when={tab().iconName}>
+                      {(name) => <PanelIcon icon={name()} iconSvg={tab().iconSvg} />}
+                    </Show>
+                  }
                 >
                   {(agent) => <AgentIdentityAvatar agent={agent()} />}
                 </Show>
               }
             >
-              {(hosted) => <HostedIcon {...props} tab={hosted()} />}
+              {(hosted) => <HostedPanelIcon {...props} tab={hosted()} />}
             </Show>
           )}
           tabs={state().tabs}
           activeId={state().activeId}
           ariaControls={(tab) => tab.contentId}
-          onSelect={(id) => {
+          onSelect={(id, event) => {
             const hosted = state().resolveHostedTab(id);
             if (hosted) {
               if (state().column?.activePanelId !== hosted.panel.id) {
                 props.callbacks?.activatePanel(hosted.panel.id);
               }
-              hosted.element.selectHostedTab(hosted.tabId);
+              hosted.element.selectHostedTab(hosted.tabId, event);
             } else {
               props.callbacks?.activatePanel(id);
             }
@@ -615,7 +650,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
             <Show when={state().tabs.length > 0 && props.callbacks?.newTab}>
               <button
                 type="button"
-                class="rail-header__action tabstrip-new"
+                class="oc-icon-button oc-icon-button--28 rail-header__action tabstrip-new"
                 title={t("browser.newTab")}
                 aria-label={t("browser.newTab")}
                 disabled={closing()}
@@ -634,7 +669,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
             <Show when={props.onOpenMobileLauncher} fallback={<TypeMenu {...props} />}>
               <button
                 type="button"
-                class="rail-header__action tabstrip-new"
+                class="oc-icon-button oc-icon-button--28 rail-header__action tabstrip-new"
                 title={t("browser.newTab")}
                 aria-label={t("browser.newTab")}
                 onClick={() => props.onOpenMobileLauncher?.()}

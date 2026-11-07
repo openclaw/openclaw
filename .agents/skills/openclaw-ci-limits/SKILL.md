@@ -40,18 +40,19 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 
 - Use the smallest runner that completes the required workload reliably. Keep
   short control jobs hosted and ordinary trusted development proof local.
-- Treat the 32-class as an exception, not a default or generic retry. Record the
+- Treat physical 8-vCPU and larger runners as exceptions, not a default or generic retry. Record the
   command and measured peak memory, a smaller-runner OOM, or a controlled
   comparison showing lower total billed cost. Low CPU use alone does not prove
   a memory-heavy job can move down. Preserve resource-based worker limits.
-- Routine OpenClaw Testboxes use the 16-class with a 60-minute total-job
+- Routine OpenClaw Testboxes use the 4-class with a 60-minute total-job
   default, including hydration. Keep the 15-minute idle ceiling. Shorter
   deadlines are welcome for known short commands; do not request four hours
   automatically or upsize only to obtain more time. Select
   `.github/workflows/ci-check-high-memory-testbox.yml` explicitly only for a
   named memory-heavy command; see `docs/reference/test/remote-proof.md`.
   That workflow has at most four concurrent leases inside the shared 32-slot
-  Testbox pool. All Testbox profiles cap idle time at 15 minutes.
+  Testbox pool. The high-memory profile uses 8 vCPUs; both profiles preserve
+  their pre-November 3 physical CPU and RAM. All Testbox profiles cap idle time at 15 minutes.
 - Allocate through the current OpenClaw wrapper with workflow ref `main`;
   the source capsule preserves the checkout being tested. Do not dispatch an
   old workflow ref to bypass spending limits. Queue age is checked before
@@ -279,6 +280,13 @@ Do not:
 
 These are intentionally guarded by the `ci-workflow-guards`,
 `ci-workflow-planning`, and `ci-workflow-evidence` tests under `test/scripts/`:
+
+- Current-target Control UI locale checks share an already-selected public
+  artifact producer on real PR/push/schedule events. Keep verification before
+  generators, settle the existing strict/advisory outcomes after build diagnostics,
+  and route the logical locale gate to that explicit result. Dispatches, frozen
+  and compatibility targets, and standalone locale selections retain their job.
+  Hosted row accounting omits only the shared locale row; no build is newly selected.
 
 - `CI` concurrency key version, PR cancellation, and canonical `main`'s two
   non-canceling parity slots, each with one coalesced pending tip.
@@ -664,7 +672,8 @@ These are intentionally guarded by the `ci-workflow-guards`,
   exceeded the existing memory reserve before the three resource-gated cases ran.
 - Numbered tooling measurements in `toolingFileSeconds` drive file packing with
   native profile costs; a hosted fallback scales measured Blacksmith costs.
-  The daily refit samples the newest five contributing successful PR CI runs.
+  The daily refit samples successful jobs from the newest five contributing
+  completed PR CI runs, including workflows where other jobs failed.
   Those measurements describe the PR merge-ref and update exact compact and tooling identities;
   main compact and release sampling retain their existing provenance. Preserve
   independent-run medians, runner profiles and partial-plan history. An explicit
@@ -689,11 +698,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   manual runs, unknown paths and older planners retain coverage. Preserve the
   target's existing performance-script capability checks.
 - Eligible Control UI E2E rows request the 16-vCPU class with unchanged live
-  backend/event routing and project worker limits. Current canonical ordinary
-  plans with known changed paths, including fork PRs targeting OpenClaw, use
-  eight Control UI shards plus one browser-extension row. Hourly main also uses
-  eight without a changed-path inventory. Non-main full manual, noncanonical,
-  compatibility, and other unknown-path inventories retain twelve Control UI
+  backend/event routing. Compact plans use six mocked Control UI shards with four
+  workers each, matching four observed CPUs per runner and retaining 24 aggregate
+  worker slots. Private source-server projects remain serial. The conditional
+  browser-extension row keeps its existing reuse and routing rules. Hourly main
+  uses the same compact plan without a changed-path inventory. Non-main full
+  manual, noncanonical, compatibility, and other unknown-path inventories retain twelve Control UI
   shards plus one browser-extension row. Historical targets without the named-project contract retain four total rows on
   Blacksmith or fourteen on GitHub/hybrid. Failed-job-only retries retain their
   previously emitted matrix, including older six-shard Control UI plans; PR and
@@ -781,6 +791,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   immutable Actions caches; the main-push/daily/dispatch warmer is their sole
   writer. Build, QA and test orchestration consume its shared Node compile seed.
   PRs create no runtime-cache archives.
+- Full compiled-worker seeds retain separate prebuild and postbuild archives.
+  The existing protected warmer publishes its already-prepared postbuild full
+  generation; only selected artifact-producer source verifiers restore it.
+  Runtime workers use separate live/cache slots so they cannot replace that
+  full seed. Keep byte, topology, runtime and exact output-path validation, the
+  uncached path when no archive arrives, and existing job/worker limits.
 
 When changing one knob, update `docs/ci.md` and the guard test in the same PR.
 

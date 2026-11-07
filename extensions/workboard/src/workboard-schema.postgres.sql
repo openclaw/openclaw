@@ -239,27 +239,27 @@ CREATE TABLE "workboard_worker_protocol" (
   PRIMARY KEY ("card_id")
 );
 
-CREATE INDEX "workboard_card_artifacts_card_idx" ON "workboard_card_artifacts" (("card_id") ASC NULLS FIRST, ("ordinal") ASC NULLS FIRST);
+CREATE INDEX "workboard_card_artifacts_card_idx" ON "workboard_card_artifacts" (("card_id") ASC, ("ordinal") ASC);
 
-CREATE INDEX "workboard_card_attachments_card_idx" ON "workboard_card_attachments" (("card_id") ASC NULLS FIRST, ("ordinal") ASC NULLS FIRST);
+CREATE INDEX "workboard_card_attachments_card_idx" ON "workboard_card_attachments" (("card_id") ASC, ("ordinal") ASC);
 
-CREATE INDEX "workboard_card_attempts_card_idx" ON "workboard_card_attempts" (("card_id") ASC NULLS FIRST, ("ordinal") ASC NULLS FIRST);
+CREATE INDEX "workboard_card_attempts_card_idx" ON "workboard_card_attempts" (("card_id") ASC, ("ordinal") ASC);
 
-CREATE INDEX "workboard_card_comments_card_idx" ON "workboard_card_comments" (("card_id") ASC NULLS FIRST, ("ordinal") ASC NULLS FIRST);
+CREATE INDEX "workboard_card_comments_card_idx" ON "workboard_card_comments" (("card_id") ASC, ("ordinal") ASC);
 
-CREATE INDEX "workboard_card_events_card_idx" ON "workboard_card_events" (("card_id") ASC NULLS FIRST, ("ordinal") ASC NULLS FIRST);
+CREATE INDEX "workboard_card_events_card_idx" ON "workboard_card_events" (("card_id") ASC, ("ordinal") ASC);
 
-CREATE INDEX "workboard_card_links_card_idx" ON "workboard_card_links" (("card_id") ASC NULLS FIRST, ("ordinal") ASC NULLS FIRST);
+CREATE INDEX "workboard_card_links_card_idx" ON "workboard_card_links" (("card_id") ASC, ("ordinal") ASC);
 
-CREATE INDEX "workboard_card_notifications_card_idx" ON "workboard_card_notifications" (("card_id") ASC NULLS FIRST, ("ordinal") ASC NULLS FIRST);
+CREATE INDEX "workboard_card_notifications_card_idx" ON "workboard_card_notifications" (("card_id") ASC, ("ordinal") ASC);
 
-CREATE INDEX "workboard_card_proof_card_idx" ON "workboard_card_proof" (("card_id") ASC NULLS FIRST, ("ordinal") ASC NULLS FIRST);
+CREATE INDEX "workboard_card_proof_card_idx" ON "workboard_card_proof" (("card_id") ASC, ("ordinal") ASC);
 
-CREATE INDEX "workboard_cards_board_status_idx" ON "workboard_cards" (("board_id") ASC NULLS FIRST, ("status") ASC NULLS FIRST, ("position") ASC NULLS FIRST);
+CREATE INDEX "workboard_cards_board_status_idx" ON "workboard_cards" (("board_id") ASC, ("status") ASC, ("position") ASC);
 
 CREATE INDEX "workboard_cards_session_idx" ON "workboard_cards" (("session_key") ASC NULLS FIRST, ("run_id") ASC NULLS FIRST);
 
-CREATE INDEX "workboard_worker_logs_card_idx" ON "workboard_worker_logs" (("card_id") ASC NULLS FIRST, ("ordinal") ASC NULLS FIRST);
+CREATE INDEX "workboard_worker_logs_card_idx" ON "workboard_worker_logs" (("card_id") ASC, ("ordinal") ASC);
 
 ALTER TABLE "workboard_card_artifacts" ADD FOREIGN KEY ("card_id") REFERENCES "workboard_cards" ("id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 

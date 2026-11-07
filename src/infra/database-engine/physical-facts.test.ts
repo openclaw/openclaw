@@ -50,6 +50,7 @@ describe.skipIf(!connection)("PostgreSQL physical admission", () => {
         db.exec("CREATE TABLE anchor_identity (id TEXT)");
         admitSqliteSchema(db);
       },
+      { connection: connection! },
     );
     try {
       const result = await conformanceWorkerResult<PhysicalFactsTestResult>(worker, "Catalog");
@@ -65,32 +66,25 @@ describe.skipIf(!connection)("PostgreSQL physical admission", () => {
       });
       const partial = (kind: string, value: object) =>
         expect.objectContaining({ kind, value: expect.objectContaining(value) });
+      const exact = (table: string, kind: string, value: object) => ({ table, kind, value });
       for (const fact of [
-        {
-          table: "parents",
-          kind: "column",
-          value: {
-            name: "name",
-            type: "text",
-            nullable: false,
-            identity: false,
-            position: 2,
-            default: "'seed'",
-          },
-        },
-        {
-          table: "children",
-          kind: "foreignKey",
-          value: {
-            columns: ["parent_id"],
-            target: "parents",
-            targetColumns: ["id"],
-            onUpdate: "NO ACTION",
-            onDelete: "CASCADE",
-            deferrable: true,
-            deferred: true,
-          },
-        },
+        exact("parents", "column", {
+          name: "name",
+          type: "text",
+          nullable: false,
+          identity: false,
+          position: 2,
+          default: "'seed'",
+        }),
+        exact("children", "foreignKey", {
+          columns: ["parent_id"],
+          target: "parents",
+          targetColumns: ["id"],
+          onUpdate: "NO ACTION",
+          onDelete: "CASCADE",
+          deferrable: true,
+          deferred: true,
+        }),
         partial("constraintDefinition", { definition: "CHECK ((length(name) > 0))" }),
         partial("indexDefinition", {
           name: "child_parent",

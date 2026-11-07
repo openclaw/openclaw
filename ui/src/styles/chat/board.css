@@ -22,24 +22,6 @@
   overflow: hidden;
 }
 
-/* Scroll owner for the board face. Widget/tab menus stay usable because
-   native popovers render them in the top layer, so this overflow cannot clip them.
-   Inline padding lives on .board-view below: macOS overlay scrollbars render
-   inside the scroll container's padding and would float away from the edge. */
-.board-session-surface__board > openclaw-board-view {
-  display: block;
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  padding: 12px 0 16px;
-}
-
-.board-session-surface__board .board-view {
-  padding-inline: 16px;
-}
-
 .board-session-surface__board > openclaw-board-view[data-initial-loading] {
   overflow: hidden;
 }
@@ -99,6 +81,18 @@
   opacity: 1;
 }
 
+.board-session-surface:has(
+    > :where(.board-session-surface__board)
+      > :where(openclaw-board-view)
+      > :where(.board-view)
+      > .board-tabs
+  )
+  .chat-dashboard-menu__trigger {
+  border: 1px solid var(--border);
+  background: transparent;
+  opacity: 1;
+}
+
 .sidebar-region--mobile-host .chat-dashboard-menu__trigger {
   opacity: 1;
 }
@@ -127,7 +121,7 @@
   min-width: 0;
   max-width: calc(100vw - 24px);
   padding: 8px;
-  border-radius: 22px;
+  border-radius: var(--menu-radius-large);
   font-size: 13px;
   line-height: 18px;
 }
@@ -139,7 +133,7 @@
   column-gap: 10px;
   min-height: 34px;
   padding: 7px 10px;
-  border-radius: 10px;
+  border-radius: var(--menu-item-radius);
   font: inherit;
 }
 
@@ -225,18 +219,6 @@
   color: var(--accent);
 }
 
-.chat-dashboard-menu__panel .board-widget__menu-separator {
-  margin: 7px 2px;
-  border-top: 1px solid var(--details-separator);
-}
-
-.chat-dashboard-menu__panel .board-widget__menu-heading {
-  padding: 3px 10px 6px;
-  font-size: 12px;
-  letter-spacing: normal;
-  text-transform: none;
-}
-
 .chat-dashboard-menu__sizes {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -245,6 +227,7 @@
 }
 
 .chat-dashboard-menu__sizes .board-widget__preset {
+  margin-block-start: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -262,9 +245,26 @@
   color: var(--muted);
 }
 
+.chat-dashboard-menu__sizes
+  .oc-menu-item:not(.is-current):is(:hover, :focus-visible):not(:disabled):not(
+    [aria-disabled="true"]
+  ) {
+  background: var(--menu-hover);
+}
+
 .chat-dashboard-menu__sizes .is-current {
-  border-color: var(--border);
-  background: var(--bg-hover);
+  background: var(--menu-selected);
+}
+
+.chat-dashboard-menu__sizes
+  .is-current:is(:hover, :focus-visible):not(:disabled):not([aria-disabled="true"]) {
+  background: var(--surface-selected-hover);
+}
+
+@media (forced-colors: active) {
+  .chat-dashboard-menu__sizes .is-current {
+    border-color: SelectedItem;
+  }
 }
 
 .chat-dashboard-menu__sizes .is-current .oc-menu-item__label {

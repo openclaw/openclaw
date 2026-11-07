@@ -119,10 +119,7 @@ export async function writeSnapshotManifest(
   }
 }
 
-export async function readSnapshotManifest(
-  snapshotDir: string,
-  expectedSnapshotId = path.basename(snapshotDir),
-): Promise<SnapshotManifest> {
+export async function readSnapshotManifest(snapshotDir: string): Promise<SnapshotManifest> {
   const snapshotRoot = await root(snapshotDir);
   const manifestPath = path.join(snapshotDir, SNAPSHOT_MANIFEST_FILENAME);
   const result = await snapshotRoot.read(SNAPSHOT_MANIFEST_FILENAME, {
@@ -136,7 +133,7 @@ export async function readSnapshotManifest(
   } catch (error) {
     throw new Error(`Snapshot manifest is not valid JSON: ${manifestPath}`, { cause: error });
   }
-  return parseSnapshotManifest(parsed, manifestPath, expectedSnapshotId);
+  return parseSnapshotManifest(parsed, manifestPath, path.basename(snapshotDir));
 }
 
 export function parseSnapshotManifest(

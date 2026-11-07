@@ -75,17 +75,16 @@ async function compress(attempts: StreamTargetChunk[][]): Promise<VideoCompressi
   for (const method of ["addEventListener", "removeEventListener"] as const) {
     vi.stubGlobal(method, workerScope[method].bind(workerScope));
   }
-  const result = new Promise<VideoCompressionResponse>((resolve) => {
-    vi.stubGlobal("postMessage", (message: VideoCompressionResponse) => {
-      if (message.type !== "progress") {
-        resolve(message);
-      }
-    });
+  const result = Promise.withResolvers<VideoCompressionResponse>();
+  vi.stubGlobal("postMessage", (message: VideoCompressionResponse) => {
+    if (message.type !== "progress") {
+      result.resolve(message);
+    }
   });
   await import("./chat-attachment-video.worker.ts");
   const file = new File([], "screen.mp4");
   workerScope.dispatchEvent(new MessageEvent("message", { data: { file, maxBytes: 100_000 } }));
-  return result;
+  return result.promise;
 }
 
 async function prepared(attempts: StreamTargetChunk[][]) {
@@ -95,7 +94,7 @@ async function prepared(attempts: StreamTargetChunk[][]) {
 
 it("preserves positional header rewrites without publishing unused capacity", async () => {
   const file = await prepared([[writeChunk([0, 0, 3, 4]), writeChunk([1, 2])]]);
-  expect(file).toMatchObject({ name: "screen-compressed.mp4", type: "video/mp4" });
+  expect(file).toMatchObject({ name: "screen.mp4", type: "video/mp4" });
   expect([...new Uint8Array(await file.arrayBuffer())]).toEqual([1, 2, 3, 4]);
 });
 

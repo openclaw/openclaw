@@ -102,7 +102,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Verify protected main-ancestry workflow pin
@@ -119,7 +119,7 @@ jobs:
   run_telegram_proof:
     name: Run request-bound Telegram bot proof
     needs: admit_request
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       actions: read
@@ -137,7 +137,7 @@ jobs:
       - name: Setup trusted tooling
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: 24.x
+          node-version: 24.22.1
           install-bun: "false"
           cache-mode: restore
       - name: Ensure rootless networking helper
@@ -244,7 +244,7 @@ jobs:
       - name: Setup trusted finalizer dependencies
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: 24.x
+          node-version: 24.22.1
           install-bun: "false"
           cache-mode: restore
       - name: Verify artifacts and bind receipt

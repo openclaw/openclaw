@@ -5,11 +5,7 @@ import { initializeGitFixture } from "../../agents/worktrees/git-fixture.test-su
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
-import {
-  createPreparationArtifacts,
-  PREPARATION_TARGET,
-  usePreparedPoolFixture,
-} from "./prepared-pool.test-support.js";
+import { usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 
@@ -38,26 +34,9 @@ it("refills the pinned preparation after its managed seed checkout is removed an
   const primary = await commit(repo, "new primary HEAD\n", "advance primary");
   expect((await runGit(repo, ["merge-base", "--is-ancestor", pinned, primary])).code).toBe(1);
 
-  f.provider = {
-    ...f.provider,
-    requiresNodeEnrollment: true,
-    supportsProjectPreparation: () => true,
-    resolvePreparationTarget: () => PREPARATION_TARGET,
-  };
+  f.provider = { ...f.provider };
   const createIntentOwner = () =>
-    createWorkerProviderIntent({
-      store: f.store,
-      getConfig: () => f.config,
-      projectNamespace: "prepared-pool-test",
-      providerFor: () => f.provider,
-      prepareNodeArtifacts: async () => ({
-        artifacts: createPreparationArtifacts(),
-        assertCurrent: () => {},
-      }),
-      resumeProvision: async (record) => await f.ready(record),
-      isStopping: () => false,
-      withLock: async (_environmentId, task) => task(),
-    });
+    createWorkerProviderIntent(f.intentOwnerOptions("prepared-pool-test"));
   const createPool = (intentOwner: ReturnType<typeof createIntentOwner>) =>
     f.pool({
       prepareIntent: intentOwner.prepareIntent,

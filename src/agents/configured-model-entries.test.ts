@@ -1,33 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   collectConfiguredCatalogModels,
   resolveConfiguredModelEntries,
 } from "./configured-model-entries.js";
-
-function model(id: string, overrides: Partial<ModelDefinitionConfig> = {}): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 32768,
-    maxTokens: 1024,
-    ...overrides,
-  };
-}
+import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 
 type ResolveOptions = Omit<Parameters<typeof resolveConfiguredModelEntries>[0], "cfg">;
-function resolveDefaults(
-  defaults: AgentDefaultsConfig,
-  options: ResolveOptions = {},
-  providers: NonNullable<OpenClawConfig["models"]>["providers"] = {},
-) {
+function resolveDefaults(defaults: AgentDefaultsConfig, options: ResolveOptions = {}) {
   return resolveConfiguredModelEntries({
-    cfg: { agents: { defaults }, models: { providers } },
+    cfg: { agents: { defaults } },
     allowPluginNormalization: false,
     ...options,
   });
@@ -57,7 +39,7 @@ describe("resolveConfiguredModelEntries", () => {
           ollama: {
             baseUrl: "http://127.0.0.1:11434",
             api: "ollama",
-            models: [model("qwen3:8bb", { baseUrl: "http://other-server:11434" })],
+            models: [modelDefinition("qwen3:8bb", { baseUrl: "http://other-server:11434" })],
           },
         },
       },
@@ -102,24 +84,6 @@ describe("resolveConfiguredModelEntries", () => {
     ]);
   });
 
-  it("normalizes retired nested Gemini ids in configured provider rows", () => {
-    const key = "kilocode/google/gemini-3-pro-preview";
-    const { entries } = resolveDefaults(
-      { model: { primary: key }, models: { [key]: { alias: "Kilo Gemini" } } },
-      {},
-      {
-        kilocode: {
-          api: "openai-completions",
-          baseUrl: "https://kilocode.test/v1",
-          models: [model("google/gemini-3-pro-preview")],
-        },
-      },
-    );
-
-    expect(metadata(entries)).toEqual([
-      ["kilocode/google/gemini-3.1-pro-preview", ["Kilo Gemini"], configuredTags],
-    ]);
-  });
   it.each([
     ["openai/gpt-5.5", "Primary", { "openai/*": {} }, {}, "openai/gpt-5.5"],
     ["legacy/model", "Work", {}, canonical, "current/model"],

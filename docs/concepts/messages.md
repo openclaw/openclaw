@@ -63,6 +63,12 @@ later messages can update its idle delay within the original maximum deadline.
 Explicit transport timing overrides remain fixed. Telegram's forwarded-message
 collection window remains separate.
 
+Once a message is adopted, its dispatch remains owned by the Gateway until
+completion, even after the webhook request or durable ingress acknowledgment
+returns. Telegram's spooled dispatch includes draft cleanup and fallback delivery.
+Suspension refuses new requests while admitted turns finish; restart draining
+still blocks new agent work.
+
 ## Sessions and devices
 
 Sessions are owned by the gateway, not by clients.
@@ -74,6 +80,8 @@ Sessions are owned by the gateway, not by clients.
 Multiple devices/channels can map to the same session, but history is not fully synced back to every client. Use one primary device for long conversations to avoid divergent context. The Control UI and TUI always show the gateway-backed session transcript, so they are the source of truth.
 
 If publishing a live transcript update fails after an agent message is saved, OpenClaw keeps the saved message and logs a warning. Reload the session to refresh its transcript; the failed notification is not replayed automatically.
+
+If an accepted chat message never starts its own turn, a later turn can still read it from history. Recovering that input keeps the original message visible without rewriting it into the next message or rebuilding history just to replace it. Provider retries preserve that input alongside the current message. Providers that require alternating roles receive the combined text only when the request is sent; the stored messages remain separate. Deliberately sending the same text again creates another user turn.
 
 If a run fails or times out before an assistant reply is saved, its transcript receives one visible failure notice. Nested runs retain their own failure notices even after the requesting turn has ended.
 
@@ -210,6 +218,8 @@ still apply, and the current-prompt capability expires with its admitted turn.
 
 ## Silent replies
 
+Silent maintenance turns suppress streamed text, attachments, locations, and interactive controls. Errors, actual voice messages, and system notices explicitly marked for delivery keep their normal delivery rules.
+
 The silent token `NO_REPLY` is reserved for sessions connected to external message channels. Only a completed final whose entire text is `NO_REPLY`, ignoring casing and surrounding whitespace, requests silence. It intentionally ends a turn without another reply, including after a cross-chat send, a reaction, group chatter, or a deliberate yield, even when the admitted turn normally requires a reply. Subagents, private completions, the Control UI, and other internal sessions still must return a result or continue unfinished work.
 
 Direct-message prompts omit silent-reply guidance. An exact `NO_REPLY` emitted by the model still follows this protocol; omitting the prompt guidance does not force an additional answer.
@@ -224,8 +234,8 @@ The terminal producer prepares the reply once and records whether it is visible 
 
 Conversation policy still controls admission and default reply expectations:
 
-- Direct and accepted group/channel requests normally receive answers. An explicit token-only `NO_REPLY` can end either silently.
-- Mention and access gates still decide which messages reach the agent. `silentReply.group: "allow"` permits optional handling of unaddressed group requests; it is not needed to honor an explicit `NO_REPLY`.
+- Direct and accepted group/channel requests normally receive answers. An explicit token-only `NO_REPLY` can end either silently. The legacy `HEARTBEAT_OK` marker does not request silence: presentation removes it, so it cannot satisfy a required reply.
+- Mention and access gates still decide which messages reach the agent. `silentReply.group: "allow"` permits optional handling of unaddressed group requests; it is not needed to honor an explicit `NO_REPLY`. In `message_tool` mode, optional bot messages get quiet-room participation guidance: stay silent unless there is something useful to add. Explicit bot mentions and required replies keep their normal delivery guidance.
 - [Ambient room events](/channels/ambient-room-events) can remain silent. In `message_tool` visible-reply mode, visible output uses `message(action=send)`. Private subagent completions record the parent's reviewed outcome internally.
 
 Defaults live under `agents.defaults.silentReply.group`; `surfaces.<id>.silentReply.group` can override group policy per surface. Doctor removes the retired `internal` setting during config migration.

@@ -4,20 +4,16 @@ import { expect, type Mock } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
 
-export async function pluginTreeFixture(directory: string, count: number) {
+export async function pluginTreeLayout(directory: string, statePath = "snapshot") {
   const base = await fs.realpath(directory);
   const source = path.join(base, "source");
-  const targetStateDir = path.join(base, "snapshot");
+  const targetStateDir = path.join(base, statePath);
   const candidateRoot = path.join(base, "candidate");
   const destination = path.join(targetStateDir, "plugin");
   await fs.mkdir(source);
   await fs.mkdir(candidateRoot);
-  const payload = path.join(source, "0.txt");
-  await fs.writeFile(payload, "inventory bytes");
-  for (let index = 1; index < count; index += 1) {
-    await fs.link(payload, path.join(source, `${index}.txt`));
-  }
   return {
+    base,
     source,
     destination,
     targetStateDir,
@@ -30,6 +26,16 @@ export async function pluginTreeFixture(directory: string, count: number) {
         candidateRoot,
       }),
   };
+}
+
+export async function pluginTreeFixture(directory: string, count: number) {
+  const layout = await pluginTreeLayout(directory);
+  const payload = path.join(layout.source, "0.txt");
+  await fs.writeFile(payload, "inventory bytes");
+  for (let index = 1; index < count; index += 1) {
+    await fs.link(payload, path.join(layout.source, `${index}.txt`));
+  }
+  return layout;
 }
 
 export async function expectDrainedWorkerFailure<Request>(

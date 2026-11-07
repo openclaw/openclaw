@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -36,7 +37,7 @@ import { withChannelReadAuthority } from "../../shared/channel-read-authority.js
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
-import { findCodeRegions } from "../../shared/text/code-regions.js";
+import { findCodeRegions, isInsideCode } from "../../shared/text/code-regions.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
@@ -53,6 +54,7 @@ import {
   applyMessageCrossContextMarker,
   executeGatewayAction,
 } from "./message-action-execution.js";
+import { recordGatewayActionSend } from "./message-action-gateway-transcript.js";
 import { collectAttachmentSources, normalizeSandboxMediaSource } from "./message-action-params.js";
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import {
@@ -138,9 +140,10 @@ export async function buildMessagePayload(params: {
       allowEmpty: true,
       trim: false,
     }) ?? "";
-  if (message.includes("\\n")) {
-    message = message.replaceAll("\\n", "\n");
-  }
+  let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
+  message = message.replace(/\\n/g, (match, offset: number) =>
+    isInsideCode(offset, (codeRegions ??= findCodeRegions(message))) ? match : "\n",
+  );
   if (!message.trim()) {
     message = caption.trim() ? caption : "";
   }
@@ -243,8 +246,7 @@ export async function buildMessagePayload(params: {
   applySendLocationToActionParams(actionParams, location);
 
   if (params.channel && params.target) {
-    const channel = params.channel;
-    const target = params.target;
+    const { channel, target } = params;
     message = await withChannelReadAuthority(
       input.messageActionAuthorization?.scheduled ? input.assertDirectAdapterHandoff : undefined,
       () =>
@@ -415,15 +417,15 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   const initialReply = resolveAndApplyOutboundReplyToId(params, {
     channel,
     toolContext: input.toolContext,
-    matchesToolContextTarget: channelPlugin?.threading?.matchesToolContextTarget,
+    matchesToolContextTarget: channelPlugin.threading?.matchesToolContextTarget,
   });
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
     cfg,
     to,
     accountId,
     toolContext: input.toolContext,
-    resolveAutoThreadId: channelPlugin?.threading?.resolveAutoThreadId,
-    resolveReplyTransport: channelPlugin?.threading?.resolveReplyTransport,
+    resolveAutoThreadId: channelPlugin.threading?.resolveAutoThreadId,
+    resolveReplyTransport: channelPlugin.threading?.resolveReplyTransport,
     replyToIsExplicit: initialReply?.source === "explicit",
   });
   // Route resolution is read-only; persist only after the send succeeds so a
@@ -490,14 +492,14 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     const preparedTtsPreferences = await prepareTtsPreferences();
     if (
       explicitTts ||
-      shouldAttemptTtsPayload({
+      (await shouldAttemptTtsPayload({
         cfg,
         preparedTtsPreferences,
         ttsAuto,
         agentId,
         channelId: channel,
         accountId: accountId ?? undefined,
-      })
+      }))
     ) {
       const { maybeApplyTtsToPayload } = await loadMessageActionTtsRuntime();
       ttsPayload = await maybeApplyTtsToPayload({
@@ -541,8 +543,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   const usesGatewayAction =
     !requiresCoreDelivery &&
     Boolean(gateway) &&
-    (channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway" ||
-      channelPlugin?.outbound?.deliveryMode === "gateway");
+    (channelPlugin.actions?.resolveExecutionMode?.({ action }) === "gateway" ||
+      channelPlugin.outbound?.deliveryMode === "gateway");
   if (usesGatewayAction && !dryRun) {
     let stagedPayload = sendPayload.payload;
     const mediaUrls = sendPayload.mediaUrls;
@@ -592,6 +594,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
           channel,
           action,
           to,
+          accountId: accountId ?? undefined,
           handledBy: "plugin",
           payload,
           dryRun,
@@ -601,6 +604,25 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
     if (!deliveryFact || deliveryFact.status === "settled") {
       await commitOutboundSessionRoute();
+      // The Gateway owns source-reply history; other conversations get the
+      // confirmed send through the destination history owner.
+      if (!dryRun && outboundRoute && !deliveryFact?.partialDelivery) {
+        await recordGatewayActionSend({
+          cfg,
+          channel,
+          to,
+          accountId: ctx.accountId ?? undefined,
+          route: outboundRoute,
+          producerSessionKey: input.sourceReplySessionKey ?? input.sessionKey,
+          agentId,
+          payload: sendPayload.payload,
+          deliveryId:
+            normalizeOptionalString(params.idempotencyKey) ??
+            input.deliveryIntentId ??
+            randomUUID(),
+          signal: ctx.abortSignal,
+        });
+      }
     }
     return await annotateSourceDelivery(
       withSendNormalization(gatewayPluginAction, sendPayload.normalization),
@@ -610,7 +632,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   }
 
   const useCorePresentationDelivery = Boolean(
-    sendPayload.payload.presentation && hasCorePresentationDelivery(channelPlugin?.outbound),
+    sendPayload.payload.presentation && hasCorePresentationDelivery(channelPlugin.outbound),
   );
   if (sendPayload.payload.presentation && !useCorePresentationDelivery) {
     const fallbackMessage = materializeMessagePresentationFallback({
@@ -633,24 +655,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       // Model-authored sends get the failure back and resend it themselves; every
       // other caller only reports the error, so recovery keeps its replay right.
       deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
-      // Both delivery paths must commit a first-contact route before mirroring.
       onSendAccepted: commitOutboundSessionRoute,
-      mirror:
-        !dryRun && input.transcriptMirror
-          ? {
-              ...input.transcriptMirror,
-              text: sendPayload.message,
-              mediaUrls: sendPayload.mediaUrls,
-            }
-          : outboundRoute && !dryRun && input.suppressTranscriptMirror !== true
-            ? {
-                sessionKey: outboundRoute.sessionKey,
-                agentId,
-                text: sendPayload.message,
-                mediaUrls: sendPayload.mediaUrls,
-                idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
-              }
-            : undefined,
+      transcriptRoute: outboundRoute ?? undefined,
       silent: sendPayload.silent ?? undefined,
     },
     to,
@@ -689,6 +695,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     channel,
     action,
     to,
+    accountId: accountId ?? undefined,
     handledBy: send.handledBy,
     payload: send.payload,
     ...(send.deliveredText ? { deliveredText: send.deliveredText } : {}),

@@ -15,27 +15,12 @@ function createProvider(maxInputTokens?: number, id = "mock"): EmbeddingProvider
 
 type EmbeddingChunks = ReturnType<typeof enforceEmbeddingMaxInputTokens>;
 
-function expectChunksWithinUtf8Bytes(chunks: EmbeddingChunks, maxBytes: number) {
+function expectSplit(chunks: EmbeddingChunks, text: string, maxBytes: number) {
+  expect(chunks.length).toBeGreaterThan(1);
+  expect(chunks.map((chunk) => chunk.text).join("")).toBe(text);
   for (const chunk of chunks) {
     expect(estimateUtf8Bytes(chunk.text)).toBeLessThanOrEqual(maxBytes);
   }
-}
-
-function expectChunksLineRange(chunks: EmbeddingChunks, startLine: number, endLine: number) {
-  for (const chunk of chunks) {
-    expect(chunk).toMatchObject({ startLine, endLine });
-  }
-}
-
-function expectChunksHaveHashes(chunks: EmbeddingChunks) {
-  for (const chunk of chunks) {
-    expect(typeof chunk.hash).toBe("string");
-    expect(chunk.hash.length).toBeGreaterThan(0);
-  }
-}
-
-function joinedChunkText(chunks: EmbeddingChunks): string {
-  return chunks.map((chunk) => chunk.text).join("");
 }
 
 function makeChunk(text: string) {
@@ -44,35 +29,33 @@ function makeChunk(text: string) {
 
 describe("embedding chunk limits", () => {
   it("splits oversized chunks so each embedding input stays <= maxInputTokens bytes", () => {
-    const provider = createProvider(8192);
     const input = {
       ...makeChunk("x".repeat(9000)),
       entryStartLine: 1,
       entryEndLine: 4,
     };
 
-    const out = enforceEmbeddingMaxInputTokens(provider, [input]);
-    expect(out.length).toBeGreaterThan(1);
-    expect(joinedChunkText(out)).toBe(input.text);
-    expectChunksWithinUtf8Bytes(out, 8192);
-    expectChunksLineRange(out, 1, 1);
-    expectChunksHaveHashes(out);
-    expect(out.every((chunk) => chunk.entryStartLine === 1 && chunk.entryEndLine === 4)).toBe(true);
+    const out = enforceEmbeddingMaxInputTokens(createProvider(8192), [input]);
+    expectSplit(out, input.text, 8192);
+    for (const chunk of out) {
+      expect(chunk).toMatchObject({
+        startLine: 1,
+        endLine: 1,
+        entryStartLine: 1,
+        entryEndLine: 4,
+      });
+      expect(typeof chunk.hash).toBe("string");
+      expect(chunk.hash.length).toBeGreaterThan(0);
+    }
   });
 
   it("does not split inside surrogate pairs (emoji)", () => {
-    const provider = createProvider(8192);
-    const emoji = "😀";
-    const inputText = `${emoji.repeat(2100)}\n${emoji.repeat(2100)}`;
-
-    const out = enforceEmbeddingMaxInputTokens(provider, [{ ...makeChunk(inputText), endLine: 2 }]);
-
-    expect(out.length).toBeGreaterThan(1);
-    expect(joinedChunkText(out)).toBe(inputText);
-    expectChunksWithinUtf8Bytes(out, 8192);
-
-    // If we split inside surrogate pairs we'd likely end up with replacement chars.
-    expect(joinedChunkText(out)).not.toContain("\uFFFD");
+    const text = `${"😀".repeat(2100)}\n${"😀".repeat(2100)}`;
+    const out = enforceEmbeddingMaxInputTokens(createProvider(8192), [
+      { ...makeChunk(text), endLine: 2 },
+    ]);
+    expectSplit(out, text, 8192);
+    expect(out.map((chunk) => chunk.text).join("")).not.toContain("\uFFFD");
   });
 
   it.each([
@@ -85,20 +68,12 @@ describe("embedding chunk limits", () => {
     expect(out.map((chunk) => chunk.text)).toEqual(expected);
   });
 
-  it("uses conservative fallback limits for local providers without declared maxInputTokens", () => {
-    const provider = createProvider(undefined, "local");
-
-    const out = enforceEmbeddingMaxInputTokens(provider, [makeChunk("x".repeat(3000))]);
-
-    expect(out.length).toBeGreaterThan(1);
-    expectChunksWithinUtf8Bytes(out, 2048);
-  });
-
-  it("honors hard safety caps lower than provider maxInputTokens", () => {
-    const provider = createProvider(8192);
-    const out = enforceEmbeddingMaxInputTokens(provider, [makeChunk("x".repeat(8100))], 8000);
-
-    expect(out.length).toBeGreaterThan(1);
-    expectChunksWithinUtf8Bytes(out, 8000);
+  it.each([
+    ["undeclared local limit", undefined, "local", 3000, undefined, 2048],
+    ["hard safety cap", 8192, "mock", 8100, 8000, 8000],
+  ] as const)("splits at the %s", (_name, limit, id, size, cap, expected) => {
+    const text = "x".repeat(size);
+    const out = enforceEmbeddingMaxInputTokens(createProvider(limit, id), [makeChunk(text)], cap);
+    expectSplit(out, text, expected);
   });
 });

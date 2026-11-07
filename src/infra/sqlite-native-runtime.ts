@@ -9,17 +9,11 @@ import {
 } from "./bun-sqlite-library.js";
 import { formatErrorMessage } from "./errors.js";
 import { compareValidSemver } from "./semver.js";
-import {
-  probeSqliteIteratorBehavior,
-  type SqliteIteratorBehavior,
-} from "./sqlite-native-observer.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
-let validatedSqliteModule:
-  | { sqlite: typeof import("node:sqlite"); iteratorBehavior: SqliteIteratorBehavior }
-  | undefined;
+let validatedSqliteModule: typeof import("node:sqlite") | undefined;
 let extensionLoadingSupported = false;
 let jsonbSupported = false;
 
@@ -32,7 +26,7 @@ function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): 
   const wording = isShared ? "uses shared system" : "embeds";
   const remediation = isShared
     ? "Upgrade the system SQLite library to one of those safe versions, or use a Node build embedding a safe version."
-    : "Upgrade to Node 24.16.0+ or 26.1.0+ before retrying.";
+    : "Upgrade to Node 24.22.1+ or 26.12.1+ before retrying.";
   throw new Error(
     `OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x for WAL safety; ` +
       `Node ${nodeVersion} ${wording} SQLite ${version}, which is affected by the upstream WAL-reset ` +
@@ -56,7 +50,6 @@ type SqliteNativeRuntimeAdmission = {
   version: string;
   storageIdentity?: { sourceId: string; compileOptions: string };
   extensionLoadingSupported: boolean;
-  iteratorBehavior: SqliteIteratorBehavior;
 };
 
 function parseSqliteNativeRuntimeAdmission(
@@ -66,10 +59,7 @@ function parseSqliteNativeRuntimeAdmission(
     !isRecord(value) ||
     value.format !== 1 ||
     typeof value.version !== "string" ||
-    typeof value.extensionLoadingSupported !== "boolean" ||
-    !isRecord(value.iteratorBehavior) ||
-    typeof value.iteratorBehavior.nextAfterDoneIsTerminal !== "boolean" ||
-    typeof value.iteratorBehavior.returnAfterDoneIsInert !== "boolean"
+    typeof value.extensionLoadingSupported !== "boolean"
   ) {
     return undefined;
   }
@@ -91,10 +81,6 @@ function parseSqliteNativeRuntimeAdmission(
           }
         : undefined,
     extensionLoadingSupported: value.extensionLoadingSupported,
-    iteratorBehavior: {
-      nextAfterDoneIsTerminal: value.iteratorBehavior.nextAfterDoneIsTerminal,
-      returnAfterDoneIsInert: value.iteratorBehavior.returnAfterDoneIsInert,
-    },
   };
 }
 
@@ -121,11 +107,9 @@ export function installSqliteNativeRuntimeAdmission(value: unknown): void {
   }
 }
 
-export function assertSafeSqliteRuntime(
-  sqlite: typeof import("node:sqlite"),
-): SqliteIteratorBehavior {
-  if (validatedSqliteModule?.sqlite === sqlite) {
-    return validatedSqliteModule.iteratorBehavior;
+function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
+  if (validatedSqliteModule === sqlite) {
+    return;
   }
   const inherited = parseSqliteNativeRuntimeAdmission(
     getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY),
@@ -135,8 +119,8 @@ export function assertSafeSqliteRuntime(
     assertSqliteWalResetSafeVersion(inherited.version, process.versions.node);
     jsonbSupported = (compareValidSemver(inherited.version, "3.45.0") ?? -1) >= 0;
     extensionLoadingSupported = inherited.extensionLoadingSupported;
-    validatedSqliteModule = { sqlite, iteratorBehavior: inherited.iteratorBehavior };
-    return inherited.iteratorBehavior;
+    validatedSqliteModule = sqlite;
+    return;
   }
   // Shared-SQLite Node builds can load a different library than process.versions
   // reports, so query the loaded library before callers open real state databases.
@@ -144,7 +128,6 @@ export function assertSafeSqliteRuntime(
   let version: string;
   let storageIdentity: SqliteNativeRuntimeAdmission["storageIdentity"];
   let extensions: boolean;
-  let iteratorBehavior: SqliteIteratorBehavior;
   try {
     const statement = database.prepare(
       "SELECT sqlite_version() AS version, sqlite_source_id() AS sourceId, " +
@@ -164,22 +147,19 @@ export function assertSafeSqliteRuntime(
       storageIdentity = { sourceId: row.sourceId, compileOptions: row.compileOptions };
     }
     extensions = row?.omitted === 0;
-    iteratorBehavior = probeSqliteIteratorBehavior(statement);
   } finally {
     database.close();
   }
   jsonbSupported = (compareValidSemver(version, "3.45.0") ?? -1) >= 0;
   extensionLoadingSupported = extensions;
-  validatedSqliteModule = { sqlite, iteratorBehavior };
+  validatedSqliteModule = sqlite;
   setEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY, {
     format: 1,
     runtime: sqliteNativeRuntimeIdentity(),
     version,
     storageIdentity,
     extensionLoadingSupported: extensions,
-    iteratorBehavior,
   });
-  return iteratorBehavior;
 }
 
 // node:sqlite is optional across Node versions, so callers get a clear runtime

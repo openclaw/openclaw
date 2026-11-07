@@ -104,7 +104,7 @@ export function createFaceTimeCallControl(params: {
     }
   };
   const enableCallAudio = async (call: ActiveFaceTimeCall) => {
-    const generation = call.captureGeneration();
+    const generation = call.generation;
     const mutedResult = await call.runCarrierCommand({
       generation,
       action: async () => await params.helper.setMuted(call.carrierCallUUID, false),
@@ -244,8 +244,7 @@ export function createFaceTimeCallControl(params: {
       call.carrierHangupRetryTimer = setTimeout(() => {
         call.carrierHangupRetryTimer = undefined;
         void attemptCarrierHangup(call, reason);
-      }, 1_000);
-      call.carrierHangupRetryTimer.unref?.();
+      }, 1_000).unref();
     }
     return false;
   };
@@ -277,7 +276,7 @@ export function createFaceTimeCallControl(params: {
     ]);
   };
   const terminateCarrierProcesses = async (call: ActiveFaceTimeCall): Promise<void> => {
-    const generation = call.captureGeneration();
+    const generation = call.generation;
     await terminateExactCarrierProcesses({
       runtime: params.runtime,
       peers: call.carrierPeers,
@@ -316,7 +315,6 @@ export function createFaceTimeCallControl(params: {
           logger: params.logger,
           callUUID,
           senderId: call.senderId,
-          senderIsOwner: call.senderIsOwner,
           captureBinary: params.captureBinary,
           signal: call.lifecycleAbort.signal,
           async onHangupRequested() {
@@ -355,7 +353,7 @@ export function createFaceTimeCallControl(params: {
     }
   };
   const activateCallTalk = async (call: ActiveFaceTimeCall) => {
-    const generation = call.captureGeneration();
+    const generation = call.generation;
     if (!call.talkActivation) {
       call.talkActivation = (async () => {
         await call.talk?.readyForAudio();

@@ -1,24 +1,21 @@
 import type { JSX } from "@solidjs/web";
-import { UI_APPEARANCE_DEFAULTS } from "../../app/settings.ts";
-import {
-  SettingsDefaultDescription,
-  SettingsToggleRow,
-} from "../../components/solid/settings-ui.tsx";
-import { t } from "../../lib/reactive/i18n.ts";
+import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
+import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
+import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import type { ConfigProps } from "./view-types.ts";
 
-type LocalToggle =
-  | "chatShowTaskProgress"
-  | "chatCollapseTaskProgress"
-  | "composerHoldToRecord"
-  | "sidebarLiveActivity"
-  | "sessionDeleteConfirm"
-  | "lobsterPetVisits"
-  | "lobsterPetSounds";
+registerEnglishCatalog(registerPreferencesEnglish);
 
 export function LocalToggleRow(props: {
   config: ConfigProps;
-  setting: LocalToggle;
+  setting:
+    | "chatShowTaskProgress"
+    | "chatCollapseTaskProgress"
+    | "composerHoldToRecord"
+    | "sidebarLiveActivity"
+    | "sessionDeleteConfirm"
+    | "lobsterPetVisits"
+    | "lobsterPetSounds";
   title: string;
   hint: JSX.Element;
   extraDescription?: JSX.Element;
@@ -31,12 +28,6 @@ export function LocalToggleRow(props: {
       description={
         <>
           {props.hint}
-          <br />
-          <SettingsDefaultDescription
-            value={t(UI_APPEARANCE_DEFAULTS[props.setting] ? "common.enabled" : "common.disabled")}
-            overridden={props.config[props.setting] !== UI_APPEARANCE_DEFAULTS[props.setting]}
-          />{" "}
-          {t("quickSettings.personal.browserOnly")}
           {props.extraDescription}
         </>
       }

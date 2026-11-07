@@ -9,10 +9,6 @@ import { projectOwner } from "../../lib/reactive/projection.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
-  getChatAttachmentDataUrl,
-  registerChatAttachmentPayload,
-} from "./attachment-payload-store.ts";
-import {
   ChatSessionCompanionThreads,
   requestSessionCompanionAnswer,
 } from "./chat-session-companion.ts";
@@ -227,22 +223,6 @@ describe("ChatSessionCompanionThreads", () => {
     ]);
   });
 
-  it("clears local state only after the reset RPC succeeds", async () => {
-    const threads = new ChatSessionCompanionThreads();
-    await threads.hydrate("one", async () => ({
-      exchanges: [{ question: "Q", answer: "A", ts: 1 }],
-    }));
-    await expect(
-      threads.reset("one", async () => {
-        throw new Error("offline");
-      }),
-    ).rejects.toThrow("offline");
-    expect(threads.view("one").turns).toHaveLength(1);
-
-    await threads.reset("one", async () => ({ ok: true as const }));
-    expect(threads.view("one").turns).toMatchObject([]);
-  });
-
   it("retires one session without clearing unrelated companion state", () => {
     const threads = new ChatSessionCompanionThreads();
     threads.setDraft("one", "retire me", "main");
@@ -389,9 +369,8 @@ describe("ChatSessionRailElement", () => {
           draft: "",
         },
       });
-      const phrase = element.querySelector("openclaw-working-phrase")!;
-      await phrase.updateComplete;
-      expect(phrase.textContent?.replace(/\s+/g, " ").trim()).toBe(expected);
+      const text = () => element.querySelector("openclaw-working-phrase")?.textContent;
+      await waitForSolid(() => expect(text()?.replace(/\s+/g, " ").trim()).toBe(expected));
     } finally {
       setCurrentThemeBranding(originalBranding);
     }
@@ -417,9 +396,12 @@ describe("ChatSessionRailElement", () => {
 
     element.querySelector("form")?.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
     expect(onSubmit).toHaveBeenCalledWith("What should I verify?");
-    expect(element.querySelector(".chat-session-rail__answer strong")?.textContent).toBe("Only");
+    const answer = element.querySelector(".chat-group.assistant");
+    expect(answer?.querySelector(".chat-group-messages strong")?.textContent).toBe("Only");
     expect(element.querySelector("script")).toBeNull();
-    expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
+    // The main transcript's footer replaces the bespoke "as of" line.
+    expect(answer?.querySelector(".chat-group-footer time.chat-group-timestamp")).not.toBeNull();
+    expect(element.textContent).not.toContain("as of");
   });
 
   it("returns focus to the rail composer after deleting its last comment", async () => {
@@ -447,9 +429,8 @@ describe("ChatSessionRailElement", () => {
       },
     });
     const textarea = element.querySelector("textarea")!;
-    await waitForSolid(() =>
-      expect(element.querySelector('button[aria-label="Delete comment"]')).not.toBeNull(),
-    );
+    await vi.dynamicImportSettled();
+    expect(element.querySelector('button[aria-label="Delete comment"]')).not.toBeNull();
     element.querySelector<HTMLButtonElement>('button[aria-label="Delete comment"]')!.click();
     expect(onAttachmentsChange).toHaveBeenCalledWith([]);
     expect(document.activeElement).toBe(textarea);
@@ -472,7 +453,9 @@ describe("ChatSessionRailElement", () => {
         draft: "",
       },
     });
-    const text = element.querySelector(".chat-session-rail__answer strong")!.firstChild!;
+    const text = element.querySelector(
+      ".chat-group.assistant .chat-group-messages strong",
+    )!.firstChild!;
     const range = document.createRange();
     range.selectNodeContents(text);
     const selection = document.getSelection()!;
@@ -565,7 +548,7 @@ describe("ChatSessionRailElement", () => {
   });
 
   it.each([false, true])(
-    "uses an empty-question fallback only for images (image: %s)",
+    "submits attachments without a written question (image: %s)",
     async (image) => {
       const onSubmit = vi.fn();
       const element = await mount({
@@ -591,73 +574,17 @@ describe("ChatSessionRailElement", () => {
           ],
         },
       });
-      expect(element.querySelector<HTMLButtonElement>("button[type=submit]")?.disabled).toBe(
-        !image,
-      );
+      expect(element.querySelector<HTMLButtonElement>("button[type=submit]")?.disabled).toBe(false);
       element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
       element
         .querySelector("textarea")!
         .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      expect(onSubmit.mock.calls).toEqual(
-        image ? [["What does this image show?"], ["What does this image show?"]] : [],
-      );
+      const question = image
+        ? "What does this image show?"
+        : "Respond to the selected text and comments.";
+      expect(onSubmit.mock.calls).toEqual([[question], [question]]);
     },
   );
-
-  it("explains unsupported image input and retries the retained image only on user action", async () => {
-    const threads = new ChatSessionCompanionThreads();
-    threads.subscribe(() => {
-      element.companion = { ...threads.view("one") };
-    });
-    const image = registerChatAttachmentPayload({
-      attachment: { id: "retry-image", mimeType: "image/png", fileName: "retry.png" },
-      dataUrl: "data:image/png;base64,aW1hZ2U=",
-      file: new File(["image"], "retry.png", { type: "image/png" }),
-    });
-    const ask = vi
-      .fn()
-      .mockRejectedValueOnce(
-        Object.assign(new Error("Image input unsupported"), {
-          details: { reason: "image-input-unsupported" },
-          retryable: false,
-        }),
-      )
-      .mockResolvedValue({ answer: "The image is now visible.", ts: 123 });
-    let submitted: Promise<void> | undefined;
-    const element = await mount({
-      companion: threads.view("one"),
-      onSubmit: (turn) => {
-        submitted = threads.submit("one", turn, ask);
-      },
-    });
-    try {
-      threads.setAttachments("one", [image]);
-      await threads.submit("one", "Explain this image", ask);
-      await element.updateComplete;
-      expect(element.textContent).toContain(
-        "This Side chat model cannot read images. Choose an image-capable model, then retry.",
-      );
-      expect(element.textContent).not.toContain("No utility model is configured");
-      expect(ask).toHaveBeenCalledOnce();
-      expect(getChatAttachmentDataUrl(image)).not.toBeNull();
-      threads.setDraft("one", "Keep my next question");
-      await element.updateComplete;
-      const retry = element.querySelector<HTMLButtonElement>(".chat-session-rail__retry");
-      expect(retry).not.toBeNull();
-      expect(retry?.disabled).toBe(false);
-      retry!.click();
-      await submitted;
-      await element.updateComplete;
-      expect(ask).toHaveBeenCalledTimes(2);
-      expect(ask).toHaveBeenLastCalledWith("one", "Explain this image", [image]);
-      expect(element.textContent).toContain("The image is now visible.");
-      expect(element.querySelector(".chat-session-rail__retry")).toBeNull();
-      expect(threads.view("one").draft).toBe("Keep my next question");
-      expect(getChatAttachmentDataUrl(image)).toBeNull();
-    } finally {
-      threads.retire();
-    }
-  });
 
   it.each(["answered"] as const)(
     "keeps a follow-up editable while answering and retains it when %s",

@@ -1,11 +1,11 @@
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect } from "vitest";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import {
   createAttempt,
+  createBindingStore,
   externalSessionFixture,
   mockClient,
   registerHarness,
@@ -41,13 +41,7 @@ async function createFixture(
   config: () => OpenClawConfig,
 ) {
   const params = await createAttempt(state.stateDir);
-  const openStore = () =>
-    createPluginStateKeyedStoreForTests<AgentsApiBinding>("agentsapi", {
-      namespace: "agentsapi-sessions",
-      maxEntries: 100_000,
-      overflowPolicy: "reject-new",
-      env: state.env,
-    });
+  const openStore = <T = AgentsApiBinding>() => createBindingStore<T>(state.env);
   const scope = harnessScope(() => registerHarness(state.env, config), {
     params,
     ...mockClient(sessionId),

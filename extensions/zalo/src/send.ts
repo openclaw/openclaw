@@ -9,17 +9,15 @@ import { resolveZaloAccount } from "./accounts.js";
 import { sendMessage, sendPhoto } from "./api.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 
-type ZaloSendOptions = {
-  accountId?: string;
-  cfg: OpenClawConfig;
-  mediaUrl?: string;
-  assertDirectAdapterHandoff?: () => void;
-};
-
 export async function sendMessageZalo(
   chatId: string,
   text: string,
-  options: ZaloSendOptions,
+  options: {
+    accountId?: string;
+    cfg: OpenClawConfig;
+    mediaUrl?: string;
+    assertDirectAdapterHandoff?: () => void;
+  },
 ): Promise<{ messageId: string; receipt: MessageReceipt }> {
   const account = resolveZaloAccount({ cfg: options.cfg, accountId: options.accountId });
   const { token } = account;

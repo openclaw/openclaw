@@ -18,10 +18,13 @@ images, then [recreate the affected sandboxes](/cli/sandbox#openclaw-sandbox-rec
 <Note>
 **Source checkout vs npm install**
 
-The `scripts/sandbox-setup.sh`, `scripts/sandbox-common-setup.sh`, and `scripts/sandbox-browser-setup.sh` helper scripts are only available when running from a [source checkout](https://github.com/openclaw/openclaw). They are not included in the npm package.
+The npm package includes the standalone `scripts/sandbox-image-build.sh` builder
+and the default Dockerfile. `openclaw doctor --fix` locates this builder in the
+installed package, so you can run it from any directory with Docker available.
+Doctor skips image checks when sandbox mode is `off` (the default).
 
-If you installed the global OpenClaw npm package, use the inline `docker build`
-commands shown below instead.
+The common and browser image builders still require a [source checkout](https://github.com/openclaw/openclaw)
+or the manual build instructions below.
 </Note>
 
 <Steps>
@@ -32,29 +35,42 @@ commands shown below instead.
     scripts/sandbox-setup.sh
     ```
 
-    From an npm install (no source checkout needed):
+    From an npm install with Docker sandboxing already enabled (no source checkout needed):
 
     ```bash
-    docker build -t openclaw-sandbox:trixie-slim - <<'DOCKERFILE'
-    FROM debian:trixie-slim
-    ENV DEBIAN_FRONTEND=noninteractive
-    RUN apt-get update && apt-get install -y --no-install-recommends \
-      bash ca-certificates curl git jq python3 ripgrep \
-      && rm -rf /var/lib/apt/lists/*
-    RUN useradd --create-home --shell /bin/bash sandbox
-    USER sandbox
-    WORKDIR /home/sandbox
-    CMD ["sleep", "infinity"]
-    DOCKERFILE
+    openclaw doctor --fix
     ```
+
+    For a fresh install, first configure the Docker backend and enable sandboxing
+    by setting `agents.defaults.sandbox.mode` to `non-main` or `all`, then run
+    Doctor and accept the image build. See [Sandboxing](/gateway/sandboxing) for
+    mode selection.
+
+    To provision the image before enabling sandboxing, run the packaged builder
+    directly. For a global npm install:
+
+    ```bash
+    bash "$(npm root -g)/openclaw/scripts/sandbox-image-build.sh"
+    ```
+
+    For a local npm install, use that installation's
+    `node_modules/openclaw/scripts/sandbox-image-build.sh` path instead.
 
     The default image does **not** include Node. If a skill needs Node (or other runtimes), either bake a custom image or install via `sandbox.docker.setupCommand` (requires network egress + writable root + root user).
 
     OpenClaw does not silently substitute plain `debian:trixie-slim` when `openclaw-sandbox:trixie-slim` is missing. Sandbox runs that target the default image fail fast with a build instruction until you build it, because the bundled image carries `python3` for the sandbox write/edit helpers.
 
+    Doctor reports a missing default image as an update warning. Updates continue;
+    image builds remain a separate runtime repair. OpenClaw also does not silently
+    reuse a previous Bookworm image: its operating system and installed tools differ
+    from this version's default. An explicit `sandbox.docker.image` setting remains
+    the operator's choice.
+
   </Step>
   <Step title="Optional: build the common image">
     For a more functional sandbox image with common tooling (for example `curl`, `jq`, Node 24, pnpm, `python3`, and `git`):
+
+    With `INSTALL_NODE=1` (the default), the image also provisions Chromium's Linux system libraries and fonts through the Playwright version pinned in `package.json`. Projects install their own matching browser executables in a writable workspace or cache. `INSTALL_NODE=0` skips this browser dependency step.
 
     From a source checkout:
 
@@ -68,7 +84,7 @@ commands shown below instead.
     docker build -t openclaw-sandbox-common:trixie-slim -f Dockerfile.common .
     ```
 
-    `package.json` supplies the pinned pnpm version and must be in the build context, even with `--build-arg INSTALL_PNPM=0`. It is a read-only build input; you do not need a source checkout or a host pnpm installation.
+    `package.json` supplies the pinned pnpm and Playwright versions and must be in the build context, even with `--build-arg INSTALL_PNPM=0`. It is a read-only build input; you do not need a source checkout or a host pnpm installation.
 
     Then set `agents.defaults.sandbox.docker.image` to `openclaw-sandbox-common:trixie-slim`.
 
@@ -86,6 +102,13 @@ commands shown below instead.
 </Steps>
 
 By default, local container sandboxes run with **no network**. Override with `agents.defaults.sandbox.docker.network`.
+
+Dependency-template builders keep `HOME` and XDG configuration, data, state, and
+cache directories in a private writable tmpfs outside the workspace. Package-manager
+state is discarded with the builder and is not staged as workspace content. This
+does not supply registry metadata or packages for offline installs. Runtime tool
+containers retain the image and `sandbox.docker.env` settings; custom images with a
+missing or read-only home need writable HOME/XDG paths for tools that write there.
 
 The default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy) is Gateway-loopback only. Sandbox exec receives neither its proxy/CA environment nor protected sentinels. Sandbox/container proxy reachability is not implemented; do not enable sandbox networking expecting secret substitution to work in this release.
 

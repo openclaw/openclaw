@@ -4,21 +4,18 @@ import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-ha
 import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { installScriptedRunnerMocks } from "./embedded-agent-runner.mock-test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "./embedded-agent-runner/run/types.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
+import { model as modelDefinition } from "./model-catalog-fixtures.test-support.js";
 import {
   buildEmbeddedRunnerAssistant,
   immediateEnqueue,
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import {
-  installEmbeddedRunnerBackoffE2eMocks,
-  installEmbeddedRunnerBaseE2eMocks,
-  installEmbeddedRunnerFastRunE2eMocks,
-} from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "transport-refresh" });
 const oldUrl = "http://127.0.0.1:21431/v1";
@@ -27,9 +24,11 @@ const remoteUrl = "https://model.example/v1";
 const attempt = vi.fn<(params: EmbeddedRunAttemptParams) => Promise<EmbeddedRunAttemptResult>>();
 // Load the runtime during collection, before lifecycle hook deadlines start.
 
-installEmbeddedRunnerBaseE2eMocks();
-installEmbeddedRunnerFastRunE2eMocks({ runEmbeddedAttempt: (params) => attempt(params) });
-installEmbeddedRunnerBackoffE2eMocks({ computeBackoff: () => 0, sleepWithAbort: async () => {} });
+installScriptedRunnerMocks({
+  runEmbeddedAttempt: (params) => attempt(params),
+  resolveModel: false,
+  backoff: { computeBackoff: () => 0, sleepWithAbort: async () => {} },
+});
 // The transport and credentials must come from production preparation, not fixture answers.
 vi.doUnmock("./prepared-model-runtime.js");
 vi.doUnmock("./runtime-plan/prepare-auth.js");
@@ -81,14 +80,14 @@ function config(
           ...(!options.noAuth ? { apiKey: `synthetic-${epoch}-key` } : {}),
           headers: { "X-Local-Route": `${epoch}-route` },
           models: [
-            {
-              id: "chat",
-              name: "Fixture chat",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              ...(options.limits ?? { contextWindow: 16_000, maxTokens: 2048 }),
-            },
+            modelDefinition(
+              "chat",
+              "Fixture chat",
+              options.limits ?? {
+                contextWindow: 16_000,
+                maxTokens: 2048,
+              },
+            ),
           ],
         },
       },
@@ -285,14 +284,7 @@ it.each<TransportCase>([
     ];
     const observations: EmbeddedRunAttemptParams[] = [];
     attempt.mockImplementation(async (params) => {
-      // Run disposal clears continuation payloads; record their dispatch-time facts.
-      observations.push({
-        ...params,
-        continuation: params.continuation && {
-          prompt: params.continuation.prompt,
-          messages: [...params.continuation.messages],
-        },
-      });
+      observations.push({ ...params });
       if (observations.length === 1) {
         if (!serverError) {
           expect(params).toMatchObject({
@@ -363,7 +355,10 @@ it.each<TransportCase>([
           ...(localNoAuth ? { Authorization: null } : {}),
         },
       },
-      continuation: { prompt: "Preserve this admitted request exactly.", messages: history },
+      continuation: undefined,
+      prompt: expect.stringContaining("Continue the current task from the existing transcript"),
+      skipPreparedUserTurnMessage: true,
+      suppressNextUserMessagePersistence: true,
     });
     expect(first.admittedRunContext).toBeDefined();
     expect(retry.admittedRunContext).toBe(first.admittedRunContext);

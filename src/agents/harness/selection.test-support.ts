@@ -7,17 +7,29 @@ import {
   type AdmittedRunContext,
 } from "../admitted-run-context.js";
 import { createModelGenerationFixture } from "../embedded-agent-runner/model.generation-scope.test-support.js";
-import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import type {
+  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptResult,
+} from "../embedded-agent-runner/run/types.js";
 import { retainPreparedPluginRegistry } from "../prepared-model-runtime.plugin-lifetime.js";
 import { maybeCompactAgentHarnessSession as compactSession } from "./compaction.js";
-import { createBaseAttemptParams } from "./lifecycle.test-support.js";
+import * as lifecycle from "./lifecycle.test-support.js";
+
+export function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
+  const { diagnosticTrace: _trace, ...result } = lifecycle.createAttemptResult();
+  return {
+    ...result,
+    sessionIdUsed,
+    assistantTexts: [`${sessionIdUsed} ok`],
+  };
+}
 
 export const createHarnessAttemptParams = (
   admittedRunContext: AdmittedRunContext,
   config?: OpenClawConfig,
 ): EmbeddedRunAttemptParams =>
   ({
-    ...createBaseAttemptParams(),
+    ...lifecycle.createBaseAttemptParams(),
     admittedRunContext,
     agentId: "main",
     runId: admittedRunContext.operationalRunInstance.runId,

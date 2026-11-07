@@ -63,9 +63,16 @@ describe("confirmed session navigation", () => {
       client: context.gateway.snapshot.client!,
       key: sessionKey,
       agentId: "main",
+      entry: { displayName: "Accepted title", category: "Claws" },
     });
 
     expect(animate).toHaveBeenCalledTimes(animations);
+    expect(context.chatSubmissions.readAcceptedCreate()).toMatchObject({
+      creation: { sessionKey, admitted: true },
+      displayName: "Accepted title",
+      category: "Claws",
+    });
+    expect(context.chatSubmissions.creation).toBeUndefined();
   });
 
   it.each(["leave", "stop"] as const)(

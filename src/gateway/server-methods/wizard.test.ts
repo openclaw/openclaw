@@ -62,7 +62,7 @@ import {
   whenAdmittedWizardSessionSettled,
 } from "./setup-admission.js";
 import { systemAgentHandlers } from "./system-agent.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayRequestContext } from "./types.js";
 import { type SetupWizardRunner, wizardHandlers } from "./wizard.js";
 
 afterEach(() => __setFsSafeTestHooksForTest(undefined));
@@ -149,19 +149,11 @@ async function cancelWizardSessions(sessions: Map<string, WizardSession>) {
 it.each(["wizard.next", "wizard.cancel", "wizard.status"] as const)(
   "returns structured details from %s",
   async (method) => {
-    const params = { sessionId: "expired" };
-    const respond = vi.fn();
-    const handler = expectDefined(wizardHandlers[method], method);
-
-    await handler({
-      req: { type: "req", id: "wizard-missing", method, params },
-      params,
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: { wizardSessions: new Map() } as never,
-    } as GatewayRequestHandlerOptions);
-
+    const respond = await callWizard(
+      method,
+      { sessionId: "expired" },
+      createWizardContext(vi.fn()),
+    );
     expect(respond).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: "INVALID_REQUEST",
@@ -509,26 +501,16 @@ describe("wizard setup ownership", () => {
     { label: "omitted", params: {}, expected: undefined },
   ])("projects installDaemon when $label", async ({ params, expected }) => {
     let receivedInstallDaemon: boolean | undefined;
-    const tracker = createWizardSessionTracker();
     const wizardRunner: SetupWizardRunner = async (opts, _runtime, prompter) => {
       receivedInstallDaemon = opts.installDaemon;
       await prompter.note("ready");
     };
-    const respond = vi.fn();
-
-    await expectDefined(
-      wizardHandlers["wizard.start"],
-      "wizard.start test invariant",
-    )({
-      params: { mode: "local", ...params },
-      respond,
-      context: { ...tracker, wizardRunner },
-    } as never);
-
+    const context = createWizardContext(wizardRunner);
+    const respond = await callWizard("wizard.start", { mode: "local", ...params }, context);
     expect(receivedInstallDaemon).toBe(expected);
     expect(respond.mock.calls[0]?.[1]).toMatchObject({ done: false, status: "running" });
 
-    await cancelWizardSessions(tracker.wizardSessions);
+    await cancelWizardSessions(context.wizardSessions);
   });
 });
 

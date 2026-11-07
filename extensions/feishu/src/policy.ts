@@ -9,6 +9,7 @@ import {
   type ChannelIngressIdentitySubjectInput,
   type ResolveChannelMessageIngressParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/context-visibility-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChannelGroupContext } from "../runtime-api.js";
@@ -154,8 +155,6 @@ export async function resolveFeishuGroupConversationIngressAccess(params: {
   groupPolicy: FeishuGroupPolicy;
   groupAllowFrom?: Array<string | number> | null;
   groupExplicitlyConfigured?: boolean;
-  contextBinding?: ChannelIngressContextBinding;
-  threadId?: string;
 }) {
   const groupPolicy = normalizeFeishuGroupPolicy(params.groupPolicy);
   const groupAllowFrom =
@@ -169,9 +168,7 @@ export async function resolveFeishuGroupConversationIngressAccess(params: {
     conversation: {
       kind: "group",
       id: params.chatId,
-      threadId: params.threadId,
     },
-    ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
     dmPolicy: "disabled",
     groupPolicy,
     groupAllowFrom,
@@ -264,7 +261,6 @@ export function resolveFeishuGroupToolPolicy(params: ChannelGroupContext) {
 }
 
 export function resolveFeishuReplyPolicy(params: {
-  isDirectMessage: boolean;
   cfg: OpenClawConfig;
   accountId?: string | null;
   groupId?: string | null;
@@ -275,10 +271,6 @@ export function resolveFeishuReplyPolicy(params: {
    */
   groupPolicy?: "open" | "allowlist" | "disabled" | "allowall";
 }): { requireMention: boolean } {
-  if (params.isDirectMessage) {
-    return { requireMention: false };
-  }
-
   const feishuCfg = params.cfg.channels?.feishu;
   const resolvedCfg = resolveMergedAccountConfig<FeishuConfig>({
     channelConfig: feishuCfg,
@@ -296,4 +288,38 @@ export function resolveFeishuReplyPolicy(params: {
     requireMention:
       groupRequireMention ?? resolvedCfg.requireMention ?? params.groupPolicy !== "open",
   };
+}
+
+export async function shouldIncludeFetchedGroupContextMessage(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  chatId: string;
+  isGroup: boolean;
+  allowFrom: Array<string | number>;
+  mode: "all" | "allowlist" | "allowlist_quote";
+  kind: "quote" | "thread" | "history";
+  senderId?: string;
+  senderType?: string;
+}): Promise<boolean> {
+  let senderAllowed =
+    !params.isGroup || params.allowFrom.length === 0 || params.senderType === "app";
+  const senderId = params.senderId?.trim();
+  if (!senderAllowed && senderId) {
+    const access = await resolveFeishuGroupSenderActivationIngressAccess({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      chatId: params.chatId,
+      allowFrom: params.allowFrom,
+      senderOpenId: senderId,
+      senderUserId: senderId,
+      requireMention: false,
+      mentionedBot: true,
+    });
+    senderAllowed = access.senderAccess.decision === "allow";
+  }
+  return evaluateSupplementalContextVisibility({
+    mode: params.mode,
+    kind: params.kind,
+    senderAllowed,
+  }).include;
 }

@@ -17,33 +17,6 @@ import {
 
 const MIGRATION_REASON_TARGET_NOT_REGULAR = "target is not a regular file";
 
-async function addInstructionItem(params: {
-  items: MigrationItem[];
-  id: string;
-  source?: string;
-  target: string;
-  sourceLabel: string;
-}): Promise<void> {
-  if (!params.source) {
-    return;
-  }
-  const targetNotRegular = (await lstatIfExists(params.target))?.isFile() === false;
-  params.items.push(
-    createMigrationItem({
-      id: params.id,
-      kind: ["AGENTS.md", "USER.md"].includes(path.basename(params.target))
-        ? "workspace"
-        : "memory",
-      action: "append",
-      source: params.source,
-      target: params.target,
-      status: targetNotRegular ? "conflict" : "planned",
-      reason: targetNotRegular ? MIGRATION_REASON_TARGET_NOT_REGULAR : undefined,
-      details: { sourceLabel: params.sourceLabel },
-    }),
-  );
-}
-
 function collectionSlug(label: string, id: string): string {
   const slug = label
     .normalize("NFKD")
@@ -86,12 +59,51 @@ async function assertSafeMemoryDestination(
   }
 }
 
-async function buildAutoMemoryItems(params: {
+export async function buildMemoryItems(params: {
   source: ClaudeSource;
   targets: PlannedMigrationTargets;
   overwrite?: boolean;
+  includeInstructions?: boolean;
 }): Promise<MigrationItem[]> {
   const items: MigrationItem[] = [];
+  if (params.includeInstructions !== false) {
+    for (const [id, source, target, sourceLabel] of [
+      ["workspace:CLAUDE.md", params.source.projectMemoryPath, "AGENTS.md", "project CLAUDE.md"],
+      [
+        "workspace:.claude/CLAUDE.md",
+        params.source.projectDotClaudeMemoryPath,
+        "AGENTS.md",
+        "project .claude/CLAUDE.md",
+      ],
+      [
+        "memory:user-CLAUDE.md",
+        params.source.userMemoryPath,
+        "USER.md",
+        "user ~/.claude/CLAUDE.md",
+      ],
+    ] as const) {
+      const targetPath = path.join(params.targets.workspaceDir, target);
+      if (!source) {
+        continue;
+      }
+      const targetNotRegular = (await lstatIfExists(targetPath))?.isFile() === false;
+      items.push(
+        createMigrationItem({
+          id,
+          kind: ["AGENTS.md", "USER.md"].includes(path.basename(targetPath))
+            ? "workspace"
+            : "memory",
+          action: "append",
+          source,
+          target: targetPath,
+          status: targetNotRegular ? "conflict" : "planned",
+          reason: targetNotRegular ? MIGRATION_REASON_TARGET_NOT_REGULAR : undefined,
+          details: { sourceLabel },
+        }),
+      );
+    }
+  }
+  const autoMemoryItems: MigrationItem[] = [];
   for (const collection of params.source.autoMemorySources) {
     const destinationBoundary = await resolveMemoryDestinationBoundary(
       collection.path,
@@ -105,7 +117,7 @@ async function buildAutoMemoryItems(params: {
       collectionSlug(collection.label, collection.id),
     );
     await assertSafeMemoryDestination(destinationBoundary, targetRoot);
-    const remaining = CLAUDE_AUTO_MEMORY_MAX_FILES - items.length;
+    const remaining = CLAUDE_AUTO_MEMORY_MAX_FILES - autoMemoryItems.length;
     const scan = await listMarkdownFiles(collection.path, remaining);
     if (scan.truncatedBy) {
       const limit =
@@ -127,7 +139,7 @@ async function buildAutoMemoryItems(params: {
         await assertSafeMemoryDestination(destinationBoundary, target);
       }
       const targetConflict = targetNotRegular || (targetExists && !params.overwrite);
-      items.push(
+      autoMemoryItems.push(
         createMigrationItem({
           id: `memory:claude-auto:${collection.id}:${relativePath.replaceAll(path.sep, "/")}`,
           kind: "memory",
@@ -153,41 +165,6 @@ async function buildAutoMemoryItems(params: {
       );
     }
   }
-  return items;
-}
-
-export async function buildMemoryItems(params: {
-  source: ClaudeSource;
-  targets: PlannedMigrationTargets;
-  overwrite?: boolean;
-  includeInstructions?: boolean;
-}): Promise<MigrationItem[]> {
-  const items: MigrationItem[] = [];
-  if (params.includeInstructions !== false) {
-    for (const [id, source, target, sourceLabel] of [
-      ["workspace:CLAUDE.md", params.source.projectMemoryPath, "AGENTS.md", "project CLAUDE.md"],
-      [
-        "workspace:.claude/CLAUDE.md",
-        params.source.projectDotClaudeMemoryPath,
-        "AGENTS.md",
-        "project .claude/CLAUDE.md",
-      ],
-      [
-        "memory:user-CLAUDE.md",
-        params.source.userMemoryPath,
-        "USER.md",
-        "user ~/.claude/CLAUDE.md",
-      ],
-    ] as const) {
-      await addInstructionItem({
-        items,
-        id,
-        source,
-        target: path.join(params.targets.workspaceDir, target),
-        sourceLabel,
-      });
-    }
-  }
-  items.push(...(await buildAutoMemoryItems(params)));
+  items.push(...autoMemoryItems);
   return items;
 }

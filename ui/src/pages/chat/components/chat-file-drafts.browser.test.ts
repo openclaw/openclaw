@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { canReloadControlUiDocument } from "../../../app/document-reload-guard.ts";
-import "../../../lib/toast-host.ts";
+import "../../../lib/toast-host.tsx";
 import {
   retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
@@ -98,9 +98,7 @@ describe.runIf(browserMode)("file draft document reload protection", () => {
     await button(`Copy ${file.name}`).click();
     await expect
       .element(page.getByRole("alert"))
-      .toHaveTextContent(
-        "Could not copy the edits. Select the text or download the draft instead.",
-      );
+      .toHaveTextContent("Couldn’t copy the edits. Select the text or download the draft instead.");
     expect(fallback).toHaveBeenCalledWith("copy");
     expect(canReloadControlUiDocument()).toBe(false);
     clipboard.mockResolvedValue(undefined);

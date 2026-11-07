@@ -172,7 +172,8 @@ vi.mock("./gateway-install-token.js", () => ({
 }));
 
 // mock-isolation: Each fixture controls its closed-connection diagnostic and health text.
-vi.mock("./health-format.js", () => ({
+vi.mock("./health-format.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./health-format.js")>()),
   formatGatewayClosedDiagnostic,
   formatHealthCheckFailure,
 }));
@@ -506,7 +507,30 @@ describe("maybeRepairGatewayDaemon", () => {
     await runDoctorHealthContributionList(ctx, contributions);
 
     expect(ctx).toMatchObject({ healthOk: false, gatewayHealthSkipped: false });
-    expect(ctx.runtime.error).toHaveBeenCalledOnce();
+    expect(ctx.healthFindings).toEqual([
+      {
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        category: "fix-now",
+        message: "Gateway health check failed: health failed",
+        fixHint:
+          "Run openclaw gateway status --deep using the same profile and account, inspect the reported startup errors, then rerun Doctor.",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/checks#gateway-and-service-repairs",
+      },
+    ]);
+    const { showDoctorHealthSummary } = await import("../flows/doctor-health-contribution.js");
+    showDoctorHealthSummary(ctx);
+    const output = vi.mocked(ctx.runtime.log).mock.calls.map(([message]) => message);
+    expect(output).toEqual([
+      "Fix now:",
+      "- Gateway health check failed: health failed",
+      "  Next step: Run openclaw gateway status --deep using the same profile and account, inspect the reported startup errors, then rerun Doctor.",
+      "  Docs: https://docs.openclaw.ai/cli/doctor/checks#gateway-and-service-repairs",
+    ]);
+    expect(ctx.updateWarnings).toEqual([
+      "core/doctor/gateway-health: Gateway health check failed: health failed",
+    ]);
+    expect(ctx.runtime.error).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
     expect(service.isLoaded).not.toHaveBeenCalled();
     expect(service.readCommand).not.toHaveBeenCalled();
@@ -672,18 +696,20 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
-  it("reports a typed close after restart without depending on error wording", async () => {
+  it("reports a typed close after restart and masks the connection note", async () => {
     const error = new Error("transport closed after restart");
     healthCommand.mockRejectedValueOnce(error);
     formatGatewayClosedDiagnostic.mockReturnValueOnce(
       "Gateway connect failed: transport closed after restart",
     );
 
-    const runtime = await runAutoRepair();
+    const runtime = await runAutoRepair(undefined, {
+      gatewayDetailsMessage: "details password=doctorSynthetic7",
+    });
 
     expect(formatGatewayClosedDiagnostic).toHaveBeenCalledWith(error);
     expectNote("Gateway connect failed: transport closed after restart");
-    expect(note).toHaveBeenCalledWith("details", "Gateway connection");
+    expect(note).toHaveBeenCalledWith("details password=***", "Gateway connection");
     expect(runtime.error).not.toHaveBeenCalled();
   });
 

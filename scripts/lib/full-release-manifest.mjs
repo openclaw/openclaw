@@ -29,7 +29,7 @@ export function releaseManifestChildEvidence(child) {
   };
 }
 
-export function buildReleaseValidationManifest({ plan, drain, context }) {
+export function buildReleaseValidationManifest({ plan, drain, context, reusedManifest }) {
   const childEvidence = Object.fromEntries(
     Object.entries(drain?.children ?? {}).map(([key, child]) => [
       key,
@@ -49,8 +49,8 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
     candidateBinding: plan.candidate,
     publicationArtifacts: context.publicationArtifacts ?? { npmPreflight: null, docker: null },
     publishInputs: context.publishInputs,
-    // Keep the wire field; current release policy admits no advisory jobs.
-    advisoryJobs: [],
+    advisoryJobs: drain?.advisoryJobs ?? [],
+    waivers: drain?.waivers ?? [],
     childEvidence,
     ...(plan.qualificationCoverage
       ? {
@@ -75,7 +75,10 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
       : {}),
   };
   const runs = Object.fromEntries(plan.children.map((child) => [child.key, child.runId]));
-  const root = plan.evidenceReuse.sourceManifest;
+  const root = reusedManifest ?? plan.evidenceReuse.sourceManifest;
+  if (plan.evidenceReuse.requested && !root) {
+    throw new Error("reused release evidence manifest is required at the manifest boundary");
+  }
   let rootPublication;
   if (plan.evidenceReuse.requested && root?.publicationAdmissionContract !== undefined) {
     rootPublication = {
@@ -94,7 +97,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
   }
   const manifest = plan.evidenceReuse.requested
     ? {
-        ...plan.evidenceReuse.sourceManifest,
+        ...root,
         ...current,
         evidenceReuse: {
           policy: plan.evidenceReuse.policy,
@@ -105,7 +108,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
           ...(rootPublication ? { publication: rootPublication } : {}),
         },
         controls: {
-          ...plan.evidenceReuse.sourceManifest.controls,
+          ...root.controls,
           performanceReportPublication: "artifact-only",
         },
       }
@@ -117,6 +120,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
         runReleaseSoak: context.runReleaseSoak,
         validationInputs: {
           ...context.validationInputs,
+          ...(plan.targetVersion ? { targetVersion: plan.targetVersion } : {}),
           ...(plan.sourceAdmissionContract
             ? {
                 ...publicationIntentInputs(plan.sourceAdmission),
@@ -160,8 +164,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
   return manifest;
 }
 
-export function manifestContextFromEnvironment(source) {
-  const env = process.env;
+export function manifestContextFromEnvironment(source, env = process.env) {
   const coverage = source?.coverage ?? {};
   const inputs = {};
   for (const [key, variable, sourceKey] of [
@@ -201,10 +204,6 @@ export function manifestContextFromEnvironment(source) {
   }
   inputs.targetContextRef = env.TARGET_CONTEXT_REF ?? source?.targetContextRef ?? "";
   inputs.targetVersion = env.TARGET_VERSION ?? source?.projection?.version ?? "";
-  const waiver = env.TELEGRAM_WAIVER ?? coverage.telegram_waiver ?? "";
-  if (waiver) {
-    inputs.telegramWaiver = waiver;
-  }
   return {
     runId: env.GITHUB_RUN_ID,
     runAttempt: env.GITHUB_RUN_ATTEMPT,

@@ -1,7 +1,6 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectThemeSettings, resetServerUiPref } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import { resolveServerUiPrefState, extractServerUiPrefs } from "./server-prefs-reconcile.ts";
@@ -9,8 +8,9 @@ import {
   configWithPrefs,
   createServerPrefsWriter,
   refreshServerPrefsProfile,
+  installServerPrefsStorage,
 } from "./server-prefs.test-support.ts";
-import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
+import { flushServerUiPrefs, pushServerUiPrefs } from "./server-prefs.ts";
 import { loadSettings, patchSettings, settingsKeyForGateway } from "./settings.ts";
 
 const scope = "ws://tab-icon-prefs";
@@ -22,15 +22,7 @@ const stored = (key: string) => JSON.parse(localStorage.getItem(key)!);
 const provenance = (config: ReturnType<typeof configWithPrefs>) =>
   resolveServerUiPrefState(config, "tabIcon", scope, loadSettings(), { profileId }).provenance;
 
-beforeEach(() => {
-  vi.stubGlobal("localStorage", createStorageMock());
-  resetServerUiPrefsSync();
-  patchSettings({ gatewayUrl: scope });
-});
-afterEach(() => {
-  resetServerUiPrefsSync();
-  vi.unstubAllGlobals();
-});
+installServerPrefsStorage(scope);
 
 it("preserves the icon on theme selection and removes the preference on reset", () => {
   const choice = "lobster:crimson";

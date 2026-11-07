@@ -6,7 +6,6 @@ import {
   agentIds,
   mountRoster,
   roster,
-  session,
   settleRoster,
 } from "../test-helpers/app-sidebar-cases/roster.test-support.ts";
 import {
@@ -14,12 +13,6 @@ import {
   SESSION_MUTATION_TEST_METHODS,
 } from "../test-helpers/gateway-methods.ts";
 
-const reply = () => [
-  session("main", 30, {
-    lastMessagePreview: "A newer user question",
-    lastAssistantMessage: { text: "The assistant's latest answer", timestamp: 20 },
-  }),
-];
 const pinned = (sidebar: Element) => sidebar.querySelector('[data-pinned-agent="main"]');
 const menuItem = (sidebar: Element, value: string) =>
   sidebar.querySelector<HTMLElement>(`[data-value="${value}"]`)!;
@@ -28,13 +21,17 @@ async function openMenu(sidebar: Element, value = "sessions") {
   await vi.waitFor(() => expect(menuItem(sidebar, value)).not.toBeNull());
   return menuItem(sidebar, value);
 }
+const rightClick = (element: Element) =>
+  element.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 60 }),
+  );
 const modalButton = (text: string) =>
   [...document.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
     (button) => button.textContent === text,
   )!;
 
-it("pins an agent into a menu-less gallery above the roster and preserves the other agents", async () => {
-  const { sidebar, context, provider } = await mountRoster(roster, reply());
+it("persists pins across remounts without removing the other agents", async () => {
+  const { sidebar, context, provider } = await mountRoster(roster, []);
   sidebar.sidebarAgentsMode = "roster";
   await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
   await settleRoster(sidebar);
@@ -47,26 +44,10 @@ it("pins an agent into a menu-less gallery above the roster and preserves the ot
   expect(loadSettings().pinnedAgentIds).toEqual(["main"]);
   expect(document.activeElement?.getAttribute("data-agent-id")).toBe("main");
   provider.remove();
-  const remounted = await mountRoster(roster, reply());
+  const remounted = await mountRoster(roster, []);
   remounted.sidebar.sidebarAgentsMode = "roster";
   await vi.waitFor(() => expect(pinned(remounted.sidebar)).not.toBeNull());
   await settleRoster(remounted.sidebar);
-  const pin = pinned(remounted.sidebar)!;
-  const content = pin.querySelector('[slot="content"]')?.textContent;
-  expect(content).toContain("The assistant's latest answer");
-  expect(content).not.toContain("A newer user question");
-  expect(pin.querySelector(".sidebar-agent-roster__preview")).toBeNull();
-  const link = pin.querySelector<HTMLAnchorElement>("a")!;
-  link.focus();
-  const tooltip = pin.querySelector("openclaw-tooltip")!;
-  await vi.waitFor(() => expect(tooltip.hasAttribute("open")).toBe(true));
-  expect(link.getAttribute("aria-describedby")).toBeTruthy();
-  link.dispatchEvent(
-    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-  );
-  await vi.waitFor(() => expect(tooltip.hasAttribute("open")).toBe(false));
-  expect(document.activeElement).toBe(link);
-  expect(pin.querySelector("button")).toBeNull();
   remounted.context.navigation.update({ pinnedAgentIds: [] });
   await vi.waitFor(() => {
     expect(remounted.sidebar.querySelector("[data-pinned-agent]")).toBeNull();
@@ -99,37 +80,9 @@ it("keeps every configured pin available and ignores unavailable saved agents", 
   ).toEqual(agents.agents.filter((agent) => agent.id !== "system").map((agent) => agent.id));
   expect(
     sidebar.querySelector('[data-pinned-agent="main"] [slot="content"]')?.textContent,
-  ).toContain("No assistant reply yet");
+  ).toContain("No agent reply yet");
   expect(context.navigation.snapshot.pinnedAgentIds).toContain("missing");
 });
-
-it.each(["main", "recent"])(
-  "renders no provisional session row for a %s-agent create in the agent roster",
-  async (agentId) => {
-    const { sidebar, context } = await mountRoster(roster, []);
-    context.navigation.update({ pinnedAgentIds: ["main"] });
-    sidebar.sidebarAgentsMode = "roster";
-    sidebar.activeRouteId = "chat";
-    const sessionKey = `agent:${agentId}:creating`;
-    sidebar.sessionKey = sessionKey;
-    await vi.waitFor(() => expect(pinned(sidebar)).not.toBeNull());
-    const release = context.chatSubmissions.beginCreate({
-      creation: { sessionKey, admitted: false },
-      displayName: "Preparing new conversation",
-      message: null,
-      canDisplay: () => true,
-    });
-    try {
-      await settleRoster(sidebar);
-      expect(sidebar.getRouteSessionKey()).toBe(sessionKey);
-      expect(sidebar.querySelector(".sidebar-recent-session--creating")).toBeNull();
-      expect(sidebar.textContent).not.toContain("Preparing new conversation");
-      expect(agentIds(sidebar)).toEqual(["recent", "working"]);
-    } finally {
-      release();
-    }
-  },
-);
 
 it("offers agent sessions and settings without a create action, and confirms agent deletion", async () => {
   const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
@@ -183,4 +136,37 @@ it("offers agent sessions and settings without a create action, and confirms age
     });
     expect(context.agents.refreshList).toHaveBeenCalledOnce();
   });
+});
+
+it("offers Create Template from the pinned agent menu", async () => {
+  const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
+  context.runtimeConfig.state.configForm = {
+    gateway: { controlUi: { experimental: { templates: true } } },
+  };
+  context.navigation.update({ pinnedAgentIds: ["main"] });
+  gatewayHarness.publish({
+    hello: gatewayHelloForMethods([
+      ...SESSION_MUTATION_TEST_METHODS,
+      "templates.drafts.create",
+      "chat.send",
+    ]),
+  });
+  sidebar.sidebarAgentsMode = "roster";
+  await vi.waitFor(() => expect(pinned(sidebar)).not.toBeNull());
+  await settleRoster(sidebar);
+
+  const previousRequest = request.getMockImplementation()!;
+  request.mockImplementation((...args) =>
+    args[0] === "templates.drafts.create"
+      ? Promise.reject(new Error("The agent workspace is unavailable."))
+      : previousRequest(...args),
+  );
+  expect(pinned(sidebar)!.querySelector("button")).toBeNull();
+  rightClick(pinned(sidebar)!);
+  await vi.waitFor(() => expect(menuItem(sidebar, "create-template")).not.toBeNull());
+  menuItem(sidebar, "create-template").click();
+  await vi.waitFor(() =>
+    expect(request).toHaveBeenCalledWith("templates.drafts.create", { agentId: "main" }),
+  );
+  expect(context.navigation.snapshot.pinnedAgentIds).toEqual(["main"]);
 });

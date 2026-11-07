@@ -30,7 +30,7 @@ function createPipeline(coalescing = false, afterSend?: () => void) {
 function finalPayloads(pipeline: ReturnType<typeof createBlockReplyPipeline>, text: string) {
   return buildReplyPayloads({
     payloads: [blockFor(text, 1)],
-    isHeartbeat: false,
+
     blockStreamingEnabled: true,
     blockReplyPipeline: pipeline,
     replyToMode: "off",

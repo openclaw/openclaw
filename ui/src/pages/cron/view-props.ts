@@ -1,27 +1,113 @@
-import { hasCronFormErrors } from "../../lib/cron/index.ts";
+import {
+  normalizeSortedUniqueTrimmedStringList,
+  normalizeTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
+import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
+import { listSelectableAgents } from "../../lib/agents/display.ts";
+import { currentConfigObject } from "../../lib/config/config-state-model.ts";
+import { hasCronFormErrors } from "../../lib/cron/form.ts";
+import { resolveConfiguredCronModelSuggestions } from "../../lib/cron/model-suggestions.ts";
 import { getCronRunsViewState } from "../../lib/cron/runs.ts";
+import { profileDirectory } from "../../lib/profile-directory.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
 import type { createCronPage } from "./cron-page-state.ts";
 import { validateCronEventSelection } from "./event-source.ts";
-import {
-  buildCronSuggestions,
-  resolveConversationTargetSuggestions,
-  THINKING_SUGGESTIONS,
-} from "./form-suggestions.ts";
+
+const THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
 
 export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   const channels = page.inventories.channels.read();
-  const suggestions = buildCronSuggestions({
-    channels,
-    runtimeConfig: page.inventories.runtimeConfig.read(),
-    cron: page.cron(),
-    agentsList: page.inventories.agents.read().agentsList,
-    modelSuggestions: page.cronModelSuggestions(),
-    conversationTargets: resolveConversationTargetSuggestions(
-      page.deliveryDirectory.conversations,
-      page.cron().cronForm.deliveryAccountId,
-    ),
-  });
-  const canManage = page.canManageCron();
+  const runtimeConfig = page.inventories.runtimeConfig.read();
+  const cron = page.cron();
+  const agentsList = page.inventories.agents.read().agentsList;
+  let agentSuggestions: string[] = [];
+  let modelSuggestions: string[] = [];
+  let timezoneSuggestions: string[] = [];
+  let accountSuggestions: string[] = [];
+  let failureAlertToSuggestions: string[] = [];
+  let deliveryToSuggestions: string[] = [];
+  // Only the editor consumes these inventories; list updates must not rebuild them.
+  if (cron.cronCreateOpen || (cron.cronEditingJob && page.detailTab() !== "history")) {
+    const conversations = page.deliveryDirectory.conversations;
+    const accountId = page.cron().cronForm.deliveryAccountId.trim();
+    // The bounded directory cannot prove a unique account/topic route. Only the
+    // operator's explicit account supplies plain targets; never infer routing.
+    const conversationTargets = accountId
+      ? normalizeSortedUniqueTrimmedStringList(
+          conversations
+            .filter((conversation) => conversation.accountId === accountId)
+            .map((conversation) => conversation.target),
+        )
+      : [];
+    const configValue = currentConfigObject(runtimeConfig);
+    const channel = cron.cronForm.deliveryChannel.trim() || "last";
+    const systemAgentIds = new Set(
+      (agentsList?.agents ?? [])
+        .filter((entry) => entry.kind === "system")
+        .map((entry) => entry.id.trim()),
+    );
+    agentSuggestions = normalizeSortedUniqueTrimmedStringList([
+      ...listSelectableAgents(agentsList?.agents ?? []).map((entry) => entry.id.trim()),
+      ...cron.cronJobs.map((job) =>
+        typeof job.agentId === "string" && !systemAgentIds.has(job.agentId.trim())
+          ? job.agentId.trim()
+          : "",
+      ),
+    ]);
+    modelSuggestions = normalizeSortedUniqueTrimmedStringList([
+      ...page.cronModelSuggestions(),
+      ...resolveConfiguredCronModelSuggestions(configValue),
+      ...cron.cronJobs.map((job) => {
+        const payload = job.payload;
+        return payload.kind === "agentTurn" && typeof payload.model === "string"
+          ? payload.model.trim()
+          : "";
+      }),
+    ]);
+    const savedDeliveryTargets = normalizeSortedUniqueTrimmedStringList(
+      cron.cronJobs.map((job) => job.delivery?.to),
+    );
+    const deliveryTargets = normalizeSortedUniqueTrimmedStringList([
+      ...savedDeliveryTargets,
+      ...(cron.cronForm.deliveryMode === "announce" ? conversationTargets : []),
+    ]);
+    const accountTargets = normalizeTrimmedStringList(
+      (channel === "last"
+        ? Object.values(channels.channelsSnapshot?.channelAccounts ?? {}).flat()
+        : (channels.channelsSnapshot?.channelAccounts?.[channel] ?? [])
+      ).map((account) => account.accountId),
+    );
+    const forDeliveryMode = (targets: string[]) =>
+      cron.cronForm.deliveryMode === "webhook"
+        ? targets.filter((value) => /^https?:\/\//i.test(value))
+        : targets;
+    timezoneSuggestions = resolveTimezoneSuggestions(
+      cron.cronJobs.map((job) => (job.schedule.kind === "cron" ? (job.schedule.tz ?? "") : "")),
+    );
+    accountSuggestions = accountTargets;
+    failureAlertToSuggestions = forDeliveryMode(savedDeliveryTargets);
+    deliveryToSuggestions = forDeliveryMode(deliveryTargets);
+  }
+  const canManage =
+    cron.cronEditingJob || cron.cronCreateOpen
+      ? page.canManageCron()
+      : page.canCreateCron() || cron.cronJobs.some(page.canManageJob);
+  const directory = profileDirectory(page.context().gateway);
+  const selectedOwner = cron.cronForm.ownerProfileId;
+  const profiles = directory.result?.profiles.filter((profile) => !profile.mergedInto) ?? [];
+  const ownerOptions = profiles.map((profile) => ({
+    value: profile.id,
+    label:
+      userProfileDisplayName(profile.id, profile.displayName, profile.githubIdentity?.login) ||
+      profile.id,
+  }));
+  if (!selectedOwner || !profiles.some((profile) => profile.id === selectedOwner)) {
+    ownerOptions.unshift({
+      value: selectedOwner,
+      label: selectedOwner || t("cron.form.ownerUnassigned"),
+    });
+  }
   const eventSource = page.eventSource.view;
   const fieldErrors = {
     ...page.cron().cronFieldErrors,
@@ -29,6 +115,8 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   };
   return {
     ...page.actions,
+    gateway: page.context().gateway,
+    getActionRetired: page.getActionRetired,
     onRunMount: page.registerRun,
     loading: page.cron().cronLoading,
     /** True once a cron.list response has completed (initial load finished). */
@@ -36,9 +124,11 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     listError: page.cron().cronJobsError,
     /** Canonical gateway capability for every mutation-capable cron control. */
     canManage,
+    ownerOptions,
     connected: page.cron().connected,
     status: page.cron().cronStatus,
     jobs: page.cron().cronJobs,
+    reads: page.reads,
     jobsLoadingMore: page.cron().cronJobsLoadingMore,
     jobsTotal: page.cron().cronJobsTotal,
     jobsHasMore: page.cron().cronJobsHasMore,
@@ -53,14 +143,10 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     createOpen: page.cron().cronCreateOpen,
     listTab: page.listTab(),
     detailTab: page.detailTab(),
-    error:
-      page.cron().cronError ??
-      page.cron().cronRunsError ??
-      page.deliveryDirectory.error ??
-      page.modelSuggestionsError(),
+    error: page.cron().cronError ?? page.cron().cronRunsError ?? page.deliveryDirectory.error,
+    notice: page.cron().cronNotice,
     busy: page.cron().cronBusy,
     form: page.cron().cronForm,
-    heartbeatScratch: canManage ? page.heartbeatScratch() : "",
     channels: channels.channelsSnapshot?.channelMeta?.length
       ? channels.channelsSnapshot.channelMeta.map((entry) => entry.id)
       : (channels.channelsSnapshot?.channelOrder ?? []),
@@ -78,12 +164,12 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     eventSource,
     fieldErrors,
     canSubmit: page.cron().connected && !hasCronFormErrors(fieldErrors),
-    agentSuggestions: suggestions.agentSuggestions,
-    modelSuggestions: suggestions.modelSuggestions,
+    agentSuggestions,
+    modelSuggestions,
     thinkingSuggestions: THINKING_SUGGESTIONS,
-    timezoneSuggestions: suggestions.timezoneSuggestions,
-    deliveryToSuggestions: suggestions.deliveryToSuggestions,
-    failureAlertToSuggestions: suggestions.failureAlertToSuggestions,
-    accountSuggestions: suggestions.accountTargets,
+    timezoneSuggestions,
+    deliveryToSuggestions,
+    failureAlertToSuggestions,
+    accountSuggestions,
   };
 }

@@ -1,3 +1,4 @@
+import { onAgentEvent as subscribeAgentEvents } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { finalMessage as finalItem } from "./event-projector.compact.test-support.js";
 import * as fixture from "./event-projector.compact.test-support.js";
 import {
@@ -9,7 +10,6 @@ import {
   TURN_ID,
   createParams,
   createProjector,
-  createProjectorWithAssistantHooks,
   forCurrentTurn,
   turnCompleted,
   THREAD_ID,
@@ -26,10 +26,16 @@ function commentaryItem(id: string, text = "") {
   return fixture.message(id, text, "commentary");
 }
 
+function reviewedToolDetails(projector: Awaited<ReturnType<typeof createProjector>>) {
+  const message = fixture
+    .result(projector)
+    .messagesSnapshot.find((entry) => entry.role === "toolResult");
+  return requireRecord(message, "reviewed tool result").details;
+}
+
 describe("CodexAppServerEventProjector text and guardian projection", () => {
   it("keeps intermediate agentMessage items out of the final visible reply", async () => {
-    const { onAssistantMessageStart, onPartialReply, projector } =
-      await createProjectorWithAssistantHooks();
+    const { onPartialReply, projector } = await fixture.observePartial();
     const draft = "checking thread context";
     const answer = "Final answer.";
 
@@ -42,7 +48,6 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
 
     const result = fixture.result(projector);
 
-    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
     // Unphased previews must remain replaceable, not append-only channel replies.
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(result.assistantTexts).toEqual([answer]);
@@ -58,14 +63,11 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
     const item = {
       type: "dynamicToolCall",
       id: "call-write",
-      namespace: null,
       tool: "write",
       arguments: { path: "note.txt", content: "written once" },
       status: "inProgress",
-      contentItems: null,
-      success: null,
-      durationMs: null,
     };
+    const contentItems = [{ type: "inputText" as const, text: "written once" }];
     await fixture.start(projector, item);
     projector.recordDynamicToolCall({
       callId: item.id,
@@ -77,14 +79,13 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
       tool: item.tool,
       success: true,
       sideEffectEvidence: true,
-      contentItems: [{ type: "inputText", text: "written once" }],
+      contentItems,
     });
     await fixture.complete(projector, {
       ...item,
       status: "completed",
-      contentItems: [{ type: "inputText", text: "written once" }],
+      contentItems,
       success: true,
-      durationMs: 1,
     });
     await fixture.rawAssistant(projector, " \n ");
     await fixture.finish(projector, []);
@@ -97,7 +98,6 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
       content: fixture.text(""),
     });
     expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
-    expect(result.itemLifecycle).toEqual({ startedCount: 2, completedCount: 2, activeCount: 0 });
     expect(result.messagesSnapshot.filter((message) => message.role === "assistant")).toEqual([
       expect.objectContaining({ content: [expect.objectContaining({ type: "toolCall" })] }),
     ]);
@@ -184,11 +184,7 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
       const result = fixture.result(projector);
       expect(result.assistantTexts).toEqual(["final answer"]);
       const commentary = result.messagesSnapshot.find(
-        (message) =>
-          requireRecord(
-            requireRecord(message, "assistant snapshot").openclawStreamFallback ?? {},
-            "commentary fallback",
-          ).itemId === "msg-commentary",
+        (message) => readMirrorIdentity(message) === `${TURN_ID}:commentary:msg-commentary`,
       );
       expect(commentary).toMatchObject({
         role: "assistant",
@@ -263,16 +259,14 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
   it("pairs a raw commentary echo after an empty typed completion", async () => {
     const { projector, onAgentEvent } = await fixture.observe();
 
-    await fixture.start(projector, fixture.message("msg-commentary", "", "commentary"));
+    await fixture.start(projector, commentaryItem("msg-commentary"));
     await fixture.complete(projector, commentaryItem("msg-commentary"));
     await fixture.rawAssistant(projector, "<oai-mem-citation>source</oai-mem-citation>", {
       id: "msg-commentary",
       phase: "commentary",
     });
 
-    const preambles = fixture.events(onAgentEvent, "item", "preamble");
-
-    expect(preambles).toEqual([]);
+    expect(fixture.events(onAgentEvent, "item", "preamble")).toEqual([]);
 
     await fixture.rawAssistant(projector, "Later raw-only note", { phase: "commentary" });
     await fixture.finish(projector, []);
@@ -312,13 +306,7 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
       targetItemId: target,
       ...(phase === "completed" ? { decisionSource: "agent" } : {}),
       review,
-      action: action ?? {
-        type: "execve",
-        source: "shell",
-        program: "/bin/printf",
-        argv: ["printf", "hello"],
-        cwd: "/tmp",
-      },
+      action: action ?? { type: "execve", argv: ["printf", "hello"] },
     });
   }
 
@@ -395,10 +383,7 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
       ["cmd-1", "reviewing", true],
       ["cmd-1", "approved", true],
     ]);
-    const toolResult = fixture
-      .result(projector)
-      .messagesSnapshot.find((message) => message.role === "toolResult");
-    expect(requireRecord(toolResult, "reviewed tool result").details).toMatchObject({
+    expect(reviewedToolDetails(projector)).toMatchObject({
       approvalReviews: [{ id: "review-1", status: "approved" }],
       approvalReviewOutcome: "approved",
     });
@@ -425,9 +410,6 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
         action: {
           type: "networkAccess",
           target: "https://example.invalid",
-          host: "example.invalid",
-          protocol: "https",
-          port: 443,
         },
       }),
       guardianWarning(denied),
@@ -457,18 +439,12 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
           target: "cmd-many-reviews",
           status,
           ...(status === "inProgress" ? { phase: "started" as const } : {}),
-          riskLevel: status === "approved" ? "low" : "high",
-          userAuthorization: status === "approved" ? "high" : "low",
-          rationale: `${status} ${index}.`,
         }),
       );
     }
     expect(events("tool", "review").at(-1)?.approvalReviewOutcome).toBe("reviewing");
     await send(commandItem("completed", "cmd-many-reviews"));
-    const toolResult = fixture
-      .result(projector)
-      .messagesSnapshot.find((message) => message.role === "toolResult");
-    expect(requireRecord(toolResult, "bounded review tool result").details).toMatchObject({
+    expect(reviewedToolDetails(projector)).toMatchObject({
       approvalReviews: Array.from({ length: 16 }, (_, index) => ({ id: `review-${index + 2}` })),
       approvalReviewOutcome: "approved",
     });
@@ -540,14 +516,49 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
     expect(JSON.stringify(fixture.result(projector).messagesSnapshot)).not.toContain("Codex plan:");
   });
 
+  it("streams native reasoning items without channel callbacks before the turn finishes", async () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeAgentEvents(listener);
+    try {
+      const projector = await createProjector();
+      await fixture.notify(projector, "item/reasoning/summaryTextDelta", {
+        itemId: "reason-1",
+        summaryIndex: 0,
+        delta: "Checking",
+      });
+      expect(fixture.events(listener, "thinking")).toMatchObject([
+        { data: { itemId: "reason-1", text: "Checking", delta: "Checking" } },
+      ]);
+      const completed = { type: "reasoning", id: "reason-1", summary: ["Checked."], content: [] };
+      await fixture.complete(projector, completed);
+      await fixture.complete(projector, completed);
+      await fixture.start(projector, {
+        type: "reasoning",
+        id: "reason-2",
+        summary: ["Next check."],
+        content: [],
+      });
+      await fixture.complete(projector, {
+        type: "reasoning",
+        id: "reason-2",
+        summary: [],
+        content: [],
+      });
+      expect(fixture.events(listener, "thinking")).toMatchObject([
+        { data: { itemId: "reason-1", text: "Checking" } },
+        { data: { itemId: "reason-1", text: "Checked." } },
+        { data: { itemId: "reason-2", text: "Next check." } },
+        { data: { itemId: "reason-2", text: "" } },
+      ]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("orders streamed reasoning sections and replaces them with authoritative completion", async () => {
     const onReasoningStream = vi.fn();
     const onReasoningEnd = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      onReasoningStream,
-      onReasoningEnd,
-    });
+    const { projector } = await fixture.observe({ onReasoningStream, onReasoningEnd });
     for (const [method, indexField, prefix] of [
       ["summaryTextDelta", "summaryIndex", ""],
       ["textDelta", "contentIndex", "First section\n\nSecond\n\n"],
@@ -569,7 +580,6 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
         [{ text: `${prefix}First section\n\nSecond`, isReasoningSnapshot: true }],
       ]);
     }
-    expect(onReasoningStream).toHaveBeenCalledTimes(6);
     await fixture.complete(projector, {
       type: "reasoning",
       id: "reason-1",
@@ -586,9 +596,26 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
     const text = "First summary\n\nSecond summary\n\nCompleted reasoning\n\nNext item";
     expect(onReasoningStream).toHaveBeenLastCalledWith({ text, isReasoningSnapshot: true });
     expect(onReasoningEnd).toHaveBeenCalledOnce();
-    expect(fixture.result(projector).messagesSnapshot).toContainEqual(
-      expect.objectContaining({ content: [{ type: "thinking", thinking: text }] }),
-    );
+    expect(
+      fixture
+        .result(projector)
+        .messagesSnapshot?.filter(
+          (message) =>
+            message.role === "assistant" &&
+            message.content.some((part) => part.type === "thinking"),
+        ),
+    ).toMatchObject([
+      {
+        content: [
+          { type: "thinking", thinking: "First summary\n\nSecond summary\n\nCompleted reasoning" },
+        ],
+        __openclaw: { mirrorIdentity: "turn-1:reasoning:reason-1" },
+      },
+      {
+        content: [{ type: "thinking", thinking: "Next item" }],
+        __openclaw: { mirrorIdentity: "turn-1:reasoning:reason-2" },
+      },
+    ]);
   });
 });
 

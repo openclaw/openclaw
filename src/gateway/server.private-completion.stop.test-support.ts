@@ -86,7 +86,7 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
           (run) => run.runId === descendantRunId,
         );
       const abort = (key = sessionKey, id = runId) =>
-        f.kernel.gatewayInstanceRuntime.recovery.dispatchSessionMethod("chat.abort", {
+        f.kernel.gatewayInstanceRuntime.lifecycle.dispatchSessionMethod("chat.abort", {
           sessionKey: key,
           runId: id,
         });
@@ -344,7 +344,6 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
         scheduler: createTestGatewayScheduler(clock.clock),
         logHealth: { info: vi.fn(), error: vi.fn() },
         runDeliveryQueueMediaGc: async () => undefined,
-        runManagedOutgoingMediaGc: async () => undefined,
       });
       try {
         await clock.advanceBy(60_000);

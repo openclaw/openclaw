@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSessionChoices } from "./tui-session-picker.js";
+import { buildSessionChoices, resolveResumeSession } from "./tui-session-picker.js";
 
 describe("buildSessionChoices", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -31,5 +31,38 @@ describe("buildSessionChoices", () => {
     ]);
 
     expect(choice?.description).toBe("Use `[[reply_to_current]]` literally.");
+  });
+});
+
+describe("resolveResumeSession", () => {
+  it.each(["Café", "한국어"])("matches canonically equivalent titles for %s", (title) => {
+    for (const [stored, query] of [
+      [title.normalize("NFD"), title],
+      [title, title.normalize("NFD")],
+    ] as const) {
+      const session = { key: "agent:main:original", displayName: stored };
+      expect(resolveResumeSession([session], query)).toMatchObject({
+        kind: "match",
+        session: { value: session.key },
+      });
+    }
+  });
+
+  it("keeps equivalent titles ambiguous and exact session keys authoritative", () => {
+    const sessions = [
+      { key: "agent:main:first", displayName: "Café" },
+      { key: "agent:main:second", displayName: "Café".normalize("NFD") },
+    ];
+    const result = resolveResumeSession(sessions, "Café");
+    expect(result.kind).toBe("ambiguous");
+    if (result.kind === "ambiguous") {
+      expect(result.candidates.map((candidate) => candidate.value)).toEqual(
+        sessions.map((session) => session.key),
+      );
+    }
+    expect(resolveResumeSession(sessions, sessions[1]!.key)).toMatchObject({
+      kind: "match",
+      session: { value: sessions[1]!.key },
+    });
   });
 });

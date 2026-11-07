@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import type { GatewaySessionRow } from "../api/types.ts";
+import type { BoardWidget } from "../lib/board/types.ts";
 import type { SidebarLayout } from "../pages/chat/sidebar-layout-types.ts";
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
@@ -54,12 +55,12 @@ export function dashboardLayout(
   };
 }
 
-export function board(sessionKey: string) {
+export function board(sessionKey: string, widgets: BoardWidget[] = []) {
   return {
     sessionKey,
     revision: 1,
     tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-    widgets: [],
+    widgets,
   };
 }
 

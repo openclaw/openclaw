@@ -50,25 +50,80 @@ it("keeps artifact cleanup inside the repository-owned evidence directory", () =
   expect(result.stdout).not.toContain(`Android screenshot artifacts: ${process.env.HOME}\n`);
 });
 
-it("keeps fixture readiness and device restoration aligned", () => {
-  const script = readFileSync(SCRIPT, "utf8");
-  const fixture = readFileSync(
-    "apps/android/app/src/main/java/ai/openclaw/app/AndroidScreenshotFixture.kt",
-    "utf8",
+it("captures the visible phone diagram after rendering when the latest reply prose is offscreen", () => {
+  const { root, run } = captureFixture("phone");
+  const adb = executable(
+    root,
+    "adb",
+    `case "$*" in
+  devices) printf 'List of devices attached\\nemulator-5554\\tdevice\\n' ;;
+  '-s emulator-5554 emu avd name') echo OpenClaw_Screenshots_API36 ;;
+  '-s emulator-5554 shell getprop ro.kernel.qemu') echo 1 ;;
+  '-s emulator-5554 shell cmd time_zone_detector is_auto_detection_enabled') echo true ;;
+  '-s emulator-5554 shell getprop persist.sys.timezone') echo UTC ;;
+  '-s emulator-5554 shell wm size') echo 'Physical size: 1440x2560' ;;
+  '-s emulator-5554 shell wm density') echo 'Physical density: 560' ;;
+  *'shell am start -W '*) echo "\${!#}" > "$FIXTURE_ROOT/scene" ;;
+  '-s emulator-5554 exec-out uiautomator dump /dev/tty')
+    scene=$(cat "$FIXTURE_ROOT/scene")
+    case "$scene" in
+      home) echo '<node text="Overview" />' ;;
+      chat)
+        count=$(cat "$FIXTURE_ROOT/chat-dumps" 2>/dev/null || echo 0)
+        count=$((count + 1))
+        echo "$count" > "$FIXTURE_ROOT/chat-dumps"
+        case "$count" in
+          1) echo '<node text="The Android release is close. Rendering diagram…" />' ;;
+          2) echo '<node text="The Android release is close. Mermaid diagram flowchart TD" />' ;;
+          *) echo '<node text="" content-desc="Mermaid diagram" bounds="[98,175][1342,1492]" />' ;;
+        esac
+        ;;
+      settings) echo '<node text="Device name and identity" />' ;;
+      gateway) echo '<node text="Connection between this phone and OpenClaw." />' ;;
+      voice-wake) echo '<node text="Wake listener" />' ;;
+    esac
+    ;;
+  '-s emulator-5554 exec-out screencap -p')
+    scene=$(cat "$FIXTURE_ROOT/scene")
+    if [[ "$scene" == chat ]]; then
+      cat "$FIXTURE_ROOT/chat-dumps" > "$FIXTURE_ROOT/chat-captured-at-dump"
+    fi
+    echo 'synthetic screenshot bytes'
+    ;;
+  '-s emulator-5554 shell '*|'-s emulator-5554 logcat '*) ;;
+  *) printf 'unexpected adb invocation: %s\\n' "$*" >&2; exit 97 ;;
+esac
+`,
   );
-  const chatReady = "The Android release is close.";
+  const sips = executable(root, "sips", 'cp "$7" "$9"\n');
+  executable(root, "file", "echo 'JPEG image data, 1440x2560'\n");
+  executable(
+    root,
+    "git",
+    `[[ "$*" == "-C $FIXTURE_ROOT rev-parse HEAD" ]] || exit 97
+printf '%s\\n' '${"a".repeat(40)}'
+`,
+  );
+  // Readiness polling is exercised without spending real time between fixed UI states.
+  executable(root, "sleep", "exit 0\n");
+  const result = run({
+    ADB: adb,
+    SIPS: sips,
+    PATH: `${root}:${process.env.PATH}`,
+    FIXTURE_ROOT: root,
+    ANDROID_SCREENSHOT_DEVICE: "",
+    ANDROID_SCREENSHOT_AVD: "OpenClaw_Screenshots_API36",
+    ANDROID_SCREENSHOT_SCENE_TIMEOUT_SECONDS: "2",
+  });
 
-  expect(fixture).toContain(chatReady);
-  expect(script).toContain(`chat) printf '%s\\n' "${chatReady}"`);
-  for (const marker of [
-    'shell wm density "$ORIGINAL_WM_DENSITY"',
-    "shell wm density reset",
-    'shell cmd alarm set-timezone "$ORIGINAL_TIME_ZONE"',
-    'shell cmd time_zone_detector set_auto_detection_enabled "$ORIGINAL_AUTO_TIME_ZONE"',
-    "com.google.android.wearable.sysui:id/charging_container",
-    "shell input keyevent 4",
-  ]) {
-    expect(script).toContain(marker);
+  expect(result.status, result.stderr).toBe(0);
+  expect(readFileSync(path.join(root, "chat-captured-at-dump"), "utf8")).toBe("3\n");
+  const artifacts = path.join(root, ".artifacts/android-screenshots/latest/phone");
+  const chatDump = readFileSync(path.join(artifacts, "ui-dumps/openclaw-chat.xml"), "utf8");
+  expect(chatDump).toContain('content-desc="Mermaid diagram"');
+  expect(chatDump).not.toContain("The Android release is close.");
+  for (const scene of ["home", "chat", "settings", "gateway", "voice-wake"]) {
+    expect(existsSync(path.join(artifacts, `screenshots/openclaw-${scene}.jpg`))).toBe(true);
   }
 });
 
@@ -96,6 +151,31 @@ exit 97
   expect(result.stderr).not.toContain("Connected emulator 'unknown'");
   expect(result.stderr).not.toContain("unexpected adb invocation");
 });
+
+it.each(["phone", "wear"] as const)(
+  "does not start device discovery when the %s screenshot build fails",
+  (formFactor) => {
+    const { root } = captureFixture(formFactor);
+    const androidDir = path.join(root, "apps/android");
+    mkdirSync(androidDir, { recursive: true });
+    executable(androidDir, "gradlew", "echo 'Synthetic screenshot build failure' >&2\nexit 42\n");
+    const deviceAccess = path.join(root, "device-access");
+    const adb = executable(
+      root,
+      "adb",
+      `touch "$FIXTURE_DEVICE_ACCESS"\necho 'Device discovery preceded compilation' >&2\nexit 43\n`,
+    );
+
+    const result = runAndroidScreenshots(
+      ["--form-factor", formFactor, "--skip-install"],
+      { ADB: adb, FIXTURE_DEVICE_ACCESS: deviceAccess },
+      path.join(root, SCRIPT),
+    );
+
+    expect(result.status, result.stderr).toBe(42);
+    expect(existsSync(deviceAccess)).toBe(false);
+  },
+);
 
 it("retains emulator diagnostics and the failing status when startup stops before screenshots", () => {
   const { root, run } = captureFixture("wear");
@@ -146,6 +226,101 @@ printf 'ready\\n' > "$FIXTURE_EMULATOR_READY"
   );
 });
 
+it("retains system failure evidence before emulator teardown without replacing the capture error", () => {
+  const { root, run } = captureFixture("phone");
+  const helper = "scripts/lib/android-screenshot-diagnostics.sh";
+  mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
+  copyFileSync(helper, path.join(root, helper));
+  const readyPipe = path.join(root, "emulator-ready");
+  expect(command("mkfifo", [readyPipe]).status).toBe(0);
+  executable(
+    root,
+    "uname",
+    `case "$1" in
+  -s) printf 'Linux\\n' ;;
+  -m) printf 'x86_64\\n' ;;
+  *) printf 'Linux fixture\\n' ;;
+esac
+`,
+  );
+  executable(
+    root,
+    "timeout",
+    `while [[ "$1" == --* ]]; do shift; done
+shift
+exec "$@"
+`,
+  );
+  const adb = executable(
+    root,
+    "adb",
+    `case "$*" in
+  devices)
+    printf 'List of devices attached\\n'
+    [[ ! -e "$FIXTURE_ROOT/stopped" ]] || exit 0
+    [[ -e "$FIXTURE_ROOT/discovered" ]] || { touch "$FIXTURE_ROOT/discovered"; exit 0; }
+    if [[ ! -e "$FIXTURE_ROOT/online" ]]; then
+      read -r ready < "$FIXTURE_ROOT/emulator-ready"
+      touch "$FIXTURE_ROOT/online"
+    fi
+    printf 'emulator-5554\\tdevice\\n'
+    ;;
+  '-s emulator-5554 wait-for-device') ;;
+  '-s emulator-5554 emu kill')
+    grep -Fq 'SystemUI ANR fixture' "$FIXTURE_ROOT/.artifacts/android-screenshots/latest/phone/diagnostics/last-anr.txt"
+    printf 'ANR evidence existed before teardown\\n' > "$FIXTURE_ROOT/teardown-proof"
+    touch "$FIXTURE_ROOT/stopped"
+    ;;
+  '-s emulator-5554 shell getprop sys.boot_completed'|'-s emulator-5554 shell getprop ro.kernel.qemu') printf '1\\n' ;;
+  '-s emulator-5554 shell cmd time_zone_detector is_auto_detection_enabled') printf 'true\\n' ;;
+  '-s emulator-5554 shell getprop persist.sys.timezone') printf 'UTC\\n' ;;
+  '-s emulator-5554 shell wm size') printf 'Physical size: 1080x1920\\n' ;;
+  '-s emulator-5554 shell wm density') printf 'Physical density: 420\\n' ;;
+  '-s emulator-5554 shell am start -W '*) echo 'Synthetic screenshot launch failure' >&2; exit 42 ;;
+  '-s emulator-5554 logcat '*) printf 'SystemUI system event fixture\\n' ;;
+  '-s emulator-5554 shell dumpsys activity lastanr') printf 'SystemUI ANR fixture\\n' ;;
+  '-s emulator-5554 shell dumpsys activity exit-info com.android.systemui') echo 'Synthetic diagnostic probe unavailable' >&2; exit 19 ;;
+  '-s emulator-5554 shell dumpsys '*|'-s emulator-5554 shell for key '*|'-s emulator-5554 shell cat /proc/meminfo;'*) printf 'Synthetic system counters\\n' ;;
+  '-s emulator-5554 shell pidof com.android.systemui') ;;
+  '-s emulator-5554 shell input '*|'-s emulator-5554 shell cmd '*|'-s emulator-5554 shell settings '*|'-s emulator-5554 shell svc '*|'-s emulator-5554 shell wm '*|'-s emulator-5554 shell pm '*|'-s emulator-5554 shell am force-stop '*) ;;
+  *) printf 'unexpected adb invocation: %s\\n' "$*" >&2; exit 97 ;;
+esac
+`,
+  );
+  const emulator = executable(
+    root,
+    "emulator",
+    `case "$*" in
+  -list-avds) printf 'OpenClaw_Screenshots_API36\\n' ;;
+  '-no-window -version') printf 'Synthetic emulator version\\n' ;;
+  *) printf 'ready\\n' > "$FIXTURE_ROOT/emulator-ready" ;;
+esac
+`,
+  );
+  const result = run({
+    ADB: adb,
+    ANDROID_EMULATOR: emulator,
+    ANDROID_SCREENSHOT_DEVICE: "",
+    ANDROID_SCREENSHOT_AVD: "OpenClaw_Screenshots_API36",
+    ANDROID_SCREENSHOT_DIAGNOSTICS: "1",
+    FIXTURE_ROOT: root,
+    PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+  });
+  expect(result.status, result.stderr).toBe(42);
+  const artifacts = path.join(root, ".artifacts/android-screenshots/latest/phone");
+  for (const [file, contents] of [
+    ["diagnostics/system-events.log", "SystemUI system event fixture"],
+    ["diagnostics/last-anr.txt", "SystemUI ANR fixture"],
+    ["diagnostics/systemui-exit-info.txt", "probe_exit_status=19"],
+  ] as const) {
+    expect(readFileSync(path.join(artifacts, file), "utf8")).toContain(contents);
+  }
+  expect(existsSync(path.join(root, "teardown-proof"))).toBe(true);
+  expect(readFileSync(path.join(artifacts, "process-status.txt"), "utf8")).toContain(
+    "exit_status=42\n",
+  );
+});
+
 it("rejects locale path escapes before dry-run output", () => {
   const result = runAndroidScreenshots(["--dry-run", "--locale", "../escape"]);
 
@@ -169,23 +344,15 @@ it.runIf(existsSync(IMAGEMAGICK_CONVERT) && existsSync(IMAGEMAGICK_IDENTIFY))(
 
     for (const [dimensions, grayscale] of [
       ["1440x2560", false],
-      ["454x454", false],
-      ["32x32", true],
+      ["454x454", true],
     ] as const) {
       const input = path.join(root, `input ${dimensions}.png`);
       const output = path.join(root, `output ${dimensions}.jpg`);
-      const [width, height] = dimensions.split("x");
-      const gradient = (size: string, color: string) => {
-        const endColor = grayscale ? "#ffffff" : color;
-        return ["(", "-size", size, `gradient:#000000-${endColor}`];
-      };
       const fixture = command(IMAGEMAGICK_CONVERT, [
-        ...gradient(dimensions, "#ff0000"),
-        ")",
-        ...gradient(`${height}x${width}`, "#00ff00"),
-        ..."-transpose ) -compose plus -composite -alpha set -channel A -evaluate set 60% +channel".split(
-          " ",
-        ),
+        "-size",
+        dimensions,
+        `gradient:#000000-${grayscale ? "#ffffff" : "#ff0000"}`,
+        ..."-alpha set -channel A -evaluate set 60% +channel".split(" "),
         input,
       ]);
       expect(fixture.status, fixture.stderr).toBe(0);

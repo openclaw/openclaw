@@ -2,16 +2,22 @@ import type { JSX } from "@solidjs/web";
 import { Show, createUniqueId, onSettled } from "solid-js";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
+import "../../../components/tooltip.ts";
 import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
-import "../../../components/tooltip.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import type { FileCopyFeedback } from "./chat-file-copy.ts";
 import type { MobileFileFindCloseReason, FileViewControls } from "./chat-file-reader-controls.ts";
+import "./chat-sidebar-file-mobile.css";
 import type { FileHtmlPreviewControls } from "./chat-html-preview.ts";
 import type { MobileFileBack } from "./chat-sidebar-content-types.ts";
-import "./chat-sidebar-file-mobile.css";
+
+registerEnglishCatalog(registerChatMediaEnglish);
+
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 registerCodeBlocksEnglish();
 registerFilePreviewEnglish();
@@ -27,30 +33,19 @@ export type MobileFileMenuAction = {
 
 type MobileFileReadMode = Pick<FileHtmlPreviewControls, "source" | "onToggle">;
 
-export type SidebarFileMobileRailProps = {
-  name: string;
-  /** Full identity for the tooltip; never derive a local path from an artifact URL. */
-  identity: string;
-  back?: MobileFileBack;
-  menuActions?: readonly MobileFileMenuAction[];
-  /** Native Download, attachment Copy, MCP or external-editor controls, as eligible. */
-  actions?: JSX.Element;
-};
-
 function MobileFileButton(props: {
   label: string;
   icon: IconName;
   onClick: () => void;
   disabled?: boolean;
   tooltip?: boolean;
-  class?: string;
   ref?: (element: HTMLButtonElement) => void;
 }) {
   return (
     <openclaw-tooltip prop:content={props.tooltip === false ? "" : props.label}>
       <button
         type="button"
-        class={["sidebar-file-mobile__button", props.class]}
+        class="sidebar-file-mobile__button"
         aria-label={props.label}
         disabled={props.disabled}
         ref={(element) => props.ref?.(element)}
@@ -63,8 +58,31 @@ function MobileFileButton(props: {
 }
 
 /** Mount separately from the document so changing chrome never replaces its editor/player. */
-export function SidebarFileMobileRail(props: SidebarFileMobileRailProps) {
+export function SidebarFileMobileRail(props: {
+  name: string;
+  /** Full identity for the tooltip; never derive a local path from an artifact URL. */
+  identity: string;
+  back?: MobileFileBack;
+  menuActions?: readonly MobileFileMenuAction[];
+  attachment?: import("./chat-file-session-attachment.ts").FileSessionAttachment;
+  /** Native Download, attachment Copy, MCP or external-editor controls, as eligible. */
+  actions?: JSX.Element;
+}) {
   const id = createUniqueId();
+  const actions = (): readonly MobileFileMenuAction[] => [
+    ...(props.attachment
+      ? [
+          {
+            id: "attach-session",
+            label: t("chat.detailPanel.attachToSession"),
+            icon: "paperclip" as const,
+            disabled: props.attachment.disabled,
+            onSelect: props.attachment.attach,
+          },
+        ]
+      : []),
+    ...(props.menuActions ?? []),
+  ];
   return (
     <div class="sidebar-file-mobile__rail">
       <Show when={props.back}>
@@ -81,14 +99,14 @@ export function SidebarFileMobileRail(props: SidebarFileMobileRailProps) {
       </span>
       <div class="sidebar-file-mobile__rail-actions">
         {props.actions}
-        <Show when={props.menuActions?.length}>
+        <Show when={actions().length}>
           <Menu
             id={`mobile-file-${id}`}
             label={t("chat.workspaceFiles.actions")}
             placement="bottom-end"
             triggerClass="sidebar-file-mobile__button"
             trigger={<Icon name="moreHorizontal" />}
-            items={(props.menuActions ?? []).map((action) => ({
+            items={actions().map((action) => ({
               id: action.id,
               label: action.label,
               icon: <Icon name={action.icon} />,
@@ -97,7 +115,9 @@ export function SidebarFileMobileRail(props: SidebarFileMobileRailProps) {
               checked: action.checked,
             }))}
             onSelect={(item) =>
-              props.menuActions?.find((action) => action.id === item.id)?.onSelect()
+              actions()
+                .find((action) => action.id === item.id)
+                ?.onSelect()
             }
           />
         </Show>
@@ -127,7 +147,20 @@ export function mobileFileTextMenuActions(options: {
     icon: controls.copyFeedback[action] === "copied" ? "check" : "copy",
     onSelect: () => controls.onCopy(action),
   });
-  const actions = [copy("contents")];
+  const actions: MobileFileMenuAction[] = [
+    ...(controls.fileAttachment
+      ? [
+          {
+            id: "attach-session",
+            label: t("chat.detailPanel.attachToSession"),
+            icon: "paperclip" as const,
+            disabled: controls.fileAttachment.disabled,
+            onSelect: controls.fileAttachment.attach,
+          },
+        ]
+      : []),
+    copy("contents"),
+  ];
   if (path) {
     actions.push(copy("path"));
     if (controls.onReveal) {
@@ -151,7 +184,7 @@ export function mobileFileTextMenuActions(options: {
   return actions;
 }
 
-export type SidebarFileMobileTextControlsProps = {
+export function SidebarFileMobileTextControls(props: {
   controls: FileViewControls;
   canEdit: boolean;
   /** Omit for code/plain text/CSV. Markdown and HTML share this two-mode contract. */
@@ -160,9 +193,7 @@ export type SidebarFileMobileTextControlsProps = {
   active: boolean;
   /** One owner operation clears matches/query and restores the prior mode and appropriate focus. */
   onCloseFind: (reason: MobileFileFindCloseReason) => void;
-};
-
-export function SidebarFileMobileTextControls(props: SidebarFileMobileTextControlsProps) {
+}) {
   let root!: HTMLDivElement;
   let find: HTMLDivElement | undefined;
   onSettled(() => {
@@ -314,15 +345,13 @@ export function SidebarFileMobileTextControls(props: SidebarFileMobileTextContro
   );
 }
 
-export type SidebarFileMobileImageControlsProps = {
+export function SidebarFileMobileImageControls(props: {
   name: string;
   /** Supplied only for an eligible path, with the native copy operation/feedback. */
   copyPath?: { onCopy: () => void; feedback?: FileCopyFeedback["path"] };
   /** Opens the existing image lightbox with its real image/gallery context. */
   onExpand: () => void;
-};
-
-export function SidebarFileMobileImageControls(props: SidebarFileMobileImageControlsProps) {
+}) {
   return (
     <div class="sidebar-file-mobile__floating">
       <div class="sidebar-file-mobile__capsule sidebar-file-mobile__image">

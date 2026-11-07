@@ -1,9 +1,7 @@
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
-import {
-  createTextEndBlockReplyHarness,
-  emitToolRun,
-} from "./embedded-agent-subscribe.e2e-harness.js";
+import { createDeliveryHarness } from "./embedded-agent-subscribe.delivery.test-support.js";
+import { emitToolRun } from "./embedded-agent-subscribe.e2e-harness.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 function ollamaAssistant(text: string, extra?: AssistantMessage["content"]): AssistantMessage {
@@ -15,26 +13,26 @@ function ollamaAssistant(text: string, extra?: AssistantMessage["content"]): Ass
 }
 
 function setup(runId: string) {
-  const onBlockReply = vi.fn();
-  const { emit, subscription } = createTextEndBlockReplyHarness({
+  const harness = createDeliveryHarness({
     runId,
-    onBlockReply,
     blockReplyChunking: { minChars: 4, maxChars: 200 },
   });
-  onTestFinished(() => subscription.unsubscribe());
   return {
-    emit,
-    subscription,
-    onBlockReply,
-    texts: () => onBlockReply.mock.calls.map(([payload]) => payload.text),
-    update: (message: AssistantMessage, assistantMessageEvent: object) =>
-      emit({ type: "message_update", message, assistantMessageEvent }),
+    ...harness,
+    endText: (message: AssistantMessage, text: string) =>
+      harness.update(message, {
+        type: "text_end",
+        contentIndex: 0,
+        content: text,
+        partial: message,
+      }),
+    texts: () => harness.onBlockReply.mock.calls.map(([payload]) => payload.text),
   };
 }
 
 describe("native Ollama pre-tool narration", () => {
   it("streams two narrated tool rounds and the final answer exactly once", async () => {
-    const { emit, update, subscription, texts } = setup("run-ollama-stream");
+    const { emit, update, endText, subscription, texts } = setup("run-ollama-stream");
     const expected: string[] = [];
 
     for (const [index, path] of ["README.md", "NOTES.md"].entries()) {
@@ -54,12 +52,7 @@ describe("native Ollama pre-tool narration", () => {
       expect(texts()).toEqual(expected);
 
       // Native Ollama keeps the same unsigned text through the tool boundary.
-      update(unsigned, {
-        type: "text_end",
-        contentIndex: 0,
-        content: narration,
-        partial: unsigned,
-      });
+      endText(unsigned, narration);
       await subscription.waitForPendingEvents();
       expect(texts()).toEqual(expected);
 
@@ -101,12 +94,7 @@ describe("native Ollama pre-tool narration", () => {
     const finalMessage = { ...ollamaAssistant(answer), stopReason: "stop" as const };
     emit({ type: "message_start", message: ollamaAssistant("") });
     update(finalMessage, { type: "text_delta", contentIndex: 0, delta: answer });
-    update(finalMessage, {
-      type: "text_end",
-      contentIndex: 0,
-      content: answer,
-      partial: finalMessage,
-    });
+    endText(finalMessage, answer);
     await subscription.waitForPendingEvents();
     expected.push(answer);
     expect(texts()).toEqual(expected);

@@ -7,8 +7,8 @@ import {
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
 import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SnapshotResult } from "../browser/client.js";
 import { writeExternalFileWithinOutputRoot } from "../browser/output-files.js";
@@ -31,9 +31,7 @@ function parseOptionalIntegerOption(
   const parsed =
     opts.min === 0 ? parseStrictNonNegativeInteger(value) : parseStrictPositiveInteger(value);
   if (parsed === undefined || parsed < opts.min) {
-    defaultRuntime.error(danger(`Invalid ${label}: must be an integer >= ${opts.min}`));
-    defaultRuntime.exit(1);
-    return undefined;
+    throw new Error(`Invalid ${label}: must be an integer >= ${opts.min}`);
   }
   return parsed;
 }
@@ -42,14 +40,50 @@ function parseBrowserChoiceOption<const T extends string>(
   value: string,
   label: string,
   choices: readonly T[],
-): T | undefined {
+): T {
   const choice = choices.find((candidate) => candidate === value);
   if (choice !== undefined) {
     return choice;
   }
-  defaultRuntime.error(danger(`Invalid ${label}: expected ${choices.join(" or ")}`));
-  defaultRuntime.exit(1);
-  return undefined;
+  throw new Error(`Invalid ${label}: expected ${choices.join(" or ")}`);
+}
+
+type PendingDialogSummary = { id: string; type?: string; message?: string };
+
+function readPendingDialogs(browserState: unknown): PendingDialogSummary[] {
+  const dialogs = isRecord(browserState) ? browserState.dialogs : undefined;
+  const pending = isRecord(dialogs) ? dialogs.pending : undefined;
+  if (!Array.isArray(pending)) {
+    return [];
+  }
+  return pending.flatMap((entry) => {
+    if (!isRecord(entry) || typeof entry.id !== "string") {
+      return [];
+    }
+    return [
+      {
+        id: entry.id,
+        type: typeof entry.type === "string" ? entry.type : undefined,
+        message: typeof entry.message === "string" ? entry.message : undefined,
+      },
+    ];
+  });
+}
+
+function describeDialogBlockedSnapshot(result: SnapshotResult, profile?: string): string {
+  // Keep the selected profile in the suggested command: without it the dialog hook goes to
+  // the default profile, where this target may not exist, and the dialog stays pending.
+  const profileFlag = profile ? ` --browser-profile=${profile}` : "";
+  const lines = [`Snapshot not captured: a pending dialog blocks tab ${result.targetId}.`];
+  for (const dialog of readPendingDialogs(result.browserState)) {
+    const kind = dialog.type ? ` (${dialog.type})` : "";
+    const message = dialog.message ? `: ${JSON.stringify(dialog.message)}` : "";
+    lines.push(`Dialog ${dialog.id}${kind}${message}`);
+    lines.push(
+      `Dismiss it with: openclaw browser dialog${profileFlag} --dismiss --dialog-id ${dialog.id} --target-id ${result.targetId}`,
+    );
+  }
+  return lines.join("\n");
 }
 
 function resolveBrowserInspectTimeout(
@@ -90,9 +124,6 @@ export function registerBrowserInspectCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       const type = parseBrowserChoiceOption(opts.type, "--type", ["png", "jpeg"]);
-      if (type === undefined) {
-        return;
-      }
       await runBrowserCliCommand(async () => {
         const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
         const result = await callBrowserRequest<{ path: string }>(request.parent, {
@@ -138,16 +169,10 @@ export function registerBrowserInspectCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       const format = parseBrowserChoiceOption(opts.format, "--format", ["aria", "ai"]);
-      if (format === undefined) {
-        return;
-      }
       const explicitMode =
         opts.mode === undefined
           ? undefined
           : parseBrowserChoiceOption(opts.mode, "--mode", ["efficient"]);
-      if (opts.mode !== undefined && explicitMode === undefined) {
-        return;
-      }
       const formatWasExplicit = cmd.getOptionValueSource("format") === "cli";
       const configMode =
         !formatWasExplicit &&
@@ -159,12 +184,6 @@ export function registerBrowserInspectCommands(
         opts.efficient === true || explicitMode === "efficient" ? "efficient" : configMode;
       const limit = parseOptionalIntegerOption(opts.limit, "--limit", { min: 1 });
       const depth = parseOptionalIntegerOption(opts.depth, "--depth", { min: 0 });
-      if (
-        (opts.limit !== undefined && limit === undefined) ||
-        (opts.depth !== undefined && depth === undefined)
-      ) {
-        return;
-      }
       await runBrowserCliCommand(async () => {
         const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
         const query: Record<string, string | number | boolean | undefined> = {
@@ -188,6 +207,15 @@ export function registerBrowserInspectCommands(
           query,
         });
         const imagePath = result.format === "ai" ? result.imagePath : undefined;
+
+        // A pending dialog answers with an empty payload and blockedByDialog, so the caller
+        // can dismiss the dialog and retry. Outside --json that flag is the only thing that
+        // separates "no capture happened" from a genuinely blank page, so do not print the
+        // empty payload as a result or write it over an existing --out file. --json without
+        // --out keeps returning the full response, dialog details included.
+        if (result.blockedByDialog && (opts.out || !parent?.json)) {
+          throw new Error(describeDialogBlockedSnapshot(result, normalizeOptionalString(profile)));
+        }
 
         if (opts.out) {
           const payload =

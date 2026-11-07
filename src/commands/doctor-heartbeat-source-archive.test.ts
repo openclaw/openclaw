@@ -1,32 +1,30 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { useHeartbeatMigrationRoots } from "./doctor-heartbeat-migration.test-support.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import {
   collectHeartbeatScratchMigrationFindings,
   maybeMigrateHeartbeatFilesToScratch,
 } from "./doctor-heartbeat-scratch-migration.js";
 
-const handles: Awaited<ReturnType<typeof fs.open>>[] = [];
-const read = (file: string) => fs.readFile(file, "utf8");
-async function edit(handle: Awaited<ReturnType<typeof fs.open>>, content: string) {
-  await handle.truncate(0);
-  await handle.writeFile(content);
-  await handle.sync();
-}
-async function openSource(file: string, content: string) {
-  await fs.writeFile(file, content);
-  const handle = await fs.open(file, "r+");
-  handles.push(handle);
-  return handle;
-}
-const makeRoot = useHeartbeatMigrationRoots("openclaw-heartbeat-archive-", async () => {
-  await Promise.all(handles.splice(0).map((handle) => handle.close()));
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
+    cleanup();
+  }),
+);
 
 async function fixture() {
-  const root = await makeRoot();
+  const root = tempDirs.make("openclaw-heartbeat-archive-");
   const workspace = path.join(root, "workspace");
   await fs.mkdir(workspace);
   const sourcePath = path.join(workspace, "HEARTBEAT.md");
@@ -42,19 +40,19 @@ async function fixture() {
   const archivedContents = async (
     directory = path.join(root, "backups", "heartbeat-migration"),
   ) => {
-    const entries = await fs.readdir(directory, { recursive: true, withFileTypes: true });
+    const entries = (await listDirectoryTreeStrict(directory)).map((walkEntry) => walkEntry.dirent);
     return Promise.all(
       entries
         .filter((entry) => entry.isFile())
-        .map((entry) => read(path.join(entry.parentPath, entry.name))),
+        .map((entry) => fs.readFile(path.join(entry.parentPath, entry.name), "utf8")),
     );
   };
-  return { root, workspace, cfg, sourcePath, migrate, findings, archivedContents };
+  return { root, cfg, sourcePath, migrate, findings, archivedContents };
 }
 
 it("treats a missing workspace as having no heartbeat source", async () => {
   const f = await fixture();
-  await fs.rmdir(f.workspace);
+  await fs.rmdir(path.dirname(f.sourcePath));
   await expect(f.findings()).resolves.toEqual([]);
 });
 
@@ -67,10 +65,10 @@ it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     const claimPath = `${f.sourcePath}.doctor-importing-${process.pid}-0123456789ab`;
     await fs.writeFile(claimPath, "Interrupted instructions");
     expect((await f.findings())[0]?.message).toContain("interrupted migration claim");
-    await fs.chmod(f.workspace, 0o111);
+    await fs.chmod(workspace, 0o111);
     try {
       await expect(fs.lstat(f.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.readdir(f.workspace)).rejects.toMatchObject({ code: "EACCES" });
+      await expect(fs.readdir(workspace)).rejects.toMatchObject({ code: "EACCES" });
       expect(await f.findings()).toEqual([
         expect.objectContaining({
           severity: "error",
@@ -81,7 +79,7 @@ it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     } finally {
       await fs.chmod(workspace, 0o700);
     }
-    expect(await read(claimPath)).toBe("Interrupted instructions");
+    expect(await fs.readFile(claimPath, "utf8")).toBe("Interrupted instructions");
   },
 );
 
@@ -100,23 +98,30 @@ it.each([false, true])(
       });
     }
     const writers: Awaited<ReturnType<typeof fs.open>>[] = [];
-    for (let occurrence = 0; occurrence < 2; occurrence++) {
-      writers.push(await openSource(f.sourcePath, "Same checklist"));
-      expect((await f.migrate()).warnings).toEqual([]);
-      await expect(fs.access(f.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+    try {
+      for (let occurrence = 0; occurrence < 2; occurrence++) {
+        await fs.writeFile(f.sourcePath, "Same checklist");
+        writers.push(await fs.open(f.sourcePath, "r+"));
+        expect((await f.migrate()).warnings).toEqual([]);
+        await expect(fs.access(f.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      for (const [index, writer] of writers.entries()) {
+        expect((await writer.stat()).nlink).toBeGreaterThan(0);
+        await writer.truncate(0);
+        await writer.writeFile(`Late edit ${index}`);
+        await writer.sync();
+      }
+      expect(
+        await f.archivedContents(crossDevice ? path.dirname(f.sourcePath) : stateArchives),
+      ).toEqual(expect.arrayContaining(["Late edit 0", "Late edit 1"]));
+      if (crossDevice) {
+        expect(await f.archivedContents()).toEqual(["Same checklist"]);
+      }
+      expect(await f.findings()).toEqual([]);
+      expect(await f.migrate()).toEqual({ changes: [], warnings: [] });
+    } finally {
+      await Promise.all(writers.map((writer) => writer.close()));
     }
-    for (const [index, writer] of writers.entries()) {
-      expect((await writer.stat()).nlink).toBeGreaterThan(0);
-      await edit(writer, `Late edit ${index}`);
-    }
-    expect(
-      await f.archivedContents(crossDevice ? path.dirname(f.sourcePath) : stateArchives),
-    ).toEqual(expect.arrayContaining(["Late edit 0", "Late edit 1"]));
-    if (crossDevice) {
-      expect(await f.archivedContents()).toEqual(["Same checklist"]);
-    }
-    expect(await f.findings()).toEqual([]);
-    expect(await f.migrate()).toEqual({ changes: [], warnings: [] });
   },
 );
 
@@ -157,7 +162,9 @@ it.each(["before claiming", "while claimed"])(
     expect(result.changes).toEqual([]);
     expect(result.warnings.join("\n")).toContain("workspace changed");
     for (const workspace of [original, replacement]) {
-      expect(await read(path.join(workspace, "HEARTBEAT.md"))).toBe("Same instructions");
+      expect(await fs.readFile(path.join(workspace, "HEARTBEAT.md"), "utf8")).toBe(
+        "Same instructions",
+      );
     }
   },
 );
@@ -166,30 +173,34 @@ it.each(["before", "after"])(
   "preserves late edits across an interruption %s the archive rename",
   async (phase) => {
     const f = await fixture();
-    const writer = await openSource(f.sourcePath, "Original checklist");
-    const rename = fs.rename.bind(fs);
-    const fault = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      if (
-        typeof to === "string" &&
-        to.includes("heartbeat-migration") &&
-        path.basename(to) === "HEARTBEAT.md"
-      ) {
-        if (phase === "after") {
-          await rename(from, to);
+    await fs.writeFile(f.sourcePath, "Original checklist");
+    const writer = await fs.open(f.sourcePath, "r+");
+    try {
+      const rename = fs.rename.bind(fs);
+      const fault = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        if (
+          typeof to === "string" &&
+          to.includes("heartbeat-migration") &&
+          path.basename(to) === "HEARTBEAT.md"
+        ) {
+          if (phase === "after") {
+            await rename(from, to);
+          }
+          throw new Error("Interrupted archive rename");
         }
-        throw new Error("Interrupted archive rename");
-      }
-      await rename(from, to);
-    });
-    expect((await f.migrate()).warnings.join("\n")).toContain("Interrupted archive rename");
-    fault.mockRestore();
-    await edit(writer, "Late edit after interruption");
-    expect((await writer.stat()).nlink).toBeGreaterThan(0);
-    await f.migrate();
-    if (phase === "after") {
+        await rename(from, to);
+      });
+      expect((await f.migrate()).warnings.join("\n")).toContain("Interrupted archive rename");
+      fault.mockRestore();
+      await writer.truncate(0);
+      await writer.writeFile("Late edit after interruption");
+      await writer.sync();
+      expect((await writer.stat()).nlink).toBeGreaterThan(0);
+      await f.migrate();
       expect(await f.archivedContents()).toContain("Late edit after interruption");
-    } else {
-      expect(await read(f.sourcePath)).toBe("Late edit after interruption");
+      await expect(fs.access(f.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await writer.close();
     }
   },
 );

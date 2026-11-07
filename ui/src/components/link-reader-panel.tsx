@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, For, Repeat, onCleanup, onSettled } from "solid-js";
+import { createMemo, createUniqueId, For, Repeat, onSettled } from "solid-js";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
@@ -25,6 +25,7 @@ import {
   type ReaderTab,
   type ReaderSection,
 } from "./link-reader-panel-view.ts";
+import { LINK_READER_METADATA_REQUEST_EVENT } from "./link-reader-response.ts";
 import { EMPTY_LINK_READERS } from "./link-reader-target.ts";
 import type { PanelHostedTabsElement } from "./panel-hosted-tabs.ts";
 import { PanelTabStrip } from "./panel-tab-strip-solid.tsx";
@@ -41,7 +42,10 @@ function NewReaderTabAction(props: { view: () => LinkReaderPanelOwner; internal?
   return (
     <button
       ref={nativeListener("click", () => props.view().createTab())}
-      class={["rail-header__action bp-icon", { "session-panel-rail__button": props.internal }]}
+      class={[
+        "oc-icon-button oc-icon-button--28 rail-header__action bp-icon",
+        { "session-panel-rail__button": props.internal },
+      ]}
       type="button"
       aria-label={label()}
       title={label()}
@@ -216,6 +220,9 @@ function PanelView(
     return () => {
       disposed = true;
       owner.dispose();
+      if (owners.get(host) === owner) {
+        owners.delete(host);
+      }
     };
   });
   // One window listener follows this mounted owner; embedded panels never claim it.
@@ -226,11 +233,9 @@ function PanelView(
       }
     }),
   );
-  onCleanup(() => {
-    if (owners.get(host) === owner) {
-      owners.delete(host);
-    }
-  });
+  onSettled(() =>
+    listen(window, LINK_READER_METADATA_REQUEST_EVENT, () => owner.publishMetadata()),
+  );
   const tab = () => view().activeTab();
   const target = () => view().target();
   const railMenuId = createUniqueId();
@@ -395,7 +400,7 @@ function PanelView(
                 {editedUrl() && (
                   <button
                     class={[
-                      "rail-header__action bp-icon lr-go",
+                      "oc-icon-button oc-icon-button--28 rail-header__action bp-icon lr-go",
                       { "session-panel-rail__button": !props.mobile },
                     ]}
                     type="submit"
@@ -413,34 +418,37 @@ function PanelView(
                     () => owner.refresh(),
                     !target() || !props.available || !props.client || loading(),
                   )}
+                <a
+                  class="lr-external"
+                  href={target()!.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-link-reader-external
+                  aria-label={t("linkReader.openExternal", { provider: target()!.reader.label })}
+                  title={t("linkReader.openExternal", { provider: target()!.reader.label })}
+                >
+                  <span class="lr-external-label">
+                    {t("linkReader.openExternal", { provider: target()!.reader.label })}
+                  </span>
+                  <span class="lr-external-provider" aria-hidden="true">
+                    {target()!.reader.label}
+                  </span>
+                  <Icon name="externalLink" />
+                </a>
                 <Menu
                   id={railMenuId}
                   label={t("linkReader.moreActions")}
                   trigger={<Icon name="moreHorizontal" />}
                   triggerClass={
                     props.mobile
-                      ? "rail-header__action bp-icon lr-menu"
-                      : "rail-header__action bp-icon lr-menu session-panel-rail__button"
+                      ? "oc-icon-button oc-icon-button--28 rail-header__action bp-icon lr-menu"
+                      : "oc-icon-button oc-icon-button--28 rail-header__action bp-icon lr-menu session-panel-rail__button"
                   }
                   panelClass="lr-rail-menu"
                   placement="bottom-end"
                   disabled={!target()}
                   items={[
                     { id: "copy", label: t("linkReader.copyLink"), icon: <Icon name="copy" /> },
-                    {
-                      id: "external",
-                      label: props.mobile
-                        ? t("linkReader.openInBrowser")
-                        : t("linkReader.openExternal", { provider: target()?.reader.label ?? "" }),
-                      icon: <Icon name="externalLink" />,
-                      href: target()?.href,
-                      class: "lr-external",
-                      attributes: {
-                        target: "_blank",
-                        rel: "noopener noreferrer",
-                        "data-link-reader-external": "",
-                      },
-                    },
                   ]}
                   onSelect={(item) => {
                     const href = target()?.href;
@@ -448,6 +456,7 @@ function PanelView(
                       void copyToClipboard(href, () => host.isConnected).then((copied) => {
                         if (host.isConnected) {
                           showToast({
+                            severity: copied ? "success" : "error",
                             message: t(copied ? "common.copied" : "common.copyFailed"),
                             anchor: host,
                           });
@@ -522,17 +531,14 @@ function PanelView(
             )}
             <For each={[...view().state.tabs]} keyed={(item) => item.id}>
               {(item) => {
-                let id = "";
-                onCleanup(() => content.delete(id));
+                const registerContent = elementRef<HTMLElement>((element) => {
+                  const initialTabId = item().id;
+                  content.set(initialTabId, element);
+                  return () => content.delete(initialTabId);
+                });
                 return (
                   <div
-                    ref={[
-                      (element) => {
-                        id = item().id;
-                        content.set(id, element);
-                      },
-                      elementRef(props.onScrollPortRef),
-                    ]}
+                    ref={[registerContent, elementRef(props.onScrollPortRef)]}
                     class="lr-content"
                     tabindex={-1}
                     hidden={item().id !== view().state.activeId || initial()}

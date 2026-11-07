@@ -155,7 +155,6 @@ export function redeemFactoryGitHubProof(proof: string): FactoryGitHubProofVerdi
 /** Retain original caller, profile bindings and issuer through one broker-owned operation. */
 export async function withFactoryGitHubProof<T>(
   input: {
-    env?: NodeJS.ProcessEnv;
     actorId: number;
     profileId: string;
     claim: FactoryGitHubProofClaim;
@@ -195,7 +194,7 @@ export async function withFactoryGitHubProof<T>(
       assertCurrent,
     });
     const env = {
-      ...(input.env ?? process.env),
+      ...process.env,
       GH_TOKEN: undefined,
       GH_ENTERPRISE_TOKEN: undefined,
       GITHUB_TOKEN: undefined,

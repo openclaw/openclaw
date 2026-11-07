@@ -57,6 +57,7 @@ describe("security audit attack surface summary", () => {
     expect(summary.detail).toBe(
       [
         "groups: open=1, allowlist=1",
+        "direct messages: open=0",
         "tools.elevated: enabled",
         "hooks.webhooks: enabled",
         "hooks.internal: disabled",

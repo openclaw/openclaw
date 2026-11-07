@@ -37,15 +37,13 @@ export function createRealtimeVoiceAudioPortSender(output: RealtimeVoiceAudioOut
       }
       return;
     }
-    // Never transfer Buffer pool storage or detach a view retained by a caller.
-    const bytes = new Uint8Array(audio.length);
-    bytes.set(audio);
+    // Dequeue transfers unique custody of the queue's unpooled copy.
+    const byteLength = audio.byteLength;
     inFlight = true;
-    output.port.postMessage(
-      { type: "audio", audio: bytes } satisfies RealtimeVoiceAudioOutputMessage,
-      [bytes.buffer],
-    );
-    recordWorkerMessage("realtime", "to_worker", audio.byteLength);
+    output.port.postMessage({ type: "audio", audio } satisfies RealtimeVoiceAudioOutputMessage, [
+      audio.buffer,
+    ]);
+    recordWorkerMessage("realtime", "to_worker", byteLength);
   };
   const acknowledge = (message: { type: "ack" } | { type: "flush"; marker: number }) => {
     recordWorkerMessage("realtime", "from_worker");

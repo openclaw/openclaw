@@ -9,6 +9,9 @@ const listeners = vi.hoisted(() => vi.fn());
 const readOwner = vi.hoisted(() =>
   vi.fn<typeof import("./gateway-owner-lease.js").readGatewayOwnerLease>(),
 );
+const readOwnerAsync = vi.hoisted(() =>
+  vi.fn<typeof import("./gateway-owner-lease.js").readGatewayOwnerLeaseAsync>(),
+);
 
 vi.mock("node:child_process", async () => {
   const { mockNodeChildProcessSpawnSync } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -34,6 +37,7 @@ vi.mock("./restart-stale-pids.js", () => ({
 // mock-isolation: Inject lease ownership without reading host lease files.
 vi.mock("./gateway-owner-lease.js", () => ({
   readGatewayOwnerLease: readOwner,
+  readGatewayOwnerLeaseAsync: readOwnerAsync,
 }));
 
 // mock-isolation: Keep synthetic process-safety cases independent of global logger state.
@@ -41,8 +45,11 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => ({ debug: vi.fn() })),
 }));
 
-const { findVerifiedGatewayListenerPidsOnPortSync: find, signalVerifiedGatewayPidSync: signal } =
-  await import("./gateway-processes.js");
+const {
+  findVerifiedGatewayListenerPidsOnPortSync: find,
+  findVerifiedGatewayListenerPidsOnPort: findAsync,
+  signalVerifiedGatewayPidSync: signal,
+} = await import("./gateway-processes.js");
 
 const output = (stdout: string) => ({ error: null, status: 0, stdout });
 const spyOnKill = () => vi.spyOn(process, "kill").mockImplementation(() => true);
@@ -82,7 +89,9 @@ function gatewayOwner(
 }
 
 describe("gateway-processes", () => {
-  beforeEach(() => [spawn, readFile, listeners, readOwner].forEach((mock) => mock.mockReset()));
+  beforeEach(() =>
+    [spawn, readFile, listeners, readOwner, readOwnerAsync].forEach((mock) => mock.mockReset()),
+  );
 
   afterEach(() => vi.restoreAllMocks());
 
@@ -153,13 +162,17 @@ describe("gateway-processes", () => {
     expect(spawn.mock.calls[2]?.[0]).toBe(getWindowsPowerShellExePath());
   });
 
-  it("recognizes a relative Windows gateway only at its recorded listener PID and port", () => {
+  it("recognizes a relative Windows gateway only at its recorded listener PID and port", async () => {
     mockRelativeWindowsGateway([500, 600, 500]);
     readOwner.mockReturnValue(gatewayOwner());
     const env = { OPENCLAW_STATE_DIR: "C:\\fixture\\state" };
     const killSpy = spyOnKill();
 
     expect(find(18789, { env })).toEqual([500]);
+    readOwner.mockClear();
+    readOwnerAsync.mockResolvedValue(gatewayOwner());
+    expect(await findAsync(18789, { env })).toEqual([500]);
+    expect(readOwner).not.toHaveBeenCalled();
     signal(500, "SIGTERM", { env, port: 18789 });
     expect(killSpy).toHaveBeenCalledWith(500, "SIGTERM");
     expect(readOwner).toHaveBeenCalledWith({ env, port: 18789, current: true });
@@ -176,18 +189,21 @@ describe("gateway-processes", () => {
     ["foreign host", gatewayOwner({ state: "unknown", host: "other-host" })],
     ["different PID", gatewayOwner({ pid: 501 })],
     ["different port", gatewayOwner({ port: 18890 })],
-  ] as const)("refuses Windows discovery and signaling with a %s owner", (label, owner) => {
+  ] as const)("refuses Windows discovery and signaling with a %s owner", async (label, owner) => {
     mockRelativeWindowsGateway();
     if (label === "unreadable") {
       readOwner.mockImplementation(() => {
         throw new Error("database unavailable");
       });
+      readOwnerAsync.mockRejectedValue(new Error("database unavailable"));
     } else {
       readOwner.mockReturnValue(owner);
+      readOwnerAsync.mockResolvedValue(owner);
     }
     const killSpy = spyOnKill();
 
     expect(find(18789)).toEqual([]);
+    expect(await findAsync(18789)).toEqual([]);
     expectRefused(killSpy);
   });
 

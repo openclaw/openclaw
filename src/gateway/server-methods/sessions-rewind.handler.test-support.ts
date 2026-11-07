@@ -1,9 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { harnessRegistry } from "../../agents/model-catalog-fixtures.test-support.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
@@ -12,12 +12,18 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
 } from "../../state/user-profile-writes.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
 } from "./types.js";
+
+export {
+  expectRpcError as expectCutFailure,
+  expectRpcResult as expectCutReply,
+} from "./rpc-response.test-support.js";
 
 export const sessionKey = "agent:main:rewind-handler";
 export const sourceSessionId = "rewind-handler-source";
@@ -34,23 +40,18 @@ export function installHarness(
   registerPlugin = false,
   id = "test-harness",
 ) {
-  const registry = createEmptyPluginRegistry();
+  const registry = harnessRegistry(id, {
+    label: "Test harness",
+    supports: () => ({ supported: false }),
+    runAttempt: async () => {
+      throw new Error("not used");
+    },
+    ...overrides,
+  });
+  registry.agentHarnesses[0]!.source = "runtime";
   if (registerPlugin) {
     registry.plugins.push(createPluginRecord({ id }));
   }
-  registry.agentHarnesses.push({
-    pluginId: id,
-    source: "runtime",
-    harness: {
-      id,
-      label: "Test harness",
-      supports: () => ({ supported: false }),
-      runAttempt: async () => {
-        throw new Error("not used");
-      },
-      ...overrides,
-    },
-  });
   setActivePluginRegistry(registry);
 }
 
@@ -132,12 +133,7 @@ export async function restrictedOperator(
       }),
       scopes: ["operator.write"],
     },
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
+    authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
   } as GatewayClient;
   const roles = sessionRoleConfig("guest", {
     sessions: { others: "view" },

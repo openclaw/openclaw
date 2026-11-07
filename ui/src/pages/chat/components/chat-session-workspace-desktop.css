@@ -156,7 +156,7 @@
 .workspace-desktop__heading > span {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -172,7 +172,8 @@
   opacity: 1;
 }
 
-.workspace-desktop__row .chat-attachment-file-icon {
+.workspace-desktop__row .chat-attachment-file-icon,
+.workspace-desktop__attachment-icon {
   width: 20px;
   height: 20px;
   flex: 0 0 20px;

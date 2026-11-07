@@ -82,9 +82,7 @@ async function observeWorkerPools() {
   return {
     run,
     pools,
-    rejectNextInspection(error: Error) {
-      dispatch.mockRejectedValueOnce(error);
-    },
+    rejectNextInspection: (error: Error) => dispatch.mockRejectedValueOnce(error),
   };
 }
 
@@ -115,9 +113,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  for (const mock of Object.values(mocks)) {
-    mock.mockClear();
-  }
+  Object.values(mocks).forEach((mock) => mock.mockClear());
   writeJson.mockClear();
   const memoryManager = createStatusMemorySearchManager();
   memoryManager.manager.status.mockReturnValue({ files: 1, chunks: 0, dirty: false });
@@ -176,9 +172,7 @@ it.each(["populated", "empty", "unrelated", "missing", "unavailable"] as const)(
         writeJson.mockClear();
         mocks.getMemorySearchManager.mockClear();
         poolRun.run.mockClear();
-        for (const call of nativeCalls) {
-          call.mockClear();
-        }
+        nativeCalls.forEach((call) => call.mockClear());
         await statusJsonCommand({ all: true }, runtime);
         if (kind === "missing") {
           expect(poolRun.run).not.toHaveBeenCalled();
@@ -186,8 +180,7 @@ it.each(["populated", "empty", "unrelated", "missing", "unavailable"] as const)(
           expect(poolRun.run).toHaveBeenCalled();
           expect(poolRun.pools.size).toBeGreaterThan(0);
         }
-        expect(writeJson).toHaveBeenCalledOnce();
-        expect(writeJson).toHaveBeenCalledWith(
+        expect(writeJson).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             gateway: expect.objectContaining({ reachable: false }),
             memory:
@@ -204,9 +197,7 @@ it.each(["populated", "empty", "unrelated", "missing", "unavailable"] as const)(
         expect(fs.existsSync(databasePath)).toBe(false);
       }
     } finally {
-      for (const call of nativeCalls) {
-        call.mockRestore();
-      }
+      nativeCalls.forEach((call) => call.mockRestore());
     }
   },
 );

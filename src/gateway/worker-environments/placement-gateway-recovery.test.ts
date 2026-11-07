@@ -25,6 +25,10 @@ const claimLocal = (stage: string) =>
     claimId: `${stage}-local-turn`,
     runId: `${stage}-local-run`,
   });
+const recoverRequest = (expectedGeneration: number) => ({
+  ...REQUEST,
+  recoverToGateway: { expectedGeneration },
+});
 
 it.each([false, true])(
   "prepares the Gateway workspace before local admission only for explicit recovery (recover=%s)",
@@ -39,26 +43,10 @@ it.each([false, true])(
     const failed = await fail((await store.startDispatch(REQUEST)).generation);
 
     await expect(
-      harness.service.reclaim({
-        ...REQUEST,
-        ...(recover ? { recoverToGateway: { expectedGeneration: failed.generation } } : {}),
-      }),
+      harness.service.reclaim(recover ? recoverRequest(failed.generation) : REQUEST),
     ).resolves.toMatchObject({ state: "local", recoveryError: null, terminalReason: null });
 
-    expect(prepare.mock.calls).toEqual(
-      recover
-        ? [
-            [
-              expect.objectContaining({
-                sessionId: REQUEST.sessionId,
-                sessionKey: REQUEST.sessionKey,
-                agentId: REQUEST.agentId,
-                assertCurrent: expect.any(Function),
-              }),
-            ],
-          ]
-        : [],
-    );
+    expect(prepare).toHaveBeenCalledTimes(Number(recover));
     await store.releaseTurn(await claimLocal("recovered"));
     expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
   },
@@ -98,12 +86,7 @@ it.each([
 
   await expect(
     harness.service.reclaim(
-      {
-        ...REQUEST,
-        recoverToGateway: {
-          expectedGeneration: failed.generation - (failure === "stale source" ? 1 : 0),
-        },
-      },
+      recoverRequest(failed.generation - (failure === "stale source" ? 1 : 0)),
       authorize,
     ),
   ).rejects.toThrow(error);

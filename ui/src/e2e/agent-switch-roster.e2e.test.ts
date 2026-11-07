@@ -10,7 +10,7 @@ import {
   installMockGateway,
 } from "./session-management.test-support.ts";
 
-const suite = createSessionManagementE2eSuite(true);
+const suite = createSessionManagementE2eSuite();
 const rows = ["main", "writer"].flatMap((agentId) =>
   Array.from({ length: 200 }, (_, index) =>
     createControlUiSessionRow(
@@ -45,6 +45,7 @@ suite.define(() => {
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: false,
           sessions: rows,
           historyMessages: [{ role: "assistant", content: "Synthetic agent-switch conversation." }],
           methodResponses: {
@@ -54,7 +55,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat/main`);
         await projectRow(page, "main").waitFor();
         await captureUiProof(suite, page, "01-main-ready.png");
-        await gateway.deferNext("chat.startup");
+        const startupRequests = await gateway.deferNext("chat.startup");
         await switchAgent(page, "writer");
         await gateway.waitForRequest("sessions.list", {
           match: { agentId: "writer", includeLastMessage: true },
@@ -62,6 +63,7 @@ suite.define(() => {
         await projectRow(page, "writer").waitFor();
         expect(await projectRow(page, "main").count()).toBe(0);
         await captureUiProof(suite, page, "02-writer-before-history.png");
+        await gateway.waitForRequest("chat.startup", { after: startupRequests });
         await gateway.resolveDeferred("chat.startup");
 
         // Hold the authoritative replacement: only correctly scoped loaded rows can appear.

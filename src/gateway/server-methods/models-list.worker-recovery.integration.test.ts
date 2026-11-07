@@ -8,16 +8,13 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import { refreshExpiredPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
-import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "../../agents/prepared-model-runtime.js";
-import { resolvePreparedModelRuntimeOwnerBySnapshot } from "../../agents/prepared-model-runtime.owner.js";
 import { registerPreparedModelRuntimePublicationListener } from "../../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import { disconnectGatewayClient } from "../test-helpers.e2e.js";
+import { UnresolvedSecretInputError } from "../../config/types.secrets.js";
 import type { ChatMetadataResult } from "./chat-metadata-contract.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 import {
@@ -26,22 +23,27 @@ import {
   catalogSessionRpc,
   catalogModelIds,
   catalogModelDefaults,
-  closeCatalogServer,
   createCatalogState,
   createCatalogAuthProfiles,
   expectAssistantReply,
-  listenCatalogServer,
-  startCatalogGateway,
   writeCatalogPlugin,
 } from "./models-catalog-fixture.test-support.js";
+import { serveModelsEndpoint, startModelsGateway } from "./models-integration.test-support.js";
 
 it("model reads recover a failed shared-worker publication and retain the failed renewal", async ({
   signal,
 }) => {
-  const state = await createCatalogState("catalog-worker-recovery");
+  await using state = await createCatalogState("catalog-worker-recovery");
   const provider = "recovery-fixture";
   const sibling = "healthy-fixture";
   const providers = [provider, sibling];
+  const preparationFailure = new UnresolvedSecretInputError({
+    path: `models.providers.${provider}.apiKey`,
+    ref: { source: "env", provider: "default", id: "UNRESOLVED_FIXTURE_KEY" },
+  });
+  // Static preparation crosses native plugin and Vitest loaders; retain the host error identity.
+  const failureKey = `__catalog_recovery_${state.root}`;
+  Object.defineProperty(globalThis, failureKey, { configurable: true, value: preparationFailure });
   const events = new EventEmitter();
   const workers = new Map<number, Worker>();
   const workerChannel = channel("worker_threads");
@@ -107,7 +109,8 @@ it("model reads recover a failed shared-worker publication and retain the failed
     events.emit("request");
   });
   try {
-    const baseUrl = await listenCatalogServer(endpoint);
+    await using listening = await serveModelsEndpoint(endpoint);
+    const { baseUrl } = listening;
     const pluginPath = await writeCatalogPlugin(
       state,
       providers,
@@ -118,7 +121,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
             staticCatalog: provider === ${JSON.stringify(provider)} ? {
               order: "simple", async run() {
                 const response = await fetch(${JSON.stringify(`${baseUrl}/prepare`)});
-                if (!response.ok) throw new Error("Fixture runtime preparation failed");
+                if (!response.ok) throw globalThis[${JSON.stringify(failureKey)}];
                 return null;
               },
             } : undefined,
@@ -152,7 +155,6 @@ it("model reads recover a failed shared-worker publication and retain the failed
       },
       agents: catalogAgents(state, {
         skipBootstrap: true,
-        heartbeat: { every: "0m" },
         model: { primary: `${provider}/original` },
         modelPolicy: { allow: providers.map((id) => `${id}/*`) },
       }),
@@ -164,7 +166,8 @@ it("model reads recover a failed shared-worker publication and retain the failed
     await state.writeAuthProfiles(
       createCatalogAuthProfiles(Object.fromEntries(providers.map((id) => [id, `synthetic-${id}`]))),
     );
-    const { client, server } = await startCatalogGateway(state, cfg, token);
+    await using gateway = await startModelsGateway(state, cfg, token);
+    const { client, server } = gateway;
     const rpc = catalogSessionRpc(client);
     let releasePublication: (() => void) | undefined;
     try {
@@ -195,59 +198,18 @@ it("model reads recover a failed shared-worker publication and retain the failed
           agentDir: state.agentDir(),
           config: cfg,
         });
-      const original = readSnapshot();
-      expect(original).toBeDefined();
-      const providerFacts = resolvePreparedModelRuntimeOwnerBySnapshot(
-        original!,
-      )?.catalogInventory?.providers.get(provider);
-      if (!providerFacts) {
-        throw new Error("Missing published recovery fixture inventory");
-      }
-      expect(providerFacts.expiresAt).toBeUndefined();
-      const initialRequests = requests;
-      expect((await list()).models).toEqual(initial.models);
-      expect(requests).toBe(initialRequests);
-      const renewalFailed = createDeferred();
       const recoveryFailed = createDeferred<Error>();
       releasePublication = registerPreparedModelRuntimePublicationListener((event) => {
         if (event.phase === "failed") {
-          renewalFailed.resolve();
           recoveryFailed.resolve(event.error);
-        } else if (event.phase === "catalog-failed") {
-          renewalFailed.resolve();
         }
       });
-      // The shipped SDK renewal entry point still owns background expiry; Gateway reads stay passive.
       hold = true;
       const renewal = once(events, "request");
-      providerFacts.expiresAt = 0;
-      const renewing = refreshExpiredPreparedModelCatalog({
-        agentId: "main",
-        config: original!.config,
-      });
-      expect(renewing?.pendingProviders).toContain(provider);
+      const renewing = await list(true, provider);
+      expect(renewing.pendingProviders).toContain(provider);
       expect((await list()).models).toEqual(initial.models);
-      expect(
-        await withinTest(
-          Promise.race([
-            renewal.then(() => "request"),
-            renewalFailed.promise.then(() => "failure"),
-          ]),
-          signal,
-        ),
-      ).toBe("request");
-      const readAuth = (snapshot: NonNullable<ReturnType<typeof readSnapshot>>) => {
-        const auth = getPreparedModelFullCatalogAuth(snapshot.readFullModelCatalog!()!)!;
-        return { ...auth, authStore: { profiles: auth.authStore.profiles } };
-      };
-      const acceptedAuth = readAuth(original!);
-      const acceptedRuntime = original!.readPublishedModels!();
-      expect(acceptedAuth?.authStore.profiles[`${provider}:default`]).toMatchObject({
-        type: "api_key",
-        provider,
-        key: `synthetic-${provider}`,
-      });
-      expect(acceptedRuntime?.get(provider)?.map((model) => model.id)).toContain("original");
+      await withinTest(renewal, signal);
       const failedRequests = requests;
       const healthyRequests = siblingRequests;
       const worker = workers.get(heldThread);
@@ -257,7 +219,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
       failedPreparations = 1;
       await worker!.terminate();
       expect((await withinTest(recoveryFailed.promise, signal)).message).toContain(
-        "Fixture runtime preparation failed",
+        preparationFailure.message,
       );
       // Picker and chat must repair stale errors without a Gateway restart or plugin reload.
       const [rechecked, metadata] = await Promise.all([
@@ -268,6 +230,29 @@ it("model reads recover a failed shared-worker publication and retain the failed
       expect(metadata.models).toContainEqual(
         expect.objectContaining({ provider, id: "original", available: true }),
       );
+      for (let read = 0; read < 3; read++) {
+        const saved = await list();
+        expect(saved.models).toEqual(initial.models);
+        expect(saved.refreshFailed).toBe(true);
+        expect(requests).toBe(failedRequests);
+        expect(siblingRequests).toBe(healthyRequests);
+      }
+      const replacement = readSnapshot()!;
+      expect(replacement.config.agents?.defaults?.model).toEqual({
+        primary: `${provider}/original`,
+      });
+      await refreshPreparedModelRuntimeSnapshots(replacement.config, {
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+        agentIds: new Set(["main"]),
+        pluginMetadataSnapshot: replacement.metadataSnapshot,
+      });
+      const reloaded = await list();
+      expect(reloaded.models).toEqual(initial.models);
+      expect(reloaded.refreshFailed).toBe(true);
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(savedConfig);
+      expect(requests).toBe(failedRequests);
+      // A real turn proves recovered model/auth usability after the static rebuild too.
       const session = await rpc.create(`${provider}/original`, "agent:main:recovered-runtime");
       const turn = await rpc.send(
         session.key,
@@ -280,35 +265,6 @@ it("model reads recover a failed shared-worker publication and retain the failed
       expect(inferenceRequests).toEqual([
         { authorization: `Bearer synthetic-${provider}`, model: "original" },
       ]);
-      for (let read = 0; read < 3; read++) {
-        const saved = await list();
-        expect(saved.models).toEqual(initial.models);
-        expect(saved.refreshFailed).toBe(true);
-        expect(requests).toBe(failedRequests);
-        expect(siblingRequests).toBe(healthyRequests);
-      }
-      const expectRetainedSnapshot = () => {
-        const snapshot = readSnapshot()!;
-        expect(readAuth(snapshot)).toEqual(acceptedAuth);
-        expect(snapshot.readPublishedModels!()).toEqual(acceptedRuntime);
-        expect(snapshot.config.agents?.defaults?.model).toEqual({
-          primary: `${provider}/original`,
-        });
-        return snapshot;
-      };
-      const replacement = expectRetainedSnapshot();
-      await refreshPreparedModelRuntimeSnapshots(replacement.config, {
-        catalogMode: "static",
-        allowGatewaySubagentBinding: true,
-        agentIds: new Set(["main"]),
-        pluginMetadataSnapshot: replacement.metadataSnapshot,
-      });
-      const reloaded = await list();
-      expect(reloaded.models).toEqual(initial.models);
-      expect(reloaded.refreshFailed).toBe(true);
-      expectRetainedSnapshot();
-      expect(await fs.readFile(state.configPath, "utf8")).toBe(savedConfig);
-      expect(requests).toBe(failedRequests);
       expect((await refresh(sibling)).refreshFailed).toBe(true);
       expect(requests).toBe(failedRequests);
       advertised = ["original", "recovered"];
@@ -319,13 +275,10 @@ it("model reads recover a failed shared-worker publication and retain the failed
     } finally {
       releasePublication?.();
       releaseResponses();
-      await disconnectGatewayClient(client);
-      await server.close();
     }
   } finally {
+    Reflect.deleteProperty(globalThis, failureKey);
     workerChannel.unsubscribe(recordWorker);
-    await closeCatalogServer(endpoint);
     await Promise.all(providerWork);
-    await state.cleanup();
   }
 }, 120_000);

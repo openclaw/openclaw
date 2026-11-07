@@ -131,6 +131,7 @@ it.each(
           },
           session: {
             agentId: "main",
+            resolvedSessionModel: { provider: owner.run.provider, model: owner.run.model },
             cfg: { messages: { queue: { allowCollaborativeSteering: true } } },
             entry: undefined,
             sessionKey,
@@ -149,7 +150,7 @@ it.each(
             },
             isInternalTextSlashCommandTurn: false,
             replyOptionImages: image
-              ? [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png", sourceIndex: 0 }]
+              ? [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]
               : [],
             replyOptionMedia: [],
           },

@@ -29,6 +29,7 @@ import {
 } from "../config/env-substitution.js";
 import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
+import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
@@ -241,33 +242,6 @@ function collectTouchedTextModelRefs(params: {
   return touchedRefs;
 }
 
-function resolveCanonicalPrimaryRef(
-  config: OpenClawConfig,
-  value: string,
-  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"],
-  agentId?: string,
-): { provider: string; model: string } | undefined {
-  const validationConfig: OpenClawConfig = {
-    ...config,
-    agents: {
-      ...config.agents,
-      defaults: {
-        ...config.agents?.defaults,
-        model: value,
-      },
-    },
-  };
-  const resolved = resolveConfiguredModelRef({
-    cfg: validationConfig,
-    agentId,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: "",
-    allowPluginNormalization: true,
-    manifestPlugins,
-  });
-  return resolved.model ? resolved : undefined;
-}
-
 function resolveFallbackRef(
   config: OpenClawConfig,
   value: string,
@@ -302,9 +276,28 @@ function resolveCanonicalModelRef(
   manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"],
 ) {
   const agentId = ref.agentId ?? tryResolveLegacyCompatibilityAgentId(config);
-  return ref.fallback
-    ? resolveFallbackRef(config, ref.value, manifestPlugins, agentId)?.ref
-    : resolveCanonicalPrimaryRef(config, ref.value, manifestPlugins, agentId);
+  if (ref.fallback) {
+    return resolveFallbackRef(config, ref.value, manifestPlugins, agentId)?.ref;
+  }
+  const validationConfig: OpenClawConfig = {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: {
+        ...config.agents?.defaults,
+        model: ref.value,
+      },
+    },
+  };
+  const resolved = resolveConfiguredModelRef({
+    cfg: validationConfig,
+    agentId,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: "",
+    allowPluginNormalization: true,
+    manifestPlugins,
+  });
+  return resolved.model ? resolved : undefined;
 }
 
 function scopedModelRefComparisonKey(config: OpenClawConfig, ref: TouchedModelRef): string {
@@ -312,32 +305,6 @@ function scopedModelRefComparisonKey(config: OpenClawConfig, ref: TouchedModelRe
     ...ref,
     agentId: ref.agentId ?? tryResolveLegacyCompatibilityAgentId(config),
   });
-}
-
-function hasUnresolvedInheritedFallbackProvider(
-  config: OpenClawConfig,
-  ref: TouchedModelRef,
-  unresolvedPaths: ReadonlySet<string>,
-): boolean {
-  if (!ref.fallback || ref.value.includes("/")) {
-    return false;
-  }
-  const agentId = ref.agentId ?? tryResolveLegacyCompatibilityAgentId(config);
-  const primaries = collectTextModelRefs(config).filter((candidate) => !candidate.fallback);
-  const primaryRef =
-    primaries.find((candidate) => candidate.agentId === agentId) ??
-    primaries.find((candidate) => candidate.agentId === undefined);
-  if (
-    !primaryRef ||
-    !unresolvedPaths.has(formatConcreteConfigPath(primaryRef.path.split("."), config))
-  ) {
-    return false;
-  }
-  const primaryModel = splitTrailingAuthProfile(primaryRef.value).model;
-  const slash = primaryModel.indexOf("/");
-  const provider = slash > 0 ? primaryModel.slice(0, slash) : primaryModel;
-  const fallback = resolveFallbackRef(config, ref.value, undefined, agentId);
-  return Boolean(fallback && !fallback.alias && containsEnvVarReference(provider));
 }
 
 function expandInheritedDefaultRefs(
@@ -374,22 +341,6 @@ function expandInheritedDefaultRefs(
   return dedupeByKey(expanded, (ref) => `${ref.path}\u0000${ref.agentId ?? ""}`);
 }
 
-function validateModelRefSyntax(
-  config: OpenClawConfig,
-  ref: TouchedModelRef,
-  unresolvedPaths: ReadonlySet<string>,
-): string | undefined {
-  if (!ref.value) {
-    return "Model reference is empty";
-  }
-  const configPath = formatConcreteConfigPath(ref.path.split("."), config);
-  if (unresolvedPaths.has(configPath)) {
-    return "Model reference contains an unresolved environment variable";
-  }
-  const resolved = resolveCanonicalModelRef(config, ref);
-  return resolved ? undefined : "Invalid model reference or configured model alias target";
-}
-
 async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> {
   const modelSelection = await import("../agents/model-selection.js");
   const loadModelModules = () =>
@@ -413,6 +364,7 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     const agentDir = resolveAgentDir(config, targetAgentId);
     const workspaceDir = resolveAgentWorkspaceDir(config, targetAgentId);
     const [modelRuntime, preparedRuntime] = await (modelModules ??= loadModelModules());
+    await loadPinnedRuntimeConfigAsync(async () => ({ config }));
 
     // Exact pins need provider hooks in their generation; a catalog-only snapshot cannot load them.
     await using lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
@@ -439,33 +391,21 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     }
     const { provider, model } = resolvedRef;
     const stores = lease.snapshot.createStores();
-    const resolution = await modelRuntime.resolveModelAsync(provider, model, agentDir, config, {
-      ...stores,
-      modelIdSource: "selected",
-      agentId: targetAgentId,
-      allowBundledStaticCatalogFallback: true,
-      ...(ref.authProfileId ? { authProfileId: ref.authProfileId } : {}),
-      preparedModelRuntime: lease.snapshot,
-      workspaceDir,
-    });
+    const resolution = await lease.run(() =>
+      modelRuntime.resolveModelAsync(provider, model, agentDir, config, {
+        ...stores,
+        modelIdSource: "selected",
+        agentId: targetAgentId,
+        allowBundledStaticCatalogFallback: true,
+        ...(ref.authProfileId ? { authProfileId: ref.authProfileId } : {}),
+        preparedModelRuntime: lease.snapshot,
+        workspaceDir,
+      }),
+    );
     return resolution.model
       ? undefined
       : (resolution.error ?? `Unknown model: ${provider}/${model}`);
   };
-}
-
-function formatModelRefError(
-  ref: TouchedModelRef,
-  error: string,
-  authoredValue = ref.value,
-  options?: { suppressDetail?: boolean },
-): string {
-  const safeError =
-    options?.suppressDetail || authoredValue !== ref.value
-      ? "Unable to resolve authored model reference"
-      : error;
-  const detail = safeError.endsWith(".") ? safeError : `${safeError}.`;
-  return `Cannot set model reference "${authoredValue}" at ${ref.path}: ${detail} Run ${formatCliCommand("openclaw models list")} to list available models.`;
 }
 
 function materializeValidationRoster(config: OpenClawConfig): OpenClawConfig {
@@ -547,12 +487,15 @@ export async function checkTouchedTextModelRefs(params: {
   );
   const formatError = (ref: TouchedModelRef, error: string) => {
     const redactDependency = Boolean(params.redactDependencyValues && ref.dependency);
-    return formatModelRefError(
-      ref,
-      error,
-      redactDependency ? "<configured model reference>" : authoredValuesByPath.get(ref.path),
-      { suppressDetail: modelEnvWasExpanded || redactDependency },
-    );
+    const authoredValue =
+      (redactDependency ? "<configured model reference>" : authoredValuesByPath.get(ref.path)) ??
+      ref.value;
+    const safeError =
+      modelEnvWasExpanded || redactDependency || authoredValue !== ref.value
+        ? "Unable to resolve authored model reference"
+        : error;
+    const detail = safeError.endsWith(".") ? safeError : `${safeError}.`;
+    return `Cannot set model reference "${authoredValue}" at ${ref.path}: ${detail} Run ${formatCliCommand("openclaw models list")} to list available models.`;
   };
   const validationRosterConfig = materializeValidationRoster(validationConfig);
   const validationPreviousRosterConfig = validationPreviousConfig
@@ -627,13 +570,41 @@ export async function checkTouchedTextModelRefs(params: {
   }
   // A bare fallback cannot be accepted while its inherited provider is env-unresolved;
   // leave it unchecked until runtime can determine that provider.
-  const refsToValidate = refs.filter(
-    (ref) => !hasUnresolvedInheritedFallbackProvider(config, ref, unresolvedPaths),
-  );
-  const validatedRefs = refsToValidate.map((ref) => ({
-    ref,
-    error: validateModelRefSyntax(validationConfig, ref, unresolvedPaths),
-  }));
+  const refsToValidate = refs.filter((ref) => {
+    if (!ref.fallback || ref.value.includes("/")) {
+      return true;
+    }
+    const agentId = ref.agentId ?? tryResolveLegacyCompatibilityAgentId(config);
+    const primaries = collectTextModelRefs(config).filter((candidate) => !candidate.fallback);
+    const primaryRef =
+      primaries.find((candidate) => candidate.agentId === agentId) ??
+      primaries.find((candidate) => candidate.agentId === undefined);
+    if (
+      !primaryRef ||
+      !unresolvedPaths.has(formatConcreteConfigPath(primaryRef.path.split("."), config))
+    ) {
+      return true;
+    }
+    const primaryModel = splitTrailingAuthProfile(primaryRef.value).model;
+    const slash = primaryModel.indexOf("/");
+    const provider = slash > 0 ? primaryModel.slice(0, slash) : primaryModel;
+    const fallback = resolveFallbackRef(config, ref.value, undefined, agentId);
+    return !(fallback && !fallback.alias && containsEnvVarReference(provider));
+  });
+  const validatedRefs = refsToValidate.map((ref) => {
+    if (!ref.value) {
+      return { ref, error: "Model reference is empty" };
+    }
+    const configPath = formatConcreteConfigPath(ref.path.split("."), validationConfig);
+    if (unresolvedPaths.has(configPath)) {
+      return { ref, error: "Model reference contains an unresolved environment variable" };
+    }
+    const resolved = resolveCanonicalModelRef(validationConfig, ref);
+    return {
+      ref,
+      error: resolved ? undefined : "Invalid model reference or configured model alias target",
+    };
+  });
   const syntaxFailures = validatedRefs.filter(
     (entry): entry is { ref: TouchedModelRef; error: string } => Boolean(entry.error),
   );

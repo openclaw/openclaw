@@ -1,4 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { buildSubagentTaskMessage } from "../agents/subagents/spawn/subagent-system-prompt.js";
+import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -22,13 +25,14 @@ afterEach(() => vi.restoreAllMocks());
 async function withSession(
   run: (params: sessionAccessor.SessionTranscriptRuntimeScope) => Promise<void>,
   transcript: Array<{ role: string; content: string; provenance?: unknown }> = messages,
+  sessionKey = "agent:main:dashboard:legacy",
 ) {
   await withOpenClawTestState({ scenario: "minimal", label: "doctor-title" }, async (state) => {
     setRuntimeConfigSnapshot(cfg);
     const params = {
       agentId: "main",
       storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-      sessionKey: "agent:main:dashboard:legacy",
+      sessionKey,
       sessionId: "legacy-session",
       lifecycleRevision: "legacy-lifecycle",
     };
@@ -55,6 +59,93 @@ function repair() {
     postSessionPluginMigrationPlanBound: true,
   });
 }
+
+it("preserves native child names while repairing ordinary sessions in the same scan", async () => {
+  await withSession(
+    async (params) => {
+      const task = "Investigate the gateway timeout";
+      const fixtures: Array<{
+        sessionKey: string;
+        message: string;
+        entry?: Partial<SessionEntry>;
+        displayName?: string;
+      }> = [
+        ...(["run", "session"] as const).flatMap((spawnMode) => {
+          const historical = `[Subagent Context] You are running as a subagent.\n\n[Subagent Task]\n\n${task}`;
+          const current = buildSubagentTaskMessage({
+            task,
+            spawnMode,
+            childDepth: 1,
+            maxSpawnDepth: 5,
+          });
+          return [historical, current].map((message, index) => ({
+            sessionKey: `agent:main:subagent:${spawnMode}-${index}:thread:child`,
+            message,
+          }));
+        }),
+        {
+          sessionKey: "agent:main:subagent:named",
+          message: task,
+          entry: { label: "Explicit child label" },
+          displayName: undefined,
+        },
+        {
+          sessionKey: "agent:main:dashboard:child",
+          message: task,
+          entry: {},
+          displayName: task,
+        },
+      ];
+      const expected = new Map<string, SessionEntry>();
+      for (const [index, fixture] of fixtures.entries()) {
+        const scope = { ...params, sessionKey: fixture.sessionKey, sessionId: `child-${index}` };
+        await sessionAccessor.persistSessionTranscriptTurn(scope, {
+          messages: [{ message: user(fixture.message) }],
+          touchSessionEntry: false,
+        });
+        await sessionAccessor.replaceSessionEntry(scope, {
+          sessionId: scope.sessionId,
+          lifecycleRevision: `child-lifecycle-${index}`,
+          status: "done",
+          updatedAt: Date.now(),
+          lastActivityAt: 11,
+          lastInteractionAt: 10,
+          ...fixture.entry,
+        });
+        const before = expectDefined(sessionAccessor.loadSessionEntry(scope), fixture.sessionKey);
+        expected.set(fixture.sessionKey, {
+          ...before,
+          ...(fixture.displayName ? { displayName: fixture.displayName } : {}),
+        });
+      }
+      await repair();
+      for (const [sessionKey, entry] of expected) {
+        expect
+          .soft(sessionAccessor.loadSessionEntry({ ...params, sessionKey }), sessionKey)
+          .toEqual(entry);
+      }
+      expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBe(
+        "[Subagent Context] Explain this phrase",
+      );
+    },
+    [user("[Subagent Context] Explain this phrase")],
+  );
+});
+
+it.each(Object.entries(INTERNAL_WAKE_TRANSCRIPT_PROMPTS))(
+  "preserves the main session name after a %s wake",
+  async (sourceTool, content) => {
+    await withSession(
+      async (params) => {
+        const before = sessionAccessor.loadSessionEntry(params);
+        await repair();
+        expect(sessionAccessor.loadSessionEntry(params)).toEqual(before);
+      },
+      [{ role: "user", content, provenance: { kind: "internal_system", sourceTool } }],
+      "agent:main:main",
+    );
+  },
+);
 
 const relay = { ...user("Internal relay"), provenance: { kind: "inter_session" } };
 const later = user("A later task must not become the title");

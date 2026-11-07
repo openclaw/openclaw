@@ -202,6 +202,7 @@ export function resolveWorkerPlacementModelRuntime(
     model: string;
     preparedEnvironment?: NodeJS.ProcessEnv;
     metadataSnapshot?: PluginMetadataSnapshot | null;
+    resolveEmbeddedRuntime?: () => string;
   },
 ): string {
   const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider(params);
@@ -249,14 +250,15 @@ export function resolveWorkerPlacementModelRuntime(
       isCliProvider(cliExecutionProvider ?? params.provider, params.cfg, params.metadataSnapshot));
   return useCliExecution
     ? (cliExecutionProvider ?? params.provider)
-    : resolveEffectiveAgentRuntime({
-        cfg: params.cfg,
-        provider: params.provider,
-        modelId: params.model,
-        agentScope: { kind: "prepared", agentId: params.agentId },
-        sessionKey: params.sessionKey,
-        sessionEntry: params.entry,
-      });
+    : (params.resolveEmbeddedRuntime?.() ??
+        resolveEffectiveAgentRuntime({
+          cfg: params.cfg,
+          provider: params.provider,
+          modelId: params.model,
+          agentScope: { kind: "prepared", agentId: params.agentId },
+          sessionKey: params.sessionKey,
+          sessionEntry: params.entry,
+        }));
 }
 
 export function resolveWorkerPlacementExecutionMode(
@@ -294,7 +296,8 @@ export function projectWorkerPlacementAgentRuntime(
   const workspaceEnvironment = getRegisteredAgentHarness(runtime.id)?.harness.workspaceEnvironment;
   return {
     ...identity,
-    ...(workspaceEnvironment ? { workspaceEnvironment } : {}),
+    // Registered harness metadata can be a managed view; rows own the JSON they freeze.
+    ...(workspaceEnvironment ? { workspaceEnvironment: { ...workspaceEnvironment } } : {}),
     cloudPlacementSupported: executionMode !== undefined,
     ...(executionMode ? { cloudPlacementExecutionMode: executionMode } : {}),
     ...(devicePlacement ? { devicePlacement } : {}),

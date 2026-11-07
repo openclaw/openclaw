@@ -1,10 +1,13 @@
 import { createSignal, Show, useContext } from "solid-js";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
-import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import "../../../styles/chat/session-diff-sync-mobile.css";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 export type SessionDiffSyncMobileData = {
   /** Already quoted and assembled by the native diff owner, using this root and branch. */
@@ -13,13 +16,11 @@ export type SessionDiffSyncMobileData = {
   branch: string;
 };
 
-export type SessionDiffSyncMobileProps = {
+/** Body below the mobile host's Sync title/Back rail; owns no navigation or Git operation. */
+export function SessionDiffSyncMobile(props: {
   /** Null when the native owner cannot offer Sync. Never substitute the selected commit. */
   data: SessionDiffSyncMobileData | null;
-};
-
-/** Body below the mobile host's Sync title/Back rail; owns no navigation or Git operation. */
-export function SessionDiffSyncMobile(props: SessionDiffSyncMobileProps) {
+}) {
   const available = () => {
     const data = props.data;
     return data?.root && data.branch && data.command ? data : null;

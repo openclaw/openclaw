@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnv } from "../../test-utils/env.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
-import { apiKey, authStore, model } from "../model-catalog-fixtures.test-support.js";
+import {
+  apiKey,
+  authStore,
+  model,
+  providerConfig,
+} from "../model-catalog-fixtures.test-support.js";
 import type { ModelCatalogSnapshot } from "../model-catalog.types.js";
 import {
   CATALOG_ALIAS_ID,
@@ -41,17 +45,13 @@ export async function expectLegacyWorkerCatalogRetention(params: {
       fixture.agentDir,
     ),
   );
-  const config: OpenClawConfig = {
+  const config = {
     ...fixture.config,
-    models: {
-      providers: {
-        [PROVIDER_ID]: {
-          baseUrl: "https://worker-catalog.invalid/v1",
-          api: "openai-completions",
-          models: [model("configured-row", "Configured-only model", { contextWindow: 8192 })],
-        },
-      },
-    },
+    ...providerConfig(PROVIDER_ID, {
+      baseUrl: "https://worker-catalog.invalid/v1",
+      api: "openai-completions",
+      models: [model("configured-row", "Configured-only model", { contextWindow: 8192 })],
+    }),
   };
   const input = catalogInput({ ...fixture, config });
   const retirement = new AbortController();
@@ -76,17 +76,15 @@ export async function expectLegacyWorkerCatalogRetention(params: {
       )
       .map(({ id }) => id)
       .toSorted();
+  const entry = (catalog: ModelCatalogSnapshot, id: string) =>
+    catalog.entries.find((row) => row.provider === PROVIDER_ID && row.id === id);
   const expectConfiguredRow = (catalog: ModelCatalogSnapshot, revision: number) => {
     expect(catalog.entries.filter(({ id }) => id.startsWith("proof-refresh-"))).toEqual([
       expect.objectContaining({
         id: expect.stringMatching(new RegExp(`^proof-refresh-${revision}-`)),
       }),
     ]);
-    expect(
-      catalog.entries.find(
-        ({ provider, id }) => provider === PROVIDER_ID && id === "configured-row",
-      )?.statusReason,
-    ).toBe(`refresh-${revision}`);
+    expect(entry(catalog, "configured-row")?.statusReason).toBe(`refresh-${revision}`);
   };
   const initial = await refresh();
   expect(learnedIds(initial)).toEqual(params.catalogReturnsRows ? ["Learned", "learned"] : []);
@@ -100,9 +98,7 @@ export async function expectLegacyWorkerCatalogRetention(params: {
     expect(learnedIds(repeated)).toEqual(["Learned", "learned"]);
     expectConfiguredRow(repeated, 1);
     const seeded = await refresh("seed");
-    expect(
-      seeded.entries.find(({ provider, id }) => provider === PROVIDER_ID && id === "Learned")?.name,
-    ).toBe("Uppercase legacy model");
+    expect(entry(seeded, "Learned")?.name).toBe("Uppercase legacy model");
     expectConfiguredRow(seeded, 1);
     const empty = await refresh("empty");
     expect(learnedIds(empty)).toEqual([]);

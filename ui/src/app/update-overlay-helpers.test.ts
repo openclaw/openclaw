@@ -3,6 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 // @vitest-environment node
 // Control UI tests cover localized update and recovery status copy.
 import type { GatewayHelloOk } from "../api/gateway.ts";
+import type { UpdateScheduleState } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
 import { client } from "./overlays-access.test-support.ts";
 import {
@@ -101,25 +102,21 @@ describe("update schedule hydration", () => {
         updatedAtMs: 2_000,
       },
     } as const;
-    const hello = {
-      snapshot: {
-        updateAvailable: {
-          currentVersion: "2026.8.1",
-          latestVersion: "2026.8.1",
-          channel: "dev",
-          currentSha: "a".repeat(40),
-          upstreamRef: "origin/main",
-          upstreamSha: "b".repeat(40),
-          repositoryUrl: "https://github.com/example/openclaw",
-          commitsBehind: 3,
-          commits: [
-            { sha: "b0b0b0b", subject: "Improve update scheduling" },
-            { sha: "a0a0a0a", subject: "Tighten update checks" },
-          ],
-        },
-        updateSchedule,
-      },
-    } as GatewayHelloOk;
+    const updateAvailable = {
+      currentVersion: "2026.8.1",
+      latestVersion: "2026.8.1",
+      channel: "dev",
+      currentSha: "a".repeat(40),
+      upstreamRef: "origin/main",
+      upstreamSha: "b".repeat(40),
+      repositoryUrl: "https://github.com/example/openclaw",
+      commitsBehind: 3,
+      commits: [
+        { sha: "b0b0b0b", subject: "Improve update scheduling" },
+        { sha: "a0a0a0a", subject: "Tighten update checks" },
+      ],
+    };
+    const hello = { snapshot: { updateAvailable, updateSchedule } } as GatewayHelloOk;
 
     const projected = projectConnectedUpdateSnapshot(
       {
@@ -130,19 +127,12 @@ describe("update schedule hydration", () => {
       },
       hello,
     );
-    expect(projected.updateAvailable).toMatchObject({
-      currentSha: "a".repeat(40),
-      upstreamRef: "origin/main",
-      upstreamSha: "b".repeat(40),
-      repositoryUrl: "https://github.com/example/openclaw",
-      commitsBehind: 3,
-      commits: [
-        { sha: "b0b0b0b", subject: "Improve update scheduling" },
-        { sha: "a0a0a0a", subject: "Tighten update checks" },
-      ],
+    expect(projected).toEqual({
+      updateAvailable,
+      updateSchedule,
+      heldUpdateCampaignId: "campaign-1",
+      updateCampaignStatusHydrated: false,
     });
-    expect(projected.updateSchedule).toEqual(updateSchedule);
-    expect(projected.heldUpdateCampaignId).toBe("campaign-1");
   });
 
   it("formats countdown deadlines with a stable minutes-and-seconds shape", () => {
@@ -158,39 +148,19 @@ describe("update schedule hydration", () => {
       },
     } as const;
 
-    expect(formatUpdateCampaignLabel(schedule, 1_000)).toBe(
-      "Waiting for active work · forced update in 0:54",
-    );
-    expect(
+    const label = (
+      campaign: Partial<NonNullable<UpdateScheduleState["campaign"]>> = {},
+      now = 1_000,
+    ) =>
       formatUpdateCampaignLabel(
-        {
-          ...schedule,
-          campaign: { ...schedule.campaign, state: "countdown", applyAtMs: 762_000 },
-        },
-        1_000,
-      ),
-    ).toBe("Updating in 12:41");
-    expect(formatUpdateCampaignLabel(schedule, 56_000)).toBe(
-      "Waiting for active work · forced update in 0:00",
-    );
-    expect(
-      formatUpdateCampaignLabel(
-        {
-          ...schedule,
-          campaign: { ...schedule.campaign, holdUntilMs: 762_000 },
-        },
-        1_000,
-      ),
-    ).toBe("Update held · resumes in 12:41");
-    expect(
-      formatUpdateCampaignLabel(
-        {
-          ...schedule,
-          campaign: { ...schedule.campaign, state: "applying", holdUntilMs: 762_000 },
-        },
-        1_000,
-      ),
-    ).toBe("Applying update…");
+        { ...schedule, campaign: { ...schedule.campaign, ...campaign } },
+        now,
+      );
+    expect(label()).toBe("Waiting for active work · forced update in 0:54");
+    expect(label({ state: "countdown", applyAtMs: 762_000 })).toBe("Updating in 12:41");
+    expect(label({}, 56_000)).toBe("Waiting for active work · forced update in 0:00");
+    expect(label({ holdUntilMs: 762_000 })).toBe("Update held · resumes in 12:41");
+    expect(label({ state: "applying", holdUntilMs: 762_000 })).toBe("Applying update…");
   });
 });
 
@@ -215,11 +185,11 @@ describe("update status localization", () => {
     const error = "gateway request timed out after 5000ms: update.status";
     expect(resolveUpdateStatusCheckBanner(new Error(error))).toEqual({
       tone: "warn",
-      text: `Could not check for updates: ${error}`,
+      text: `Couldn’t check for updates. ${error}`,
     });
     expect(resolveUpdateStatusBanner({ status: "error", reason: "build-failed" })).toMatchObject({
       tone: "danger",
-      text: expect.stringContaining("Update error: build-failed"),
+      text: expect.stringContaining("Couldn’t update OpenClaw. build-failed"),
     });
   });
 
@@ -309,7 +279,7 @@ describe("update status localization", () => {
       })?.banner,
     ).toEqual({
       tone: "danger",
-      text: "The update failed at install: ENOSPC: no space left on device, write. Dependency install failed. Fix the install error and retry. If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
+      text: "Couldn’t complete install: ENOSPC: no space left on device, write. Couldn’t install dependencies. Fix the install error and retry. If Ask OpenClaw is unavailable, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
     });
   });
 
@@ -350,7 +320,7 @@ describe("update status localization", () => {
 
       expect(resolveUpdateStatusBanner({ status: "error", reason })).toEqual({
         tone: "danger",
-        text: `Update error: ${reason}. See the gateway logs for the exact failure and retry once the cause is fixed.`,
+        text: `Couldn’t update OpenClaw. ${reason}. See the Gateway logs for the exact failure and retry once the cause is fixed.`,
       });
       expect(translate).toHaveBeenCalledWith("updates.failureReasons.default", undefined);
     },

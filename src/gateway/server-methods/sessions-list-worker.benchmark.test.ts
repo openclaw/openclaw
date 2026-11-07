@@ -48,7 +48,10 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1").each(["same", "distinct"]
               samples.push({
                 cpuMs: (elapsed.user + elapsed.system) / 1_000 / viewers,
                 wallMs: (performance.now() - start) / viewers,
-                wireBytes: Buffer.byteLength(frames[0]!),
+                wireBytes:
+                  typeof frames[0] === "string"
+                    ? Buffer.byteLength(frames[0])
+                    : frames[0]!.byteLength,
                 rowArrays: new Set(responses.map((response) => response.sessions)).size,
                 selections: new Set(responses.map((response) => response.owners)).size,
               });

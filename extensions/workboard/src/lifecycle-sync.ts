@@ -1,5 +1,9 @@
 import { AsyncResource } from "node:async_hooks";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
+import {
+  isAgentLifecycleYieldedWaiting,
+  resolveAgentRunLifecycleTerminalFacts,
+} from "openclaw/plugin-sdk/agent-lifecycle";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -20,19 +24,19 @@ const WORKBOARD_LIFECYCLE_SWEEP_MS = 60_000;
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 const WORKBOARD_SESSION_LOOKUP_LIMIT = 2;
 const WORKBOARD_WORKTREE_CLEANUP_SWEEP_LIMIT = 32;
-// Prepared hook generations share the active service reader, never a worker's
-// caller authority. Gateway restart clears both readiness and that reader.
+// Prepared hook generations route to the active service, never a worker's
+// caller authority. Gateway restart clears readiness and the active handler.
 const workboardLifecycleGatewayState = resolveGlobalSingleton<{
   ready: boolean;
   abortSignal?: AbortSignal;
-  readSessions?: WorkboardLifecycleSessionReader;
+  onRunSettled?: WorkboardRunSettledHandler;
 }>(
   Symbol.for("openclaw.workboard.lifecycleGatewayState"),
   () => ({ ready: false }),
   (state) => {
     state.ready = false;
     state.abortSignal = undefined;
-    state.readSessions = undefined;
+    state.onRunSettled = undefined;
   },
 );
 
@@ -84,11 +88,16 @@ type WorkboardLifecycleMatchHandler = (input: {
   sessionKey?: string;
 }) => Promise<void>;
 
+type WorkboardRunEvent = Parameters<
+  Parameters<OpenClawPluginApi["agent"]["events"]["registerAgentEventSubscription"]>[0]["handle"]
+>[0];
+type WorkboardRunSettledHandler = (event: WorkboardRunEvent) => Promise<void>;
+
 type WorkboardLifecycleService = OpenClawPluginService & {
   stop: () => void;
   onGatewayStart: (abortSignal?: AbortSignal) => void;
   onGatewayStop: () => void;
-  readSessions: WorkboardLifecycleSessionReader;
+  onRunSettled: WorkboardRunSettledHandler;
 };
 
 function needsWorkboardLifecycleReconciliation(card: WorkboardCard, now: number): boolean {
@@ -127,10 +136,14 @@ async function syncWorkboardLifecycleEvent(params: {
   observation: WorkboardLifecycleObservation;
   now: number;
   onMatched?: WorkboardLifecycleMatchHandler;
+  isCurrent?: () => boolean;
 }): Promise<{ cards: readonly WorkboardCard[]; count: number }> {
   const cards = (await params.store.list()).filter(
     (card) => !card.metadata?.archivedAt && workboardCardMatchesLifecycleLink(card, params.source),
   );
+  if (params.isCurrent && !params.isCurrent()) {
+    return { cards: [], count: 0 };
+  }
   const updates = Promise.all(
     cards.map(async (card) => {
       return await params.store.syncLifecycle(card.id, {
@@ -200,43 +213,37 @@ export async function syncWorkboardSubagentEnded(params: {
   return synced.count;
 }
 
-export async function syncWorkboardAgentEnded(params: {
+async function syncWorkboardRunSettled(params: {
   store: WorkboardStore;
-  event: { runId?: string; success: boolean };
-  context: { runId?: string; sessionKey?: string };
-  now?: number;
-  readSessions: (
-    options: WorkboardLifecycleSessionReadOptions,
-  ) => Promise<WorkboardLifecycleSessionSnapshot>;
+  event: WorkboardRunEvent;
+  isCurrent?: () => boolean;
   onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
-  const now = params.now ?? Date.now();
-  if (!params.context.sessionKey) {
+  const { event } = params;
+  const phase = event.data.phase;
+  // The execution owner publishes this only after fallback settles. Attempt hooks
+  // and yielded parents are not completion facts; never infer completion from idleness.
+  if (
+    event.stream !== "lifecycle" ||
+    (phase !== "end" && phase !== "error") ||
+    event.data.executionSettled !== true ||
+    isAgentLifecycleYieldedWaiting(event.data) ||
+    !event.sessionKey
+  ) {
     return 0;
   }
-  // An attempt can finish before fallback settles, even with success=true.
-  // Only the session owner can establish the run's terminal outcome.
-  const snapshot = await params.readSessions({
-    sessionKey: params.context.sessionKey,
-  });
-  const session = snapshot.sessions.find((entry) => entry.key === params.context.sessionKey);
-  if (!session) {
-    return 0;
-  }
-  const observation = lifecycleFromSession(session, now);
-  if (observation.state !== "succeeded" && observation.state !== "failed") {
-    return 0;
-  }
+  const outcome = resolveAgentRunLifecycleTerminalFacts({ phase, data: event.data });
   return (
     await syncWorkboardLifecycleEvent({
       store: params.store,
-      source: {
-        sessionKey: params.context.sessionKey,
-        runId: params.event.runId ?? params.context.runId,
+      source: { sessionKey: event.sessionKey, runId: event.runId },
+      observation: {
+        state: outcome.status === "ok" ? "succeeded" : "failed",
+        sourceUpdatedAt: event.ts,
       },
-      observation,
-      now,
-      ...(params.onMatched ? { onMatched: params.onMatched } : {}),
+      now: event.ts,
+      onMatched: params.onMatched,
+      isCurrent: params.isCurrent,
     })
   ).count;
 }
@@ -277,69 +284,6 @@ function lifecycleFromSession(
     return { state: "succeeded", sourceUpdatedAt };
   }
   return { state: "idle", sourceUpdatedAt };
-}
-
-async function syncWorkboardLifecycleSessions(params: {
-  store: WorkboardStore;
-  cards: readonly WorkboardCard[];
-  sessions: readonly WorkboardLifecycleSession[];
-  now: number;
-  onMatched?: WorkboardLifecycleMatchHandler;
-}): Promise<void> {
-  const now = params.now;
-  for (const card of params.cards) {
-    const lookupKey = workboardCardSessionLookupKey(card);
-    const candidates = lookupKey.startsWith("subagent:workboard-")
-      ? params.sessions.filter((entry) => entry.key.endsWith(`:${lookupKey}`))
-      : [];
-    // Persisted links win; an unlinked dispatcher claim needs one configured owner.
-    const session =
-      params.sessions.find((entry) => entry.key === lookupKey) ??
-      (candidates.length === 1 ? candidates[0] : undefined);
-    if (!session && candidates.length > 1) {
-      continue;
-    }
-    const launch = card.metadata?.automation?.launch;
-    const preparedAcceptanceAt =
-      launch?.phase === "prepared" && session && sessionProvesPreparedAcceptance(session)
-        ? session.hasActiveRun === true
-          ? Math.max(now, launch.preparedAt)
-          : session.updatedAt
-        : undefined;
-    if (
-      launch?.phase === "prepared" &&
-      (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt)
-    ) {
-      await params.store.failPreparedLaunch(card.id, {
-        expectedLaunch: launch,
-        reason: "Gateway did not accept the prepared Workboard session before restart.",
-        failedAt: now,
-      });
-      continue;
-    }
-    if (!session) {
-      continue;
-    }
-    const observation = lifecycleFromSession(session, now);
-    if (
-      await params.store.syncLifecycle(card.id, {
-        ...LIFECYCLE_TARGETS[observation.state],
-        sourceUpdatedAt: observation.sourceUpdatedAt,
-        stale: observation.stale,
-        now,
-        association: {
-          ...(cardSessionKey(card) ? { expectedSessionKey: cardSessionKey(card) } : {}),
-          ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
-          sessionKey: session.key,
-          ...(preparedAcceptanceAt === undefined ? {} : { acceptedAt: preparedAcceptanceAt }),
-        },
-      })
-    ) {
-      if (observation.state === "succeeded" || observation.state === "failed") {
-        await params.onMatched?.({ cards: [card], sessionKey: session.key });
-      }
-    }
-  }
 }
 
 function normalizeSession(value: unknown): WorkboardLifecycleSession | undefined {
@@ -461,10 +405,7 @@ export async function readWorkboardLifecycleSessions(
 export function createWorkboardLifecycleService(params: {
   store: WorkboardStore;
   worktrees?: WorkboardWorktreeCleanupRuntime;
-  readSessions: (
-    options: WorkboardLifecycleSessionReadOptions,
-  ) => Promise<WorkboardLifecycleSessionSnapshot>;
-  now?: () => number;
+  readSessions: WorkboardLifecycleSessionReader;
   onMatched?: WorkboardLifecycleMatchHandler;
 }): WorkboardLifecycleService {
   let generation = 0;
@@ -472,7 +413,7 @@ export function createWorkboardLifecycleService(params: {
   let begin: (() => void) | undefined;
   let removeDrainListener: (() => void) | undefined;
   let cleanupCursor = 0;
-  let serviceReader: WorkboardLifecycleSessionReader | undefined;
+  let handleRunSettled: WorkboardRunSettledHandler | undefined;
   const cleanupWorktrees = async (
     cards: readonly WorkboardCard[],
     warn: (message: string) => void,
@@ -498,10 +439,10 @@ export function createWorkboardLifecycleService(params: {
     }
   };
   const stop = () => {
-    if (workboardLifecycleGatewayState.readSessions === serviceReader) {
-      workboardLifecycleGatewayState.readSessions = undefined;
+    if (workboardLifecycleGatewayState.onRunSettled === handleRunSettled) {
+      workboardLifecycleGatewayState.onRunSettled = undefined;
     }
-    serviceReader = undefined;
+    handleRunSettled = undefined;
     removeDrainListener?.();
     removeDrainListener = undefined;
     generation += 1;
@@ -532,17 +473,12 @@ export function createWorkboardLifecycleService(params: {
   };
   return {
     id: "workboard-lifecycle-sync",
-    async readSessions(options) {
-      const reader = workboardLifecycleGatewayState.readSessions;
-      if (!reader) {
-        return { sessions: [], complete: false };
-      }
-      return await reader(options);
+    async onRunSettled(event) {
+      await workboardLifecycleGatewayState.onRunSettled?.(event);
     },
     start(ctx) {
       const owner = ++generation;
-      serviceReader = AsyncResource.bind(params.readSessions);
-      workboardLifecycleGatewayState.readSessions = serviceReader;
+      const readSessions = AsyncResource.bind(params.readSessions);
       let begun = false;
       const onMatched: WorkboardLifecycleMatchHandler = async (input) => {
         if (generation === owner) {
@@ -557,7 +493,7 @@ export function createWorkboardLifecycleService(params: {
               return;
             }
             const cardsByKey = new Map<string, WorkboardCard[]>();
-            const now = params.now?.() ?? Date.now();
+            const now = Date.now();
             const sweep: WorkboardLifecycleSweep = {};
             for (const card of cards.filter((candidate) =>
               needsWorkboardLifecycleReconciliation(candidate, now),
@@ -569,18 +505,73 @@ export function createWorkboardLifecycleService(params: {
             }
             for (const [sessionKey, linkedCards] of cardsByKey) {
               try {
-                const snapshot = await params.readSessions({ sessionKey, sweep });
+                const snapshot = await readSessions({ sessionKey, sweep });
                 // A partial suffix search cannot establish a unique owner or absence.
                 if (!snapshot.complete) {
                   continue;
                 }
-                await syncWorkboardLifecycleSessions({
-                  store: params.store,
-                  cards: linkedCards,
-                  sessions: snapshot.sessions,
-                  now,
-                  onMatched,
-                });
+                const store = params.store;
+                const sessions = snapshot.sessions;
+                for (const card of linkedCards) {
+                  const lookupKey = workboardCardSessionLookupKey(card);
+                  const candidates = lookupKey.startsWith("subagent:workboard-")
+                    ? sessions.filter((entry) => entry.key.endsWith(`:${lookupKey}`))
+                    : [];
+                  // Persisted links win; an unlinked dispatcher claim needs one configured owner.
+                  const session =
+                    sessions.find((entry) => entry.key === lookupKey) ??
+                    (candidates.length === 1 ? candidates[0] : undefined);
+                  if (!session && candidates.length > 1) {
+                    continue;
+                  }
+                  const launch = card.metadata?.automation?.launch;
+                  const preparedAcceptanceAt =
+                    launch?.phase === "prepared" &&
+                    session &&
+                    sessionProvesPreparedAcceptance(session)
+                      ? session.hasActiveRun === true
+                        ? Math.max(now, launch.preparedAt)
+                        : session.updatedAt
+                      : undefined;
+                  if (
+                    launch?.phase === "prepared" &&
+                    (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt)
+                  ) {
+                    await store.failPreparedLaunch(card.id, {
+                      expectedLaunch: launch,
+                      reason:
+                        "Gateway did not accept the prepared Workboard session before restart.",
+                      failedAt: now,
+                    });
+                    continue;
+                  }
+                  if (!session) {
+                    continue;
+                  }
+                  const observation = lifecycleFromSession(session, now);
+                  if (
+                    await store.syncLifecycle(card.id, {
+                      ...LIFECYCLE_TARGETS[observation.state],
+                      sourceUpdatedAt: observation.sourceUpdatedAt,
+                      stale: observation.stale,
+                      now,
+                      association: {
+                        ...(cardSessionKey(card)
+                          ? { expectedSessionKey: cardSessionKey(card) }
+                          : {}),
+                        ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
+                        sessionKey: session.key,
+                        ...(preparedAcceptanceAt === undefined
+                          ? {}
+                          : { acceptedAt: preparedAcceptanceAt }),
+                      },
+                    })
+                  ) {
+                    if (observation.state === "succeeded" || observation.state === "failed") {
+                      await onMatched({ cards: [card], sessionKey: session.key });
+                    }
+                  }
+                }
               } catch (error) {
                 if (generation === owner) {
                   ctx.logger.warn(`workboard lifecycle sync failed: ${String(error)}`);
@@ -605,6 +596,17 @@ export function createWorkboardLifecycleService(params: {
           }
         }
       };
+      const isCurrent = () =>
+        generation === owner && workboardLifecycleGatewayState.onRunSettled === handleRunSettled;
+      handleRunSettled = AsyncResource.bind(async (event) => {
+        if (!isCurrent()) {
+          return;
+        }
+        await params.store.runOperation(() =>
+          syncWorkboardRunSettled({ store: params.store, event, isCurrent, onMatched }),
+        );
+      });
+      workboardLifecycleGatewayState.onRunSettled = handleRunSettled;
       begin = () => {
         if (generation !== owner || begun) {
           return;

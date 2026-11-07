@@ -25,6 +25,7 @@ type DeepgramRealtimeTranscriptionEvent = {
   is_final?: boolean;
   speech_final?: boolean;
   from_finalize?: boolean;
+  last_word_end?: number;
   error?: unknown;
   message?: string;
 };
@@ -149,7 +150,6 @@ export function buildDeepgramRealtimeTranscriptionProvider({
       };
       let speechStarted = false;
       let finalizedTranscript = "";
-      let pendingPartial = "";
       let finalizeFallbackFired = false;
       let finalizeFallbackTimer: ReturnType<typeof setTimeout> | undefined;
       let openedOnce = false;
@@ -157,15 +157,10 @@ export function buildDeepgramRealtimeTranscriptionProvider({
       const joinTranscript = (left: string, right: string) =>
         (left && right ? `${left} ${right}` : left || right).replace(/\s+/g, " ").trim();
 
-      const clearFinalizeFallback = () => {
+      const clearTurn = () => {
         clearTimeout(finalizeFallbackTimer);
         finalizeFallbackTimer = undefined;
-      };
-
-      const clearTurn = () => {
-        clearFinalizeFallback();
         finalizedTranscript = "";
-        pendingPartial = "";
         speechStarted = false;
       };
 
@@ -187,12 +182,11 @@ export function buildDeepgramRealtimeTranscriptionProvider({
           return false;
         }
         finalizedTranscript = nextFinalized;
-        pendingPartial = nextPartial;
         return true;
       };
 
-      const flushTurn = (includePartial = true) => {
-        const full = joinTranscript(finalizedTranscript, includePartial ? pendingPartial : "");
+      const flushTurn = () => {
+        const full = finalizedTranscript;
         clearTurn();
         if (full) {
           config.onTranscript?.(full);
@@ -237,6 +231,11 @@ export function buildDeepgramRealtimeTranscriptionProvider({
             );
             return;
           }
+          case "UtteranceEnd":
+            if ((event.last_word_end ?? -1) >= 0 && !finalizeFallbackFired) {
+              flushTurn();
+            }
+            return;
           case "SpeechStarted":
             speechStarted = true;
             config.onSpeechStart?.();
@@ -268,6 +267,13 @@ export function buildDeepgramRealtimeTranscriptionProvider({
           url.searchParams.set("channels", "1");
           url.searchParams.set("interim_results", String(config.interimResults));
           url.searchParams.set("endpointing", String(config.endpointingMs));
+          if (config.interimResults && config.endpointingMs <= 5_000) {
+            // Transcript gaps still end a turn when noise keeps VAD endpointing open.
+            url.searchParams.set(
+              "utterance_end_ms",
+              String(Math.max(1_000, Math.ceil(config.endpointingMs))),
+            );
+          }
           if (config.language) {
             url.searchParams.set("language", config.language);
           }
@@ -284,7 +290,7 @@ export function buildDeepgramRealtimeTranscriptionProvider({
           if (openedOnce) {
             // The replacement stream cannot replay confirmed text from the old
             // connection. Emit it as an interrupted turn, but discard its partial tail.
-            flushTurn(false);
+            flushTurn();
           } else {
             openedOnce = true;
             clearTurn();
@@ -299,10 +305,9 @@ export function buildDeepgramRealtimeTranscriptionProvider({
             // Finalize may produce no Results event when Deepgram has no buffered
             // audio left. Preserve already-finalized text before core force-closes.
             finalizeFallbackTimer = setTimeout(() => {
-              finalizeFallbackTimer = undefined;
               finalizeFallbackFired = true;
               try {
-                flushTurn(false);
+                flushTurn();
               } catch (error) {
                 try {
                   config.onError?.(error instanceof Error ? error : new Error(String(error)));

@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { nativeRuntime } from "../test-helpers/chat-model.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -35,7 +36,9 @@ async function openFailure(page: Page, message: string) {
   await failure.locator("summary").click();
   const details = failure.getByLabel("Error details", { exact: true });
   await details.waitFor();
-  expect(await details.textContent()).toBe(`Runner failed: ${message}`);
+  expect(await details.textContent()).toBe(
+    `Couldn’t continue this session. Check its device and try again. ${message}`,
+  );
   return failure;
 }
 function expectSameSession(page: Page, key: string) {
@@ -153,14 +156,7 @@ suite.define(() => {
       ...recoverySession("repository-recovery", "Recover repository session"),
       repositoryWorkspaceId: "repository-workspace-1",
       placement: placement("local"),
-      agentRuntime: {
-        id: "openclaw",
-        cloudPlacementSupported: true,
-        cloudPlacementExecutionMode: "worker-turn",
-        devicePlacementSupported: true,
-        devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-        source: "model",
-      },
+      agentRuntime: { ...nativeRuntime(), devicePlacementSupported: true },
     } satisfies GatewaySessionRow;
     const { page, gateway, composer } = await openRecovery(session, {
       featureMethods: ["chat.send", "sessions.dispatch"],
@@ -183,25 +179,25 @@ suite.define(() => {
         },
       },
     });
-    await page.getByText("Repository worker required", { exact: true }).waitFor();
+    await page.getByText("This repository needs a device", { exact: true }).waitFor();
     expect(await composer.isEnabled()).toBe(false);
     expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
     await page
       .locator(".agent-chat__disabled-banner")
-      .getByRole("button", { name: "Choose worker…", exact: true })
+      .getByRole("button", { name: "Choose device…", exact: true })
       .click();
     await page.locator('[data-value="device:runner"]').click();
     expect(await page.locator('[data-value="gateway"]').count()).toBe(0);
     await gateway.deferNext("sessions.dispatch");
-    await page.getByRole("button", { name: "Continue on worker", exact: true }).click();
+    await page.getByRole("button", { name: "Continue on device", exact: true }).click();
     const request = await gateway.waitForRequest("sessions.dispatch");
     expect(request.params).toEqual({
       key: session.key,
       agentId: "main",
       deviceId: "runner",
     });
-    await page.getByText("Starting worker…", { exact: true }).first().waitFor();
+    await page.getByText("Preparing device…", { exact: true }).first().waitFor();
 
     const recovered = {
       ...session,

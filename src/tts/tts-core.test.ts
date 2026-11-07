@@ -1,29 +1,40 @@
-import { readFileSync } from "node:fs";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
-import { resolveSpeechProviderApiKey, summarizeText } from "./tts-core.js";
 import { resolveTtsConfig } from "./tts-settings.js";
 
 describe("TTS core", () => {
-  it("keeps summarization-only LLM modules lazy", () => {
-    const source = readFileSync(new URL("./tts-core.ts", import.meta.url), "utf8");
-
-    expect(source).toContain('import("../agents/simple-completion-runtime.js")');
-    expect(source).not.toContain('from "../llm/stream.js"');
-    expect(source).not.toContain('from "../agents/simple-completion-runtime.js"');
-    expect(source).not.toContain('from "../agents/model-auth.js"');
-  });
-
-  it("resolves the first non-blank speech provider API key", () => {
-    expect(resolveSpeechProviderApiKey(undefined, " \t", "  provider-key  ", "fallback")).toBe(
-      "provider-key",
-    );
-    expect(resolveSpeechProviderApiKey(undefined, "\n")).toBeUndefined();
+  it("resolves speech provider keys without loading summarization-only LLM modules", async () => {
+    vi.resetModules();
+    // mock-isolation: Cold speech imports must not load the summary completion runtime.
+    vi.doMock("../agents/simple-completion-runtime.js", () => {
+      throw new Error("Cold speech import loaded the summary completion runtime");
+    });
+    // mock-isolation: Cold speech imports must not load the summary credential runtime.
+    vi.doMock("../agents/model-auth.js", () => {
+      throw new Error("Cold speech import loaded the summary credential runtime");
+    });
+    // mock-isolation: Cold speech imports must not load the LLM streaming runtime.
+    vi.doMock("../llm/stream.js", () => {
+      throw new Error("Cold speech import loaded the LLM streaming runtime");
+    });
+    try {
+      const { resolveSpeechProviderApiKey } = await import("./tts-core.js");
+      expect(resolveSpeechProviderApiKey(undefined, " \t", "  provider-key  ", "fallback")).toBe(
+        "provider-key",
+      );
+      expect(resolveSpeechProviderApiKey(undefined, "\n")).toBeUndefined();
+    } finally {
+      vi.doUnmock("../agents/simple-completion-runtime.js");
+      vi.doUnmock("../agents/model-auth.js");
+      vi.doUnmock("../llm/stream.js");
+      vi.resetModules();
+    }
   });
 
   it("clamps oversized summarization timeout timers", async () => {
+    const { summarizeText } = await import("./tts-core.js");
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const model = makeProviderModelFixture({

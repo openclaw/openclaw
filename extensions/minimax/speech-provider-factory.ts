@@ -196,6 +196,7 @@ export function buildMinimaxSpeechProvider({
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeMinimaxProviderConfig(baseTtsConfig);
+      const talkBaseUrl = trimToUndefined(talkProviderConfig.baseUrl);
       return {
         ...base,
         ...(talkProviderConfig.apiKey === undefined
@@ -206,9 +207,7 @@ export function buildMinimaxSpeechProvider({
                 path: "talk.providers.minimax.apiKey",
               }),
             }),
-        ...(trimToUndefined(talkProviderConfig.baseUrl) == null
-          ? {}
-          : { baseUrl: normalizeMinimaxTtsBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
+        ...(talkBaseUrl ? { baseUrl: normalizeMinimaxTtsBaseUrl(talkBaseUrl) } : {}),
         ...readMinimaxOverrides({ ...talkProviderConfig, model: talkProviderConfig.modelId }),
       };
     },
@@ -233,17 +232,18 @@ export function buildMinimaxSpeechProvider({
         await import("openclaw/plugin-sdk/provider-auth");
       const apiKey = resolveSpeechProviderApiKey(
         config.apiKey,
-        await resolveProviderAuthProfileApiKey({
-          cfg: req.cfg,
-          provider: MINIMAX_PORTAL_PROVIDER_ID,
-        }),
+        config.apiKey
+          ? undefined
+          : await resolveProviderAuthProfileApiKey({
+              cfg: req.cfg,
+              provider: MINIMAX_PORTAL_PROVIDER_ID,
+            }),
         resolveMinimaxDirectTtsApiKey(),
       );
       if (!apiKey) {
         throw new Error("MiniMax TTS auth missing");
       }
       const safeTimeoutMs = resolveTimerTimeoutMs(req.timeoutMs, 1);
-      const text = req.text;
       const { assertOkOrThrowProviderError, readProviderJsonObjectResponse } =
         await import("openclaw/plugin-sdk/provider-http");
       const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
@@ -261,14 +261,14 @@ export function buildMinimaxSpeechProvider({
           },
           body: JSON.stringify({
             model: overrides.model ?? config.model,
-            text,
+            text: req.text,
             stream: false,
             output_format: "hex",
             voice_setting: {
               voice_id: overrides.voiceId ?? config.voiceId,
               speed: overrides.speed ?? config.speed ?? 1,
               vol: overrides.vol ?? config.vol ?? 1,
-              pitch: Math.trunc(overrides.pitch ?? config.pitch ?? 0),
+              pitch: overrides.pitch ?? config.pitch ?? 0,
             },
             audio_setting: { format: "mp3", sample_rate: 32000 },
           }),

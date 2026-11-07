@@ -3,6 +3,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createChatRunState } from "./server-chat-state.js";
@@ -23,7 +24,6 @@ export function makeCronState(overrides: Partial<TestCronState> = {}): TestCronS
     reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileSystemJobs: vi.fn(async () => "converged" as const),
     ...overrides,
   };
 }
@@ -36,12 +36,16 @@ export function makeContextParams(
     runtime: {
       scheduler: createTestGatewayScheduler(),
       getSessionRowProjection: () => undefined,
+      getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 0 }),
       forgetConnectionAncestors: vi.fn(),
       connectionWork: { track: trackAsyncWork },
       deps: {} as never,
       runtimeState: {
         cronState: makeCronState(),
-        configReloader: { isConfigReloadSettled: vi.fn(() => true) },
+        configReloader: {
+          getCommittedRuntimeConfig: vi.fn(getRuntimeConfig),
+          isConfigReloadSettled: vi.fn(() => true),
+        },
       },
       lifecycle: { closePreludeStarted: false },
       getAttachedGatewayMethodRegistry: vi.fn(() => ({}) as never),

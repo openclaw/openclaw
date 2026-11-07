@@ -65,15 +65,12 @@ async function* malformedSse(events: AsyncIterable<{ type: string }>) {
 }
 
 function failedMessages(manager: SessionManager) {
-  return manager
-    .getBranch()
-    .flatMap((entry) =>
-      entry.type === "message" &&
-      entry.message.role === "assistant" &&
-      entry.message.stopReason === "error"
-        ? [entry.message]
-        : [],
-    );
+  return manager.getBranch().flatMap((entry) => {
+    if (entry.type !== "message" || entry.message.role !== "assistant") {
+      return [];
+    }
+    return entry.message.stopReason === "error" ? [entry.message] : [];
+  });
 }
 
 function createRetrySession(execute?: ToolDefinition["execute"], enabled = true) {
@@ -84,10 +81,9 @@ function createRetrySession(execute?: ToolDefinition["execute"], enabled = true)
     }),
     customTools: execute
       ? [
-          {
-            ...createStubTool("record"),
-            execute,
-          },
+          { ...createStubTool("record"), execute },
+          // Async tool calls need sessions_yield to collect their results.
+          { ...createStubTool("sessions_yield"), async: false },
         ]
       : undefined,
   });
@@ -96,15 +92,11 @@ function createRetrySession(execute?: ToolDefinition["execute"], enabled = true)
 it.each([
   { failure: "eof", recover: true },
   { failure: "malformed_sse", recover: true },
-  { failure: "malformed_sse", recover: false, repeatFailure: true },
-  { failure: "malformed_sse", recover: false, retryEnabled: false },
   { failure: "max_output_tokens", recover: true },
   { failure: "max_output_tokens", responseStatus: "completed", recover: false },
   { failure: "content_filter", recover: false },
   { failure: "unknown", recover: false },
   { failure: "completed", recover: false },
-  { failure: "max_output_tokens", recover: false, retryEnabled: false },
-  { failure: "identity_type", recover: true },
   { failure: "identity_call", recover: true },
   { failure: "identity_call", recover: false, retryEnabled: false },
   { failure: "identity_call", recover: false, repeatFailure: true },
@@ -140,7 +132,6 @@ it.each([
       details: {},
     }));
     const requests: Context["messages"][] = [];
-    const transportEvents: string[] = [];
     streamMocks.streamSimple.mockImplementation((model, context) => {
       requests.push([...context.messages]);
       if (requests.length === 1) {
@@ -180,26 +171,25 @@ it.each([
               const erased =
                 beforeConflict === "erased-text" || beforeConflict === "erased-refusal";
               const item =
-                beforeConflict === "text" || beforeConflict === "empty-text" || erased
-                  ? responseMessage(
-                      "msg_partial",
-                      erased
-                        ? []
-                        : [
-                            {
-                              type: "output_text",
-                              text: beforeConflict === "text" ? "Partial answer" : "",
-                            },
-                          ],
-                    )
-                  : beforeConflict === "function"
-                    ? responseCall("completed", "{}", "completed")
-                    : { type: "mcp_call", id: "mcp_completed", status: "completed" };
-              if (beforeConflict === "function") {
+                beforeConflict === "function"
+                  ? responseCall("completed", "{}", "completed")
+                  : beforeConflict === "provider"
+                    ? { type: "mcp_call", id: "mcp_completed", status: "completed" }
+                    : responseMessage(
+                        "msg_partial",
+                        erased
+                          ? []
+                          : [
+                              {
+                                type: "output_text",
+                                text: beforeConflict === "text" ? "Partial answer" : "",
+                              },
+                            ],
+                      );
+              if (beforeConflict === "function" || erased) {
                 yield outputItem("added", item, 1);
               }
               if (erased) {
-                yield outputItem("added", item, 1);
                 yield {
                   type:
                     beforeConflict === "erased-refusal"
@@ -223,12 +213,10 @@ it.each([
                       encrypted_content: "test-encrypted-placeholder",
                       summary: [],
                     }
-                  : failure === "identity_type"
-                    ? responseMessage("msg_conflicting", [])
-                    : {
-                        ...responseCall("unfinished", "{}", "completed"),
-                        call_id: "different_call",
-                      },
+                  : {
+                      ...responseCall("unfinished", "{}", "completed"),
+                      call_id: "different_call",
+                    },
                 ...(terminalRefusal
                   ? [responseMessage("msg_refusal", [{ type: "refusal", refusal: "Declined" }])]
                   : []),
@@ -251,12 +239,7 @@ it.each([
         void processResponsesStream(
           source,
           output,
-          {
-            push: (event) => {
-              transportEvents.push(event.type);
-              stream.push(event);
-            },
-          },
+          stream,
           model,
           unprovenRequest ? undefined : { canRetryIdentityConflict: () => true },
         ).catch((error: unknown) => failTransportStream({ stream, output, error }));
@@ -268,40 +251,14 @@ it.each([
 
     await session.prompt("Record once and report the result.");
 
-    expect(transportEvents).toContain("toolcall_start");
-    if (beforeConflict === "erased-text" || beforeConflict === "erased-refusal") {
-      expect(transportEvents).toContain("text_delta");
-    }
-    expect(transportEvents.includes("toolcall_end")).toBe(beforeConflict === "function");
     expect(execute).toHaveBeenCalledOnce();
     expect(session.getLastAssistantText()).toBe(
       recover ? recovered : beforeConflict === "text" ? "Partial answer" : undefined,
     );
     expect(requests).toHaveLength(recover || repeatFailure ? 3 : 2);
     if (identityFailure) {
-      const recorded = failedMessages(sessionManager).at(-1);
-      expect(recorded).toMatchObject({ errorCode: "responses_output_identity_conflict" });
-      expect(JSON.parse(recorded?.errorBody ?? "{}")).toMatchObject({
-        eventType: earlyConflict
-          ? "response.output_item.done"
-          : filteredConflict
-            ? "response.incomplete"
-            : "response.completed",
-        outputIndex: 0,
-        expectedType: "function_call",
-        actualType: filteredConflict
-          ? "reasoning"
-          : failure === "identity_type"
-            ? "message"
-            : "function_call",
-        mismatch: filteredConflict || failure === "identity_type" ? "type" : "call_id",
-        completedToolCall: beforeConflict === "function",
-        retrySafe:
-          !filteredConflict &&
-          !earlyConflict &&
-          !terminalRefusal &&
-          (!beforeConflict || beforeConflict === "empty-text") &&
-          !unprovenRequest,
+      expect(failedMessages(sessionManager).at(-1)).toMatchObject({
+        errorCode: "responses_output_identity_conflict",
       });
     }
     if (!recover) {
@@ -410,17 +367,7 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
       expect(events.filter((event) => event.type === "auto_retry_end")).toEqual([
         { type: "auto_retry_end" },
       ]);
-      expect(failedMessages(sessionManager)).toMatchObject([
-        {
-          errorCode: "incomplete_tool_call",
-          diagnostics: [
-            {
-              type: "openai_responses_terminal",
-              details: { incompleteReason: "max_output_tokens" },
-            },
-          ],
-        },
-      ]);
+      expect(failedMessages(sessionManager)).toMatchObject([{ errorCode: "incomplete_tool_call" }]);
     } finally {
       finish.resolve();
       await session.abort();

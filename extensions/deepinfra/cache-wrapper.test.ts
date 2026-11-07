@@ -1,51 +1,24 @@
-import { buildOpenAICompletionsParams } from "@openclaw/ai/transports";
+import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
+import {
+  createAssistantMessageEventStream,
+  streamSimple,
+  type Model,
+} from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import deepinfraPlugin from "./index.js";
 
-async function registeredWrapper(base: StreamFn, modelId: string, cacheRetention?: string) {
-  const provider = await registerSingleProviderPlugin(deepinfraPlugin);
-  const wrapped = provider.wrapStreamFn?.({
-    provider: "deepinfra",
-    modelId,
-    streamFn: base,
-    extraParams: { cacheRetention },
-  });
-  if (!wrapped) {
-    throw new Error("DeepInfra stream wrapper missing");
-  }
-  return wrapped;
-}
+const NEMOTRON = "nvidia/NVIDIA-Nemotron-3.5-Super-VL";
+const ANTHROPIC = "anthropic/claude-sonnet-4-6";
+const DEEPSEEK = "deepseek-ai/DeepSeek-V4-Flash";
+afterEach(() => vi.unstubAllGlobals());
 
-async function capturePayload(params: {
-  modelId: string;
-  api?: "openai-completions" | "anthropic-messages";
-  initialPayload: Record<string, unknown>;
-  cacheRetention?: "none" | "short" | "long";
-}): Promise<{
-  captured: Record<string, unknown>;
-  baseCalls: number;
-  baseCacheRetention: unknown;
-}> {
-  let captured: Record<string, unknown> = {};
-  let baseCalls = 0;
-  let baseCacheRetention: unknown;
-  const baseStreamFn: StreamFn = (_model, _context, options) => {
-    baseCalls += 1;
-    baseCacheRetention = options?.cacheRetention;
-    const payload = structuredClone(params.initialPayload);
-    options?.onPayload?.(payload, _model);
-    captured = payload;
-    return createAssistantMessageEventStream();
-  };
-
-  const wrapped = await registeredWrapper(baseStreamFn, params.modelId, params.cacheRetention);
-  const model: Model = {
-    api: params.api ?? "openai-completions",
+function makeModel(id: string): Model<"openai-completions"> {
+  return {
+    api: "openai-completions",
+    id,
     provider: "deepinfra",
-    id: params.modelId,
     name: "Synthetic model",
     baseUrl: "https://api.deepinfra.com/v1/openai",
     reasoning: false,
@@ -54,165 +27,132 @@ async function capturePayload(params: {
     contextWindow: 200000,
     maxTokens: 8192,
   };
-  void wrapped(model, { messages: [] }, {});
-
-  return { captured, baseCalls, baseCacheRetention };
 }
 
-describe("registered DeepInfra cache wrapper", () => {
-  it("injects ephemeral cache_control markers on the system message for anthropic/* models", async () => {
-    const { captured, baseCalls } = await capturePayload({
-      modelId: "Anthropic/Claude-Sonnet-4-6",
-      initialPayload: {
-        messages: [
-          { role: "system", content: "You are a helpful assistant." },
-          { role: "user", content: "Hi" },
-        ],
-      },
-    });
+const conversation = (content: unknown, user: unknown = "Hi") => ({
+  messages: [
+    { role: "system", content },
+    { role: "user", content: user },
+  ],
+});
+const cachedText = (text: string) => ({
+  type: "text",
+  text,
+  cache_control: { type: "ephemeral" },
+});
 
-    expect(baseCalls).toBe(1);
-    expect(captured.messages).toEqual([
-      {
-        role: "system",
-        content: [
-          {
-            type: "text",
-            text: "You are a helpful assistant.",
-            cache_control: { type: "ephemeral" },
-          },
-        ],
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "Hi", cache_control: { type: "ephemeral" } }],
-      },
-    ]);
-  });
+async function registeredWrapper(
+  base: StreamFn,
+  modelId: string,
+  cacheRetention?: string,
+  thinkingLevel?: "off" | "high",
+) {
+  const provider = await registerSingleProviderPlugin(deepinfraPlugin);
+  return (
+    provider.wrapStreamFn?.({
+      provider: "deepinfra",
+      modelId,
+      streamFn: base,
+      thinkingLevel,
+      extraParams: { cacheRetention },
+    }) ?? expect.fail("DeepInfra stream wrapper missing")
+  );
+}
 
-  it("tags the last block of an array-shaped system message", async () => {
-    const { captured } = await capturePayload({
-      modelId: "anthropic/claude-haiku-4-5",
-      initialPayload: {
-        messages: [
-          {
-            role: "system",
-            content: [
-              { type: "text", text: "Block one" },
-              { type: "text", text: "Block two" },
-            ],
-          },
-          { role: "user", content: "Hi" },
-        ],
-      },
-    });
-
-    expect(captured.messages).toEqual([
-      {
-        role: "system",
-        content: [
-          { type: "text", text: "Block one" },
-          { type: "text", text: "Block two", cache_control: { type: "ephemeral" } },
-        ],
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "Hi", cache_control: { type: "ephemeral" } }],
-      },
-    ]);
-  });
-
-  it.each(["none", "long"] as const)(
-    "honors configured %s retention without inventing TTL support",
-    async (cacheRetention) => {
-      const { captured } = await capturePayload({
-        modelId: "anthropic/claude-sonnet-4-6",
-        cacheRetention,
-        initialPayload: {
-          messages: [
-            { role: "system", content: "system" },
-            { role: "user", content: "question" },
-          ],
-        },
+describe("registered DeepInfra request wrapper", () => {
+  const system = conversation("system");
+  const tagged = conversation([cachedText("system")], [cachedText("Hi")]);
+  const blocks = [
+    { type: "text", text: "Block one" },
+    { type: "text", text: "Block two" },
+  ];
+  const native = {
+    system: [cachedText("system")],
+    messages: [{ role: "user", content: [{ type: "text", text: "question" }] }],
+  };
+  it.each([
+    ["Anthropic/Claude-Sonnet-4-6", undefined, undefined, system, tagged, "short"],
+    [
+      "anthropic/claude-haiku-4-5",
+      undefined,
+      undefined,
+      conversation(blocks),
+      conversation([blocks[0], cachedText("Block two")], [cachedText("Hi")]),
+      "short",
+    ],
+    [ANTHROPIC, undefined, "none", system, system, "none"],
+    [ANTHROPIC, undefined, "long", system, tagged, "long"],
+    [ANTHROPIC, "anthropic-messages", "long", native, native, undefined],
+    [DEEPSEEK, undefined, undefined, conversation("sys"), conversation("sys"), undefined],
+  ] as const)(
+    "preserves cache and API policy for %s",
+    async (modelId, api, cacheRetention, input, expected, option) => {
+      let captured: Record<string, unknown> = {};
+      const base = vi.fn<StreamFn>((model, _context, options) => {
+        const payload = structuredClone(input);
+        options?.onPayload?.(payload, model);
+        captured = payload;
+        return createAssistantMessageEventStream();
       });
-      expect(JSON.stringify(captured).match(/"cache_control":/g) ?? []).toHaveLength(
-        cacheRetention === "none" ? 0 : 2,
+      const wrapped = await registeredWrapper(base, modelId, cacheRetention);
+      void wrapped(
+        { ...makeModel(modelId), api: api ?? "openai-completions" },
+        { messages: [] },
+        {},
       );
+      expect(base).toHaveBeenCalledOnce();
+      expect(captured).toEqual(expected);
       expect(JSON.stringify(captured)).not.toContain('"ttl"');
+      expect(base.mock.calls[0]?.[2]?.cacheRetention).toBe(option);
     },
   );
 
   it.each([
-    { cacheRetention: "none", requiresStringContent: false },
-    { cacheRetention: "short", requiresStringContent: true },
-  ] as const)(
-    "composes managed requests with $cacheRetention retention and string-only=$requiresStringContent",
-    async ({ cacheRetention, requiresStringContent }) => {
-      const model: Model<"openai-completions"> & {
-        compat: { requiresStringContent: boolean };
-      } = {
-        api: "openai-completions",
-        provider: "deepinfra",
-        id: "anthropic/claude-sonnet-4-6",
-        name: "Claude",
-        baseUrl: "https://api.deepinfra.com/v1/openai",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-        compat: { requiresStringContent },
-      };
-      let payload: Record<string, unknown> = {};
-      const base: StreamFn = (resolvedModel, context, options) => {
-        payload = buildOpenAICompletionsParams(resolvedModel, context, {
-          cacheRetention: options?.cacheRetention,
-        });
-        options?.onPayload?.(payload, resolvedModel);
-        return createAssistantMessageEventStream();
-      };
-      const wrapped = await registeredWrapper(base, model.id, cacheRetention);
-      void wrapped(model, {
+    [ANTHROPIC, undefined, "none", false, undefined, undefined, undefined, false],
+    [ANTHROPIC, undefined, "short", true, undefined, undefined, undefined, false],
+    [NEMOTRON, "off", undefined, false, undefined, { enabled: false }, undefined, false],
+    [NEMOTRON, "high", undefined, false, undefined, { effort: "high" }, undefined, false],
+    [NEMOTRON, undefined, undefined, false, undefined, undefined, undefined, false],
+    [DEEPSEEK, "off", undefined, false, "deepseek", undefined, { type: "disabled" }, false],
+    [ANTHROPIC, "off", undefined, false, undefined, undefined, undefined, true],
+    ["zai-org/GLM-5.3", "off", undefined, false, undefined, undefined, undefined, false],
+  ] as const)("serializes managed reasoning and cache policy for %s", async (...row) => {
+    const [id, level, retention, stringOnly, format, reasoning, thinking, cache] = row;
+    const model: Model<"openai-completions"> & { compat: { requiresStringContent: boolean } } = {
+      ...makeModel(id),
+      reasoning: true,
+      compat: { requiresStringContent: stringOnly, thinkingFormat: format },
+    };
+    let payload: Record<string, unknown> = {};
+    const capture = vi.fn<typeof fetch>(async (input, init) => {
+      const request = new Request(input, init);
+      expect(request.url).toBe("https://api.deepinfra.com/v1/openai/chat/completions");
+      payload = JSON.parse(await request.text());
+      return new Response(
+        'data: {"id":"capture","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"Synthetic response"},"finish_reason":null}]}\n\ndata: {"id":"capture","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    });
+    vi.stubGlobal("fetch", capture);
+    // String-only content is a managed transport contract.
+    const base = stringOnly ? createOpenAICompletionsTransportStreamFn() : streamSimple;
+    const wrapped = await registeredWrapper(base, id, retention, level);
+    const stream = await wrapped(
+      model,
+      {
         systemPrompt: "STABLE",
         messages: [{ role: "user", content: "Question", timestamp: 1 }],
-      });
-      expect(JSON.stringify(payload)).not.toContain("cache_control");
-      expect(payload.messages).toEqual([
-        { role: "system", content: "STABLE" },
-        { role: "user", content: "Question" },
-      ]);
-    },
-  );
-
-  it("preserves native Anthropic Messages payloads and options", async () => {
-    const initialPayload = {
-      system: [{ type: "text", text: "system", cache_control: { type: "ephemeral" } }],
-      messages: [{ role: "user", content: [{ type: "text", text: "question" }] }],
-    };
-    const { captured, baseCacheRetention } = await capturePayload({
-      modelId: "anthropic/claude-sonnet-4-6",
-      api: "anthropic-messages",
-      cacheRetention: "long",
-      initialPayload,
-    });
-    expect(captured).toEqual(initialPayload);
-    expect(baseCacheRetention).toBeUndefined();
-  });
-
-  it("does not mutate payloads for non-anthropic model ids", async () => {
-    const initialPayload = {
-      messages: [
-        { role: "system", content: "sys" },
-        { role: "user", content: "Hi" },
-      ],
-    };
-    const { captured, baseCalls, baseCacheRetention } = await capturePayload({
-      modelId: "deepseek-ai/DeepSeek-V4-Flash",
-      initialPayload,
-    });
-
-    expect(baseCalls).toBe(1);
-    expect(captured).toEqual(initialPayload);
-    expect(baseCacheRetention).toBeUndefined();
+      },
+      { apiKey: "synthetic-local-only", reasoning: level },
+    );
+    expect((await stream.result()).stopReason).toBe("stop");
+    expect(capture).toHaveBeenCalledOnce();
+    expect(payload.reasoning).toEqual(reasoning);
+    expect(payload.thinking).toEqual(thinking);
+    expect(payload).not.toHaveProperty("reasoning_effort");
+    expect(JSON.stringify(payload).includes('"cache_control"')).toBe(cache);
+    if (!cache) {
+      expect(payload.messages).toEqual(conversation("STABLE", "Question").messages);
+    }
   });
 });

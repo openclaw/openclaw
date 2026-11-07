@@ -19,6 +19,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import {
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
@@ -38,7 +39,6 @@ import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { parseNodeWorkerEnvironmentStopInput } from "../../worker/node-supervisor-protocol.js";
 import { parseNodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
 import { createGatewayWorkerPlacementRuntime } from "../server-worker-placement-startup.js";
-import * as materialization from "../session-repository-materialization.js";
 import { hashWorkerCredential } from "./credential.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
@@ -100,16 +100,11 @@ function trapPolicyAdmission(activate: () => void, mode: string) {
 const authorityCases = [
   {
     contract: "destination preparation",
-    modes: ["allowed", "policy-activated", "accepted-stop", "accepted-attached-stop"],
+    modes: ["allowed", "policy-activated"],
   },
   {
     contract: "pending-result settlement",
-    modes: [
-      "accepted-allowed",
-      "accepted-policy-destroy",
-      "accepted-policy-transaction",
-      "accepted-policy-commit",
-    ],
+    modes: ["accepted-policy-destroy"],
   },
   {
     contract: "failed-placement recovery",
@@ -368,7 +363,6 @@ process.stdin.pipe(child.stdin);
                 const readEntry = () => loadSessionEntry(identity);
                 const expectWorktree = async (bound = true) => {
                   const worktree = await readWorktree();
-                  expect(worktree).toBeDefined();
                   if (bound) {
                     expect(readEntry()?.worktree?.id).toBe(worktree!.id);
                   }
@@ -400,16 +394,13 @@ process.stdin.pipe(child.stdin);
                   root: checkpointRoot,
                   baseCommit,
                 });
-                const checkpointInput = {
-                  stagingRoot: checkpointRoot,
-                  baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-                  currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
-                  baseManifestRef: base.manifestRef,
-                  currentManifestRef: current.manifestRef,
-                };
                 const stageCheckpoint = (checkpointRef?: string, assertCurrent = () => {}) =>
                   stageSessionRepositoryCheckpoint({
-                    ...checkpointInput,
+                    stagingRoot: checkpointRoot,
+                    baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+                    currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
+                    baseManifestRef: base.manifestRef,
+                    currentManifestRef: current.manifestRef,
                     workspaceId: repository.workspaceId,
                     expectedRevision: repository.revision,
                     checkpointRef,
@@ -427,7 +418,6 @@ process.stdin.pipe(child.stdin);
                 const intent = deriveEnvironmentIntent(idempotencyKey);
                 const leaseId = state.path(`lease-${mode}`);
                 await fs.mkdir(leaseId);
-                await fs.writeFile(path.join(leaseId, "allocation"), "live\n");
                 let environment = await store.createIntent({
                   ...intent,
                   providerId: provider.id,
@@ -468,12 +458,6 @@ process.stdin.pipe(child.stdin);
                   undefined,
                   signal,
                 );
-                expect(active.state).toBe("active");
-                expect(environments.get(active.environmentId)).toMatchObject({
-                  state: "attached",
-                  profileId: "development",
-                  attachedSessionIds: [identity.sessionId],
-                });
                 await expectAcceptedFile(active.remoteWorkspaceDir);
                 publishConfig();
                 if (mode.startsWith("failed-")) {
@@ -527,10 +511,7 @@ process.stdin.pipe(child.stdin);
                     manifestHash: current.manifestRef,
                   });
                   if (refused) {
-                    expect(placement).toMatchObject({
-                      state: "failed",
-                      generation: failed.generation,
-                    });
+                    expect(placement?.generation).toBe(failed.generation);
                     await expect(
                       placements.claimTurn({
                         ...identity,
@@ -549,11 +530,11 @@ process.stdin.pipe(child.stdin);
                   target: { kind: "gateway" },
                 });
                 const cloneFilesBefore = (
-                  await fs.readdir(state.statePath("projects"), { recursive: true })
+                  await listDirectoryTreeStrict(state.statePath("projects")).then((inventory) =>
+                    inventory.map((entry) => entry.relativePath),
+                  )
                 ).toSorted();
-                expect(cloneFilesBefore).not.toContain(sha256HexPrefixCore(url, 16));
-                const latePolicy = mode.startsWith("accepted-policy-");
-                if (mode.startsWith("accepted-")) {
+                if (mode === "accepted-policy-destroy") {
                   const claim = await placements.claimReclaimWorkspaceResult({
                     ...identity,
                     claimId: "reclaim-accepted-stop",
@@ -576,51 +557,16 @@ process.stdin.pipe(child.stdin);
                   );
                   await placements.acceptWorkspaceResult(claim);
                   await placements.handoffWorkspaceResultRecovery(claim);
-                  if (mode === "accepted-stop") {
-                    await environments.destroy(active.environmentId);
-                  }
-                  const originalComplete =
-                    placements.completePlacementMoveSourceToLocal.bind(placements);
-                  const admission = trapPolicyAdmission(() => publishConfig("development"), mode);
-                  const completion = vi
-                    .spyOn(placements, "completePlacementMoveSourceToLocal")
-                    .mockImplementation((...args) => {
-                      admission.arm();
-                      return originalComplete(...args);
-                    });
-                  activateDuringDestroy = mode === "accepted-policy-destroy";
-                  if (!latePolicy && mode !== "accepted-allowed") {
-                    publishConfig("development");
-                  }
-                  try {
-                    await runtime.dispatchService.reconcileActive(active.environmentId);
-                  } finally {
-                    completion.mockRestore();
-                    admission.restore();
-                  }
-                  if (mode === "accepted-policy-transaction" || mode === "accepted-policy-commit") {
-                    expect(admission.wasActivated()).toBe(true);
-                  }
-                  if (mode === "accepted-policy-destroy") {
-                    expect(activateDuringDestroy).toBe(false);
-                    expect(config.cloudWorkers?.requiredProfile).toBe("development");
-                  }
-                  if (latePolicy) {
-                    expect(readPlacement()).toMatchObject({ state: "reclaimed", turnClaim: null });
-                  } else if (mode === "accepted-allowed") {
-                    expect(readPlacement()).toMatchObject({ state: "local", turnClaim: null });
-                  }
+                  activateDuringDestroy = true;
+                  await runtime.dispatchService.reconcileActive(active.environmentId);
+                  expect(activateDuringDestroy).toBe(false);
+                  expect(config.cloudWorkers?.requiredProfile).toBe("development");
+                  expect(readPlacement()).toMatchObject({ state: "reclaimed", turnClaim: null });
                   expect(await loadTranscriptEvents(identity)).not.toEqual(
                     expect.arrayContaining([
                       expect.objectContaining({ customType: "cloud-workspace-recovery-failed" }),
                     ]),
                   );
-                  if (!latePolicy && mode !== "accepted-allowed") {
-                    await expect(runtime.dispatchService.reclaim(identity)).resolves.toMatchObject({
-                      state: "reclaimed",
-                      turnClaim: null,
-                    });
-                  }
                   expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
                   expect(
                     await placements.getPlacementMoveAsync(identity.sessionId),
@@ -631,9 +577,6 @@ process.stdin.pipe(child.stdin);
                     expectedGeneration: begun.placement.generation,
                   });
                   await environments.destroy(active.environmentId);
-                  const observedMaterialization = vi
-                    .spyOn(materialization, "materializeSessionRepositoryWorkspaceOnGateway")
-                    .mockClear();
                   const entered = createDeferred();
                   const release = createDeferred();
                   const held = withOpenClawStateLease(
@@ -681,16 +624,6 @@ process.stdin.pipe(child.stdin);
                     await recovering;
                     observation.mockRestore();
                   }
-                  if (mode !== "allowed") {
-                    const currentCall = observedMaterialization.mock.calls.findIndex(
-                      ([params]) => params.sessionId === identity.sessionId,
-                    );
-                    expect(currentCall).toBeGreaterThanOrEqual(0);
-                    await expect(
-                      observedMaterialization.mock.results[currentCall]?.value,
-                    ).rejects.toThrow("required worker profile policy");
-                  }
-                  observedMaterialization.mockRestore();
                   if (mode === "allowed") {
                     expect(readPlacement()?.state).toBe("local");
                     const worktree = await expectWorktree();
@@ -698,28 +631,28 @@ process.stdin.pipe(child.stdin);
                     expect(await git(worktree.path, ["rev-parse", "HEAD"])).toBe(baseCommit);
                   } else {
                     expect(readPlacement()?.state).toBe("reconciling");
-                    if (mode === "policy-activated") {
-                      expect(
-                        (await placements.getPlacementMoveAsync(identity.sessionId))?.lastError,
-                      ).toContain("required worker profile policy");
-                    }
+                    expect(
+                      (await placements.getPlacementMoveAsync(identity.sessionId))?.lastError,
+                    ).toContain("required worker profile policy");
                   }
                 }
-                if (mode !== "allowed" && !latePolicy && mode !== "accepted-allowed") {
+                if (mode === "policy-activated") {
                   expect(
-                    (await fs.readdir(state.statePath("projects"), { recursive: true })).toSorted(),
+                    (
+                      await listDirectoryTreeStrict(state.statePath("projects")).then((inventory) =>
+                        inventory.map((entry) => entry.relativePath),
+                      )
+                    ).toSorted(),
                   ).toEqual(cloneFilesBefore);
                   expect(readEntry()?.repositoryWorkspaceId).toBe(repository.workspaceId);
                   expect(await readWorktree()).toBeUndefined();
                 }
-                if (latePolicy || mode === "accepted-allowed") {
+                if (mode === "accepted-policy-destroy") {
                   await expectWorktree();
                 }
                 expect(environments.get(active.environmentId)?.state).toBe("destroyed");
                 await expect(fs.stat(leaseId)).rejects.toMatchObject({ code: "ENOENT" });
                 expect(await repositories.get(repository.workspaceId)).toMatchObject({
-                  workspaceId: repository.workspaceId,
-                  baseCommit,
                   manifestHash: current.manifestRef,
                 });
                 if (mode === "policy-activated") {

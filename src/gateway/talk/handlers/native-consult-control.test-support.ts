@@ -41,6 +41,23 @@ type NativeControlHarness = {
   submitProviderResult: ReturnType<typeof vi.fn>;
 };
 
+export async function createNativeTalkCall(
+  dispatch: NativeControlHarness["dispatch"],
+  browser: boolean,
+  params: Record<string, unknown> = {},
+) {
+  const respond = await dispatch(browser ? "talk.client.create" : "talk.session.create", {
+    sessionKey: "main",
+    mode: "realtime",
+    brain: "agent-consult",
+    transport: browser ? "webrtc" : "gateway-relay",
+    ...(browser ? { capabilities: ["gateway-control-v1"] } : {}),
+    ...params,
+  });
+  expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+  return respond.mock.calls[0]![1] as { voiceSessionId?: string; sessionId?: string };
+}
+
 export function registerNativeConsultExactControlTests(harness: NativeControlHarness) {
   const cancel = { text: "cancel", mode: "cancel" };
   const success = async (
@@ -86,15 +103,7 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
         }
       });
       const browser = surface !== "relay";
-      const createMethod = browser ? "talk.client.create" : "talk.session.create";
-      const createParams = {
-        sessionKey: "main",
-        mode: "realtime",
-        brain: "agent-consult",
-        transport: browser ? "webrtc" : "gateway-relay",
-        ...(browser ? { capabilities: ["gateway-control-v1"] } : {}),
-      };
-      const result = await success(createMethod, createParams);
+      const result = await createNativeTalkCall(harness.dispatch, browser);
       const voiceId = result.voiceSessionId ?? result.sessionId!;
       let controlSessionId = result.sessionId;
       const cancelsOriginal =
@@ -115,10 +124,11 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
           sessionId: active.sessionId,
         });
         if (replacement === "other call" || replacement === "same call") {
-          const call = await success(createMethod, {
-            ...createParams,
-            ...(replacement === "same call" ? { voiceSessionId: result.voiceSessionId } : {}),
-          });
+          const call = await createNativeTalkCall(
+            harness.dispatch,
+            browser,
+            replacement === "same call" ? { voiceSessionId: result.voiceSessionId } : {},
+          );
           expect((call.voiceSessionId ?? call.sessionId) === voiceId).toBe(
             replacement === "same call",
           );

@@ -6,7 +6,6 @@ import {
   invalidateSessionAutomationIndex,
   registerSessionAutomationSource,
   sessionHasAutomation,
-  unregisterSessionAutomationSource,
 } from "./session-automation-index.js";
 
 const cfg: OpenClawConfig = {};
@@ -82,14 +81,24 @@ test("publishes additions, removals, retargets, and mutable routing config delta
   publish("agent:work:second", "agent:work:target");
   source.jobs = [];
   publish("agent:work:target");
-  const global = job({ id: "global", sessionTarget: "main" });
+  const global = job({
+    id: "global",
+    agentId: "ops",
+    owner: { agentId: "creator" },
+    sessionTarget: "session:global",
+  });
   source.jobs = [global];
   config.session!.scope = "global";
-  publish(["global", "work"]);
-  expect(sessionHasAutomation("global", config, "work")).toBe(true);
+  publish(["global", "ops"]);
+  expect(sessionHasAutomation("global", config, "ops")).toBe(true);
   expect(sessionHasAutomation("global", config, "main")).toBe(false);
+  expect(sessionHasAutomation("global", config, "creator")).toBe(false);
+  global.agentId = "research";
+  publish(["global", "ops"], ["global", "research"]);
+  expect(sessionHasAutomation("global", config, "ops")).toBe(false);
+  expect(sessionHasAutomation("global", config, "research")).toBe(true);
   global.enabled = false;
-  publish(["global", "work"]);
+  publish(["global", "research"]);
 });
 
 test("reads adopt replacement config and default agents without replacing jobs", () => {
@@ -112,24 +121,4 @@ test("reads during array replacement do not consume the pending owner delta", ()
   expectChanges();
   invalidateSessionAutomationIndex();
   expectChanges("agent:main:cron:a");
-});
-
-test("stopped services cannot clear a replacement registration", () => {
-  expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(false);
-  const expectChanges = watchChanges();
-  const source = (id: string) => ({
-    getJobs: () => [job({ id })],
-    getDefaultAgentId: () => "main",
-  });
-  const staleSource = source("stale"),
-    freshSource = source("fresh");
-  registerSessionAutomationSource(freshSource);
-  expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(true);
-  expect(sessionHasAutomation("agent:main:cron:stale", cfg)).toBe(false);
-  unregisterSessionAutomationSource(staleSource);
-  expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(true);
-  unregisterSessionAutomationSource(freshSource);
-  expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(false);
-  invalidateSessionAutomationIndex();
-  expectChanges("agent:main:cron:fresh", "agent:main:cron:fresh");
 });

@@ -146,61 +146,52 @@ function prepareSlackConversationRouteOwner(
   };
 }
 
-async function prepareSlackConversationRouteOwnersAsync(
-  inputs: readonly Parameters<
-    NonNullable<ChannelMessagingAdapter["resolveConversationRouteOwner"]>
-  >[0][],
-  inspectBindings: Parameters<
-    NonNullable<ChannelMessagingAdapter["prepareConversationRouteOwnersAsync"]>
-  >[1],
-) {
-  const prepared = inputs.map(prepareSlackConversationRouteOwner);
-  const refs = prepared.flatMap((item) =>
-    item.kind === "prepared" && item.route.bindingsEnabled
-      ? [
-          {
-            channel: "slack",
-            accountId: item.route.accountId,
-            conversationId: item.route.baseConversationId,
-          },
-          ...(item.route.runtimeBindingThreadId
-            ? [
-                {
-                  channel: "slack",
-                  accountId: item.route.accountId,
-                  conversationId: item.route.runtimeBindingThreadId,
-                  parentConversationId: item.route.baseConversationId,
-                },
-              ]
-            : []),
-        ]
-      : [],
-  );
-  const inspect = await inspectBindings(refs);
-  let index = 0;
-  const nextInspection = () => {
-    const position = index++;
-    return () => {
-      const inspection = inspect()[position];
-      if (!inspection) {
-        throw new Error("Slack binding owner returned an incomplete selection");
-      }
-      return inspection;
-    };
-  };
-  return prepared.map((item) => {
-    if (item.kind === "terminal") {
-      return () => item.owner;
-    }
-    const base = item.route.bindingsEnabled
-      ? nextInspection()
-      : () => ({ status: "available" as const, binding: null });
-    const thread =
-      item.route.bindingsEnabled && item.route.runtimeBindingThreadId ? nextInspection() : base;
-    return () => item.resolve({ base: base(), thread: thread() });
-  });
-}
-
 export const slackConversationRouteOwners = {
-  prepareConversationRouteOwnersAsync: prepareSlackConversationRouteOwnersAsync,
-};
+  prepareConversationRouteOwnersAsync: async (inputs, inspectBindings) => {
+    const prepared = inputs.map(prepareSlackConversationRouteOwner);
+    const refs = prepared.flatMap((item) =>
+      item.kind === "prepared" && item.route.bindingsEnabled
+        ? [
+            {
+              channel: "slack",
+              accountId: item.route.accountId,
+              conversationId: item.route.baseConversationId,
+            },
+            ...(item.route.runtimeBindingThreadId
+              ? [
+                  {
+                    channel: "slack",
+                    accountId: item.route.accountId,
+                    conversationId: item.route.runtimeBindingThreadId,
+                    parentConversationId: item.route.baseConversationId,
+                  },
+                ]
+              : []),
+          ]
+        : [],
+    );
+    const inspect = await inspectBindings(refs);
+    let index = 0;
+    const nextInspection = () => {
+      const position = index++;
+      return () => {
+        const inspection = inspect()[position];
+        if (!inspection) {
+          throw new Error("Slack binding owner returned an incomplete selection");
+        }
+        return inspection;
+      };
+    };
+    return prepared.map((item) => {
+      if (item.kind === "terminal") {
+        return () => item.owner;
+      }
+      const base = item.route.bindingsEnabled
+        ? nextInspection()
+        : () => ({ status: "available" as const, binding: null });
+      const thread =
+        item.route.bindingsEnabled && item.route.runtimeBindingThreadId ? nextInspection() : base;
+      return () => item.resolve({ base: base(), thread: thread() });
+    });
+  },
+} satisfies Pick<ChannelMessagingAdapter, "prepareConversationRouteOwnersAsync">;

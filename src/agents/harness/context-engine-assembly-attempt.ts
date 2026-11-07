@@ -1,5 +1,4 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { AsyncContext } from "../../shared/async-context.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -20,9 +19,8 @@ export type ContextEngineAssemblySnapshot = AssemblyTarget & {
 type AssemblyAttempt = { snapshot?: ContextEngineAssemblySnapshot };
 // Core selection and SDK assembly can load in different runtime chunks. Share the
 // scope carrier, never a last-budget value or settings across attempts.
-const assemblyAttempt = resolveGlobalSingleton(
+const assemblyAttempt = new AsyncContext<AssemblyAttempt>(
   Symbol.for("openclaw.contextEngineAssemblyAttempt"),
-  () => new AsyncLocalStorage<AssemblyAttempt>(),
 );
 
 /** Each concrete retry owns its assembly facts; rejected and concurrent attempts share none. */
@@ -63,7 +61,15 @@ export function readContextEngineAssemblyBudget(
 }
 
 export function resolveContextEngineCompletionRuntimeContext(
-  params: EmbeddedRunAttemptParams,
+  params: Pick<
+    EmbeddedRunAttemptParams,
+    | "provider"
+    | "modelId"
+    | "sessionKey"
+    | "contextTokenBudget"
+    | "modelContextWindow"
+    | "authoredContextTokenCap"
+  >,
   result: EmbeddedRunAttemptResult,
   nativeSession: boolean,
   assembly: ContextEngineAssemblySnapshot | undefined,
@@ -81,6 +87,7 @@ export function resolveContextEngineCompletionRuntimeContext(
     },
     assembly ?? null,
   );
+  const promptCache = result.promptCache ? { promptCache: result.promptCache } : {};
   // A startup estimate may describe the thread's previous model.
   const reportedContextTokens =
     result.contextTokensSource === "runtime" || result.contextTokensSource === "runtime-configured"
@@ -100,6 +107,7 @@ export function resolveContextEngineCompletionRuntimeContext(
       ...(assemblyBudget === undefined && reportedContextTokens === undefined
         ? {}
         : { tokenBudget: assemblyBudget ?? reportedContextTokens }),
+      ...promptCache,
     };
   }
   return {
@@ -114,5 +122,6 @@ export function resolveContextEngineCompletionRuntimeContext(
       params.contextTokenBudget ??
       reportedContextTokens ??
       params.authoredContextTokenCap,
+    ...promptCache,
   };
 }

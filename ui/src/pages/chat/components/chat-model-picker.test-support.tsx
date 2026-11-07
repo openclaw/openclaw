@@ -47,3 +47,12 @@ export function mountModelPicker(params: Partial<PickerProps>, options?: MountSo
 }
 export const waitForModelMenu = (container: HTMLElement) =>
   waitForSolid(() => expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull());
+
+export function expandModelProviders(container: HTMLElement) {
+  for (const toggle of container.querySelectorAll<HTMLButtonElement>(
+    '[data-chat-model-provider-toggle][aria-expanded="false"]',
+  )) {
+    toggle.click();
+    flush();
+  }
+}

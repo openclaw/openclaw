@@ -3,9 +3,11 @@ import { createHash } from "node:crypto";
 import { addAbortListener } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { observeSettlement } from "../../agents/promise-settlement.test-support.js";
 import {
   readActualWorkspaceManifestImpl,
   readWorkspaceFileContentsWithLimit,
@@ -13,6 +15,8 @@ import {
 } from "./workspace-actual-manifest.js";
 import { withWorkspaceHashMemo, workspaceStatIdentity } from "./workspace-hash-memo.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limits.js";
+import { sha256, workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
+import { writeWorkspaceFiles } from "./workspace-sync-scripts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -29,15 +33,6 @@ async function inventoryFixture(count = 0) {
   const capture = (options: Omit<InventoryOptions, "root" | "baseCommit"> = {}) =>
     readActualWorkspaceManifestImpl({ root, baseCommit: null, ...options });
   return { root, files, capture };
-}
-
-function observeSettlement(promise: Promise<unknown>) {
-  let settled = false;
-  const markSettled = () => {
-    settled = true;
-  };
-  void promise.then(markSettled, markSettled);
-  return () => settled;
 }
 
 it.each(["before traversal", "during traversal", "root resolution", "safe-root setup"] as const)(
@@ -95,7 +90,7 @@ it.each(["before traversal", "during traversal", "root resolution", "safe-root s
   },
 );
 
-it.for(["metadata", "files"] as const)(
+it.for(["metadata", "walk metadata", "files"] as const)(
   "bounds pending promise resources while %s operations are blocked",
   async (phase, { signal }) => {
     const { root, files, capture } = await inventoryFixture(512);
@@ -111,7 +106,7 @@ it.for(["metadata", "files"] as const)(
         await gate.promise;
       }
     };
-    if (phase === "metadata") {
+    if (phase !== "files") {
       const lstat = fs.lstat.bind(fs);
       vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
         await pause(args[0]);
@@ -135,7 +130,7 @@ it.for(["metadata", "files"] as const)(
         pendingPromises.delete(id);
       },
     }).enable();
-    const scan = capture({ includePaths: new Set(files) });
+    const scan = capture(phase === "walk metadata" ? {} : { includePaths: new Set(files) });
     const cancelWait = addAbortListener(signal, () => allStarted.reject(signal.reason));
     try {
       await Promise.race([allStarted.promise, scan]);
@@ -219,11 +214,12 @@ const metadataFailures = [
   "metadata error",
   "caller abort",
   "abort before metadata error",
+  "walk metadata error",
   "walk abort before metadata error",
 ] as const;
 it.each(metadataFailures)("settles metadata after %s", async (failure) => {
-  const walk = failure === "walk abort before metadata error";
-  const admitted = walk ? 1 : 4;
+  const walk = failure.startsWith("walk ");
+  const metadataError = failure === "metadata error" || failure === "walk metadata error";
   const { root, files, capture } = await inventoryFixture(9);
   const lstat = fs.lstat.bind(fs);
   const gates: Array<ReturnType<typeof createDeferred<void>>> = [];
@@ -257,19 +253,17 @@ it.each(metadataFailures)("settles metadata after %s", async (failure) => {
   });
   const settled = observeSettlement(scan);
   try {
-    await vi.waitFor(() => expect(gates).toHaveLength(admitted));
-    if (failure !== "metadata error") {
+    await vi.waitFor(() => expect(gates).toHaveLength(4));
+    if (!metadataError) {
       controller.abort(abortError);
     }
     gates[0]!.resolve();
     await failed.promise;
     expect(settled()).toBe(false);
-    expect(started).toBe(admitted);
-    if (failure === "metadata error") {
+    expect(started).toBe(4);
+    if (metadataError) {
       // Let the rejected operation reach the scan owner before the later cancellation.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await setImmediate();
       controller.abort(abortError);
     }
   } finally {
@@ -279,8 +273,8 @@ it.each(metadataFailures)("settles metadata after %s", async (failure) => {
     }
     await Promise.allSettled([scan]);
   }
-  await expect(scan).rejects.toBe(failure === "metadata error" ? error : abortError);
-  expect(started).toBe(admitted);
+  await expect(scan).rejects.toBe(metadataError ? error : abortError);
+  expect(started).toBe(4);
   expect(opened).not.toHaveBeenCalled();
 });
 
@@ -338,16 +332,14 @@ it("stops an admitted directory enumeration on caller cancellation", async () =>
 
 it("preserves bottom-up directory membership and canonical output across input orders", async () => {
   const root = await fs.realpath(tempDirs.make("workspace-inventory-membership-"));
-  for (const file of [
+  const files = [
     "cache/nested/node_modules/pkg/file.js",
     "mixed/child/keep.txt",
     "mixed/node_modules/pkg/file.js",
     "Zebra.txt",
     "älg.txt",
-  ]) {
-    await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
-    await fs.writeFile(path.join(root, file), file);
-  }
+  ];
+  await writeWorkspaceFiles(root, Object.fromEntries(files.map((file) => [file, file])));
   await fs.mkdir(path.join(root, "preserved/node_modules"), { recursive: true });
   await fs.symlink("../outside", path.join(root, "escaping"));
   const included = [
@@ -372,6 +364,7 @@ it("preserves bottom-up directory membership and canonical output across input o
       includePaths: new Set(paths),
       preserveDirectories: new Set(["preserved"]),
     });
+  const opened = vi.spyOn(fs, "opendir");
   const first = await capture(included);
   const reversed = await capture(included.toReversed());
   expect(first.manifest.directories).toEqual(["mixed", "mixed/child", "preserved"]);
@@ -381,9 +374,16 @@ it("preserves bottom-up directory membership and canonical output across input o
     "älg.txt",
   ]);
   expect(reversed).toEqual(first);
+  expect(opened.mock.calls.map(([directory]) => path.relative(root, String(directory)))).toEqual([
+    "cache/nested",
+    "cache",
+    "cache/nested",
+    "cache",
+  ]);
 });
 
 it("reserves aggregate inventory bytes even when every file hits the hash memo", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
   const { root, capture } = await inventoryFixture();
   const memo = new Map<string, string>();
   const metrics = { contentHashCount: 0, memoHitCount: 0 };
@@ -402,7 +402,31 @@ it("reserves aggregate inventory bytes even when every file hits the hash memo",
   expect(metrics).toMatchObject({ contentHashCount: 0, memoHitCount: 1 });
 });
 
+it("opens only changed file content while retaining fresh edits and deletions", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+  const { root, files, capture } = await inventoryFixture(3);
+  const memo = new Map<string, string>();
+  const read = () => withWorkspaceHashMemo(memo, () => capture());
+  const first = await read();
+  const changed = path.join(root, files[1]!);
+  const before = await fs.stat(changed);
+  await fs.writeFile(changed, "edited");
+  // Size and mtime alone cannot identify a file's contents.
+  await fs.utimes(changed, before.atime, before.mtime);
+  await fs.unlink(path.join(root, files[2]!));
+  const opened = vi.spyOn(fs, "open");
+  const next = await read();
+  expect(next.manifestRef).not.toBe(first.manifestRef);
+  expect(next.manifest.entries.map((entry) => entry.path)).toEqual(files.slice(0, 2));
+  expect(next.manifest.entries[1]).toMatchObject({
+    sha256: createHash("sha256").update("edited").digest("hex"),
+  });
+  expect(opened.mock.calls.some(([file]) => file === path.join(root, files[0]!))).toBe(false);
+  expect(opened.mock.calls.some(([file]) => file === changed)).toBe(true);
+});
+
 it("bounds active fallback scratch across inventories and skips reads on memo hits", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
   vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
   const fixtures = await Promise.all(
     [0, 1].map(async (owner) => {
@@ -415,13 +439,7 @@ it("bounds active fallback scratch across inventories and skips reads on memo hi
             owner * 32 + index,
           );
           await fs.writeFile(path.join(root, file), bytes);
-          return {
-            path: file,
-            type: "file",
-            mode: 0o644,
-            size: bytes.length,
-            sha256: createHash("sha256").update(bytes).digest("hex"),
-          };
+          return workspaceFile(file, bytes);
         }),
       );
       const memo = new Map<string, string>();
@@ -490,7 +508,7 @@ it.each(["", "\u0000binary\u00ff"])(
     expect(first).toMatchObject({
       type: "file",
       size: expected.length,
-      sha256: createHash("sha256").update(expected).digest("hex"),
+      sha256: sha256(expected),
     });
     expect(second).toEqual(first);
     if (first.type !== "file" || second.type !== "file") {

@@ -1,11 +1,9 @@
 import fs from "node:fs";
-import { IncomingMessage, ServerResponse } from "node:http";
-import { Socket } from "node:net";
+import { ServerResponse } from "node:http";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import * as deviceTokens from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
@@ -18,6 +16,14 @@ import { handleControlUiHttpRequest } from "./control-ui.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { readStoredClaw, writeStoredClaw } from "./openclaw-id/claw-store.js";
+import {
+  setDeviceTokenBindingOwner,
+  setDeviceTokenBindingsLoading,
+} from "./openclaw-id/device-token-binding.js";
+import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
+import { createOpenClawIdService } from "./openclaw-id/service.js";
+import { setOpenClawIdTunnelPrincipalResolver } from "./openclaw-id/tunnel-principal.js";
 import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
 import {
   AUTH_TOKEN,
@@ -31,6 +37,10 @@ import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
+
+function profileRequest(token: string, method = "PUT", headers: Record<string, string> = {}) {
+  return { path: "/profile", method, authorization: `Bearer ${token}`, headers };
+}
 
 async function pairBrowser(scopes: string[], auth = AUTH_TOKEN, controlUi = true) {
   const identity = { deviceId: "browser", role: "operator", scopes };
@@ -108,21 +118,16 @@ it.each(["operator.admin", "operator.read"])(
             ? ["operator.admin", "operator.read", "operator.write"]
             : ["operator.read"];
           for (const method of ["PUT", "POST"]) {
-            const response = await sendRequest(server, {
-              path: "/profile",
-              method,
-              authorization: `Bearer ${token}`,
-              headers: { "x-openclaw-scopes": "operator.admin" },
-            });
+            const response = await sendRequest(
+              server,
+              profileRequest(token, method, { "x-openclaw-scopes": "operator.admin" }),
+            );
             expect(response.res.statusCode).toBe(isAdmin ? 200 : 403);
             expect(JSON.parse(response.getBody())).toEqual({ scopes: expectedScopes });
           }
-          const pending = createRequest({
-            path: "/profile",
-            method: "PUT",
-            authorization: `Bearer ${token}`,
-            headers: { "content-type": "application/json" },
-          });
+          const pending = createRequest(
+            profileRequest(token, "PUT", { "content-type": "application/json" }),
+          );
           const response = createResponse();
           Object.defineProperty(response.res, "writableEnded", {
             get: () => response.res.writableFinished,
@@ -137,11 +142,7 @@ it.each(["operator.admin", "operator.read"])(
           expectUnauthorized(response);
           expect(effects).toBe(previousEffects);
           for (const credential of [token, "wrong-token"]) {
-            const rejected = await sendRequest(server, {
-              path: "/profile",
-              method: "PUT",
-              authorization: `Bearer ${credential}`,
-            });
+            const rejected = await sendRequest(server, profileRequest(credential));
             expectUnauthorized(rejected);
           }
         },
@@ -151,7 +152,94 @@ it.each(["operator.admin", "operator.read"])(
 );
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  setDeviceTokenBindingOwner(undefined);
+  setDeviceTokenBindingsLoading(Promise.resolve());
+  setOpenClawIdTunnelPrincipalResolver(undefined);
+});
+
+// Status of an ordinary-ingress Control UI read with `token`, or null when authorized.
+async function ordinaryReadStatus(token: string): Promise<number | null> {
+  const req = createRequest({ path: "/control-ui-config.json", authorization: `Bearer ${token}` });
+  const res = new ServerResponse(req);
+  try {
+    const authorized = await authorizeControlUiReadRequestOrReply({
+      req,
+      res,
+      auth: AUTH_TOKEN,
+      cfg: {},
+      getRuntimeConfig: () => ({}),
+    });
+    return authorized ? null : res.statusCode;
+  } finally {
+    res.destroy();
+    req.destroy();
+  }
+}
+
+it("keeps a saved tunnel-bound token refused on HTTP after a Gateway start with the switch off", async () => {
+  await withOpenClawTestState({ label: "openclaw-id-http-restart-off" }, async () => {
+    const token = await pairBrowser(["operator.admin"]);
+    const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
+    await claw.authority.bindToken("browser", "operator", claw.w1);
+    // A new service over the saved claw record stands for the restarted Gateway.
+    const service = createOpenClawIdService({
+      getConfig: () => ({ enabled: false }),
+      getStateDir: () => "/nonexistent/openclaw-id-test",
+      getGatewayServer: () => undefined,
+      log: { info: () => {}, warn: () => {} },
+    });
+    const loaded = service.loadTokenBindings();
+    const early = ordinaryReadStatus(token);
+    await loaded;
+    expect(await early).toBe(401);
+    expect(await ordinaryReadStatus(token)).toBe(401);
+    await service.stop();
+  });
+});
+
+it("refuses tunnel-bound HTTP tokens outside the tunnel and token fallback for removed peers", async () => {
+  await withOpenClawTestState({ label: "openclaw-id-http-binding" }, async () => {
+    const token = await pairBrowser(["operator.admin"]);
+    const peerKey = `iroh:${"ac".repeat(32)}`;
+    setDeviceTokenBindingOwner({
+      lookup: () => peerKey,
+      record: async () => {},
+      reportMismatch: () => {},
+    });
+    setOpenClawIdTunnelPrincipalResolver(async () => undefined);
+    for (const tunnel of [false, true]) {
+      const req = createRequest({
+        path: "/control-ui-config.json",
+        authorization: `Bearer ${token}`,
+      });
+      if (tunnel) {
+        markGatewayIngressTransport(req, {
+          kind: "openclaw-id-tunnel",
+          peerKey,
+          clientIp: "fd69:726f:6800::1",
+        });
+      }
+      const res = new ServerResponse(req);
+      try {
+        expect(
+          await authorizeControlUiReadRequestOrReply({
+            req,
+            res,
+            auth: AUTH_TOKEN,
+            cfg: {},
+            getRuntimeConfig: () => ({}),
+          }),
+        ).toBeNull();
+        expect(res.statusCode).toBe(401);
+      } finally {
+        res.destroy();
+        req.destroy();
+      }
+    }
+  });
+});
 
 it("authenticates remote HTTP reads only from the grant and refuses reusable credentials", async () => {
   await withOpenClawTestState({ label: "remote-http-device-ceiling" }, async () => {
@@ -201,8 +289,7 @@ it("keeps the public shell when a paired token is revoked during bootstrap admis
       join(root, "index.html"),
       "<!doctype html><html><head></head><body><openclaw-app></openclaw-app></body></html>",
     );
-    const auth = { mode: "token" as const, token: "synthetic-shared-token", allowTailscale: false };
-    const token = await pairBrowser(["operator.read"], auth);
+    const token = await pairBrowser(["operator.read"]);
     const verify = deviceTokens.verifyDeviceToken;
     vi.spyOn(deviceTokens, "verifyDeviceToken").mockImplementationOnce(async (params) => {
       const result = await verify(params);
@@ -210,18 +297,17 @@ it("keeps the public shell when a paired token is revoked during bootstrap admis
       return result;
     });
 
-    const req = new IncomingMessage(new Socket());
-    req.url = "/control/chat/main/topic";
-    req.method = "GET";
-    req.headers = { authorization: `Bearer ${token}` };
+    const req = createRequest({
+      path: "/control/chat/main/topic",
+      authorization: `Bearer ${token}`,
+    });
     const response = makeMockHttpResponse();
-    const config: OpenClawConfig = {};
     await handleControlUiHttpRequest(req, response.res, {
       basePath: "/control",
       root: { kind: "resolved", path: root },
-      config,
-      getRuntimeConfig: () => config,
-      auth,
+      config: {},
+      getRuntimeConfig: () => ({}),
+      auth: AUTH_TOKEN,
       sessionEntryPath: req.url,
       isSessionEntryCurrent: () => true,
     });

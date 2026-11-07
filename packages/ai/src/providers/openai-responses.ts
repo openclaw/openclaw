@@ -46,7 +46,10 @@ export interface OpenAIResponsesOptions extends BaseOpenAIStreamOptions {
 type OpenAIResponsesReplayOptions = SimpleStreamOptions & {
   authProfileId?: string;
   replayResponsesItemIds?: boolean;
-};
+} & Pick<
+    BaseOpenAIStreamOptions,
+    "openclawCodeModeToolSurface" | "openclawCodeModeAllowedHostedToolTypes"
+  >;
 
 export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIResponsesOptions> = (
   model,
@@ -60,6 +63,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
     stream,
     model,
     output,
+    context,
     options,
     createClient: () => {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -95,6 +99,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
         replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
         sessionId: options?.sessionId,
         authProfileId: options?.authProfileId,
+        mutableInput: Boolean(options?.onPayload),
         replayMode,
       });
 
@@ -146,6 +151,8 @@ export const streamSimpleOpenAIResponses: StreamFunction<
   return streamOpenAIResponses(model, context, {
     ...base,
     authProfileId: replayOptions?.authProfileId,
+    openclawCodeModeToolSurface: replayOptions?.openclawCodeModeToolSurface,
+    openclawCodeModeAllowedHostedToolTypes: replayOptions?.openclawCodeModeAllowedHostedToolTypes,
     reasoningEffort: resolveOpenAISimpleReasoningEffort(model, options?.reasoning),
     replayResponsesItemIds: replayOptions?.replayResponsesItemIds,
   } satisfies OpenAIResponsesOptions);

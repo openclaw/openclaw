@@ -5,7 +5,8 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
+import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
   controlUiBundledSettingsStorageKey,
@@ -65,17 +66,12 @@ function boardResponse(sizeH: number) {
     revision: 1,
     tabs: [{ tabId: "main", title: "Main", position: 0 }],
     widgets: [
-      {
+      createBoardWidget({
         name: "continuity",
-        tabId: "main",
         title: "Dashboard",
-        contentKind: "html",
         sizeW: 12,
         sizeH,
         heightMode: "fixed",
-        position: 0,
-        grantState: "none",
-        revision: 1,
         instanceId: "continuity-instance",
         frameUrl: `${new URL(suite.server.baseUrl).origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/continuity/index.html?bt=ticket`,
         viewTicket: "ticket",
@@ -83,7 +79,7 @@ function boardResponse(sizeH: number) {
         viewGeneration: "0123456789abcdef0123456789abcdef",
         sandboxUrl: buildBoardWidgetSandboxPath({ grantState: "none" }),
         sandboxPort,
-      },
+      }),
     ],
   };
 }
@@ -110,6 +106,27 @@ async function waitForPanelGeometry(page: Page): Promise<void> {
       );
     await Promise.all(animations.map((animation) => animation.finished.catch(() => undefined)));
   });
+}
+
+async function expectSideConversationFits(page: Page) {
+  const chat = page.locator('.sidebar-region__primary[data-region="side"]');
+  await expect
+    .poll(() =>
+      chat.evaluate((element) => {
+        const panel = element.getBoundingClientRect();
+        return [".chat-main__conversation", ".chat-thread", ".agent-chat__composer-shell"].every(
+          (selector) => {
+            const content = element.querySelector(selector)!.getBoundingClientRect();
+            return (
+              content.width > 0 &&
+              content.left >= panel.left - 1 &&
+              content.right <= panel.right + 1
+            );
+          },
+        );
+      }),
+    )
+    .toBe(true);
 }
 
 async function expectPaneHeaderGeometry(page: Page, dock: "left" | "right" | "bottom") {
@@ -201,21 +218,22 @@ suite.define(() => {
         const input = widgetInput(page);
         await input.fill("Keep the release note while discussing changes");
         const identity = await documentIdentity(input);
-        const header = page.locator(".chat-pane__header");
-        const chat = header.getByRole("button", { name: "Chat", exact: true });
+        const panels = page
+          .locator(".sidebar-region__panels-toggle")
+          .getByRole("button", { name: "Panels", exact: true });
         const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await chat.waitFor();
-        expect(await chat.getAttribute("aria-pressed")).toBe("false");
+        await panels.waitFor();
+        expect(await panels.getAttribute("aria-expanded")).toBe("false");
         await expect.poll(() => composer.isVisible()).toBe(false);
         // Details is session context, not a shortcut that reveals the transcript.
         const details = await openChatDetails(page);
         expect(await details.getAttribute("role")).toBe("dialog");
         await expect.poll(() => composer.isVisible()).toBe(false);
         await closeChatDetails(page);
-        await chat.click();
+        await panels.click();
         await composer.fill("Let's review the eight remaining changes.");
         await page.getByText("The release overview is ready.", { exact: false }).waitFor();
-        expect(await chat.getAttribute("aria-pressed")).toBe("true");
+        expect(await panels.getAttribute("aria-expanded")).toBe("true");
         expect(await input.isVisible()).toBe(true);
         // Allow the card inset, but not a fixed-height row when opening Chat.
         const pageHeight = await regionSize(
@@ -225,9 +243,10 @@ suite.define(() => {
         expect(await regionSize(page.locator(".board-widget__frame"), "height")).toBeGreaterThan(
           pageHeight - 32,
         );
-        await chat.click();
+        await panels.click();
         await composer.waitFor({ state: "hidden" });
-        await chat.click();
+        await panels.click();
+        await composer.waitFor();
         expect(await composer.inputValue()).toBe("Let's review the eight remaining changes.");
         // The mobile dock keeps the conversation available and retains the saved desktop layout.
         await page.setViewportSize({ width: 390, height: 844 });
@@ -438,12 +457,14 @@ suite.define(() => {
         await selectChatLayoutAction(paneHeader, /^Swap /);
         await expect.poll(() => dashboard.getAttribute("data-region")).toBe("main");
         await expect.poll(() => regionSize(chat)).toBeCloseTo(width, 0);
+        await expectSideConversationFits(page);
         // Layout settles before the frame-batched geometry event is delivered.
         await expect.poll(() => chat.getAttribute("data-swap-width-invalidated")).toBe("true");
         await expectPaneHeaderGeometry(page, "right");
         for (const dock of ["left", "bottom", "right"] as const) {
           await dockChatSidePanel(page, dock);
           await expectPaneHeaderGeometry(page, dock);
+          await expectSideConversationFits(page);
           if (dock !== "bottom") {
             expect(await regionSize(chat)).toBeCloseTo(width, 0);
           }
@@ -467,6 +488,7 @@ suite.define(() => {
         await expect.poll(() => regionSize(chat)).toBeGreaterThan(width);
         await waitForPanelGeometry(page);
         const resizedWidth = await regionSize(chat);
+        await expectSideConversationFits(page);
         await layoutAndWait(paneHeader, "Minimize side panel", dashboard, chat);
         await expectContinuity();
         await layoutAndWait(paneHeader, /^(Side panel|Minimize side panel)$/, chat);
@@ -480,6 +502,7 @@ suite.define(() => {
         await expect.poll(() => regionSize(chat)).toBeCloseTo(resizedWidth, 0);
         await input.waitFor();
         await expectPaneHeaderGeometry(page, "left");
+        await expectSideConversationFits(page);
         await openChatSidePanelType(page, "Terminal");
         const terminal = page.locator('[data-panel-slot="terminal"] openclaw-terminal-panel');
         await terminal.locator(".tp-session.is-current").click();
@@ -588,8 +611,7 @@ suite.define(() => {
           expect(await mountedCanvas?.evaluate((element) => element.isConnected)).toBe(true);
         }
         await page.setViewportSize({ width: 400, height: 900 });
-        const mobile = page.locator(".agent-chat__header--mobile");
-        await mobile.getByRole("button", { name: "Panels", exact: true }).click();
+        await openChatPanels(page, "mobile");
         const host = page.locator(".chat-mobile-host");
         await host.getByRole("button", { name: "Panels", exact: true }).click();
         await side.locator('.tabstrip-tab[data-tab-value^="hosted:terminal:"]').click();

@@ -1,20 +1,25 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { escapeHtml } from "../shared/html-escape.js";
+import { isOpenClawIdEnabled } from "../shared/openclaw-id-policy.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import {
   buildControlUiRootAssetPath,
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
+  CONTROL_UI_ID_LABS_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
   CONTROL_UI_BUILD_ID_ATTRIBUTE,
   CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   CONTROL_UI_ROOT_PUBLIC_ASSETS,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   isControlUiVersionedPublicAsset,
-  type ControlUiEnvironment,
   type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
-import { selectControlUiRoutePreloads } from "./control-ui-route-preloads.js";
+import {
+  controlUiPreloadLinks,
+  selectControlUiRoutePreloads,
+} from "./control-ui-route-preloads.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sendControlUiHtmlBody } from "./control-ui-static.js";
 import {
@@ -44,7 +49,7 @@ function rewriteControlUiIndexHtmlAssetHrefs(
     replacements.set(`href="${buildControlUiRootAssetPath(normalized, asset)}"`, assetHref);
   }
   // Copy the document once instead of once per matching asset.
-  const pattern = new RegExp([...replacements.keys()].map(escapeRegExp).join("|"), "g");
+  const pattern = new RegExp(Array.from(replacements.keys(), escapeRegExp).join("|"), "g");
   return html.replace(pattern, (match) => replacements.get(match) ?? match);
 }
 
@@ -55,7 +60,7 @@ export async function serveControlUiIndexHtml(
   uiPath: string,
   basePath?: string,
   allowWasm?: boolean,
-  environment?: ControlUiEnvironment,
+  config?: OpenClawConfig,
   buildId?: string,
   sessionEntryPath?: string,
   isSessionEntryCurrent?: () => boolean,
@@ -63,6 +68,7 @@ export async function serveControlUiIndexHtml(
   bootstrapConfig?: ControlUiBootstrapConfig,
 ) {
   const ingress = getRemoteControlUiIngressContext(req);
+  const environment = config?.gateway?.controlUi?.environment;
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
   const preloadRoute =
     uiPath === "/chat" || uiPath.startsWith("/chat/")
@@ -81,6 +87,10 @@ export async function serveControlUiIndexHtml(
   const bootstrapAttribute = bootstrapConfig
     ? ` ${CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE}="${escapeHtml(JSON.stringify(bootstrapConfig))}"`
     : "";
+  // Popup navigations are anonymous even when their opener authenticated with a token.
+  const idAttribute = isOpenClawIdEnabled(config?.gateway?.openclawId)
+    ? ` ${CONTROL_UI_ID_LABS_ATTRIBUTE}="true"`
+    : "";
   const environmentAttributes = environment
     ? ` ${CONTROL_UI_ENVIRONMENT_ATTRIBUTE}="${escapeHtml(JSON.stringify(environment))}"`
     : "";
@@ -97,7 +107,7 @@ export async function serveControlUiIndexHtml(
       .replace(
         /<html\b/i,
         () =>
-          `<html${basePathAttribute}${ingress ? ' data-openclaw-remote-ingress="true"' : ""}${proxySessionEntry ? ' data-openclaw-proxy-session-entry="true"' : ""} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}${bootstrapAttribute}`,
+          `<html${basePathAttribute}${ingress ? ' data-openclaw-remote-ingress="true"' : ""}${proxySessionEntry ? ' data-openclaw-proxy-session-entry="true"' : ""} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}${bootstrapAttribute}${idAttribute}`,
       ),
   );
   const document = sessionEntryPath
@@ -127,5 +137,11 @@ export async function serveControlUiIndexHtml(
     "Cache-Control",
     bootstrapConfig ? "private, no-store" : sessionEntryPath ? "no-store" : "no-cache",
   );
+  const links = controlUiPreloadLinks(withBasePath);
+  if (links.length && (!isSessionEntryCurrent || isSessionEntryCurrent())) {
+    // Final-response preloads avoid the duplicate fetches observed with 103.
+    // The document still rechecks authority after asynchronous compression.
+    res.setHeader("Link", links);
+  }
   await sendControlUiHtmlBody(req, res, document, isSessionEntryCurrent);
 }

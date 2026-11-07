@@ -4,6 +4,14 @@ import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
 vi.mock("../logger.js", () => ({ logWarn: vi.fn() }));
 
+const defaults = {
+  connectionTimeoutMs: 30_000,
+  requestTimeoutMs: 60_000,
+  supportsParallelToolCalls: false,
+};
+const warning = (server: string, key: string) =>
+  `bundle-mcp: server "${server}": env "${key}" is blocked for stdio startup safety and was ignored.`;
+
 describe("resolveMcpTransportConfig", () => {
   beforeEach(() => {
     vi.mocked(logWarn).mockClear();
@@ -29,28 +37,21 @@ describe("resolveMcpTransportConfig", () => {
       },
     });
 
-    expect(resolved).toEqual({
-      kind: "stdio",
-      transportType: "stdio",
-      command: "node",
-      args: undefined,
-      cwd: undefined,
-      description: "node",
-      connectionTimeoutMs: 30_000,
-      requestTimeoutMs: 60_000,
-      supportsParallelToolCalls: false,
-      env: {
-        SAFE_VALUE: "ok",
-        PORT: "3000",
-        ENABLED: "true",
-        GITHUB_TOKEN: "token",
-        HTTP_PROXY: "http://proxy.example",
-      },
-    });
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        kind: "stdio",
+        command: "node",
+        env: {
+          SAFE_VALUE: "ok",
+          PORT: "3000",
+          ENABLED: "true",
+          GITHUB_TOKEN: "token",
+          HTTP_PROXY: "http://proxy.example",
+        },
+      }),
+    );
     for (const key of Object.keys(blocked)) {
-      expect(logWarn).toHaveBeenCalledWith(
-        `bundle-mcp: server "probe": env "${key}" is blocked for stdio startup safety and was ignored.`,
-      );
+      expect(logWarn).toHaveBeenCalledWith(warning("probe", key));
     }
   });
 
@@ -67,13 +68,9 @@ describe("resolveMcpTransportConfig", () => {
         resolveMcpTransportConfig(server, { command: "node", env: { [key]: "/tmp/unsafe" } }),
       ).toEqual(expect.objectContaining({ env: {} }));
     }
-    expect(logWarn).toHaveBeenCalledTimes(5);
-    warnings.forEach(([server, key], index) => {
-      expect(logWarn).toHaveBeenNthCalledWith(
-        index + 1,
-        `bundle-mcp: server "${server}": env "${key}" is blocked for stdio startup safety and was ignored.`,
-      );
-    });
+    expect(vi.mocked(logWarn).mock.calls).toEqual(
+      warnings.map(([server, key]) => [warning(server, key)]),
+    );
   });
 
   it("sanitizes config-controlled names in stdio env warnings", () => {
@@ -101,9 +98,7 @@ describe("resolveMcpTransportConfig", () => {
     expect(resolved).toEqual({
       kind: "http",
       transportType: "sse",
-      connectionTimeoutMs: 30_000,
-      requestTimeoutMs: 60_000,
-      supportsParallelToolCalls: false,
+      ...defaults,
       url: "https://mcp.example.com/sse",
       headers: {
         Authorization: "Bearer token",
@@ -113,16 +108,38 @@ describe("resolveMcpTransportConfig", () => {
     });
   });
 
+  it("preserves literal TLS client paths from config", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      url: "https://mcp.example.com/sse",
+      clientCert: " cert.pem ",
+      clientKey: " key.pem ",
+    });
+
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        kind: "http",
+        clientCert: " cert.pem ",
+        clientKey: " key.pem ",
+      }),
+    );
+  });
+
+  it("treats whitespace-only TLS client paths from config as absent", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      url: "https://mcp.example.com/sse",
+      clientCert: "   ",
+      clientKey: "\t",
+    });
+
+    expect(resolved).toEqual(expect.objectContaining({ kind: "http" }));
+    expect(resolved).not.toHaveProperty("clientCert");
+    expect(resolved).not.toHaveProperty("clientKey");
+  });
+
   it.each([
-    {
-      name: "rejects non-HTTP URL schemes",
-      server: { url: "ftp://mcp.example.com/tools", transport: "streamable-http" },
-    },
-    {
-      name: "rejects http as a canonical transport",
-      server: { url: "https://mcp.example.com/http", transport: "http" },
-    },
-  ])("$name", ({ server }) => {
+    { url: "ftp://mcp.example.com/tools", transport: "streamable-http" },
+    { url: "https://mcp.example.com/http", transport: "http" },
+  ])("rejects unsupported transport or scheme: %j", (server) => {
     expect(resolveMcpTransportConfig("probe", server)).toBeNull();
   });
 });

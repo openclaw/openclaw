@@ -128,8 +128,9 @@ export function resolveOutboundPayloadMirrorText(payload: ReplyPayload): string 
 function normalizeRawOutboundPayload(
   payload: ReplyPayload,
   context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
+  admittedReasoning?: true,
 ): ReplyPayload | null {
-  if (shouldSuppressReasoningPayload(payload)) {
+  if (!admittedReasoning && shouldSuppressReasoningPayload(payload)) {
     return null;
   }
   const parsed = parseReplyDirectives(stripLeadingInboundMetadata(payload.text ?? ""), {
@@ -175,36 +176,6 @@ function normalizeRawOutboundPayload(
   return normalizedPayload;
 }
 
-function createStructuredOutboundPayloadPlanEntry(
-  payload: ReplyPayload,
-): Omit<OutboundPayloadPlan, "sourceIndex"> | null {
-  const mediaEntries = indexFirstByKey(collectReplyMediaEntries(payload), ({ url }) => url.trim());
-  mediaEntries.delete("");
-  const mediaUrls = [...mediaEntries.keys()];
-  const attachments = payload.attachments
-    ? [...mediaEntries.values()].map(({ attachment }) => attachment ?? {})
-    : undefined;
-  const normalizedPayload = applyReplyPayloadTargetPolicy(
-    copyReplyPayloadMetadata(payload, {
-      ...payload,
-      text: payload.text ?? "",
-      mediaUrls: mediaUrls.length ? mediaUrls : undefined,
-      mediaUrl: mediaUrls.length > 1 ? undefined : payload.mediaUrl,
-      ...(attachments ? { attachments } : {}),
-    }),
-  );
-  if (!isRenderablePayload(normalizedPayload)) {
-    return null;
-  }
-  return {
-    payload: normalizedPayload,
-    parts: resolveSendableOutboundReplyParts(normalizedPayload),
-    hasPresentation: hasMessagePresentationBlocks(normalizedPayload.presentation),
-    hasInteractive: hasLegacyInteractiveReplyBlocks(normalizedPayload.interactive),
-    hasChannelData: hasReplyChannelData(normalizedPayload.channelData),
-  };
-}
-
 function buildOutboundPayloadPlan(
   payloads: readonly ReplyPayload[],
   preparePayload?: (payload: ReplyPayload) => ReplyPayload | null,
@@ -215,10 +186,37 @@ function buildOutboundPayloadPlan(
   const plan: OutboundPayloadPlan[] = [];
   for (const [sourceIndex, payload] of payloads.entries()) {
     const prepared = preparePayload ? preparePayload(payload) : payload;
-    const entry = prepared ? createStructuredOutboundPayloadPlanEntry(prepared) : null;
-    if (entry) {
-      plan.push({ sourceIndex, ...entry });
+    if (!prepared) {
+      continue;
     }
+    const mediaEntries = indexFirstByKey(collectReplyMediaEntries(prepared), ({ url }) =>
+      url.trim(),
+    );
+    mediaEntries.delete("");
+    const mediaUrls = [...mediaEntries.keys()];
+    const attachments = prepared.attachments
+      ? [...mediaEntries.values()].map(({ attachment }) => attachment ?? {})
+      : undefined;
+    const normalizedPayload = applyReplyPayloadTargetPolicy(
+      copyReplyPayloadMetadata(prepared, {
+        ...prepared,
+        text: prepared.text ?? "",
+        mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+        mediaUrl: mediaUrls.length > 1 ? undefined : prepared.mediaUrl,
+        ...(attachments ? { attachments } : {}),
+      }),
+    );
+    if (!isRenderablePayload(normalizedPayload)) {
+      continue;
+    }
+    plan.push({
+      sourceIndex,
+      payload: normalizedPayload,
+      parts: resolveSendableOutboundReplyParts(normalizedPayload),
+      hasPresentation: hasMessagePresentationBlocks(normalizedPayload.presentation),
+      hasInteractive: hasLegacyInteractiveReplyBlocks(normalizedPayload.interactive),
+      hasChannelData: hasReplyChannelData(normalizedPayload.channelData),
+    });
   }
   return plan;
 }
@@ -230,6 +228,16 @@ export function createOutboundPayloadPlan(
 ): OutboundPayloadPlan[] {
   return buildOutboundPayloadPlan(payloads, (payload) =>
     normalizeRawOutboundPayload(payload, context),
+  );
+}
+
+/** Internal lane handoff: retain admitted reasoning while parsing raw reply controls normally. */
+export function createOutboundPayloadPlanWithAdmittedReasoning(
+  payloads: readonly ReplyPayload[],
+  context: OutboundPayloadPlanContext = {},
+): OutboundPayloadPlan[] {
+  return buildOutboundPayloadPlan(payloads, (payload) =>
+    normalizeRawOutboundPayload(payload, context, true),
   );
 }
 

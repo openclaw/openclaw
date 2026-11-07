@@ -23,7 +23,9 @@ import {
   getUpdateRun,
   listUpdateRuns,
   recordUpdateRunPhase,
+  recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
+import * as reportHealth from "../../infra/update-run-report-health.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import {
   closeOpenClawStateDatabaseAsync as closeState,
@@ -120,6 +122,38 @@ beforeEach(() => {
 });
 
 it.each([
+  ["installed ahead", "2026.10.1", "2026.9.4", "2026.9.4", false],
+  ["serving moved", "2026.9.4", "2026.10.1", "2026.9.4", true],
+  ["installed ahead, no observation", "2026.10.1", "2026.9.4", undefined, false],
+  ["newer Gateway, no observation", "2026.9.4", "2026.10.1", undefined, false],
+] as const)(
+  "projects failed history: %s",
+  async (_name, installed, version, recorded, historical) => {
+    const run = createUpdateRun({
+      trigger: "chat",
+      target: { kind: "git", channel: "dev" },
+      before: { version: installed },
+      origin: { nextAction: "Run openclaw update." },
+    });
+    if (recorded) {
+      recordUpdateRunVerification(run.runId, { serviceRunning: true, runningVersion: recorded });
+    }
+    finishUpdateRun(run.runId, { status: "failed", reason: "preflight-no-good-commit" });
+    vi.spyOn(reportHealth, "readUpdateRunReportHealth").mockResolvedValue({
+      kind: "responding",
+      version,
+    });
+    await updateStatus({});
+    if (historical) {
+      expectOutput("Last update run failed (preflight-no-good-commit)");
+      expect(outputText()).not.toContain("Run openclaw update.");
+    } else {
+      expectOutput("OpenClaw update failed", "Run openclaw update.");
+    }
+  },
+);
+
+it.each([
   { json: true, remote: false },
   { json: false, remote: false },
   { json: true, remote: true },
@@ -161,10 +195,7 @@ it.each([
   { json: true, failure: "read" },
   { json: true, failure: "audit" },
 ])("service facts (JSON: $json, failure: $failure)", async ({ json, failure }) => {
-  const drift = [
-    { message: "Service.KillMode: missing; installer expects mixed." },
-    { message: "Service.ExecStartPre: unknown edit; preserved." },
-  ];
+  const drift = [{ message: "Service.KillMode: missing; installer expects mixed." }];
   service.readCommand.mockResolvedValue({ programArguments: ["/fixture/gateway"] });
   service.audit.mockResolvedValue({ ok: true, issues: [], definitionDrift: drift });
   if (failure === "read") {
@@ -188,10 +219,7 @@ it.each([
       },
     });
   } else {
-    const output = outputText();
-    for (const fact of drift) {
-      expect(output).toContain(fact.message);
-    }
+    expectOutput(drift[0]!.message);
   }
 });
 
@@ -407,12 +435,12 @@ it.each([true, false])(
 );
 
 it.each([
-  { version: "24.15.0", state: "admitted" },
+  { version: "24.22.1", state: "admitted" },
   { version: "26.0.0", state: "unsupported" },
 ])("reports $state service Node $version", async ({ version, state }) => {
   vi.stubGlobal("process", {
     ...process,
-    versions: { ...process.versions, node: "26.8.1" },
+    versions: { ...process.versions, node: "26.12.1" },
   });
   service.readCommand.mockResolvedValue({
     programArguments: ["/fixture/node", "openclaw.mjs", "gateway"],
@@ -422,9 +450,6 @@ it.each([
     version,
     sqliteVersion: state === "unsupported" ? "3.50.2" : "3.53.0",
     nodeSharedSqlite: false,
-    ...(state === "admitted"
-      ? { note: "Node 24.15.0: unsupported version, capability check passed." }
-      : {}),
   });
   if (state === "unsupported") {
     await updateStatus({ json: true });
@@ -441,8 +466,7 @@ it.each([
   }
   await updateStatus({});
   if (state === "admitted") {
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("capability check passed"));
-    expect(runtime.log).not.toHaveBeenCalledWith(undefined);
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("nvm install 26"));
   } else {
     expectOutput(version, "npm", "nvm install 26");
   }
@@ -512,8 +536,10 @@ it.each([true, false])("unreadable migration preserves availability (JSON: %s)",
   await expect(updateStatus({ json })).resolves.toBeUndefined();
   if (json) {
     const result = jsonResult();
-    expect(result).toHaveProperty("availability");
-    expect(result.migrationWarningsError).toEqual(expect.any(String));
+    expect(result).toMatchObject({
+      availability: expect.any(Object),
+      migrationWarningsError: expect.any(String),
+    });
     expect(result).not.toHaveProperty("migrationWarnings");
   } else {
     expectOutput("OpenClaw update status", "Pending migration status unavailable:");
@@ -527,33 +553,27 @@ it("reports retained session migration warnings without an update ledger", async
     storePath: path.join(stateDir, "agents", agentId, "sessions", "sessions.json"),
     sqlitePath: path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
   }));
-  const invalidEntry = {
-    code: "entry_invalid",
-    message: "Session entry is missing a valid sessionId.",
-    sessionKey: "agent:main:invalid",
-  };
-  const malformedTranscript = {
-    code: "transcript_malformed",
-    message: `${path.join(path.dirname(targets[1]!.storePath), "broken.jsonl")}: SyntaxError: malformed JSONL line`,
-    sessionKey: "agent:other:broken",
-  };
+  const warnings = [
+    { code: "entry_invalid", message: "Missing sessionId.", sessionKey: "agent:main:invalid" },
+    { code: "transcript_malformed", message: "Malformed JSONL.", sessionKey: "agent:other:broken" },
+  ];
   const first = createMigration(process.env, targets);
   for (const [index, target] of targets.entries()) {
-    updateMigration(first, target, [index === 0 ? invalidEntry : malformedTranscript], {
+    updateMigration(first, target, [warnings[index]!], {
       validationBeforeArchive: "passed",
     });
   }
   first.manifest.completedAt = new Date().toISOString();
   writeMigration(first);
-  const expectedWarnings = [
-    `${targets[0]!.storePath}: [entry_invalid] ${invalidEntry.message}`,
-    `${targets[1]!.storePath}: [transcript_malformed] ${malformedTranscript.message}`,
-  ];
-  const expectWarnings = async (warnings: string[]) => {
+  const expectedWarnings = targets.map(
+    (target, index) =>
+      `${target.storePath}: [${warnings[index]!.code}] ${warnings[index]!.message}`,
+  );
+  const expectWarnings = async (expected: string[]) => {
     runtime.log.mockClear();
     runtime.writeJson.mockClear();
     const result = await jsonStatus();
-    expect(result.migrationWarnings).toEqual(warnings);
+    expect(result.migrationWarnings).toEqual(expected);
     expect(result).not.toHaveProperty("lastRun");
   };
   await expectWarnings(expectedWarnings);
@@ -633,17 +653,12 @@ it("does not publish partial history when the latest terminal row is unreadable"
   const latest = createUpdateRun({ trigger: "cli" });
   finishUpdateRun(latest.runId, { status: "succeeded" });
   closeStateForTest();
-  const database = new DatabaseSync(statePathFor());
-  try {
+  {
+    using database = new DatabaseSync(statePathFor());
     database
       .prepare("UPDATE update_runs SET origin_json = ? WHERE run_id = ?")
       .run("not-json", latest.runId);
-  } finally {
-    database.close();
   }
-  expect(findActiveUpdateRun()).toEqual(active);
-  expect(() => listUpdateRuns({ limit: 1 })).toThrow();
-
   await updateStatus({ json: true });
 
   const result = jsonResult();

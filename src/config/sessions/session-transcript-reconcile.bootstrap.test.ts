@@ -2,8 +2,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
-import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { readAgentDatabaseDeletionSnapshot } from "../../state/agent-deletion-journal.read.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
@@ -17,6 +15,7 @@ import {
   getSessionTranscriptReconcileWorkerPoolSnapshot,
   runSessionTranscriptReconcileOperation,
 } from "./session-transcript-reconcile-pool.js";
+import { acquireReconcileGatewayOwner } from "./session-transcript-reconcile.fixtures.test-support.js";
 import { observeReconcileHostSqlite } from "./session-transcript-reconcile.sql-observer.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "./session-transcript-reconcile.worker.js";
 
@@ -75,19 +74,7 @@ it.each([false, true])(
         const context = captureOpenClawStateWorkerContext();
         expect(context.admission.identity.key).toMatch(/^path:/u);
         expect(fs.existsSync(context.admission.databasePath)).toBe(false);
-        const parent = owned
-          ? acquireGatewayStateOwner({
-              databasePath: context.admission.databasePath,
-              payload: {
-                pid: process.pid,
-                processNamespace: readGatewayLockProcessNamespace(),
-                createdAt: new Date().toISOString(),
-                configPath: state.configPath,
-                stateDir: state.stateDir,
-                role: "gateway",
-              },
-            })
-          : undefined;
+        const parent = acquireReconcileGatewayOwner(context, state, owned);
         const observation = observe(context, agentPath);
         try {
           await expect(runDiskTask(context, agentPath)).resolves.toEqual([

@@ -9,19 +9,10 @@ import {
   isReplyPayloadTerminalContent,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
-import {
-  isSilentAssistantTranscriptMessage,
-  resolveAssistantMessagePhase,
-} from "../../shared/chat-message-content.js";
+import { resolveAssistantMessagePhase } from "../../shared/chat-message-content.js";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 
-type PayloadVisibilityOptions = {
-  includeErrorPayloads?: boolean;
-  includeReasoningPayloads?: boolean;
-  requireTerminalContent?: boolean;
-};
-
-export function collectMediaUrlsFromRecord(
+function collectMediaUrlsFromRecord(
   record: Record<string, unknown>,
   output: Set<string>,
   // Payloads arrive as in-process `unknown` objects, so a malformed
@@ -58,7 +49,11 @@ function hasVisibleAttachmentReference(value: unknown): boolean {
 
 export function hasVisibleAgentPayload(
   result: { payloads?: unknown },
-  options: PayloadVisibilityOptions = {},
+  options: {
+    includeErrorPayloads?: boolean;
+    includeReasoningPayloads?: boolean;
+    requireTerminalContent?: boolean;
+  } = {},
 ): boolean {
   return (
     Array.isArray(result.payloads) &&
@@ -96,12 +91,6 @@ export function getTranscriptMessageRole(message: unknown): string | undefined {
   return typeof role === "string" ? role : undefined;
 }
 
-/** System and malformed records do not constitute a resumable transcript tail. */
-export function isMeaningfulTranscriptMessage(message: unknown): boolean {
-  const role = getTranscriptMessageRole(message);
-  return Boolean(role && role !== "system");
-}
-
 /** Recognizes persisted progress without mistaking an ordinary assistant answer for completion. */
 export function isIntermediateAssistantTranscriptMessage(message: unknown): boolean {
   const record = asOptionalObjectRecord(message);
@@ -122,15 +111,4 @@ export function isIntermediateAssistantTranscriptMessage(message: unknown): bool
   // Keyed segments are durable progress items; unkeyed/current fallbacks can
   // become the final answer and must never bypass restart completion checks.
   return fallback?.source === "segment" && hasNonEmptyString(fallback.itemId);
-}
-
-/** Only a completed final assistant row can prove terminal silence. */
-export function isTerminalSilentAssistantMessage(message: unknown): boolean {
-  const record = asOptionalObjectRecord(message);
-  return (
-    record?.stopReason === "stop" &&
-    record.endTurn !== false &&
-    !isIntermediateAssistantTranscriptMessage(message) &&
-    isSilentAssistantTranscriptMessage(message)
-  );
 }

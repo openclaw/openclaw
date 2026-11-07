@@ -20,16 +20,10 @@ import {
 } from "../sessions/session-controller.lifecycle.js";
 import { getActiveSessionRunCount } from "../sessions/session-controller.queries.js";
 import { getActiveAgentRunContextCount } from "./agent-run-registry.js";
-import { waitForGatewayDrain } from "./gateway-drain.js";
 import { readLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 
 export type GatewayActiveWorkBlocker = GatewaySuspendBlocker;
 export type GatewayActiveWorkSnapshot = ReturnType<typeof createGatewayActiveWorkSnapshot>;
-
-type GatewayActiveWorkWaitResult = {
-  drained: boolean;
-  snapshot: GatewayActiveWorkSnapshot;
-};
 
 export type GatewayActiveWorkInspectors = Omit<
   typeof defaultInspectors,
@@ -188,9 +182,25 @@ const GATEWAY_ACTIVE_WORK_POLL_MS = 250;
 export async function waitForGatewayActiveWork(
   timeoutMs?: number,
   options: { onSnapshot?: (snapshot: GatewayActiveWorkSnapshot) => void } = {},
-): Promise<GatewayActiveWorkWaitResult> {
-  return waitForGatewayDrain(createGatewayActiveWorkSnapshot, timeoutMs, {
-    ...options,
-    pollMs: GATEWAY_ACTIVE_WORK_POLL_MS,
-  });
+): Promise<{
+  drained: boolean;
+  snapshot: GatewayActiveWorkSnapshot;
+}> {
+  const { onSnapshot } = options;
+  const startedAt = performance.now();
+  const deadlineAt =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+      ? startedAt + Math.max(0, Math.floor(timeoutMs))
+      : undefined;
+  while (true) {
+    const snapshot = createGatewayActiveWorkSnapshot();
+    onSnapshot?.(snapshot);
+    const remainingMs = deadlineAt === undefined ? undefined : deadlineAt - performance.now();
+    if (snapshot.idle || (remainingMs !== undefined && remainingMs <= 0)) {
+      return { drained: snapshot.idle, snapshot };
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, Math.min(GATEWAY_ACTIVE_WORK_POLL_MS, remainingMs ?? Infinity));
+    });
+  }
 }

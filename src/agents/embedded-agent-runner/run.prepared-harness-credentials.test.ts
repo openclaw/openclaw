@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { completionConfig, completionModelDefinition } from "../simple-completion.test-support.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -50,29 +51,21 @@ it.each([true, false, undefined])(
   async (authHeader) => {
     const explicit = authHeader !== undefined;
     const config: OpenClawConfig | undefined = explicit
-      ? {
-          models: {
-            providers: {
-              "custom-proof": {
-                api: "openai-responses" as const,
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: "synthetic-configured-key",
-                authHeader,
-                models: [
-                  {
-                    id: "gpt-5.6-luna",
-                    name: "Luna",
-                    reasoning: true,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 128_000,
-                    maxTokens: 4096,
-                  },
-                ],
-              },
-            },
-          },
-        }
+      ? completionConfig("custom-proof", {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "synthetic-configured-key",
+          authHeader,
+          models: [
+            completionModelDefinition({
+              id: "gpt-5.6-luna",
+              name: "Luna",
+              reasoning: true,
+              contextWindow: 128_000,
+              maxTokens: 4096,
+            }),
+          ],
+        })
       : undefined;
     const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
     setRuntimeConfigSnapshot(config ?? {});

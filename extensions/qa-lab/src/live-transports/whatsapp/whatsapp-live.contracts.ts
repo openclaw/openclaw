@@ -14,7 +14,7 @@ export type WhatsAppQaRuntimeEnv = {
   groupJid?: string;
 };
 
-export type WhatsAppQaApprovalDecision = "allow-once" | "deny";
+type WhatsAppQaApprovalDecision = "allow-once" | "deny";
 type WhatsAppQaApprovalDecisionMode = "reaction" | "rpc";
 
 type WhatsAppQaMessageSendMode =
@@ -35,12 +35,6 @@ export type WhatsAppQaGatewayCallContext = {
   gatewayTarget: string;
   scenarioId: string;
   sutAccountId: string;
-};
-export type WhatsAppQaObservedMessagesContext = {
-  driver: Pick<WhatsAppQaDriverSession, "getObservedMessages">;
-  sutPhoneE164: string;
-  target: string;
-  targetKind: "dm" | "group";
 };
 export type WhatsAppQaDriverQuotedMessageKey = NonNullable<
   NonNullable<Parameters<WhatsAppQaDriverSession["sendText"]>[2]>["quotedMessageKey"]
@@ -172,9 +166,4 @@ export type WhatsAppQaScenarioImplementation = {
   buildRun: () => WhatsAppQaScenarioRun;
   configOverrides?: WhatsAppQaConfigOverrides;
   requiresGroupJid?: boolean;
-};
-
-export type WhatsAppQaScenarioMetadata = {
-  id: string;
-  timeoutMs: number;
 };

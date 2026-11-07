@@ -27,12 +27,12 @@ description: "Review, triage, repair, or land OpenClaw issues and pull requests 
 
 ## Inspect the actual item
 
-- Start `git status -sb`; preserve unrelated work. Local `gitcrawl` → bare PATH `gh`, narrow live JSON. Stale/missing archive → `gh`, no broad sync. PR source: `gh pr view/diff` + checkout, not web search.
+- Start `git status -sb`; preserve unrelated work. Local `gitcrawl` → PATH `ghx`, narrow live JSON. Stale/missing archive → `ghx`, no broad sync. PR source: `ghx pr view/diff` + checkout, not web search.
 
 ```bash
-gh pr view <pr> --repo openclaw/openclaw \
+ghx pr view <pr> --repo openclaw/openclaw \
   --json number,title,state,body,author,assignees,baseRefName,headRefName,headRefOid,files,comments,reviews
-gh issue view <issue> --repo openclaw/openclaw \
+ghx issue view <issue> --repo openclaw/openclaw \
   --json number,title,state,body,author,assignees,comments
 ```
 
@@ -41,7 +41,7 @@ gh issue view <issue> --repo openclaw/openclaw \
 ## Establish the outcome
 
 - Read owner, entry points, callers, siblings, tests, docs, history, current main; inspect determining dependency contracts. Codex: root's personal source inspection. Contrary evidence → investigate before defending. No invented matrix/alternative.
-- **Already fixed:** prove current-main repair; canonical commit/PR + matching source/runnable proof. Closure authority → comment evidence + close; otherwise report.
+- **Already fixed:** prove current-main repair; canonical commit/PR + matching source/runnable proof. For released/candidate status, use [fix-inclusion tracing](../release-openclaw-maintainer/references/fix-inclusion.md). Closure authority → comment evidence + close; otherwise report.
 - **Real defect:** reproduce → repair owning invariant → prove path/siblings. Simplification over symptom guard; size/LOC ≠ correctness gate.
 - **Useful PR:** improve editable branch; unsafe → authorized credited replacement before closure. Replaced ancestry → maintainer-owned replacement, never squash contributor PR.
 - **Uncertain/product decision:** state gap; no speculative merge/automatic out-of-scope close.
@@ -57,11 +57,11 @@ gh issue view <issue> --repo openclaw/openclaw \
 
 - Before committing or landing nontrivial code: fresh review through permitted workflow; resolve actionable findings unless user opts out. Actionable = likely or high-impact; decline unlikely, recoverable edge cases whose fix adds disproportionate complexity, with one-line reason.
 
-- Nontrivial code commit/landing: `$autoreview`; resolve verified actionable findings. Review-only: independent pass only when requested, no extra mandatory CLI pass.
+- Nontrivial code commit/landing: use the [selected local review route](../../../docs/reference/pull-request-review-flow.md#local-review-before-a-pr) and resolve verified actionable findings. Required fresh independent review still applies. Review-only: independent pass only when requested, no extra mandatory CLI pass.
 - Reopen review for substantive changes/unresolved concerns, not patch-identical rebase/mechanical head change. Address real human/bot findings; explain rejections. Bot scores/Rank-up lists create no separate obligations. ClawSweeper advisory; never wait for comment to land.
 - Current PR template: plain problem/impact; inventories in diff/details. Keep risks, migrations, actions, proof, gaps, credit current; explain material tradeoffs. No invented internal-only user benefit or universal LOC/provenance/alternate-fix essays.
 - `CHANGELOG.md` release-owned; release-note context in PR/commit. Agent transcripts only on explicit request.
-- Public mutation: verify author/committer + writer; shell-sensitive body files. Authorized scope only; update existing comment/body, no duplicates.
+- Public mutation: verify author/committer + writer. Use `ghx` with real `--body-file <path>` payloads, never stdin (`--body-file -`, `--input -`, or `/dev/stdin`); the proxy does not forward stdin. Read changed bodies back with `ghx --no-cache` and verify exact nonempty bytes. Authorized scope only; update existing comment/body, no duplicates.
 - Publication/merge: read [landing](references/landing.md) (media, exact-head CI, native workflow).
 - Verify remote merge/closure + source. Report problem, owning change, proof/gaps, credit, linked final state in prose; worthwhile follow-ups only.
 

@@ -1,18 +1,12 @@
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AgentDatabaseAdmissionError,
   createAgentDatabaseInspectionRefusal,
 } from "../state/agent-database-admission.js";
 import { handleGatewayRequest } from "./server-methods.js";
-
-function moduleNotFoundError(filePath: string): Error {
-  return Object.assign(new Error(`Cannot find module '${filePath}'`), {
-    code: "ERR_MODULE_NOT_FOUND",
-    url: pathToFileURL(filePath).href,
-  });
-}
+import { moduleNotFoundError } from "./stale-install.test-support.js";
 
 async function dispatchThrowingHandler(error: Error, respond = vi.fn()) {
   await handleGatewayRequest({
@@ -89,5 +83,11 @@ it("returns a thrown pending admission as a retryable RPC response", async () =>
     pending: true,
   });
   const respond = await dispatchThrowingHandler(new AgentDatabaseAdmissionError(refusal));
-  expectUnavailable(respond, { details: refusal, retryable: true, retryAfterMs: 250 });
+  expectUnavailable(respond, {
+    details: refusal,
+    retryable: true,
+    retryAfterMs: 250,
+    message: expect.stringMatching(/waiting for capacity[\s\S]*Retry the request/),
+  });
+  expect(respond.mock.calls[0]![2].message).not.toMatch(/doctor --fix|stop the Gateway|restart/i);
 });

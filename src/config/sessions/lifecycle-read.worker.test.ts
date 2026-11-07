@@ -8,6 +8,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { resolveSessionLifecycleTimestampsAsync } from "./lifecycle-read.js";
+import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import { upsertSessionEntryCore } from "./session-accessor.entry.js";
 import {
   replaceTranscriptEvents,
@@ -43,6 +44,13 @@ it("recovers lifecycle timestamps without caller SQL and observes foreign header
     const expectStart = (sessionStartedAt: number, currentEntry?: Parameters<typeof read>[0]) =>
       expect(read(currentEntry)).resolves.toEqual({ sessionStartedAt, lastInteractionAt: 7 });
     await expectStart(Date.parse(header.timestamp));
+    expect(
+      resolveSessionLifecycleTimestamps({
+        agentId: scope.agentId,
+        storePath: scope.storePath,
+        entry,
+      }).sessionStartedAt,
+    ).toBe(Date.parse(header.timestamp));
     {
       using foreign = new DatabaseSync(scope.storePath);
       foreign

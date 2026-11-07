@@ -60,7 +60,7 @@ it("AppSidebar ignores a stale agent-menu hide after opening its replacement", a
   await click(trigger);
   const firstMenu = q(".sidebar-agent-menu");
   const settingsItem = firstMenu?.querySelector<HTMLElement>(
-    '[data-value="command:agent-settings"]',
+    '[data-value="agent:main"] .sidebar-agent-menu__settings',
   );
   expect(firstMenu).not.toBeNull();
   expect(firstMenu?.closest("openclaw-menu-surface")).toBeNull();
@@ -90,12 +90,11 @@ it.each(["recreated", "different"] as const)("AppSidebar isolates %s pin menus",
     expect(sidebar.sidebarEntries).toEqual([]);
     expect(first.isConnected).toBe(false);
     await selectSidebarView(sidebar, "pages");
-    const page = q('.sidebar-pages [data-sidebar-entry="route:usage"]')!;
-    await click(
-      page
-        .closest(".sidebar-pages__entry")!
-        .querySelector<HTMLButtonElement>('[aria-label="Pin"]')!,
+    await vi.waitFor(() =>
+      expect(q('.sidebar-pages [data-sidebar-entry="route:usage"]')).not.toBeNull(),
     );
+    const page = q('.sidebar-pages [data-sidebar-entry="route:usage"]')!;
+    await click(page.closest(".sidebar-pages__entry")!.querySelector('[aria-label="Pin"]')!);
   }
   const replacement = await openPin(recreated ? "route:usage" : "route:plugins");
   expect(replacement).not.toBe(first);

@@ -22,8 +22,10 @@ function writePackage(root: string, name?: string) {
   writeFileSync(join(root, "docs", "guide.md"), "fixture guide");
 }
 
-function expectedAssets(root: string) {
+function expectedMetadata(root: string, name = "openclaw") {
   return {
+    appName: name,
+    configDir: `.${name}`,
     paths: [join(root, "README.md"), join(root, "docs")],
     contents: ["fixture readme", "fixture guide"],
   };
@@ -119,13 +121,10 @@ it.each(["relative", "~", "~/", "nested"] as const)(
             console.log(JSON.stringify({ before, after: snapshot() }));
           `,
       });
-      const captured = {
-        appName: nested ? "openclaw" : "fixture-claw",
-        configDir: nested ? ".openclaw" : ".fixture-claw",
-      };
+      const name = nested ? "openclaw" : "fixture-claw";
       expect(result).toEqual({
-        before: { ...captured, ...expectedAssets(packageDir) },
-        after: { ...captured, ...expectedAssets(nextPackageDir) },
+        before: expectedMetadata(packageDir, name),
+        after: expectedMetadata(nextPackageDir, name),
       });
     }),
 );
@@ -175,10 +174,6 @@ it.each(["2026.9.14-worker", ""])(
         workerVersion,
         env: { OPENCLAW_PACKAGE_DIR: root },
       });
-      expect(result).toEqual({
-        appName: workerVersion ? "openclaw" : "package-claw",
-        configDir: workerVersion ? ".openclaw" : ".package-claw",
-        ...expectedAssets(root),
-      });
+      expect(result).toEqual(expectedMetadata(root, workerVersion ? "openclaw" : "package-claw"));
     }),
 );

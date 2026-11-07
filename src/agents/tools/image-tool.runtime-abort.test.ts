@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   buildMediaUnderstandingRegistry,
@@ -14,34 +12,22 @@ import type {
 } from "../../plugin-sdk/media-understanding.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
-import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
-import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
-import { createImageTool } from "./image-tool.js";
 import {
+  createRequiredImageTool,
   createMinimaxImageConfig,
   ONE_PIXEL_PNG_B64,
   resolveConfiguredImageModelForTest,
   testing,
 } from "./image-tool.test-support.js";
+import { createMediaModelPolicyFixture } from "./media-model-policy.test-support.js";
 
 const buildProviderRegistry = buildMediaUnderstandingRegistry;
 const readProvider = getMediaUnderstandingProvider;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function createRequiredImageTool(options: Parameters<typeof createImageTool>[0]) {
-  const tool = createImageTool(options);
-  if (!tool) {
-    throw new Error("expected image tool");
-  }
-  return tool;
-}
-
 type ProviderDeps = NonNullable<Parameters<typeof testing.setProviderDepsForTest>[0]>;
-type MockImageLoadWebMedia = Awaited<
-  ReturnType<NonNullable<ProviderDeps["loadImageWebMediaRuntime"]>>
->["loadWebMedia"];
+type MockImageLoadWebMedia = NonNullable<ProviderDeps["loadWebMedia"]>;
 
 function imageMedia() {
   return {
@@ -96,14 +82,12 @@ describe("image tool run abort", () => {
       resolveRegisteredMediaUnderstandingProvider: ({ providerId }) =>
         readProvider(providerId, providerRegistry),
       resolveModelAsync,
-      loadImageWebMediaRuntime: async () => ({
-        loadWebMedia,
-        optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
-          buffer,
-          contentType: contentType ?? "image/png",
-          kind: "image",
-          fileName,
-        }),
+      loadWebMedia,
+      optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
+        buffer,
+        contentType: contentType ?? "image/png",
+        kind: "image",
+        fileName,
       }),
       describeImageWithModel: spies.describeImage,
       describeImagesWithModel: spies.describeImages,
@@ -118,41 +102,17 @@ describe("image tool run abort", () => {
   ] as const)(
     "preserves $source requester model policy for $scenario",
     async ({ source, scenario }) => {
-      const cfg: OpenClawConfig = {
-        plugins: { enabled: false },
-        agents: {
-          entries: { main: {} },
-          defaults: {
-            model: "test-provider/allowed",
-            models: { "test-provider/blocked": { alias: "blocked-alias" } },
-            imageModel: { primary: "test-provider/blocked", fallbacks: ["test-provider/allowed"] },
-          },
-        },
-      };
-      let active = true;
       let sourceHolds = 0;
-      const authority = createAdmittedRunOperatorAuthority({
-        profileId: "image-reader",
-        scopes: ["operator.write"],
-        retain: () => {
-          sourceHolds += 1;
-          return () => {
-            sourceHolds -= 1;
-          };
+      const { cfg, setActive, runWithRequester } = createMediaModelPolicyFixture(
+        "image",
+        "image-reader",
+        source,
+        (delta) => {
+          sourceHolds += delta;
         },
-        assertCurrent: () => {
-          if (!active) {
-            throw new Error("requester retired");
-          }
-        },
-        modelPolicy: prepareOperatorModelPolicy({
-          cfg,
-          policy: { sourceAgent: "main" },
-          manifestPlugins: [],
-        }),
-      });
+      );
       const loadWebMedia = vi.fn<MockImageLoadWebMedia>(async () => {
-        active = scenario !== "retired after download";
+        setActive(scenario !== "retired after download");
         return imageMedia();
       });
       const spies = makeDescribeSpies();
@@ -167,16 +127,6 @@ describe("image tool run abort", () => {
         config: cfg,
         agentDir: tempDirs.make("openclaw-image-abort-"),
       });
-      const runWithRequester = <T>(run: () => Promise<T>) =>
-        source === "direct"
-          ? withOperatorToolGatewayAuthority(
-              { scopes: ["operator.write"], operatorRunAuthority: authority },
-              run,
-            )
-          : withGatewayToolCallerIdentity(
-              { agentId: "main", sessionKey: "agent:main:reader", operatorAuthority: authority },
-              run,
-            );
       const args = {
         paths: ["https://example.test/image.png"],
         prompt: "Answer using this image.",
@@ -272,7 +222,7 @@ describe("image tool run abort", () => {
     const controller = new AbortController();
     const downloadStarted = createDeferredCore();
     const loadWebMedia: MockImageLoadWebMedia = vi.fn(async (_url, options) => {
-      const downloadSignal = options?.requestInit?.signal;
+      const downloadSignal = typeof options === "object" ? options.requestInit?.signal : undefined;
       expect(downloadSignal).toBe(controller.signal);
       downloadStarted.resolve();
       return await new Promise<never>((_, reject) => {

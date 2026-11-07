@@ -54,3 +54,76 @@ it.each(["providers", "discovery"] as const)(
     expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(2);
   },
 );
+
+it("only publishes the current read after replacing an active read", async () => {
+  const first = createDeferred();
+  const next = createDeferred();
+  let calls = 0;
+  const request = createGatewayRequestMock(async (method) => {
+    if (method === "models.authStatus") {
+      await (calls++ === 0 ? first.promise : next.promise);
+      return { ts: calls, providers: [] };
+    }
+    if (method === "models.list") {
+      return { models: [] };
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  const completed = vi.fn();
+  const loader = new ModelProviderCoreLoader(() => {}, {
+    onStart: () => {},
+    onComplete: completed,
+    onCatalogComplete: () => {},
+  });
+  const client = createTestGatewayClient(request);
+  const original = loader.refresh(client, "main", "replacement");
+  await loader.refresh(client, "main", "publication");
+  const replacement = loader.refresh(client, "main", "replacement");
+  first.resolve();
+  await original;
+  expect(completed).not.toHaveBeenCalled();
+  next.resolve();
+  await replacement;
+  expect(completed).toHaveBeenCalledOnce();
+});
+
+it("turns a burst of catalog publications into one reload", async () => {
+  vi.useFakeTimers();
+  try {
+    const request = createGatewayRequestMock(async (method) => {
+      if (method === "models.authStatus") {
+        return { ts: 1, providers: [] };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = createTestGatewayClient(request);
+    const loader = new ModelProviderCoreLoader(() => {}, {
+      onStart: () => {},
+      onComplete: () => {},
+      onCatalogComplete: () => {},
+    });
+    const lists = () => request.mock.calls.filter(([method]) => method === "models.list").length;
+    // One credential save publishes several changes a few milliseconds apart.
+    const burst = [0, 1, 2].map(() => {
+      invalidateModelCatalogCache(client, { agentId: "main" });
+      return loader.refresh(client, "main", "publication");
+    });
+    expect(lists()).toBe(0);
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.all(burst);
+    expect(lists()).toBe(1);
+
+    // An explicit reload reads everything a pending publication would.
+    invalidateModelCatalogCache(client, { agentId: "main" });
+    const pending = loader.refresh(client, "main", "publication");
+    await loader.refresh(client, "main", "replacement");
+    await pending;
+    await vi.runOnlyPendingTimersAsync();
+    expect(lists()).toBe(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});

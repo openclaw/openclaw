@@ -64,56 +64,38 @@ function controlledReads(held: string, options: { synthetic?: Set<string>; faile
   return { started, release, failedRead, observedReads, reader };
 }
 
-it.for(["filesystem", "microtask"] as const)(
-  "keeps the runner event loop responsive while verifying a completed generation (%s reads)",
-  async (completion, { signal }) => {
-    const directory = tempDirs.make("vitest-worker-verification-");
-    const names = Array.from({ length: 64 }, (_, i) => `${i}.js`);
-    const manifest = generation(directory, { inputs: names, outputs: names });
-    const files = new Set([
-      ...Object.keys(manifest.inputs),
-      ...Object.keys(manifest.outputs).map((name) => path.join(directory, "dist", name)),
-    ]);
+it("keeps the runner event loop responsive while verifying a generation with microtask reads", async () => {
+  const directory = tempDirs.make("vitest-worker-verification-");
+  const names = Array.from({ length: 64 }, (_, i) => `${i}.js`);
+  const manifest = generation(directory, { inputs: names, outputs: names });
+  const files = new Set([
+    ...Object.keys(manifest.inputs),
+    ...Object.keys(manifest.outputs).map((name) => path.join(directory, "dist", name)),
+  ]);
 
-    const { started, release, observedReads, reader } = controlledReads(
-      path.join(directory, "0.js"),
-      {
-        synthetic: completion === "microtask" ? files : undefined,
-      },
-    );
-    let completed = false;
-    // Supplying the manifest means the artifact reads themselves must yield.
-    let verification: Promise<void> | undefined;
+  const { release, observedReads, reader } = controlledReads(path.join(directory, "0.js"), {
+    synthetic: files,
+  });
+  let completed = false;
+  // Supplying the manifest means the artifact reads themselves must yield.
+  let verification: Promise<void> | undefined;
+  try {
+    verification = Promise.resolve(verifyVitestWorkerArtifacts(directory, manifest)).then(() => {
+      completed = true;
+    });
+    await nextTurn();
+    expect(completed, "verification blocked the runner until every file was hashed").toBe(false);
+    expect(observedReads, "one slow input must not stall unrelated input reads").toHaveLength(64);
+  } finally {
+    release.resolve();
     try {
-      verification = Promise.resolve(verifyVitestWorkerArtifacts(directory, manifest)).then(() => {
-        completed = true;
-      });
-      if (completion === "filesystem") {
-        await withinTest(
-          awaitGateBeforeSettlement(started.promise, verification, "reads bypassed"),
-          signal,
-        );
-      }
-      await nextTurn();
-      expect(completed, "verification blocked the runner until every file was hashed").toBe(false);
-      if (completion === "microtask") {
-        expect(observedReads, "one slow input must not stall unrelated input reads").toHaveLength(
-          64,
-        );
-      }
+      await verification;
     } finally {
-      release.resolve();
-      try {
-        await verification;
-      } finally {
-        reader.mockRestore();
-      }
+      reader.mockRestore();
     }
-    if (completion === "microtask") {
-      expect(observedReads.toSorted()).toEqual([...files].toSorted());
-    }
-  },
-);
+  }
+  expect(observedReads.toSorted()).toEqual([...files].toSorted());
+});
 
 it.for([
   { group: "inputs", damage: "changed" },

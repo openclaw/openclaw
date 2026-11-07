@@ -90,6 +90,19 @@ async function setupPublishedGeneration(withAuth = false) {
     release: vi.fn(async () => {}),
   };
 }
+function publishDispatch(fixture: Awaited<ReturnType<typeof setupPublishedGeneration>>) {
+  const release = vi.fn(async () => {});
+  loadPublishedReplyDispatchRuntimeMock.mockImplementation(async ({ onRuntimeLease }) => {
+    onRuntimeLease?.({
+      snapshot: fixture.owner,
+      pluginGeneration: fixture.pluginGeneration,
+      run: <T>(run: () => T): T => run(),
+      [Symbol.asyncDispose]: release,
+    });
+    return fixture.dispatchRuntime;
+  });
+  return release;
+}
 
 describe("runCronIsolatedAgentTurn plugin generation carry", () => {
   setupRunCronIsolatedAgentTurnSuite();
@@ -148,6 +161,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
     const dispatchLease = {
       snapshot: { ...owner, metadataSnapshot, pluginRegistry: createEmptyPluginRegistry() },
       pluginGeneration,
+      run: <T>(run: () => T): T => run(),
       [Symbol.asyncDispose]: releaseDispatch,
     };
     loadPublishedReplyDispatchRuntimeMock.mockImplementation(async ({ onRuntimeLease }) => {
@@ -168,6 +182,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       return {
         snapshot: { config, metadataSnapshot, pluginRegistry: selectedGeneration.pluginRegistry },
         pluginGeneration: selectedGeneration,
+        run: <T>(run: () => T): T => run(),
         [Symbol.asyncDispose]: release,
       };
     });
@@ -207,15 +222,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
 
   it("cancels prepared runtime acquisition and releases its published dispatch lease", async () => {
     const fixture = await setupPublishedGeneration();
-    const releaseDispatch = vi.fn(async () => {});
-    loadPublishedReplyDispatchRuntimeMock.mockImplementation(async ({ onRuntimeLease }) => {
-      onRuntimeLease?.({
-        snapshot: fixture.owner,
-        pluginGeneration: fixture.pluginGeneration,
-        [Symbol.asyncDispose]: releaseDispatch,
-      });
-      return fixture.dispatchRuntime;
-    });
+    const releaseDispatch = publishDispatch(fixture);
     const acquisitionStarted = createDeferred<AbortSignal>();
     const releaseAcquisition = createDeferred();
     acquirePreparedModelRuntimeMock.mockImplementation(
@@ -284,6 +291,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       return {
         snapshot: { ...input, metadataSnapshot, pluginRegistry },
         pluginGeneration: { ...publishedGeneration, pluginRegistry },
+        run: <T>(run: () => T): T => run(),
         [Symbol.asyncDispose]: release,
       };
     });
@@ -351,6 +359,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
         configuredCatalogEntries: [],
         inlineProviderModels: [],
       },
+      run: <T>(run: () => T): T => run(),
       [Symbol.asyncDispose]: vi.fn(async () => {}),
     }));
     mockRunCronFallbackPassthrough();
@@ -376,15 +385,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
 
   it("releases the prepared lease when continuation initialization fails", async () => {
     const fixture = await setupPublishedGeneration();
-    const releaseDispatch = vi.fn(async () => {});
-    loadPublishedReplyDispatchRuntimeMock.mockImplementation(async ({ onRuntimeLease }) => {
-      onRuntimeLease?.({
-        snapshot: fixture.owner,
-        pluginGeneration: fixture.pluginGeneration,
-        [Symbol.asyncDispose]: releaseDispatch,
-      });
-      return fixture.dispatchRuntime;
-    });
+    const releaseDispatch = publishDispatch(fixture);
     const state = await import("./run-session-state.js");
     const initialize = vi.spyOn(state, "createCronRunContinuationSession").mockReturnValue({
       initialize: async () => {
@@ -396,6 +397,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
     const release = vi.fn(async () => {});
     acquirePreparedModelRuntimeMock.mockResolvedValue({
       snapshot: { config: fixture.config, pluginRegistry: createEmptyPluginRegistry() },
+      run: <T>(run: () => T): T => run(),
       [Symbol.asyncDispose]: release,
     });
     try {

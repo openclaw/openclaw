@@ -430,7 +430,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
   PACKAGE_ARTIFACT_NAME: package-under-test-${{ github.run_id }}-${{ github.run_attempt }}
   TELEGRAM_PLUGIN_REGISTRY_ARTIFACT_NAME: package-acceptance-telegram-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
 
@@ -1085,6 +1085,7 @@ jobs:
         id: upload_package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: ${{ env.PACKAGE_ARTIFACT_NAME }}
           path: |
             .artifacts/docker-e2e-package/openclaw-current.tgz
@@ -1097,6 +1098,7 @@ jobs:
         if: steps.resolve.outputs.plugin_registry_manifest_sha256 != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: ${{ env.TELEGRAM_PLUGIN_REGISTRY_ARTIFACT_NAME }}
           path: .artifacts/package-acceptance-telegram-plugin-registry/
           retention-days: 14
@@ -1243,7 +1245,7 @@ jobs:
       - name: Setup Node 24
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: Download package-under-test artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -1280,7 +1282,13 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Run install.sh with npm 12
+        id: npm12_install
         env:
+          SOURCE_ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
+          SOURCE_ARTIFACT_RUN_ATTEMPT: ${{ inputs.artifact_run_attempt }}
+          SOURCE_ARTIFACT_ID: ${{ inputs.artifact_id }}
+          SOURCE_ARTIFACT_NAME: ${{ inputs.artifact_name }}
+          SOURCE_ARTIFACT_DIGEST: ${{ inputs.artifact_digest }}
           EXPECTED_PACKAGE_SHA256: ${{ needs.resolve_package.outputs.package_sha256 }}
           EXPECTED_PACKAGE_VERSION: ${{ needs.resolve_package.outputs.package_version }}
           OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.resolve_package.outputs.package_source_sha }}
@@ -1315,12 +1323,89 @@ jobs:
           legacy_guard="$install_prefix/lib/node_modules/openclaw/dist/openclaw-install-guard"
           [[ ! -e "$pending" ]]
           [[ ! -e "$legacy_guard" ]]
+          # Preserve the complete measured tree even when the following budget gate fails.
+          package_root="$install_prefix/lib/node_modules/openclaw"
+          INVENTORY_TOOLING_SHA="$(git rev-parse HEAD)" INVENTORY_NPM_VERSION="$(npm --version)" \
+            node --input-type=module - "$package_root" "$RUNNER_TEMP/npm12-installed-tree.jsonl" <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+
+          const [root, output] = process.argv.slice(2);
+          const temporary = `${output}.partial`;
+          const fd = fs.openSync(temporary, 'wx', 0o600);
+          const emit = (record) => fs.writeFileSync(fd, `${JSON.stringify(record)}\n`);
+          let entries = 0;
+          let bytes = 0;
+          function visit(relative) {
+            const absolute = path.join(root, relative);
+            const stat = fs.lstatSync(absolute);
+            const type = stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : stat.isSymbolicLink() ? 'symlink' : 'other';
+            if (relative === '.' && type !== 'directory') throw new Error('Installed root is not a directory');
+            entries += 1;
+            if (type === 'file') bytes += stat.size;
+            emit({ type: 'entry', path: relative, kind: type, size: stat.size });
+            if (type === 'file' && (relative === 'package.json' || /(?:^|\/)node_modules\/(?:@[^/]+\/)?[^/]+\/package\.json$/u.test(relative))) {
+              let manifest;
+              try {
+                manifest = JSON.parse(fs.readFileSync(absolute, 'utf8'));
+              } catch {
+                throw new Error(`Cannot read package manifest ${JSON.stringify(relative)}`);
+              }
+              // Global npm installs do not retain a hidden lock. Missing SRI stays unknown.
+              const match = typeof manifest._integrity === 'string' && /^(sha1|sha256|sha384|sha512)-([A-Za-z0-9+/]+={0,2})$/u.exec(manifest._integrity);
+              const digestBytes = { sha1: 20, sha256: 32, sha384: 48, sha512: 64 };
+              const integrity = match && Buffer.from(match[2], 'base64').length === digestBytes[match[1]] && Buffer.from(match[2], 'base64').toString('base64') === match[2] ? manifest._integrity : null;
+              emit({
+                type: 'package', path: path.posix.dirname(relative),
+                name: typeof manifest.name === 'string' && /^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]{1,214}$/u.test(manifest.name) ? manifest.name : null,
+                version: typeof manifest.version === 'string' && /^[0-9][0-9A-Za-z.+-]{0,127}$/u.test(manifest.version) ? manifest.version : null,
+                integrity, integritySource: integrity ? 'package.json#_integrity' : 'not-retained',
+              });
+            }
+            if (type === 'directory') {
+              for (const name of fs.readdirSync(absolute).sort()) visit(relative === '.' ? name : `${relative}/${name}`);
+            }
+          }
+          try {
+            emit({
+              type: 'context', schemaVersion: 1,
+              workflowSha: process.env.GITHUB_WORKFLOW_SHA,
+              checkoutSha: process.env.INVENTORY_TOOLING_SHA,
+              runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+              packageSourceSha: process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA,
+              packageSha256: process.env.EXPECTED_PACKAGE_SHA256,
+              packageVersion: process.env.EXPECTED_PACKAGE_VERSION,
+              sourceArtifact: {
+                runId: process.env.SOURCE_ARTIFACT_RUN_ID || null,
+                runAttempt: process.env.SOURCE_ARTIFACT_RUN_ATTEMPT || null,
+                id: process.env.SOURCE_ARTIFACT_ID || null,
+                name: process.env.SOURCE_ARTIFACT_NAME || null,
+                digest: process.env.SOURCE_ARTIFACT_DIGEST || null,
+              },
+              runtime: { node: process.version, npm: process.env.INVENTORY_NPM_VERSION, platform: process.platform, arch: process.arch },
+            });
+            visit('.');
+            emit({ type: 'complete', complete: true, entries, bytes });
+          } finally {
+            fs.closeSync(fd);
+          }
+          fs.renameSync(temporary, output);
+          NODE
 
       - name: Check installed package tree budget
         shell: bash
         run: |
           set -euo pipefail
           node scripts/check-openclaw-installed-package-budget.mts "$RUNNER_TEMP/openclaw-npm12-prefix/lib/node_modules/openclaw"
+
+      - name: Upload npm 12 installed tree inventory
+        if: always() && steps.npm12_install.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.0
+        with:
+          name: npm12-installed-tree-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/npm12-installed-tree.jsonl
+          if-no-files-found: error
+          retention-days: 7
 
   docker_acceptance:
     name: Docker product acceptance (artifact-only)

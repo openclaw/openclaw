@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { assert, expect, vi } from "vitest";
-import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
+import type { OpenClawModalDialog } from "../components/modal-dialog.tsx";
 
 export function nextFrame() {
   return new Promise<void>((resolve) => {
@@ -128,7 +128,7 @@ export function createModalDialogTestFixture(
 export function waitForConfirmDialogActions(): Promise<HTMLElement> {
   return waitForDialog(() =>
     expectDefined(
-      document.body.querySelector<HTMLElement>("openclaw-modal-dialog .exec-approval-actions"),
+      document.body.querySelector<HTMLElement>("openclaw-modal-dialog openclaw-modal-actions"),
       "open confirm dialog",
     ),
   );

@@ -1,8 +1,9 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DecisionEvaluateOptions } from "../decisions/execution-types.js";
 import {
   createPluginBlobStore,
   type OpenBlobStoreOptions,
@@ -21,13 +22,14 @@ import {
   getPluginRecordRegistry,
   getPluginRegistryResourceOwner,
   isPluginRecordActive,
-  isPluginRegistryPreparing,
 } from "./registry-lifecycle.js";
 import {
   createRegisteredChannelRuntimeResolver,
   createScopedPluginChannelRuntime,
 } from "./registry-runtime-channel.js";
 import { createPluginRuntimeFacades } from "./registry-runtime-facades.js";
+import { runPluginForkedTurnAsOwner } from "./registry-runtime-forked-turn.js";
+import { createPluginSystemRuntime } from "./registry-runtime-system.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import {
@@ -127,6 +129,38 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         throw new Error(`Plugin "${pluginId}" runtime is no longer active.`);
       }
     };
+    const evaluateDecision = async <Evaluation, Outcome>(
+      options: DecisionEvaluateOptions,
+      run: (
+        runtime: typeof import("../decisions/runtime.js"),
+        registry: PluginRegistry,
+        config: OpenClawConfig,
+        isAdmissible: () => boolean,
+      ) => Promise<Evaluation>,
+      complete: (
+        completion: typeof import("../decisions/completion.js"),
+        result: Evaluation,
+      ) => Outcome,
+    ): Promise<Outcome> => {
+      assertRuntimeCurrent();
+      const capturedRegistry = currentDecisionRegistry();
+      const [decisions, completion] = await Promise.all([
+        import("../decisions/runtime.js"),
+        import("../decisions/completion.js"),
+      ]);
+      assertRuntimeCurrent();
+      const selectedRegistry = currentDecisionRegistry(capturedRegistry);
+      const config = readRuntimeConfig();
+      const result = await withPluginRuntimeRegistryScope(selectedRegistry, () =>
+        run(decisions, selectedRegistry, config, () => {
+          assertRuntimeCurrent();
+          return true;
+        }),
+      );
+      assertRuntimeCurrent();
+      options.signal.throwIfAborted();
+      return complete(completion, result);
+    };
     const assertNativeRuntimeCurrent = () => {
       assertRuntimeCurrent();
       if (registrationMode !== "full") {
@@ -188,6 +222,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     const runtime = new Proxy(registryParams.runtime, {
       get(_target, prop, receiver) {
         const getRuntimeProperty = () => readRuntimeProperty(record, prop, receiver);
+        if (prop === "capabilities") {
+          const capabilities: PluginRuntime["capabilities"] = getRuntimeProperty();
+          return record.contracts?.subagentProfiles?.length
+            ? capabilities
+            : capabilities?.filter((capability) => capability !== "native-subagent-profiles-v1");
+        }
         if (prop === "state") {
           const baseState = getRuntimeProperty();
           return {
@@ -278,25 +318,14 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           } satisfies PluginRuntime["config"];
         }
         if (prop === "system") {
-          const system: PluginRuntime["system"] = getRuntimeProperty();
-          const route = <T>(run: () => T): T => {
-            assertRuntimeCurrent();
-            if (isPluginRegistryPreparing(registry) && !isPluginRecordActive(registry, record)) {
-              throw new Error(
-                `Plugin "${pluginId}" cannot route system events during replacement preparation.`,
-              );
-            }
-            return runWithPluginScope(run);
-          };
-          return {
-            ...system,
-            enqueueSystemEvent: (...args) => route(() => system.enqueueSystemEvent(...args)),
-            requestHeartbeat: (...args) => route(() => system.requestHeartbeat(...args)),
-            requestHeartbeatNow: (...args) => route(() => system.requestHeartbeatNow(...args)),
-            runHeartbeatOnce: (...args) => route(() => system.runHeartbeatOnce(...args)),
-            runCommandWithTimeout: (...args) =>
-              runWithPluginScope(() => system.runCommandWithTimeout(...args)),
-          } satisfies PluginRuntime["system"];
+          return createPluginSystemRuntime({
+            state,
+            record,
+            system: getRuntimeProperty(),
+            currentRegistry,
+            assertRuntimeCurrent,
+            runWithPluginScope,
+          });
         }
         if (prop === "channel") {
           const channel = channelRuntime.resolve(record);
@@ -313,55 +342,34 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         if (prop === "decisions") {
           return {
-            evaluate: async (batch, options) => {
-              assertRuntimeCurrent();
-              const capturedRegistry = currentDecisionRegistry();
-              const { evaluateDecisionOperation, completeDecisionEvaluation } =
-                await import("../decisions/runtime.js");
-              assertRuntimeCurrent();
-              const selectedRegistry = currentDecisionRegistry(capturedRegistry);
-              const result = await withPluginRuntimeRegistryScope(selectedRegistry, () =>
-                evaluateDecisionOperation(
-                  batch,
-                  options,
-                  selectedRegistry,
-                  getRuntimeConfig(),
-                  record.id,
-                  () => {
-                    assertRuntimeCurrent();
-                    return true;
-                  },
-                ),
-              );
-              assertRuntimeCurrent();
-              options.signal.throwIfAborted();
-              return completeDecisionEvaluation(result);
-            },
-            evaluateV2: async (batch, options) => {
-              assertRuntimeCurrent();
-              const capturedRegistry = currentDecisionRegistry();
-              const { evaluateDecisionV2Operation, completeDecisionEvaluation } =
-                await import("../decisions/runtime.js");
-              assertRuntimeCurrent();
-              const selectedRegistry = currentDecisionRegistry(capturedRegistry);
-              const config = getRuntimeConfig();
-              const result = await withPluginRuntimeRegistryScope(selectedRegistry, () =>
-                evaluateDecisionV2Operation(
-                  batch,
-                  options,
-                  selectedRegistry,
-                  config,
-                  record.id,
-                  () => {
-                    assertRuntimeCurrent();
-                    return true;
-                  },
-                ),
-              );
-              assertRuntimeCurrent();
-              options.signal.throwIfAborted();
-              return completeDecisionEvaluation(result);
-            },
+            evaluate: (batch, options) =>
+              evaluateDecision(
+                options,
+                (decisions, selectedRegistry, config, isAdmissible) =>
+                  decisions.evaluateDecisionOperation(
+                    batch,
+                    options,
+                    selectedRegistry,
+                    config,
+                    record.id,
+                    isAdmissible,
+                  ),
+                (completion, evaluation) => completion.completeDecisionEvaluation(evaluation),
+              ),
+            evaluateV2: (batch, options) =>
+              evaluateDecision(
+                options,
+                (decisions, selectedRegistry, config, isAdmissible) =>
+                  decisions.evaluateDecisionV2Operation(
+                    batch,
+                    options,
+                    selectedRegistry,
+                    config,
+                    record.id,
+                    isAdmissible,
+                  ),
+                (completion, evaluation) => completion.completeDecisionEvaluation(evaluation),
+              ),
           } satisfies PluginRuntime["decisions"];
         }
         if (prop === "llm") {
@@ -403,6 +411,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               runWithCurrentPluginScope(() => gateway.openPluginPanel(params)),
             readSessionFacts: (params) =>
               runWithCurrentPluginScope(() => gateway.readSessionFacts(params)),
+            appendAgentMessage: (params) =>
+              runWithCurrentPluginScope(() => gateway.appendAgentMessage(params)),
             withSessionFacts: (select, run) =>
               runWithCurrentPluginScope(() =>
                 gateway.withSessionFacts(select, (snapshot) => {
@@ -474,6 +484,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             listSessionEntries: session.listSessionEntries,
             listSessionEntriesAsync: (params) =>
               runWithCurrentPluginScope(() => session.listSessionEntriesAsync(params)),
+            withSessionEntriesAsync: (params, consume) =>
+              runWithCurrentPluginScope(() =>
+                session.withSessionEntriesAsync(params, (entries) => {
+                  assertRuntimeCurrent();
+                  return consume(entries);
+                }),
+              ),
             createSessionEntryListReader: (params) =>
               runWithPluginScope(async () => {
                 const read = await session.createSessionEntryListReader(params);
@@ -518,7 +535,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               return await runWithPluginScope(async () => {
                 const resolveCurrentExecutionOwner = () =>
                   resolveStoredSessionExecutionOwner({
-                    action: "admit work on",
                     sessionKey: params.sessionKey,
                     storePath: params.storePath,
                   });
@@ -614,6 +630,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             ) => invokeSelectedRuntime(() => agent.resolveSessionCatalogCreateTarget(params)),
             resolveThinkingPolicy: (params: Parameters<typeof agent.resolveThinkingPolicy>[0]) =>
               invokeSelectedRuntime(() => agent.resolveThinkingPolicy(params)),
+            explainToolAvailability: (
+              params: Parameters<typeof agent.explainToolAvailability>[0],
+            ) => invokeSelectedRuntime(() => agent.explainToolAvailability(params)),
             runCommandFromIngress,
             runEmbeddedAgent,
             session: scopedSession,
@@ -635,29 +654,34 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         const subagent: PluginRuntime["subagent"] = getRuntimeProperty();
         const native = subagent.native;
+        const list = native?.list;
+        const runNative = <T>(run: () => T): T =>
+          runWithPluginScope(() =>
+            withNativeSubagentRuntimeGuard(
+              { pluginId, assertCurrent: assertNativeRuntimeCurrent },
+              run,
+            ),
+          );
         return {
           ...(native
             ? {
                 native: {
-                  spawn: (params) =>
-                    runWithPluginScope(() =>
-                      withNativeSubagentRuntimeGuard(
-                        { pluginId, assertCurrent: assertNativeRuntimeCurrent },
-                        () => native.spawn(params),
-                      ),
-                    ),
-                  collect: (params) =>
-                    runWithPluginScope(() =>
-                      withNativeSubagentRuntimeGuard(
-                        { pluginId, assertCurrent: assertNativeRuntimeCurrent },
-                        () => native.collect(params),
-                      ),
-                    ),
+                  spawn: (params) => runNative(() => native.spawn(params)),
+                  collect: (params) => runNative(() => native.collect(params)),
+                  ...(list ? { list: (params) => runNative(() => list(params)) } : {}),
                 },
               }
             : {}),
           complete: (params) => runWithPluginScope(() => subagent.complete(params)),
           forkSession: (params) => runWithPluginScope(() => subagent.forkSession(params)),
+          runForkedTurn: (params) =>
+            runPluginForkedTurnAsOwner(params, {
+              registry: currentRegistry(),
+              record,
+              scopedRuntime: registryParams.activateGlobalSideEffects === false,
+              runWithPluginScope,
+              subagent,
+            }),
           run: async (params) => {
             const { assertSessionIdentitiesOwned } = await loadSessionOwnership();
             return await runWithPluginScope(async () => {

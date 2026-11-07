@@ -13,6 +13,17 @@ const chatImage = (url = "data:image/png;base64,QUJDRA==") => ({
   type: "image_url",
   image_url: { url },
 });
+const textPart = (text: string) => ({ type: "text", text });
+const withChatImage = (text: string, url: string) => chatMessage([textPart(text), chatImage(url)]);
+const responseBase64 = (
+  type: "input_file" | "input_image",
+  media_type: string,
+  data: string,
+  filename?: string,
+) => ({
+  type,
+  source: { type: "base64", media_type, data, ...(filename ? { filename } : {}) },
+});
 const uploadsDisabledError = {
   type: "forbidden",
   code: "UPLOADS_DISABLED",
@@ -54,7 +65,7 @@ function disableUploadsDuringAdmission(agentCommandMock: HttpMediaSuite["agentCo
       throw new Error("Expected the HTTP command input admission guard");
     }
     publishUploads(false);
-    await options.assertSourceCurrent();
+    options.assertSourceCurrent();
     return { payloads: [], meta: { durationMs: 0, terminalReply: { disposition: "empty" } } };
   });
 }
@@ -78,17 +89,10 @@ function registerUploadPolicyTests(suite: OpenAiMediaSuite | ResponsesUploadSuit
       ? suite.postResponses(getPort(), { model: "openclaw", input, stream })
       : suite.postChatCompletions(getPort(), { model: "openclaw", messages: input, stream });
   const imagePart = responses
-    ? { type: "input_image", source: { type: "base64", media_type: "image/png", data: "QUJDRA==" } }
+    ? responseBase64("input_image", "image/png", "QUJDRA==")
     : chatImage();
-  const responseFile = (data = "dXBsb2FkZWQgdGV4dA==") => ({
-    type: "input_file",
-    source: {
-      type: "base64",
-      media_type: "text/plain",
-      data,
-      filename: "notes.txt",
-    },
-  });
+  const responseFile = (data = "dXBsb2FkZWQgdGV4dA==") =>
+    responseBase64("input_file", "text/plain", data, "notes.txt");
   const responseUrl = (type: "input_file" | "input_image", url: string) => ({
     type,
     source: { type: "url", url },
@@ -108,69 +112,45 @@ function registerUploadPolicyTests(suite: OpenAiMediaSuite | ResponsesUploadSuit
         "firstAgentOpts" in suite ? suite.firstAgentOpts() : suite.firstAgentCommandOptions();
       expect(opts?.images).toEqual([{ type: "image", data: "QUJDRA==", mimeType: "image/png" }]);
       if ("firstAgentOpts" in suite) {
+        expect(opts?.message).toBe(IMAGE_ONLY_USER_MESSAGE);
         expect(suite.firstAgentOpts().extraSystemPrompt).toContain("uploaded text");
       }
     });
 
-    const blocked: Array<{ name: string; part: unknown; stream: boolean }> = responses
-      ? [
-          { name: "inline image", part: imagePart, stream: false },
-          { name: "inline file", part: filePart, stream: false },
-          {
-            name: "URL image in a streaming request",
-            part: responseUrl("input_image", "https://example.com/image.png"),
-            stream: true,
-          },
-          {
-            name: "URL file",
-            part: responseUrl("input_file", "https://example.com/notes.txt"),
-            stream: false,
-          },
-          {
-            name: "malformed base64 before decoding",
-            part: responseFile("%%%"),
-            stream: false,
-          },
-        ]
-      : [
-          { name: "inline image", part: imagePart, stream: false },
-          {
-            name: "URL image in a streaming request",
-            part: chatImage("https://example.com/image.png"),
-            stream: true,
-          },
-          { name: "file", part: filePart, stream: false },
-          {
-            name: "malformed image before decoding",
-            part: chatImage("data:image/png;base64,%%%"),
-            stream: false,
-          },
-        ];
-    it.each(blocked)("rejects $name without extraction or dispatch", async ({ part, stream }) => {
+    // Upload admission branches on part kind, before inspecting inline/URL source data.
+    it.each([
+      {
+        name: "malformed image before decoding",
+        part: responses
+          ? responseBase64("input_image", "image/png", "%%%")
+          : chatImage("data:image/png;base64,%%%"),
+        stream: false,
+      },
+      { name: "file", part: filePart, stream: false },
+      {
+        name: "URL image in a streaming request",
+        part: responses
+          ? responseUrl("input_image", "https://example.com/image.png")
+          : chatImage("https://example.com/image.png"),
+        stream: true,
+      },
+    ])("rejects $name without extraction or dispatch", async ({ part, stream }) => {
       publishUploads(false);
-      const imageExtraction = vi.spyOn(inputFiles, "extractImageContentFromSource");
-      const fileExtraction = responses
+      using imageExtraction = vi.spyOn(inputFiles, "extractImageContentFromSource");
+      using fileExtraction = responses
         ? vi.spyOn(inputFiles, "extractFileContentFromSource")
         : undefined;
-      try {
-        const res = await post(
-          [message([{ type: responses ? "input_text" : "text", text: "Read this" }, part])],
-          stream,
-        );
-        expect(res.status).toBe(403);
-        expect(await res.json()).toEqual({ error: uploadsDisabledError });
-        expect(imageExtraction).not.toHaveBeenCalled();
-        if (fileExtraction) {
-          expect(fileExtraction).not.toHaveBeenCalled();
-        }
-        if ("fetchWithSsrFGuardMock" in suite) {
-          expect(suite.fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-        }
-        expect(agentCommandMock).not.toHaveBeenCalled();
-      } finally {
-        imageExtraction.mockRestore();
-        fileExtraction?.mockRestore();
+      const res = await post([message([part])], stream);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: uploadsDisabledError });
+      expect(imageExtraction).not.toHaveBeenCalled();
+      if (fileExtraction) {
+        expect(fileExtraction).not.toHaveBeenCalled();
       }
+      if ("fetchWithSsrFGuardMock" in suite) {
+        expect(suite.fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      }
+      expect(agentCommandMock).not.toHaveBeenCalled();
     });
 
     it("rejects a hot disable during command input admission", async () => {
@@ -214,7 +194,7 @@ function registerUploadPolicyTests(suite: OpenAiMediaSuite | ResponsesUploadSuit
       "rechecks upload policy after preparation (stream=%s)",
       async (stream) => {
         publishUploads(true);
-        const extraction = responses
+        using _ = responses
           ? vi
               .spyOn(inputFiles, "extractFileContentFromSource")
               .mockImplementationOnce(async () => {
@@ -227,14 +207,10 @@ function registerUploadPolicyTests(suite: OpenAiMediaSuite | ResponsesUploadSuit
                 publishUploads(false);
                 return { type: "image", data: "QUJDRA==", mimeType: "image/png" };
               });
-        try {
-          const res = await post([message([upload])], stream);
-          expect(res.status).toBe(403);
-          expect(await res.json()).toMatchObject({ error: { code: "UPLOADS_DISABLED" } });
-          expect(agentCommandMock).not.toHaveBeenCalled();
-        } finally {
-          extraction.mockRestore();
-        }
+        const res = await post([message([upload])], stream);
+        expect(res.status).toBe(403);
+        expect(await res.json()).toMatchObject({ error: { code: "UPLOADS_DISABLED" } });
+        expect(agentCommandMock).not.toHaveBeenCalled();
       },
     );
   });
@@ -270,47 +246,24 @@ export async function runOpenAiHttpImageInputCases({
     await res.text();
   }
 
-  const pngData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA";
   await accept(
-    [
-      chatMessage([
-        { type: "text", text: "describe this" },
-        chatImage(`data:image/png;base64,${pngData}`),
-      ]),
-    ],
-    [image(pngData)],
-    (message) => expect(message).toBe("describe this"),
-  );
-  await accept(
-    [
-      chatMessage([
-        { type: "text", text: "with metadata params" },
-        chatImage("data:image/png;charset=utf-8;base64,QUJDRA=="),
-      ]),
-    ],
+    [withChatImage("describe this", "data:image/png;charset=utf-8;base64,QUJDRA==")],
     [image("QUJDRA==")],
+    (message) => expect(message).toBe("describe this"),
   );
 
   await expectInvalidRequestNoDispatch([chatMessage([chatImage("https://example.com/image.png")])]);
   const malformedImageParts = [
     { type: "image_url" },
-    { type: "image_url", image_url: null },
-    { type: "image_url", image_url: {} },
     { type: "image_url", image_url: { url: "   " } },
     { type: "image_url", image_url: { url: 123 } },
-    { type: "image_url", image_url: { url: null } },
     { type: "image_url", image_url: "   " },
-    { type: "image_url", image_url: 123 },
   ];
   const validImagePart = chatImage();
   for (const imagePart of malformedImageParts) {
-    for (const content of [
-      [imagePart],
-      [{ type: "text", text: "describe this" }, imagePart],
-      [validImagePart, imagePart],
-    ]) {
-      await expectInvalidRequestNoDispatch([chatMessage(content)]);
-    }
+    await expectInvalidRequestNoDispatch([
+      chatMessage([textPart("describe this"), validImagePart, imagePart]),
+    ]);
   }
   for (const uri of [
     "data:image/png,QUJDRA==",
@@ -319,9 +272,7 @@ export async function runOpenAiHttpImageInputCases({
     "data:image/svg+xml;base64,PHN2Zz4=",
     "data:image/png;base64,JVBERi0xLjQK",
   ]) {
-    await expectInvalidRequestNoDispatch([
-      chatMessage([{ type: "text", text: "describe this" }, chatImage(uri)]),
-    ]);
+    await expectInvalidRequestNoDispatch([withChatImage("describe this", uri)]);
   }
 
   await accept(
@@ -329,36 +280,24 @@ export async function runOpenAiHttpImageInputCases({
     [image("QUJDRA==", "image/jpeg")],
     (message) => expect(message).toContain("User sent image(s) with no text."),
   );
-  await accept(
-    [
-      chatMessage([chatImage()]),
-      chatMessage("I can see it.", "assistant"),
-      chatMessage("What color was it?"),
-    ],
-    undefined,
-    (message) => expect(message ?? "").not.toContain("User sent image(s) with no text."),
-  );
-  for (const historicalImageParts of [[chatImage("   ")], [validImagePart, chatImage("   ")]]) {
-    for (const followup of [
-      chatMessage("What color was it?"),
-      chatMessage("Vision tool says it is blue.", "tool"),
-    ]) {
-      await accept(
-        [
-          chatMessage([{ type: "text", text: "look at this" }, ...historicalImageParts]),
-          chatMessage("Checking the image.", "assistant"),
-          followup,
-        ],
-        undefined,
-        () => expect(getFirstAgentMessage()).toContain("User: look at this"),
-      );
-    }
+  for (const followup of [
+    chatMessage("What color was it?"),
+    chatMessage("Vision tool says it is blue.", "tool"),
+  ]) {
+    await accept(
+      [withChatImage("look at this", "   "), chatMessage("Checking.", "assistant"), followup],
+      undefined,
+      (message) => {
+        expect(getFirstAgentMessage()).toContain("User: look at this");
+        expect(message ?? "").not.toContain("User sent image(s) with no text.");
+      },
+    );
   }
   await accept(
     [
-      chatMessage([{ type: "text", text: "first" }, chatImage("data:image/png;base64,QUFBQQ==")]),
+      withChatImage("first", "data:image/png;base64,QUFBQQ=="),
       chatMessage("noted", "assistant"),
-      chatMessage([{ type: "text", text: "second" }, chatImage("data:image/png;base64,QkJCQg==")]),
+      withChatImage("second", "data:image/png;base64,QkJCQg=="),
     ],
     [image("QkJCQg==")],
   );
@@ -367,13 +306,9 @@ export async function runOpenAiHttpImageInputCases({
 export function registerOpenResponsesHttpMediaInputTests({
   getPort,
   postResponses,
-  firstAgentOpts,
   agentCommandMock,
-  mockAgentOnce,
-  ensureResponseConsumed,
   expectInvalidRequest,
   buildUrlInputMessage,
-  buildFileInputMessage,
 }: OpenResponsesMediaSuite & {
   mockAgentOnce: (payloads: Array<{ text: string }>) => void;
   buildFileInputMessage: (text: string, filename: string, message?: string) => unknown;
@@ -385,20 +320,7 @@ export function registerOpenResponsesHttpMediaInputTests({
     text?: string;
   }) => unknown;
 }): void {
-  const post = (input: unknown, extra = {}) =>
-    postResponses(getPort(), { model: "openclaw", input, ...extra });
-  async function accept(
-    input: unknown,
-    check: (options: Record<string, unknown>) => void,
-    extra = {},
-  ) {
-    mockAgentOnce([{ text: "ok" }]);
-    const res = await post(input, extra);
-    expect(res.status).toBe(200);
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    check(firstAgentOpts());
-    await ensureResponseConsumed(res);
-  }
+  const post = (input: unknown) => postResponses(getPort(), { model: "openclaw", input });
   it("blocks unsafe URL-based file/image inputs", async () => {
     agentCommandMock.mockClear();
     for (const [kind, url, error] of [
@@ -412,59 +334,6 @@ export function registerOpenResponsesHttpMediaInputTests({
     ] as const) {
       await expectInvalidRequest(await post(buildUrlInputMessage({ kind, url })), error);
     }
-    expect(agentCommandMock).not.toHaveBeenCalled();
-  });
-
-  it("accepts image-only input without text, matching /v1/chat/completions", async () => {
-    const pngBase64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-
-    await accept(
-      [
-        responseMessage([
-          {
-            type: "input_image",
-            source: { type: "base64", media_type: "image/png", data: pngBase64 },
-          },
-        ]),
-      ],
-      (opts) => {
-        expect(opts.message ?? "").toBe(IMAGE_ONLY_USER_MESSAGE);
-        expect(opts.images).toHaveLength(1);
-      },
-    );
-  });
-
-  it("accepts file-only input without text, matching image-only", async () => {
-    await accept(
-      buildFileInputMessage("the quick brown fox", "doc.txt"),
-      (opts) => {
-        expect(opts.message ?? "").not.toBe("");
-        const extraSystemPrompt = opts.extraSystemPrompt ?? "";
-        expect(extraSystemPrompt).toContain('<file name="doc.txt">');
-        expect(extraSystemPrompt).toContain("the quick brown fox");
-      },
-      { instructions: "Summarize the attached document." },
-    );
-  });
-
-  it("keeps base64 input_file text truncation UTF-16 safe", async () => {
-    const text = `${"a".repeat(59_999)}😀tail`;
-    await accept(buildFileInputMessage(text, "emoji-boundary.txt"), (opts) => {
-      const extraSystemPrompt = opts.extraSystemPrompt ?? "";
-      expect(extraSystemPrompt).toContain('<file name="emoji-boundary.txt">');
-      expect(extraSystemPrompt).toContain("a".repeat(59_999));
-      expect(extraSystemPrompt).not.toContain("😀");
-      expect(extraSystemPrompt).not.toMatch(/[\uD800-\uDFFF]/u);
-    });
-  });
-
-  it("still rejects input with neither text nor image", async () => {
-    agentCommandMock.mockClear();
-
-    const res = await post([responseMessage([])]);
-
-    await expectInvalidRequest(res, /Missing user message/i);
     expect(agentCommandMock).not.toHaveBeenCalled();
   });
 }

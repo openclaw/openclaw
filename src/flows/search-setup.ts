@@ -80,24 +80,6 @@ export function resolveSearchProviderOptions(
     );
 }
 
-function defaultModelUsesCodexRuntime(config: OpenClawConfig): boolean {
-  const configuredPrimary = resolveAgentModelPrimaryValue(config.agents?.defaults?.model);
-  if (!configuredPrimary) {
-    return false;
-  }
-  const defaultModel = resolveDefaultModelForAgent({ cfg: config });
-  if (defaultModel.provider === CODEX_HOSTED_SEARCH_PROVIDER_ID) {
-    return true;
-  }
-  return (
-    resolveAgentHarnessPolicy({
-      provider: defaultModel.provider,
-      modelId: defaultModel.model,
-      config,
-    }).runtime === "codex"
-  );
-}
-
 function resolveSearchProviderEntry(
   config: OpenClawConfig,
   provider: SearchProvider,
@@ -132,16 +114,12 @@ function providerIsReady(
   return hasExistingKey(config, entry.id) || hasKeyInEnv(entry);
 }
 
-function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
-  const entry = resolveSearchProviderEntry(config, provider);
-  return entry?.getConfiguredCredentialValue?.(config);
-}
-
 export function resolveExistingKey(
   config: OpenClawConfig,
   provider: SearchProvider,
 ): string | undefined {
-  return normalizeSecretInputString(rawKeyValue(config, provider));
+  const entry = resolveSearchProviderEntry(config, provider);
+  return normalizeSecretInputString(entry?.getConfiguredCredentialValue?.(config));
 }
 
 export function hasExistingKey(config: OpenClawConfig, provider: SearchProvider): boolean {
@@ -304,8 +282,16 @@ export async function runSearchSetupFlow(
     resolveDefaultAgentDir(config),
   );
   const availableProviderOptions = resolveSearchProviderOptions(config);
+  const configuredPrimary = resolveAgentModelPrimaryValue(config.agents?.defaults?.model);
+  const defaultModel = configuredPrimary ? resolveDefaultModelForAgent({ cfg: config }) : undefined;
   const codexRecommended =
-    defaultModelUsesCodexRuntime(config) &&
+    defaultModel !== undefined &&
+    (defaultModel.provider === CODEX_HOSTED_SEARCH_PROVIDER_ID ||
+      resolveAgentHarnessPolicy({
+        provider: defaultModel.provider,
+        modelId: defaultModel.model,
+        config,
+      }).runtime === "codex") &&
     availableProviderOptions.some((entry) => entry.id === CODEX_HOSTED_SEARCH_PROVIDER_ID);
   const preferred = codexRecommended
     ? availableProviderOptions.find((entry) => entry.id === CODEX_HOSTED_SEARCH_PROVIDER_ID)

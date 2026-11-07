@@ -1,4 +1,14 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  Errored,
+  lazy,
+  Loading,
+  onCleanup,
+  onSettled,
+  Show,
+} from "solid-js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import {
@@ -6,33 +16,43 @@ import {
   availableLinkPreviewReaders,
 } from "../../app/link-reader-routing.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { isChatControlCommand } from "../../lib/chat/commands.ts";
-import { projectsForGateway } from "../../lib/projects.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
-import { i18nRevision } from "../../lib/reactive/i18n.ts";
+import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { projectTheme } from "../../lib/reactive/theme.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { chatGoalOperations } from "./chat-goals.ts";
+import { adoptBootComposer } from "./chat-pane-boot-composer.ts";
 import { chatPanePropertyKeys } from "./chat-pane-inputs.ts";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
-import { lazySidebarElements } from "./chat-pane-sidebar-layout.ts";
-import {
-  ChatProviderReviewDialog,
-  createChatProviderReview,
-  type ChatProviderReviewOwner,
-} from "./chat-provider-review-controller.tsx";
+import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
+import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import { activeQueuedMessageEdit, subscribeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
+import { readChatSessionSnapshot } from "./session-message-cache.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
+import { waitForPrewarmedChatSnapshot } from "./session-snapshot-store.ts";
+
+const ChatComposerCapabilityDialogs = lazy(() => import("./chat-composer-capability-host.tsx"), {
+  export: "ChatComposerCapabilityDialogs",
+});
+
+const ChatProviderReviewHost = lazy(() => import("./chat-provider-review-controller.tsx"), {
+  export: "ChatProviderReviewHost",
+});
 
 /** One Solid owner publishes, mounts, and retires the synchronous pane runtime. */
 export function createChatPaneView(runtime: ChatPaneRuntime) {
@@ -58,8 +78,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   }
   projectChatFields(runtime, [
     ...chatPanePropertyKeys,
+    "composerCapabilities",
     "paneWidth",
     "desktopFocus",
+    "deferredSessionHydration",
     "dashboardControls",
     "replyNavigationSessionKey",
     "replyNavigationId",
@@ -101,7 +123,27 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   };
 
   onSettled(() => {
-    setReady(true);
+    const gateway = runtime.context.gateway;
+    const pendingSnapshot = waitForPrewarmedChatSnapshot(
+      resolveChatSnapshotKey(
+        {
+          settings: gateway.connection,
+          client: gateway.snapshot.client,
+          hello: gateway.snapshot.hello,
+          agentsList: runtime.context.agents.state.agentsList,
+        },
+        { sessionKey: runtime.sessionKey },
+      ),
+    );
+    if (pendingSnapshot) {
+      void pendingSnapshot.then(() => {
+        if (!disposed) {
+          setReady(true);
+        }
+      });
+    } else {
+      setReady(true);
+    }
   });
   onCleanup(() => {
     disposed = true;
@@ -125,6 +167,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const focus = focusPending;
     focusPending = false;
     runtime.afterRender(focus);
+    adoptBootComposer(runtime);
     runtime.chatState.commitRender();
     if (runtime.presented && runtime.presentation.documentVisible) {
       notifyRenderLifecycleForTest(runtime.element, "commit");
@@ -138,7 +181,14 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       runtime.start();
     }
     const context = runtime.context;
+    // The pane retains mobile presentation while its optional host is absent.
+    onSettled(() => runtime.observeMobileViewport());
     const parentSession = projectOwner(runtime.parentSession, (owner) => owner.read(), Object.is);
+    const transcriptPosition = projectOwner(
+      runtime.transcript,
+      (owner) => owner.isPositionSettled,
+      Object.is,
+    );
     const repository = createMemo(() => {
       const target = runtime.repository.target;
       return target
@@ -153,10 +203,36 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const theme = projectTheme(context.theme);
     // Startup attaches one host for this mounted pane's lifetime.
     const state = runtime.state;
+    // Snapshot admission is fixed for this pane; live refill must not turn a cold load warm.
+    const initialCachedSession = Boolean(
+      state &&
+      readChatSessionSnapshot(state.chatMessagesBySession, state, {
+        sessionKey: state.sessionKey,
+      }),
+    );
     const realtime = createMemo(() => {
       const owner = runtime.state?.realtimeTalk;
-      return owner && projectOwner(owner, (source) => source.snapshot);
+      return (
+        owner && {
+          view: projectOwner(
+            owner,
+            (source) => source.snapshot,
+            (previous, next) =>
+              Object.entries(previous).every(
+                ([key, value]) =>
+                  key === "realtimeTalkConversationState" ||
+                  Object.is(value, Reflect.get(next, key)),
+              ),
+          ),
+          conversation: projectOwner(
+            owner,
+            (source) => source.snapshot.realtimeTalkConversationState.entries,
+            Object.is,
+          ),
+        }
+      );
     });
+    const readRealtimeTalkConversation = () => realtime()?.conversation.read() ?? [];
     // Ordinary keystrokes stay in the composer; command intent changes the pane's submit gate.
     const controlCommand = projectOwner(
       runtime.chatState.composerDraft,
@@ -168,7 +244,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       (source) => source.read().attachments,
       Object.is,
     );
-    const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
     const queuedEdit =
       state &&
       projectSource(state, {
@@ -218,6 +293,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       cacheProgress();
       return stop;
     });
+    const composerCapabilities = createMemo(() => {
+      const owner = runtime.composerCapabilities;
+      return owner && projectOwner(owner, (source) => source);
+    });
     const sources = [
       context.plugins,
       context.agents,
@@ -230,19 +309,17 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       state && sessionWorkspaceForHost(state),
       chatInputOwnerForContext(context),
       runtime.sessionDiscussion,
-      runtime.composerCapabilities,
       runtime.questionPromptState,
       state && chatGoalOperations(state),
       runtime.activeSessionResources,
-      runtime.transcript,
       runtime.sessionCompanionThreads,
       nativeGatewaysCapability(),
-      lazySidebarElements,
     ].map((source) => source && projectOwner(source, (capability) => capability));
     onSettled(() => installChatComposerPickerDismissal(runtime.element.ownerDocument));
     // Relative labels tick only while this retained pane is presented.
     const [relativeTime, setRelativeTime] = createSignal(Date.now());
     const minutePoll = useVisiblePoll(60_000, () => setRelativeTime(Date.now()));
+    const [providerReview, setProviderReview] = createSignal<ChatProviderReviewOwner>();
     const frame = createParkedProjection(
       () => {
         relativeTime();
@@ -250,9 +327,9 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         publication()?.read();
         repository()?.read();
         parentSession.read();
+        transcriptPosition.read();
         progress.read();
-        realtime()?.read();
-        projects.read();
+        realtime()?.view.read();
         theme.preferences.read();
         controlCommand.read();
         attachments.read();
@@ -261,14 +338,16 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         board().forEach((source) => source.read());
         i18nRevision();
         sources.forEach((source) => source?.read());
+        composerCapabilities()?.read();
         prepareRender();
-        return runtime.render(() => providerReview);
+        return runtime.render(providerReview, readRealtimeTalkConversation);
       },
       () => runtime.presented && runtime.presentation.documentVisible,
     );
-    const providerReview: ChatProviderReviewOwner = createChatProviderReview({
-      source: () => frame().providerReviewSource,
-      readState: () => runtime.state,
+    // Keep an admitted review alive after its row clears or its dialog closes.
+    const reviewVisited = createMemo<boolean>((previous) => {
+      const source = frame().providerReviewSource;
+      return previous || Boolean(source && selectedChatSessionRow(source.state)?.providerReview);
     });
     const questions = createComposerQuestions(
       runtime.presentationId,
@@ -292,6 +371,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     // Importing its renderer here makes the optional runtime a required boot dependency.
     return (
       <openclaw-link-reader-hovercard-provider
+        data-cached-session={initialCachedSession ? "true" : "false"}
         prop:client={
           gateway.read().snapshot.phase === "connected" ? gateway.read().snapshot.client : null
         }
@@ -302,16 +382,39 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         prop:sessionKey={runtime.sessionKey}
       >
         <PaneLayout layout={frame().layout} questions={questions} />
-        <ChatProviderReviewDialog owner={providerReview} />
+        <Show when={reviewVisited()}>
+          <Errored
+            fallback={(error, reset) => (
+              <InlineAlert tone="danger" role="alert">
+                {formatUiError(error())}
+                <button class="btn btn--sm" type="button" onClick={reset}>
+                  {t("common.retry")}
+                </button>
+              </InlineAlert>
+            )}
+          >
+            <Loading>
+              <ChatProviderReviewHost
+                source={() => frame().providerReviewSource}
+                readState={() => runtime.state}
+                onReady={(owner) => setProviderReview(owner)}
+              />
+            </Loading>
+          </Errored>
+        </Show>
         <Show when={frame().capabilityDialogs}>
-          {(dialogs) => <ChatComposerCapabilityDialogs {...dialogs()} />}
+          {(dialogs) => (
+            <ChatLazyBoundary>
+              <ChatComposerCapabilityDialogs {...dialogs()} />
+            </ChatLazyBoundary>
+          )}
         </Show>
       </openclaw-link-reader-hovercard-provider>
     );
   }
 
   return (
-    <Show when={ready()}>
+    <Show when={ready()} fallback={<LoadingState route composer={runtime.ownsRouteComposer} />}>
       <MountedPane />
     </Show>
   );

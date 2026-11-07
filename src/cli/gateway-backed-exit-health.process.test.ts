@@ -1,39 +1,28 @@
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { WebSocketServer } from "ws";
-import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import type { ChannelsStatusResult } from "../../packages/gateway-protocol/src/schema/channels.js";
-import {
-  buildMinimalGatewayHelloOkPayload,
-  closeMinimalGatewayServer,
-  parseMinimalGatewayRequestFrame,
-  sendMinimalGatewayConnectChallenge,
-  sendMinimalGatewayResponse,
-} from "../gateway/minimal-gateway.test-helpers.js";
-import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { sendMinimalGatewayResponse } from "../gateway/minimal-gateway.test-helpers.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getFreePort } from "../test-utils/ports.js";
 import {
   prepareGatewayCliFixture,
-  prepareSharedStateReadArtifacts,
   prepareUnreachableGatewayCliFixture,
   runIsolatedGatewayCli,
+  seedDeviceAuth,
   snapshotDirectoryContents,
   snapshotSharedStateArtifacts,
   tempDirs,
   UNREACHABLE_GATEWAY_URL,
 } from "./gateway-backed-exit.process.test-support.js";
-import { expectCliResult, startRateLimitedGateway } from "./gateway-backed-exit.test-helpers.js";
+import {
+  expectCliResult,
+  startGateway,
+  startRateLimitedGateway,
+} from "./gateway-backed-exit.test-helpers.js";
 
 function expectUnreachableGatewayTransportFailure(
   result: Awaited<ReturnType<typeof runIsolatedGatewayCli>>,
@@ -77,96 +66,11 @@ it.each<[string, string[]]>([
   ],
 ])("reads %s through %j while another process owns state maintenance", async (method, args) => {
   const root = tempDirs.make("openclaw-status-state-custody-");
-  const gateway = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   let stateOwner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
+  let close: (() => Promise<void>) | undefined;
   try {
-    await once(gateway, "listening");
-    const address = gateway.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Expected a TCP Gateway fixture");
-    }
-    const url = `ws://127.0.0.1:${address.port}`;
-    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-      mode: "remote",
-      auth: { mode: "none" },
-      remote: { url },
-    });
-    const env = { ...process.env, HOME: root, OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir };
-    openOpenClawStateDatabase({ env });
-    const identity = loadOrCreateDeviceIdentity({ env });
-    seedOriginDeviceToken({
-      gatewayScope: gatewayOriginScope(url),
-      deviceId: identity.deviceId,
-      role: "operator",
-      token: "synthetic-stored-device-token",
-      scopes: ["operator.admin"],
-      env,
-    });
-    closeOpenClawStateDatabaseForTest();
-    prepareSharedStateReadArtifacts(stateDir);
-    const expectedAfter = await snapshotDirectoryContents(stateDir);
-    const canonicalStateDir = await fs.realpath(stateDir);
-    const channelStatus = {
-      ts: 1_800_000_000_000,
-      channelOrder: [],
-      channelLabels: {},
-      channels: {},
-      channelAccounts: {},
-      channelDefaultAccountId: {},
-    } satisfies ChannelsStatusResult;
-    const payload =
-      method === "channels.status"
-        ? channelStatus
-        : { pid: 123, runtimeVersion: "synthetic-runtime" };
-    const calls: string[] = [];
-
-    gateway.on("connection", (ws) => {
-      sendMinimalGatewayConnectChallenge(ws);
-      ws.on("message", (data) => {
-        const frame = parseMinimalGatewayRequestFrame(data);
-        if (frame.type !== "req" || !frame.id) {
-          return;
-        }
-        if (frame.method === "connect") {
-          expect(frame.params?.auth).toEqual({ deviceToken: "synthetic-stored-device-token" });
-          expect(frame.params?.device).toMatchObject({
-            id: identity.deviceId,
-            nonce: "test-nonce",
-          });
-          // Auth loading has finished; hold native custody before the hello can trigger storage.
-          stateOwner ??= acquireGatewayStateOwner({
-            databasePath: resolveOpenClawStateSqlitePath(env),
-          });
-          const ownerPath = path.relative(canonicalStateDir, stateOwner.path);
-          if (
-            ownerPath &&
-            ownerPath !== ".." &&
-            !ownerPath.startsWith(`..${path.sep}`) &&
-            !path.isAbsolute(ownerPath)
-          ) {
-            // Preserve the pre-CLI snapshot; add only the parent's actual custody artifacts.
-            expectedAfter[ownerPath] = `file:${createHash("sha256")
-              .update(readFileSync(stateOwner.path))
-              .digest("hex")}`;
-            for (let directory = path.dirname(ownerPath); directory !== ".";) {
-              expectedAfter[directory] ??= "directory";
-              directory = path.dirname(directory);
-            }
-          }
-          sendMinimalGatewayResponse(
-            ws,
-            frame.id,
-            buildMinimalGatewayHelloOkPayload({
-              methods: [method],
-              auth: {
-                role: "operator",
-                scopes: ["operator.read"],
-                deviceToken: "synthetic-issued-device-token",
-              },
-            }),
-          );
-          return;
-        }
+    const gateway = await startGateway(
+      (ws, frame) => {
         stateOwner!.assertCurrent();
         expect(frame.method).toBe(method);
         if (method === "channels.status") {
@@ -179,10 +83,67 @@ it.each<[string, string[]]>([
             expect(timeoutMs).toBe(CHANNEL_PROBE_TIMEOUT_MS);
           }
         }
-        calls.push(method);
         sendMinimalGatewayResponse(ws, frame.id, payload);
-      });
+      },
+      (frame) => {
+        expect(frame.params?.auth).toEqual({ deviceToken: "synthetic-stored-device-token" });
+        expect(frame.params?.device).toMatchObject({ id: identity.deviceId, nonce: "test-nonce" });
+        // Acquire custody only after auth loading, before hello can trigger any writes.
+        stateOwner ??= acquireGatewayStateOwner({
+          databasePath: resolveOpenClawStateSqlitePath(env),
+        });
+        const ownerPath = path.relative(canonicalStateDir, stateOwner.path);
+        if (
+          ownerPath &&
+          ownerPath !== ".." &&
+          !ownerPath.startsWith(`..${path.sep}`) &&
+          !path.isAbsolute(ownerPath)
+        ) {
+          expectedAfter[ownerPath] =
+            `file:${createHash("sha256").update(readFileSync(stateOwner.path)).digest("hex")}`;
+          for (
+            let directory = path.dirname(ownerPath);
+            directory !== ".";
+            directory = path.dirname(directory)
+          ) {
+            expectedAfter[directory] ??= "directory";
+          }
+        }
+        return {
+          methods: [method],
+          auth: {
+            role: "operator",
+            scopes: ["operator.read"],
+            deviceToken: "synthetic-issued-device-token",
+          },
+        };
+      },
+    );
+    close = gateway.close;
+    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+      mode: "remote",
+      auth: { mode: "none" },
+      remote: { url: gateway.url },
     });
+    const { identity, env } = await seedDeviceAuth(
+      root,
+      stateDir,
+      gateway.url,
+      "synthetic-stored-device-token",
+    );
+    const expectedAfter = await snapshotDirectoryContents(stateDir);
+    const canonicalStateDir = await fs.realpath(stateDir);
+    const payload =
+      method === "channels.status"
+        ? ({
+            ts: 1_800_000_000_000,
+            channelOrder: [],
+            channelLabels: {},
+            channels: {},
+            channelAccounts: {},
+            channelDefaultAccountId: {},
+          } satisfies ChannelsStatusResult)
+        : { pid: 123, runtimeVersion: "synthetic-runtime" };
     const result = await runIsolatedGatewayCli({
       args: [...args, "--json", "--timeout", String(STATE_CUSTODY_RPC_BUDGET_MS)],
       root,
@@ -190,14 +151,14 @@ it.each<[string, string[]]>([
       configPath,
     });
     expect(expectCliResult(result)).toEqual(payload);
-    expect(calls).toEqual([method]);
+    expect(gateway.calls).toEqual([method]);
     stateOwner!.assertCurrent();
     expect(await snapshotDirectoryContents(stateDir)).toEqual(expectedAfter);
   } finally {
     try {
       stateOwner?.release();
     } finally {
-      await closeMinimalGatewayServer(gateway);
+      await close?.();
     }
   }
 });

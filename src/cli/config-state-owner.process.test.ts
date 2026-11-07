@@ -8,6 +8,7 @@ import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { runStateOwnerCli as run, stateOwnerEnv } from "./cli-process-fixture.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterAll);
@@ -32,10 +33,7 @@ describe("config CLI database effects", () => {
     const stateDir = path.join(home, "state");
     const configPath = path.join(home, "openclaw.json");
     await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ gateway: { mode: "local" }, logging: { level: "debug" } }),
-    );
+    await writeFixtureJson(configPath, { gateway: { mode: "local" }, logging: { level: "debug" } });
     return stateOwnerEnv(home);
   }
 
@@ -59,7 +57,9 @@ describe("config CLI database effects", () => {
     const result = await run(env, [...args, ...flags], input);
     expect(result.code, result.stderr).toBe(code);
     if (code === 1) {
-      expect(result.stderr).toContain("exclusive offline state ownership");
+      // Writes route to a Gateway listener; this owner holds custody without one.
+      expect(result.stderr).toContain("The state owner has no Gateway listener");
+      expect(result.stderr).toContain("No local mutation was attempted");
       expect(result.stderr).toContain("stop the Gateway");
     }
     expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(originalConfig);

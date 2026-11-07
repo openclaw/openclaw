@@ -1,4 +1,5 @@
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { recordMessageToolRunOutcome } from "../../infra/message-tool-run-outcome-store.js";
@@ -8,9 +9,9 @@ import { prepareReplyTurnRunSource } from "./agent-runner-admission.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import { bindGoalContinuationExecution } from "./goal-continuation-return.js";
+import { handoffCompletedSourceReply } from "./queue/drain.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
-import { getReplySystemEventContext } from "./system-event-session-key.js";
 import { withVisibleWorkSessionReporter } from "./visible-work-sessions.js";
 
 const messageToolOutcomeLog = createSubsystemLogger("auto-reply/message-tool-outcome");
@@ -65,6 +66,9 @@ async function recordAgentTurnExecutionOutcome(
     executionStatus === "ok" ? "completed" : executionStatus === "failed" ? "errored" : "aborted";
   const toolDelivered =
     outcome?.kind === "settled" && hasCompletedSourceReplyDeliveryEvidence(outcome.result);
+  if (toolDelivered && executionStatus === "ok" && params.replyOperation) {
+    handoffCompletedSourceReply(params.replyOperation, params.followupRun);
+  }
   const values = {
     runId: result?.runId ?? params.opts?.runId ?? "unknown",
     sessionKey,
@@ -126,6 +130,7 @@ export async function runAgentTurnWithOutcome(
       eventExecution.assertCurrent?.();
     }
     source.claim();
+    const adapter = params.followupRun.controllerInput?.sourceAdapter;
     const result = await withExecRequestTurn(
       {
         identity: {
@@ -133,10 +138,22 @@ export async function runAgentTurnWithOutcome(
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
           sessionId: params.followupRun.run.sessionId,
           agentId: params.followupRun.run.agentId,
+          // Unbound event wakes inherit custody; absent fields must not erase its original actor.
+          ...(adapter?.requester?.connectionId !== undefined
+            ? { ownerConnId: adapter.requester.connectionId }
+            : {}),
+          ...(adapter?.requester?.deviceId !== undefined
+            ? { ownerDeviceId: adapter.requester.deviceId }
+            : {}),
+          ...(adapter?.initiatingPersonalOperator
+            ? { initiatingPersonalOperator: adapter.initiatingPersonalOperator }
+            : {}),
+          ...(adapter?.controlUiVisible !== undefined
+            ? { controlUiVisible: adapter.controlUiVisible }
+            : {}),
+          ...(adapter?.turnKind ? { turnKind: adapter.turnKind } : {}),
         },
-        owners:
-          eventExecution?.execRequestOwners ??
-          getReplySystemEventContext(params.opts)?.execRequestOwners,
+        owners: eventExecution?.execRequestOwners,
         abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
       },
       () =>
@@ -148,6 +165,21 @@ export async function runAgentTurnWithOutcome(
           run,
         ),
     );
+    const automation = params.followupRun.run.scheduledAutomation;
+    const invocation = automation
+      ? getAgentRunContext(runId)?.cronRunsByJobId?.get(automation.job.id)
+      : undefined;
+    if (automation && invocation) {
+      invocation.closed = true;
+      if (result.outcome.kind === "settled") {
+        result.outcome.automation = {
+          result: invocation.result,
+          includeReasoning:
+            automation.job.payload.kind === "agentTurn" &&
+            automation.job.payload.includeReasoning === true,
+        };
+      }
+    }
     await recordAgentTurnExecutionOutcome(params, result);
     terminalRecorded = true;
     await recordSessionEventTerminalOutcome(eventExecution, runId, result);

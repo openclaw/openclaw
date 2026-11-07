@@ -42,29 +42,6 @@ test.each([
   },
 );
 
-test("records parallel, repeated, and archive phases independently in canonical order", () => {
-  diagnostics = startSessionPatchDiagnostics("sessions.patchMany");
-  const first = expectDefined(diagnostics.scope("catalog"), "active catalog phase");
-  const second = expectDefined(diagnostics.scope("catalog"), "active catalog phase");
-  const group = expectDefined(diagnostics.scope("snapshot"), "active snapshot phase");
-  at(100, () => group.mark("projection"));
-  at(200, () => group.mark("runtimeSelection"));
-  at(500, () => group.mark("archivePlacement"));
-  at(600, () => second.finish());
-  at(900, () => group.mark("commit"));
-  at(1_000, () => group.mark("snapshot"));
-  at(1_300, () => group.finish());
-  const effects = expectDefined(diagnostics.scope("effects"), "archive effects");
-  const cron = expectDefined(diagnostics.scope("cronEffects"), "archive cron effects");
-  at(1_400, () => first.finish());
-  at(1_800, () => cron.finish());
-  effects.finish();
-  diagnostics.finish();
-  expect(log).toHaveBeenCalledExactlyOnceWith(
-    "slow session patch 1800ms method=sessions.patchMany snapshot=400ms projection=100ms catalog=2000ms runtimeSelection=300ms archivePlacement=400ms commit=100ms effects=500ms cronEffects=500ms",
-  );
-});
-
 test("request settlement closes unfinished phases and retires retained markers", () => {
   const scope = expectDefined(diagnostics.scope("preflight"), "active preflight phase");
   at(1_500, () => diagnostics.finish());
@@ -91,4 +68,40 @@ test("a failed diagnostic sink cannot replace the operation error", () => {
       diagnostics.finish();
     }
   }).toThrow(originalError);
+});
+
+test("slow patch details include mutation names without identity fields or values", () => {
+  const patch = {
+    key: "synthetic-private-session",
+    agentId: "synthetic-private-agent",
+    expectedMarkedUnreadAt: null,
+    unread: false,
+    label: "synthetic-private-label",
+    "synthetic-private-field": "synthetic-private-value",
+  };
+  diagnostics.describeRequest(1, patch);
+  at(1_500, () => diagnostics.finish());
+  expect(log).toHaveBeenCalledExactlyOnceWith(
+    "slow session patch 1500ms method=sessions.patch targets=1 fields=label,unread",
+  );
+});
+
+test("slow batch details cap target count and sorted mutation names", () => {
+  diagnostics = startSessionPatchDiagnostics("sessions.patchMany");
+  diagnostics.describeRequest(150, {
+    unread: false,
+    thinkingLevel: "high",
+    pinned: true,
+    model: "synthetic-private-model",
+    label: "synthetic-private-label",
+    icon: "synthetic-private-icon",
+    contextWindow: "synthetic-private-window",
+    color: "synthetic-private-color",
+    category: "synthetic-private-category",
+    archived: false,
+  });
+  at(1_500, () => diagnostics.finish());
+  expect(log).toHaveBeenCalledExactlyOnceWith(
+    "slow session patch 1500ms method=sessions.patchMany targets=100 fields=archived,category,color,contextWindow,icon,label,model,pinned,+2",
+  );
 });

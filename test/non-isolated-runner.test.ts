@@ -4,7 +4,6 @@
 // cleanup, not five independent Vitest process boots.
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { afterAll, expect, it } from "vitest";
 import type { JsonTestResults } from "vitest/node";
@@ -14,7 +13,12 @@ import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
 import { agentReaderFixtureFiles } from "./non-isolated-runner.agent-reader-fixtures.ts";
 import { authOwnershipFixtureFiles } from "./non-isolated-runner.auth-fixtures.ts";
+import { controllerStorageFixtureFiles } from "./non-isolated-runner.controller-fixtures.ts";
 import { domResourceFixtureFiles } from "./non-isolated-runner.dom-fixtures.ts";
+import {
+  createRunnerFixtureEnv,
+  withRunnerFixture,
+} from "./non-isolated-runner.fixture-support.ts";
 import { gatewayWorkerLifetimeFixtureFiles } from "./non-isolated-runner.gateway-lifecycle-fixtures.ts";
 import { mcpManagerFixtureFiles } from "./non-isolated-runner.mcp-fixtures.ts";
 import { mockResolutionFixtureFiles } from "./non-isolated-runner.mock-resolution-fixtures.ts";
@@ -22,7 +26,6 @@ import { solidFixtureFiles } from "./non-isolated-runner.solid-fixtures.ts";
 import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
-const require = createRequire(import.meta.url);
 const sequencerSource = `import { BaseSequencer } from "vitest/node";
 class AlphabeticalSequencer extends BaseSequencer {
   override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {
@@ -38,22 +41,15 @@ const gatewayProjects = [
     "forks",
   ],
 ] as const;
+const lifecycleMarkers = ["producer", "observer"].flatMap((generation) =>
+  ["afterAll", "resource teardown"].map(
+    (phase) => `test API lifecycle: ${generation} ${phase} passed`,
+  ),
+);
 
 function childEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    // Drop parent Vitest state so the child run resolves its own config, and
-    // drop GITHUB_ACTIONS so the child's reporter cannot annotate the parent.
-    if (
-      key.startsWith("VITEST") ||
-      key.startsWith("OPENCLAW_VITEST") ||
-      key === "GITHUB_ACTIONS" ||
-      key === "FORCE_COLOR"
-    ) {
-      continue;
-    }
-    env[key] = value;
-  }
+  const env = createRunnerFixtureEnv();
+  delete env.FORCE_COLOR;
   env.NO_COLOR = "1";
   delete env.OPENCLAW_SKIP_CHANNELS;
   delete env.OPENCLAW_SKIP_CRON;
@@ -142,6 +138,28 @@ const { ManualPayload, AutoPayload } = createRequire(import.meta.url)("./mock-pa
 import { expect, vi, type RunnerTestFile } from "vitest";
 const resetModules = vi.resetModules;
 export default class FixtureRunner extends Runner {
+  private readonly domImport = Promise.withResolvers<void>();
+  private readonly domCollection = Promise.withResolvers<void>();
+
+  override async onCollectStart(file: RunnerTestFile) {
+    const held = file.filepath.endsWith("09-j-test-api-mock-only.test.ts");
+    // Reproduce Vitest's unawaited queue notification without a real timer.
+    if (held) await this.domImport.promise;
+    super.onCollectStart(file);
+    if (held) this.domCollection.resolve();
+  }
+
+  override async importFile(...args: Parameters<Runner["importFile"]>) {
+    try {
+      return await super.importFile(...args);
+    } finally {
+      if (args[1] === "collect" && args[0].endsWith("09-j-test-api-mock-only.test.ts")) {
+        this.domImport.resolve();
+        await this.domCollection.promise;
+      }
+    }
+  }
+
   override async onAfterRunFiles(files: RunnerTestFile[]) {
     const generation = files.some(file => file.filepath.endsWith("99-mcp-b-retained-owner.test.ts"))
       ? "?mcp-retirement-generation"
@@ -483,6 +501,7 @@ it(${JSON.stringify(title)}, () => {
     ),
     ...mockResolutionFixtureFiles,
     ...mcpManagerFixtureFiles(repoRoot),
+    ...controllerStorageFixtureFiles(repoRoot),
     ...testApiLifecycleFixtureFiles(repoRoot),
     ...documentFocusFixtureFiles(),
     ...domResourceFixtureFiles,
@@ -497,40 +516,13 @@ type ChildCompletion = Pick<ChildProcess, "exitCode" | "signalCode" | "killed"> 
   output: string;
 };
 
-const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
-
-async function withFixtureRoot(name: string, run: (root: string) => Promise<void>) {
-  // Outer test cleanup must not erase unjoined writers; retain failed fixtures.
-  const parent = path.join(repoRoot, ".artifacts", name);
-  await fs.mkdir(parent, { recursive: true });
-  const root = await fs.mkdtemp(path.join(parent, "run-"));
-  try {
-    await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
-    await run(root);
-    await fs.rm(root, { recursive: true, force: true });
-  } catch (error) {
-    if (error instanceof Error) {
-      error.message += `; retained fixture ${root}`;
-    }
-    throw error;
-  }
-}
-
-async function runFixture(root: string, signal: AbortSignal, env = childEnv()) {
+async function runFixture(root: string, args: string[], signal: AbortSignal, env = childEnv()) {
   const reportPath = path.join(root, "report.json");
   let child!: ChildProcess;
   const result = await runVitestShutdownCommand({
     bin: resolveTestNodeExecPath(),
     args: [
-      path.join(vitestPackageDir, "vitest.mjs"),
-      "run",
-      "--root",
-      root,
-      "--config",
-      path.join(root, "vitest.config.ts"),
-      "--configLoader",
-      "runner",
-      "--reporter=verbose",
+      ...args,
       "--reporter=json",
       `--reporter=${path.join(repoRoot, "scripts/lib/vitest-report-capture.mts")}`,
       `--outputFile.json=${reportPath}`,
@@ -583,7 +575,7 @@ async function assertCompletion(
     pid: expected.pid,
     root: expected.root,
     processTimedOut: false,
-    ended: { reason: "failed", unhandledErrors: 0, failedModules: 5, suiteErrors: 5 },
+    ended: { reason: "failed", unhandledErrors: 0, failedModules: 6, suiteErrors: 6 },
   });
   const project = {
     name: "non-isolated-runner",
@@ -600,8 +592,8 @@ async function assertCompletion(
 
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 72,
-    numPassedTests: 71,
+    numTotalTests: 80,
+    numPassedTests: 79,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,
@@ -613,13 +605,16 @@ async function assertCompletion(
       name === "99-mcp-a-uncertain-owner.test.ts" || name === "98-mcp-c-prior-failure.test.ts";
     const mockedMcpDisposer = name === "98-mcp-a-direct-disposer.test.ts";
     const failedRunCancellation = name === "97-mcp-a-cancel-failure.test.ts";
+    const failedControllerWrite = name === "96-a-controller-write-failure.test.ts";
     const skipped = name === "09-f-test-api-skipped.test.ts";
     const lifecycle = ["09-d-test-api-producer.test.ts", "09-e-test-api-observer.test.ts"].includes(
       name,
     );
     const count = crashed ? 0 : lifecycle ? 2 : 1;
     expect(file.status, name).toBe(
-      crashed || uncertainMcp || mockedMcpDisposer || failedRunCancellation ? "failed" : "passed",
+      crashed || uncertainMcp || mockedMcpDisposer || failedRunCancellation || failedControllerWrite
+        ? "failed"
+        : "passed",
     );
     if (uncertainMcp || mockedMcpDisposer) {
       expect(file.message).toContain("MCP runtime custody failed");
@@ -628,6 +623,10 @@ async function assertCompletion(
           ? "MCP test teardown could not confirm cleanup"
           : "MCP test teardown cannot use a mocked disposer",
       );
+    } else if (failedControllerWrite) {
+      expect(file.message).toContain("run state failed");
+      expect(file.message).toContain("Session-controller cleanup failed");
+      expect(file.message).toContain("readonly");
     } else if (failedRunCancellation) {
       expect(file.message).toContain("run state failed");
       expect(file.message).toContain("Synthetic run cancellation failed");
@@ -644,16 +643,15 @@ async function assertCompletion(
       });
     }
   }
-  for (const generation of ["producer", "observer"]) {
-    expect(child.output).toContain(`test API lifecycle: ${generation} afterAll passed`);
-    expect(child.output).toContain(`test API lifecycle: ${generation} resource teardown passed`);
+  for (const marker of lifecycleMarkers) {
+    expect(child.output).toContain(marker);
   }
   expect(child.output).not.toContain("first-file");
   expect(child.output).not.toContain("multiple instances of Solid");
 }
 
 async function verifyRunnerCleanup(signal: AbortSignal) {
-  await withFixtureRoot("non-isolated-runner", async (root) => {
+  await withRunnerFixture("non-isolated-runner", async ({ root, args }) => {
     const files = fixtureFiles(root);
     for (const [name, content] of Object.entries(files)) {
       await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
@@ -689,7 +687,7 @@ export default defineConfig({
       "utf8",
     );
 
-    const { child, completion, canonicalRoot, reportPath } = await runFixture(root, signal);
+    const { child, completion, canonicalRoot, reportPath } = await runFixture(root, args, signal);
     const expected = {
       root: canonicalRoot,
       pid: child.pid,
@@ -709,11 +707,9 @@ export default defineConfig({
     // Replay faults against this one completed child, not new fixture executions.
     // The same assertion path must reject incomplete proof even with a good summary.
     const capturePath = `${reportPath}.capture.json`;
-    const originals = [
-      await fs.readFile(reportPath, "utf8"),
-      await fs.readFile(capturePath, "utf8"),
-    ];
-    for (const [index, artifact] of [reportPath, capturePath].entries()) {
+    const artifacts = [reportPath, capturePath];
+    const originals = await Promise.all(artifacts.map((artifact) => fs.readFile(artifact, "utf8")));
+    for (const [index, artifact] of artifacts.entries()) {
       for (const contents of [null, "{", "null", "{}"]) {
         if (contents === null) {
           await fs.rm(artifact);
@@ -730,119 +726,37 @@ export default defineConfig({
     type Replay = { child: ChildCompletion; report: JsonTestResults; capture: VitestReportCapture };
     const passedFile = ({ report }: Replay) =>
       report.testResults.find((file) => file.status === "passed")!;
+    // Native report-owner tests cover malformed reports and process outcomes.
+    // Keep controls for this fixture's identity, completion, and exact-case proof.
     const faults: [string, (replay: Replay) => void][] = [
-      ["missing project", ({ capture }) => capture.projects.pop()],
       [
         "wrong module project",
         ({ capture }) => Object.assign(capture.modules[0]!, { name: "other" }),
       ],
-      ["omitted module", ({ capture }) => capture.modules.pop()],
-      ["duplicated module", ({ capture }) => capture.modules.splice(1, 1, capture.modules[0]!)],
-      ["unexpected module", ({ capture }) => Object.assign(capture.modules[0]!, { file: "other" })],
-      ["omitted file", ({ report }) => report.testResults.pop()],
-      ["duplicated file", ({ report }) => report.testResults.splice(1, 1, report.testResults[0]!)],
-      ["unexpected file", ({ report }) => Object.assign(report.testResults[0]!, { name: "other" })],
+      ["missing native completion", ({ capture }) => Object.assign(capture, { ended: undefined })],
+      ["wrong native process", ({ capture }) => Object.assign(capture, { pid: child.pid! + 1 })],
       [
-        "extra collection error",
-        (replay) => Object.assign(passedFile(replay), { message: "other" }),
+        "skipped assertion",
+        (replay) => Object.assign(passedFile(replay).assertionResults[0]!, { status: "skipped" }),
       ],
-      ["extra failed file", (replay) => Object.assign(passedFile(replay), { status: "failed" })],
+      ["omitted assertion", (replay) => passedFile(replay).assertionResults.pop()],
       [
-        "wrong collection error",
-        ({ report }) =>
-          Object.assign(
-            report.testResults.find((file) => file.name.endsWith("/01-a-crash.test.ts"))!,
-            { message: "other" },
-          ),
-      ],
-      ["inconsistent totals", ({ report }) => Object.assign(report, { numPassedTests: 44 })],
-    ];
-    for (const patch of [
-      { ended: undefined },
-      { processTimedOut: true },
-      { pid: child.pid! + 1 },
-      { root: "other" },
-    ]) {
-      faults.push([
-        `invalid native capture: ${JSON.stringify(patch)}`,
-        ({ capture }) => Object.assign(capture, patch),
-      ]);
-    }
-    for (const patch of [
-      { reason: "interrupted" },
-      { reason: "passed" },
-      { unhandledErrors: 1 },
-      { failedModules: 4 },
-      { failedModules: 7 },
-      { suiteErrors: 4 },
-      { suiteErrors: 7 },
-    ]) {
-      faults.push([
-        `invalid native end: ${JSON.stringify(patch)}`,
-        ({ capture }) => Object.assign(capture.ended!, patch),
-      ]);
-    }
-    for (const patch of [
-      { code: 0 },
-      { code: 2 },
-      { code: 143 },
-      { exitCode: 0 },
-      { exitCode: 2 },
-      { exitCode: null },
-      { signalCode: "SIGTERM" },
-      { killed: true },
-    ] satisfies Partial<ChildCompletion>[]) {
-      faults.push([
-        `abnormal child completion: ${JSON.stringify(patch)}`,
-        ({ child: replayChild }) => Object.assign(replayChild, patch),
-      ]);
-    }
-    const nativeReport: JsonTestResults = JSON.parse(originals[0]!);
-    for (const [index, file] of nativeReport.testResults.entries()) {
-      if (!file.assertionResults.length) {
-        continue;
-      }
-      const name = path.basename(file.name);
-      const assertionFault = (
-        label: string,
-        mutate: (tests: typeof file.assertionResults) => void,
-      ) => {
-        faults.push([
-          `${name}: ${label}`,
-          ({ report }) => mutate(report.testResults[index]!.assertionResults),
-        ]);
-      };
-      for (const status of ["pending", "skipped", "todo", "failed", "passed"] as const) {
-        if (status === file.assertionResults[0]!.status) {
-          continue;
-        }
-        assertionFault(`unexpected ${status} assertion`, (tests) => {
-          tests.at(-1)!.status = status;
-        });
-      }
-      assertionFault("omitted assertion", (tests) => tests.pop());
-      assertionFault("extra assertion", (tests) => tests.push(file.assertionResults[0]!));
-      assertionFault("failure messages", (tests) =>
-        Object.assign(tests[0]!, { failureMessages: ["unexpected failure"] }),
-      );
-      if (file.assertionResults.length > 1) {
-        assertionFault("duplicated assertion replacing its sibling", (tests) => {
+        "duplicated lifecycle assertion",
+        ({ report }) => {
+          const tests = report.testResults.find(
+            (file) => file.assertionResults.length > 1,
+          )!.assertionResults;
           tests[1] = tests[0]!;
-        });
-      }
-    }
-    for (const generation of ["producer", "observer"]) {
-      for (const phase of ["afterAll", "resource teardown"]) {
-        faults.push([
-          `missing ${generation} ${phase} marker`,
-          ({ child: replayChild }) => {
-            replayChild.output = replayChild.output.replace(
-              `test API lifecycle: ${generation} ${phase} passed`,
-              "",
-            );
-          },
-        ]);
-      }
+        },
+      ],
+    ];
+    for (const marker of lifecycleMarkers) {
+      faults.push([
+        `missing ${marker}`,
+        ({ child: replayChild }) => {
+          replayChild.output = replayChild.output.replace(marker, "");
+        },
+      ]);
     }
     for (const [label, mutate] of faults) {
       const replay: Replay = {
@@ -867,7 +781,7 @@ it("cleans every shared runner surface between files", (context) => {
 });
 
 async function verifyGatewayWorkerLifetimes(signal: AbortSignal) {
-  await withFixtureRoot("gateway-worker-lifetimes", async (root) => {
+  await withRunnerFixture("gateway-worker-lifetimes", async ({ root, args }) => {
     await fs.writeFile(path.join(root, "threads-events.log"), "");
     await fs.writeFile(path.join(root, "provenance-events.log"), "");
     const files = {
@@ -920,7 +834,12 @@ export default defineConfig({
       OPENCLAW_VITEST_MAX_WORKERS: "1",
       GATEWAY_LIFETIME_PROBE_ROOT: root,
     };
-    const { child, completion, canonicalRoot, reportPath } = await runFixture(root, signal, env);
+    const { child, completion, canonicalRoot, reportPath } = await runFixture(
+      root,
+      args,
+      signal,
+      env,
+    );
     expect(completion, completion.output).toMatchObject({
       code: 0,
       exitCode: 0,

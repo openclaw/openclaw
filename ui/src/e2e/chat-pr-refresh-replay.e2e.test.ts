@@ -1,10 +1,13 @@
 import { expect, it } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import {
+  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+} from "../../../src/gateway/control-ui-contract.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { newChatPage } from "./chat-flow.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
+import { createLightDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -13,12 +16,7 @@ const suite = createControlUiE2eSuite({
 });
 suite.define(() => {
   it("refreshes the first stream and distinct finals without replaying a completed refresh", async () => {
-    const page = await newChatPage(suite, {
-      viewport: { width: 1180, height: 800 },
-      colorScheme: "light",
-      locale: "en-US",
-      serviceWorkers: "block",
-    });
+    const page = await newChatPage(suite, createLightDesktopControlUiContextOptions());
     const gateway = await installMockGateway(page, {
       assistantName: "Review fixture",
       agentModel: "openai/gpt-5.6-sol",

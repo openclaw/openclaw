@@ -20,6 +20,7 @@ import {
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
 import * as sessionReads from "../session-utils-store.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
   createChatMetadataHarness,
   createChatMetadataOwner,
@@ -29,9 +30,8 @@ import {
   createModelsListTestContext,
   catalogEntry,
   providerCatalogEntry,
-  WITHOUT_OPENAI_ENV_AUTH,
+  requestModelsList,
 } from "./models-list-result.openai-routes.test-support.js";
-import { modelsHandlers } from "./models.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
 
 function modelsReader(
@@ -40,21 +40,12 @@ function modelsReader(
   client: GatewayClient | null = null,
 ) {
   return async () => {
-    let result: ModelsListResult | undefined;
-    await modelsHandlers["models.list"]!({
-      req: { type: "req", id: "prepared", method: "models.list", params },
-      params,
-      context,
-      client,
-      isWebchatConnect: () => false,
-      respond: (ok, value, error) => {
-        if (!ok) {
-          throw new Error(JSON.stringify(error));
-        }
-        result = value as ModelsListResult;
-      },
-    });
-    return result;
+    const respond = await requestModelsList(context, params, client);
+    const call = respond.mock.calls[0];
+    if (call && !call[0]) {
+      throw new Error(JSON.stringify(call[2]));
+    }
+    return call?.[1] as ModelsListResult | undefined;
   };
 }
 

@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   IDLE_TIMEOUT_MS,
+  PRESENCE_REPOSITORY,
   usePreparedPoolFixture,
   type PoolOptions,
 } from "./prepared-pool.test-support.js";
@@ -19,9 +19,7 @@ it.each(["new build", "promoted reserve"] as const)(
       admission === "promoted reserve"
         ? await f.seed("reserve-b", { reserve: true, projectKey, preparationKey })
         : undefined;
-    const entered = createDeferred();
-    const release = createDeferred();
-    f.releases.push(() => release.resolve());
+    const { entered, release } = f.gate();
     const reconcile = vi.fn<PoolOptions["reconcile"]>(async () => {});
     const prepareIntent = vi.fn<PoolOptions["prepareIntent"]>();
     const owner = f.pool({
@@ -78,6 +76,34 @@ it.each(["new build", "promoted reserve"] as const)(
   },
 );
 
+it("leaves repository builds with their request owner while still expiring them", async () => {
+  const build = await f.seed("repository-build", {
+    purpose: "build",
+    repository: PRESENCE_REPOSITORY,
+  });
+  const prepareRetention = vi.fn<PoolOptions["prepareRetention"]>();
+  const prepareIntent = vi.fn<PoolOptions["prepareIntent"]>();
+  const reconcile = vi.fn<PoolOptions["reconcile"]>(async () => {});
+  const owner = f.pool({ prepareRetention, prepareIntent, reconcile });
+  await f.schedule(owner);
+  expect(f.store.get(build.environmentId)).toMatchObject({
+    state: "requested",
+    destroyRequestedAtMs: null,
+  });
+  expect(prepareRetention).not.toHaveBeenCalled();
+  expect(prepareIntent).not.toHaveBeenCalled();
+  expect(reconcile).not.toHaveBeenCalled();
+  f.nowMs += IDLE_TIMEOUT_MS;
+  await f.schedule(owner);
+  expect(f.store.get(build.environmentId)?.destroyRequestedAtMs).toBe(f.nowMs);
+  expect(reconcile).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ environmentId: build.environmentId, destroyRequestedAtMs: f.nowMs }),
+    expect.any(AbortSignal),
+    expect.any(Function),
+  );
+  expect(f.reserves()).toHaveLength(1);
+});
+
 it("prefers a new build to a commit activated in the same millisecond", async () => {
   f.developmentProfile.readyWorkers = 0;
   await f.attachSeed("previous-source");
@@ -124,35 +150,25 @@ it("records build demand for subsequent ordinary reserve refill", async () => {
   );
 });
 
-it.each([
-  [
-    "expiry",
-    (): void => {
-      f.nowMs += IDLE_TIMEOUT_MS;
-    },
-  ],
-  [
-    "removed profile",
-    (): void => {
-      delete f.config.cloudWorkers!.profiles!.development;
-    },
-  ],
-  [
-    "replaced provider",
-    (): void => {
-      f.developmentProfile.provider = "other-provider";
-    },
-  ],
-  [
-    "global cap",
-    (): void => {
-      f.config.cloudWorkers!.preparedPool = { maxTotal: 0 };
-    },
-  ],
-] as const)("retires an unfinished build on %s", async (_invalidation, invalidate) => {
-  f.developmentProfile.readyWorkers = 0;
-  const build = await f.seed("build", { purpose: "build" });
-  invalidate();
-  await f.schedule(f.pool());
-  expect(f.store.get(build.environmentId)?.destroyRequestedAtMs).toBe(f.nowMs);
-});
+it.each(["expiry", "removed profile", "replaced provider", "global cap"] as const)(
+  "retires an unfinished build on %s",
+  async (invalidation) => {
+    f.developmentProfile.readyWorkers = 0;
+    const build = await f.seed("build", { purpose: "build" });
+    switch (invalidation) {
+      case "expiry":
+        f.nowMs += IDLE_TIMEOUT_MS;
+        break;
+      case "removed profile":
+        delete f.config.cloudWorkers!.profiles!.development;
+        break;
+      case "replaced provider":
+        f.developmentProfile.provider = "other-provider";
+        break;
+      case "global cap":
+        f.config.cloudWorkers!.preparedPool = { maxTotal: 0 };
+    }
+    await f.schedule(f.pool());
+    expect(f.store.get(build.environmentId)?.destroyRequestedAtMs).toBe(f.nowMs);
+  },
+);

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   AgentHarnessPreflightError,
@@ -8,14 +9,20 @@ import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { Type } from "typebox";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { StoredBinding } from "./agentsapi-binding-record.js";
 import { AgentsApiClient, type AgentsApiInputFile } from "./agentsapi-client.js";
-import { registerNativeLifecycleTests } from "./agentsapi-harness.lifecycle.test-helpers.js";
-import { registerMigrationTests } from "./agentsapi-harness.migration.test-helpers.js";
-import { createAttempt, registerHarness } from "./agentsapi-harness.persistence.test-helpers.js";
+import {
+  createAttempt,
+  createBindingStore as migrationStore,
+  mockClient,
+  registerHarness,
+  reopenState,
+} from "./agentsapi-harness.persistence.test-helpers.js";
 import {
   withNativeFixture,
   withPersistenceFixture,
@@ -523,28 +530,6 @@ it.each(["owned", "owner-only", "ownerless"] as const)(
   },
 );
 
-registerNativeLifecycleTests(resolveProviderAuth);
-
-it("preserves external session binding when delete cancel settlement fails and permits retry", async () => {
-  await withNativeFixture(async (fixture) => {
-    await fixture.harness.runAttempt(fixture.params);
-    const saved = await fixture.binding();
-    fixture.events.length = 0;
-    fixture.session.mockResolvedValue({ ...fixture.nativeSession, status: "in_progress" });
-    const failure = new Error("Native settlement unavailable");
-    fixture.cancel.mockRejectedValueOnce(failure);
-    const cleanup = () =>
-      fixture.harness.withSessionDeletion(fixture.target, async (settle) => settle());
-    await expect(cleanup()).rejects.toBe(failure);
-    expect(await fixture.binding()).toEqual(saved);
-    expect(fixture.events).toEqual([]);
-    await cleanup();
-    expect(resolveProviderAuth).toHaveBeenCalledTimes(1);
-    expect(fixture.events).toEqual(["cancel"]);
-    expect((await fixture.binding()) ?? {}).toEqual({});
-  });
-});
-
 it.each(["authority revoked", "oauth credential"] as const)(
   "preserves restarted external session binding on %s before native cleanup",
   async (failureMode) => {
@@ -595,8 +580,6 @@ it.each(["authority revoked", "oauth credential"] as const)(
   },
 );
 
-registerMigrationTests(fetchWithSsrFGuardMock);
-
 function expectText(input: string, fragments: string[]) {
   for (const fragment of fragments) {
     expect(input).toContain(fragment);
@@ -615,3 +598,381 @@ async function expectForwardingChange(
     },
   });
 }
+
+it.each([
+  ["openai_hosted", "delete", true],
+  ["self_hosted", "reset", true],
+  ["self_hosted", "delete", false],
+] as const)(
+  "retries %s %s cleanup (restart: %s) without losing history",
+  async (environment, operation, restart) => {
+    await withNativeFixture(async (fixture) => {
+      if (!restart) {
+        await fixture.harness.runAttempt(fixture.params);
+      }
+      const saved = restart
+        ? { sessionId: fixture.nativeSession.id, configFingerprint: "saved-config" }
+        : await fixture.binding();
+      if (restart) {
+        await fixture.openStore().register(fixture.params.sessionId, saved!);
+        await fixture.restart();
+      }
+      fixture.events.length = 0;
+      fixture.session.mockResolvedValue({
+        ...fixture.nativeSession,
+        status: "in_progress",
+        environment:
+          environment === "openai_hosted"
+            ? createHostedSession().environment
+            : fixture.nativeSession.environment,
+      });
+      const { agent } = fixture.runtime;
+      vi.mocked(agent.resolveAgentDir).mockReturnValue("/gateway/agents/main");
+      vi.mocked(agent.resolveAgentWorkspaceDir).mockReturnValue("/gateway/workspace");
+      const deleteSession = vi
+        .spyOn(AgentsApiClient.prototype, "deleteSession")
+        .mockResolvedValue();
+      const cleanup = () =>
+        operation === "reset"
+          ? fixture.harness.reset({ ...fixture.params.sessionTarget, reason: "reset" })
+          : fixture.harness.withSessionDeletion(fixture.target, async (settle) => settle());
+      const failure = new Error("Native cancellation unavailable");
+      fixture.cancel.mockRejectedValueOnce(failure);
+      const failed = cleanup();
+      await expect(failed).rejects.toThrow(failure.message);
+      if (!restart) {
+        await expect(failed).rejects.toBe(failure);
+      }
+      expect(await fixture.binding()).toEqual(saved);
+      expect(fixture.events).toEqual([]);
+      await cleanup();
+      expect((await fixture.binding()) ?? {}).toEqual({});
+      expect(fixture.events).toEqual(["cancel"]);
+      expect(resolveProviderAuth).toHaveBeenCalledTimes(restart ? 2 : 1);
+      expect(resolveProviderAuth).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          provider: "openai",
+          agentDir: "/gateway/agents/main",
+          workspaceDir: "/gateway/workspace",
+        }),
+      );
+      expect(agent.resolveAgentDir).toHaveBeenLastCalledWith(expect.any(Object), "main");
+      expect(fixture.cancel).toHaveBeenCalledTimes(2);
+      expect(deleteSession).not.toHaveBeenCalled();
+    });
+  },
+);
+
+it.each([
+  { outcome: "rollback", predecessor: false },
+  { outcome: "reject", predecessor: true },
+  { outcome: "commit", predecessor: true },
+] as const)(
+  "context reset: $outcome (predecessor: $predecessor)",
+  async ({ outcome, predecessor }) => {
+    await withNativeFixture(async (fixture) => {
+      expect(await fixture.harness.runAttempt(fixture.params)).toMatchObject({
+        terminal: { kind: "ok" },
+      });
+      const saved = await fixture.binding();
+      const successor = {
+        sessionId: "rotated-local-session",
+        previousSessionId: fixture.params.sessionId,
+      };
+      if (predecessor) {
+        await patchSessionEntry({
+          ...fixture.params.sessionTarget,
+          update: () => successor,
+        });
+      }
+      fixture.events.length = 0;
+      const failure = new Error("History cut rejected");
+      const result = fixture.harness.withSessionContextReset(
+        {
+          ...fixture.target,
+          ...(predecessor ? successor : {}),
+        },
+        async (settle) => {
+          if (outcome === "reject") {
+            throw failure;
+          }
+          await settle(outcome);
+          fixture.events.push(outcome);
+        },
+      );
+      if (outcome === "reject") {
+        await expect(result).rejects.toBe(failure);
+      } else {
+        await result;
+      }
+      expect(await fixture.binding()).toEqual(outcome === "commit" ? undefined : saved);
+      expect(fixture.events).toEqual(
+        outcome === "commit" ? ["commit"] : outcome === "rollback" ? ["rollback"] : [],
+      );
+    });
+  },
+);
+
+const legacy = {
+  sessionId: "stable-native-session",
+  authFingerprint: "3c26b68488ce497a69d2c9fce9ee19c461fa67a3d959b0dc3bafe5718c56119d",
+};
+const legacySession = () => ({ ...createHostedSession(), id: legacy.sessionId });
+
+function guardedResponse(finalUrl: string, response: Response) {
+  return { finalUrl, response, release: async () => {} };
+}
+
+function pluginConfig(config: Record<string, unknown>): OpenClawConfig {
+  return { plugins: { entries: { agentsapi: { config } } } };
+}
+
+type MigrationFixture<T> = {
+  params: Awaited<ReturnType<typeof createAttempt>>;
+  store: ReturnType<typeof migrationStore<T>>;
+  client: ReturnType<typeof mockClient>;
+  harness: ReturnType<typeof registerHarness>;
+  config: { current: OpenClawConfig };
+};
+
+function withMigration<T = StoredBinding>(
+  run: (fixture: MigrationFixture<T>) => Promise<void>,
+  initialConfig: OpenClawConfig = {},
+) {
+  const config = { current: initialConfig };
+  return withPersistenceFixture(
+    "must-not-create",
+    (client) =>
+      run({
+        params: client.params,
+        store: client.openStore<T>(),
+        client,
+        harness: client.harness,
+        config,
+      }),
+    () => config.current,
+  );
+}
+
+function expectNoCalls(...mocks: unknown[]) {
+  mocks.forEach((mock) => expect(mock).not.toHaveBeenCalled());
+}
+
+// v2026.9.9 stores the hash of [model.id, resolvedApiKey], not configFingerprint.
+it("upgrades a v2026.9.9 hosted binding without replacing its remote session", () =>
+  withOpenClawTestState({ label: "agentsapi-stable-upgrade" }, async (state) => {
+    const params = await createAttempt(state.stateDir);
+    const openStore = () => migrationStore<unknown>(state.env);
+    await openStore().register(params.sessionId, legacy);
+    const { create, message, session } = mockClient("must-not-create");
+    session.mockResolvedValue(legacySession());
+    const canonical = {
+      sessionId: legacy.sessionId,
+      configFingerprint: "7279f68deebd4e52eb136c95ccbb8c642a7f141b836a33de22c8aa9a4a93c022",
+    };
+    for (const resolvedApiKey of [params.resolvedApiKey, "fixture-rotated-key"]) {
+      await reopenState();
+      const harness = registerHarness(state.env);
+      try {
+        expect(await harness.runAttempt({ ...params, resolvedApiKey })).toMatchObject({
+          terminal: { kind: "ok" },
+        });
+        expect(await openStore().lookup(params.sessionId)).toEqual(canonical);
+      } finally {
+        await harness.dispose();
+      }
+    }
+    expect(create).not.toHaveBeenCalled();
+    expect(message.mock.calls.map(([id]) => id)).toEqual([legacy.sessionId, legacy.sessionId]);
+  }));
+
+it("retains legacy state rather than guessing after credential or immutable policy changes", () =>
+  withMigration(async ({ params, store, client, harness, config }) => {
+    await store.register(params.sessionId, legacy);
+    const changed = { transport: "streamable-http" as const, url: "https://mcp.example.test" };
+    const cases: Array<[string, Partial<AgentHarnessAttemptParamsV2>, OpenClawConfig?]> = [
+      ["rotated key", { resolvedApiKey: "fixture-rotated-key" }],
+      ["model", { model: { ...params.model, id: "different-model" } }],
+      ["environment", {}, pluginConfig({ environment: "self_hosted" })],
+      ["network", {}, pluginConfig({ openai_host: { network: { access: "disabled" } } })],
+      ["MCP", { config: { mcp: { servers: { changed } } } }],
+      ["native search", { toolOverrides: { webSearch: false } }],
+      ["Gateway forwarding", {}, pluginConfig({ forwarding: { gatewayTools: false } })],
+      ["MCP forwarding", {}, pluginConfig({ forwarding: { mcpServers: false } })],
+    ];
+    for (const [name, overrides, nextConfig] of cases) {
+      config.current = nextConfig ?? {};
+      await expect(harness.runAttempt({ ...params, ...overrides })).rejects.toThrow(
+        "restore the original configuration and API key",
+      );
+      expect(await store.lookup(params.sessionId), name).toEqual(legacy);
+    }
+    expectNoCalls(client.session, client.create, client.update, client.message);
+  }));
+
+it("retains corrupt and partial binding rows before either resume or cleanup", () =>
+  withMigration<unknown>(async ({ params, client, harness, store }) => {
+    for (const row of [
+      { sessionId: legacy.sessionId },
+      { authFingerprint: legacy.authFingerprint },
+      { ...legacy, configFingerprint: "ambiguous" },
+      { ...legacy, authFingerprint: "not-a-digest" },
+      { ...legacy, lease: { token: "incomplete" } },
+      { ...legacy, unknown: "must-not-strip" },
+    ]) {
+      await store.register(params.sessionId, row);
+      await expect(harness.runAttempt(params)).rejects.toThrow("Invalid Agents API binding row");
+      await expect(harness.reset({ ...params.sessionTarget, reason: "reset" })).rejects.toThrow(
+        "Invalid Agents API binding row",
+      );
+      expect(await store.lookup(params.sessionId)).toEqual(row);
+    }
+    expectNoCalls(client.session, client.create, client.message);
+  }));
+
+it("checks current-key SDK access before upgrading and retains failed admission for retry", () =>
+  withMigration(async ({ params, store, client, harness }) => {
+    await store.register(params.sessionId, legacy);
+    client.session.mockRestore();
+    const error = { error: { message: "fixture access refused", type: "invalid_request_error" } };
+    for (const status of [401, 403, 404, 500]) {
+      fetchWithSsrFGuardMock.mockImplementationOnce(async ({ url, init }) => {
+        expect(url).toBe("https://api.openai.com/v1/agents/sessions/" + legacy.sessionId);
+        expect(new Headers(init?.headers).get("authorization")).toBe(
+          "Bearer " + params.resolvedApiKey,
+        );
+        return guardedResponse(url, Response.json(error, { status }));
+      });
+      await expect(harness.runAttempt(params)).rejects.toThrow("fixture access refused");
+      expect(await store.lookup(params.sessionId)).toEqual(legacy);
+    }
+    fetchWithSsrFGuardMock.mockImplementationOnce(async () => {
+      throw new TypeError("fixture transport unavailable");
+    });
+    await expect(harness.runAttempt(params)).rejects.toThrow();
+    expect(await store.lookup(params.sessionId)).toEqual(legacy);
+    expectNoCalls(client.create, client.update, client.message);
+    fetchWithSsrFGuardMock.mockImplementationOnce(async ({ url }) =>
+      guardedResponse(url, Response.json({ ...legacySession(), id: "different-session" })),
+    );
+    await expect(harness.runAttempt(params)).rejects.toThrow("different session");
+    expect(await store.lookup(params.sessionId)).toEqual(legacy);
+    fetchWithSsrFGuardMock.mockImplementationOnce(async ({ url }) =>
+      guardedResponse(url, Response.json(legacySession())),
+    );
+    expect(await harness.runAttempt(params)).toMatchObject({ terminal: { kind: "ok" } });
+    expect(await store.lookup(params.sessionId)).toMatchObject({
+      sessionId: legacy.sessionId,
+      configFingerprint: expect.any(String),
+    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(7);
+  }));
+
+it("fences legacy migration when generation, lease, or source changes during access validation", () =>
+  withMigration(async ({ params, store, client, harness }) => {
+    let active = true;
+    params.hostCapabilities.assertActive = () => {
+      if (!active) {
+        throw new Error("fixture authority revoked");
+      }
+    };
+    try {
+      const changes: Array<[string, StoredBinding, string]> = [
+        ["authority", legacy, "fixture authority revoked"],
+        [
+          "lease",
+          { ...legacy, lease: { token: "successor", expiresAt: Date.now() + 65_000 } },
+          "lease lost",
+        ],
+        ["source", { ...legacy, authFingerprint: "a".repeat(64) }, "changed during migration"],
+      ];
+      for (const [change, expected, error] of changes) {
+        active = true;
+        await store.register(params.sessionId, legacy);
+        client.session.mockImplementationOnce(async () => {
+          const current = (await store.lookup(params.sessionId))!;
+          active = change !== "authority";
+          if (active) {
+            await store.register(params.sessionId, {
+              ...expected,
+              lease: expected.lease ?? current.lease,
+            });
+          }
+          return legacySession();
+        });
+        await expect(harness.runAttempt(params)).rejects.toThrow(error);
+        expect(await store.lookup(params.sessionId)).toEqual(expected);
+      }
+      expectNoCalls(client.create, client.update, client.message);
+    } finally {
+      active = true;
+    }
+  }));
+
+it("resumes a shipped self-hosted binding with an expired lease without adopting an executor owner", () =>
+  withMigration(
+    async ({ params, store, client, harness }) => {
+      // Exact v2026.9.9 producer identity, with its workspace-dependent environment.
+      const environment = { type: "self_hosted", workspace_directory: params.workspaceDir };
+      const row = {
+        sessionId: legacy.sessionId,
+        authFingerprint: createHash("sha256")
+          .update(JSON.stringify([params.model.id, params.resolvedApiKey, environment]))
+          .digest("hex"),
+      };
+      await store.register(params.sessionId, {
+        ...row,
+        lease: { token: "expired-owner", expiresAt: Date.now() - 1 },
+      });
+      client.session.mockResolvedValue(legacySession());
+      expect(await harness.runAttempt(params)).toMatchObject({ terminal: { kind: "ok" } });
+      const saved = await store.lookup(params.sessionId);
+      expect(saved).toEqual({ sessionId: row.sessionId, configFingerprint: expect.any(String) });
+      expect(saved?.configFingerprint).not.toBe(row.authFingerprint);
+      expect(client.create).not.toHaveBeenCalled();
+    },
+    pluginConfig({ environment: "self_hosted" }),
+  ));
+
+it.each(["reset", "delete", "context rollback"] as const)(
+  "settles unmigratable legacy work before %s with current agent authentication",
+  (operation) =>
+    withNativeFixture(async (fixture) => {
+      const { params, target } = fixture;
+      const store = fixture.openStore<StoredBinding>();
+      await store.register(params.sessionId, legacy);
+      await fixture.restart();
+      fixture.session.mockResolvedValue({
+        ...fixture.nativeSession,
+        id: legacy.sessionId,
+        status: "in_progress",
+      });
+      const successor = {
+        sessionId: "successor-local-session",
+        previousSessionId: params.sessionId,
+      };
+      if (operation === "context rollback") {
+        await patchSessionEntry({ ...params.sessionTarget, update: () => successor });
+      }
+      const cleanup = () =>
+        operation === "reset"
+          ? fixture.harness.reset({ ...target, reason: "reset" })
+          : operation === "delete"
+            ? fixture.harness.withSessionDeletion(target, async (settle) => settle())
+            : fixture.harness.withSessionContextReset({ ...target, ...successor }, (settle) =>
+                settle("rollback"),
+              );
+      fixture.cancel.mockRejectedValueOnce(new Error("fixture settlement unavailable"));
+      await expect(cleanup()).rejects.toThrow("fixture settlement unavailable");
+      expect(await store.lookup(params.sessionId)).toEqual(legacy);
+      await cleanup();
+      expect((await store.lookup(params.sessionId)) ?? {}).toEqual(
+        operation === "context rollback" ? legacy : {},
+      );
+      expect(fixture.cancel.mock.calls.map(([id]) => id)).toEqual([
+        legacy.sessionId,
+        legacy.sessionId,
+      ]);
+      expectNoCalls(fixture.create);
+    }),
+);

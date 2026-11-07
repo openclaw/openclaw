@@ -1,4 +1,5 @@
-import { etc, getPublicKeyAsync, hashes, signAsync, utils } from "@noble/ed25519";
+/// <reference lib="es2026.typedarrays" />
+
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -12,7 +13,7 @@ import {
   normalizeDeviceAuthScopes,
 } from "../../../../src/shared/device-auth.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { base64ToBytes, bytesToBase64 } from "../bytes-base64.ts";
+import { base64ToBytes } from "../bytes-base64.ts";
 
 export type {
   DeviceTokenSummary,
@@ -20,18 +21,9 @@ export type {
   PendingDevice,
 } from "../../../../src/gateway/device-pairing-list.types.js";
 
-// @noble/ed25519 defaults its SHA-512 to crypto.subtle, which browsers gate to
-// secure contexts. On plain-HTTP origins the pure-JS digests load lazily so
-// device identity keeps working there — the signing key is the one credential
-// that never crosses the wire — while secure contexts pay no startup bytes.
+// Plain-HTTP origins lack crypto.subtle; load the pure-JS digest only when
+// fingerprinting an identity there. Secure contexts use the platform digest.
 const loadPureSha2 = () => import("@noble/hashes/sha2.js");
-const subtleSha512Async = hashes.sha512Async;
-hashes.sha512Async = async (message: Uint8Array) => {
-  if (globalThis.crypto?.subtle && subtleSha512Async) {
-    return await subtleSha512Async(message);
-  }
-  return Uint8Array.from((await loadPureSha2()).sha512(message));
-};
 
 type StoredIdentity = DeviceIdentity & {
   version: 1;
@@ -211,7 +203,7 @@ export function clearDeviceAuthToken(params: {
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {
-  return bytesToBase64(bytes).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+  return bytes.toBase64({ alphabet: "base64url", omitPadding: true });
 }
 
 function base64UrlDecode(input: string): Uint8Array {
@@ -226,13 +218,16 @@ async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {
   const subtle = globalThis.crypto?.subtle;
   if (subtle) {
     const hash = await subtle.digest("SHA-256", publicKey.slice().buffer);
-    return etc.bytesToHex(new Uint8Array(hash));
+    return new Uint8Array(hash).toHex();
   }
-  return etc.bytesToHex((await loadPureSha2()).sha256(publicKey));
+  return (await loadPureSha2()).sha256(publicKey).toHex();
 }
 
 async function generateIdentity(): Promise<DeviceIdentity> {
-  const privateKey = utils.randomSecretKey();
+  // Ed25519 uses a 32-byte random seed. An unavailable RNG must fail before
+  // loading the signer so the Gateway's device-less fallback stays immediate.
+  const privateKey = globalThis.crypto.getRandomValues(new Uint8Array(32));
+  const { getPublicKeyAsync } = await import("./device-signing.runtime.ts");
   const publicKey = await getPublicKeyAsync(privateKey);
   const deviceId = await fingerprintPublicKey(publicKey);
   return {
@@ -332,6 +327,7 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
 }
 
 export async function signDevicePayload(privateKeyBase64Url: string, payload: string) {
+  const { signAsync } = await import("./device-signing.runtime.ts");
   const key = base64UrlDecode(privateKeyBase64Url);
   const data = new TextEncoder().encode(payload);
   const sig = await signAsync(data, key);

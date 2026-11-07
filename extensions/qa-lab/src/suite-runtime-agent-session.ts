@@ -17,6 +17,7 @@ import {
   extractGatewayMessageText,
 } from "./gateway-log-sentinel.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
+import { readQaAssistantToolCalls } from "./runtime-transcript.js";
 import { findSubagentHandoffReply } from "./subagent-handoff-reply.js";
 import type { QaSkillStatusEntry, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { projectQaToolActivity, readQaNestedToolActivity } from "./tool-activity.js";
@@ -63,35 +64,6 @@ type QaSessionTranscriptSummaryOptions = {
 
 function readSessionTranscriptEventMessage(event: unknown) {
   return isRecord(event) && isRecord(event.message) ? event.message : undefined;
-}
-
-function readAssistantToolCalls(message: Record<string, unknown>): Array<{
-  arguments?: unknown;
-  id?: string;
-  name: string;
-}> {
-  if (!Array.isArray(message.content)) {
-    return [];
-  }
-  return message.content.flatMap((block) => {
-    if (!isRecord(block)) {
-      return [];
-    }
-    const type = readNonEmptyString(block.type);
-    if (type !== "toolCall" && type !== "toolUse" && type !== "tool_use") {
-      return [];
-    }
-    const name = readNonEmptyString(block.name);
-    return name
-      ? [
-          {
-            arguments: block.arguments ?? block.input,
-            id: readNonEmptyString(block.id),
-            name,
-          },
-        ]
-      : [];
-  });
 }
 
 function readWaitingCodeModeRunId(message: Record<string, unknown>) {
@@ -189,8 +161,7 @@ function summarizeSessionTranscriptEvents(
       : [];
     lastAssistantErrorMessage = readNonEmptyString(message.errorMessage);
     lastAssistantStopReason = readNonEmptyString(message.stopReason);
-    const assistantToolCalls = readAssistantToolCalls(message);
-    for (const toolCall of assistantToolCalls) {
+    for (const toolCall of readQaAssistantToolCalls(message, readNonEmptyString)) {
       if (toolCall.id) {
         if (
           pendingCodeModeExecNeedle &&

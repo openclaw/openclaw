@@ -1,4 +1,4 @@
-import { copyFile, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page, Video } from "playwright";
 import { afterEach, expect, it } from "vitest";
@@ -45,7 +45,7 @@ function approvalUrl(basePath: string): string {
   return new URL(approvalPath(basePath), suite.server?.baseUrl ?? "http://127.0.0.1/").href;
 }
 
-function pendingApproval(basePath: string): PendingApprovalSnapshot {
+function pendingApproval(basePath: string) {
   const commandLines = Array.from(
     { length: 14 },
     (_value, index) =>
@@ -67,7 +67,7 @@ function pendingApproval(basePath: string): PendingApprovalSnapshot {
       agentId: "main",
       allowedDecisions: ["allow-once", "deny"],
     },
-  };
+  } satisfies PendingApprovalSnapshot;
 }
 
 function pendingPluginApproval(basePath: string): PendingApprovalSnapshot {
@@ -102,7 +102,7 @@ async function createSurface(
       ? createControlUiE2eArtifactDir("mobile-raw", suite.artifactDir)
       : undefined;
   const context = await suite.browser.newContext({
-    colorScheme: "dark",
+    colorScheme: CAPTURE_UI_PROOF ? "light" : "dark",
     hasTouch: viewport.width <= MOBILE_VIEWPORT.width,
     isMobile: viewport.width <= MOBILE_VIEWPORT.width,
     locale: "en-US",
@@ -134,9 +134,9 @@ async function closeRecordedSurface(surface: ApprovalSurface, targetName: string
   if (!video || !surface.rawVideoDir) {
     return;
   }
-  const rawVideoPath = await video.path();
-  await copyFile(rawVideoPath, path.join(suite.artifactDir, targetName));
+  await video.saveAs(path.join(suite.artifactDir, targetName));
   // Remove raw footage only after the retained named copy succeeds.
+  await video.delete();
   await rm(surface.rawVideoDir, { force: true, recursive: true });
 }
 
@@ -149,6 +149,26 @@ async function visitApproval({ page }: ApprovalSurface, url = approvalUrl("")) {
   const response = await page.goto(url);
   await waitForApprovalPage(page);
   return response;
+}
+
+async function expectLoadedApproval({ page, gateway }: ApprovalSurface): Promise<void> {
+  expect((await gateway.waitForRequest("approval.get")).params).toEqual({ id: APPROVAL_ID });
+  await expectStandaloneApprovalPage(page);
+}
+
+async function expectIdentity(
+  page: Page,
+  severity: string,
+  chips: Record<string, string[]>,
+  meta: string[],
+): Promise<void> {
+  expect(await page.locator(".approval-page__card").getAttribute("class")).toContain(
+    `approval-page__card--severity-${severity}`,
+  );
+  for (const [kind, values] of Object.entries(chips)) {
+    expect(await page.locator(`[data-approval-chip="${kind}"]`).allTextContents()).toEqual(values);
+  }
+  expect(await page.locator(".approval-page__meta-row dt").allTextContents()).toEqual(meta);
 }
 
 async function expectStandaloneApprovalPage(page: Page): Promise<void> {
@@ -220,7 +240,7 @@ async function expectMobilePendingLayout(page: Page): Promise<void> {
   expect(metrics.documentOverflow).toBeLessThanOrEqual(0);
   expect(metrics.left).toBeGreaterThanOrEqual(0);
   expect(metrics.rightOverflow).toBeLessThanOrEqual(0);
-  expect(metrics.previewOverflow).toBeGreaterThanOrEqual(0);
+  expect(metrics.previewOverflow).toBeLessThanOrEqual(0);
   expect(metrics.backLinkGap).toBeGreaterThanOrEqual(10);
 }
 
@@ -253,28 +273,20 @@ suite.define(() => {
 
     try {
       await Promise.all(
-        surfaces.map(async ({ page, gateway }) => {
-          expect((await page.goto(approvalUrl("")))?.status()).toBe(200);
-          await waitForApprovalPage(page);
-          expect((await gateway.waitForRequest("approval.get")).params).toEqual({
-            id: APPROVAL_ID,
-          });
-          await expectStandaloneApprovalPage(page);
+        surfaces.map(async (surface) => {
+          expect((await visitApproval(surface))?.status()).toBe(200);
+          await expectLoadedApproval(surface);
         }),
       );
       expect(new URL(mobile.page.url()).pathname).toBe(approvalPath(""));
       await expectMobilePendingLayout(mobile.page);
       expect(await mobile.page.title()).toBe("Command approval — OpenClaw");
-      expect(await mobile.page.locator(".approval-page__card").getAttribute("class")).toContain(
-        "approval-page__card--severity-warning",
-      );
-      expect(await mobile.page.locator('[data-approval-chip="agent"]').textContent()).toBe("main");
-      expect(await mobile.page.locator('[data-approval-chip="plugin"]').count()).toBe(0);
-      expect(await mobile.page.locator('[data-approval-chip="tool"]').count()).toBe(0);
-      expect(await mobile.page.locator(".approval-page__meta-row dt").allTextContents()).toEqual([
-        "Host",
-        "Node",
+      await expectIdentity(mobile.page, "warning", { agent: ["main"], plugin: [], tool: [] }, [
+        "Runs on",
+        "Device",
       ]);
+      await mobile.page.getByText("Admin approval", { exact: true }).waitFor();
+      await mobile.page.getByText("This computer", { exact: true }).waitFor();
       await captureProof(mobile.page, "after-pending-exec.png");
       await mobile.page.getByRole("button", { name: "Allow once" }).scrollIntoViewIfNeeded();
       await captureProof(mobile.page, "after-pending-exec-actions.png");
@@ -343,27 +355,24 @@ suite.define(() => {
     }
   });
 
-  it("renders plugin identity as chips with a severity accent", async () => {
+  it("renders plugin identity as chips with severity in the status badge", async () => {
     const pending = pendingPluginApproval("");
     const surface = await createSurface({ pending, viewport: DESKTOP_VIEWPORT });
 
-    const response = await visitApproval(surface);
-    expect(response?.status()).toBe(200);
-    await surface.gateway.waitForRequest("approval.get");
-    await expectStandaloneApprovalPage(surface.page);
-
-    expect(await surface.page.locator(".approval-page__card").getAttribute("class")).toContain(
-      "approval-page__card--severity-danger",
-    );
+    expect((await visitApproval(surface))?.status()).toBe(200);
+    await expectLoadedApproval(surface);
     expect(
       await surface.page.locator(".approval-page__heading > .approval-page__chips").count(),
     ).toBe(1);
-    expect(await surface.page.locator('[data-approval-chip="plugin"]').textContent()).toBe("codex");
-    expect(await surface.page.locator('[data-approval-chip="tool"]').textContent()).toBe(
-      "workspace.exec",
+    await expectIdentity(
+      surface.page,
+      "danger",
+      { plugin: ["codex"], tool: ["workspace.exec"], agent: ["main"] },
+      [],
     );
-    expect(await surface.page.locator('[data-approval-chip="agent"]').textContent()).toBe("main");
-    expect(await surface.page.locator(".approval-page__meta-row dt").allTextContents()).toEqual([]);
+    expect(await surface.page.locator(".approval-page__status .sr-only").textContent()).toBe(
+      "Critical ",
+    );
     await captureProof(surface.page, "after-pending-plugin.png");
     expect(surface.pageErrors).toEqual([]);
   });
@@ -381,10 +390,8 @@ suite.define(() => {
 
     await surface.gateway.resolveDeferred("connect");
     await waitForApprovalPage(surface.page);
-    const request = await surface.gateway.waitForRequest("approval.get");
-    expect(request.params).toEqual({ id: APPROVAL_ID });
+    await expectLoadedApproval(surface);
     expect(new URL(surface.page.url()).pathname).toBe(approvalPath(basePath));
-    await expectStandaloneApprovalPage(surface.page);
     expect(surface.pageErrors).toEqual([]);
   });
 
@@ -409,11 +416,9 @@ suite.define(() => {
         .getByRole("button", { name: "Switch to remote-gateway.example", exact: true })
         .click();
       await waitForApprovalPage(surface.page);
-      const request = await surface.gateway.waitForRequest("approval.get");
-      expect(request.params).toEqual({ id: APPROVAL_ID });
+      await expectLoadedApproval(surface);
       expect((await surface.gateway.getSocketUrls()).at(-1)).toBe(remoteGatewayUrl);
       expect(new URL(surface.page.url()).hash).toBe("");
-      await expectStandaloneApprovalPage(surface.page);
       await captureProof(surface.page, "after-remote-gateway-approval.png");
       await pauseRecordedProof(surface.page);
       expect(surface.pageErrors).toEqual([]);
@@ -470,17 +475,8 @@ suite.define(() => {
 
   it("renders changed Gateway content after reload instead of a hard-coded fixture", async () => {
     const pending = pendingApproval("");
-    if (pending.presentation.kind !== "exec") {
-      throw new Error("Expected an exec approval fixture");
-    }
-    const surface = await createSurface({
-      basePath: "",
-      pending,
-      viewport: MOBILE_VIEWPORT,
-    });
-
-    await surface.page.goto(approvalUrl(""));
-    await waitForApprovalPage(surface.page);
+    const surface = await createSurface({ pending });
+    await visitApproval(surface);
     const changed = {
       ...pending,
       presentation: {
@@ -508,7 +504,7 @@ suite.define(() => {
     });
 
     await surface.page.reload();
-    await surface.page.getByRole("heading", { name: "Approval unavailable" }).waitFor();
+    await surface.page.getByRole("heading", { name: "Couldn’t load approval" }).waitFor();
     await expectStandaloneApprovalPage(surface.page);
     await expectNoDecisionButtons(surface.page);
     expect(surface.pageErrors).toEqual([]);
@@ -522,7 +518,7 @@ suite.define(() => {
 
     await surface.gateway.closeLatest(1012, "test reconnect");
     await Promise.all([
-      surface.page.getByText("Connection interrupted", { exact: true }).waitFor(),
+      surface.page.getByText("Disconnected", { exact: true }).waitFor(),
       expect
         .poll(async () => (await surface.gateway.getRequests("connect")).length)
         .toBeGreaterThan(initialConnectCount),
@@ -532,10 +528,7 @@ suite.define(() => {
     );
     expect(await surface.page.getByRole("button", { name: "Allow once" }).isDisabled()).toBe(true);
     await surface.page
-      .getByText(
-        "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
-        { exact: true },
-      )
+      .getByText("Reconnect to review this approval and record a decision.", { exact: true })
       .waitFor();
 
     await surface.gateway.resolveDeferred("connect");

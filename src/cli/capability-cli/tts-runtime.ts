@@ -10,9 +10,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../../gateway/connection-details.js";
 import { isLoopbackHost } from "../../gateway/net.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../../tts/provider-registry.js";
 import type { TtsResult } from "../../tts/tts-runtime-types.js";
+import { updateTtsPrefsAsync } from "../../tts/tts-settings-write-worker.js";
 import { resolveTtsPersonaList } from "../../tts/tts-settings.js";
 import {
   getTtsProviderAsync,
@@ -21,9 +23,6 @@ import {
   resolveExplicitTtsOverridesAsync,
   resolveTtsConfig,
   resolveTtsPrefsPathAsync,
-  setTtsEnabled,
-  setTtsPersona,
-  setTtsProvider,
   textToSpeech,
 } from "../../tts/tts.js";
 import { getTtsCommandSecretTargetIds } from "../command-secret-targets.js";
@@ -45,6 +44,7 @@ export async function runTtsConvert(params: {
   output?: string;
   transport: CapabilityTransport;
 }) {
+  const signal = getAsyncWorkSignal();
   let result: Pick<TtsResult, "audioPath" | "provider" | "outputFormat" | "voiceCompatible">;
   let attempts: NonNullable<TtsResult["attempts"]> = [];
   if (params.transport === "gateway") {
@@ -66,6 +66,7 @@ export async function runTtsConvert(params: {
         voiceId: params.voiceId,
       },
       timeoutMs: 120_000,
+      signal,
     });
   } else {
     const cfg = await resolveLocalCapabilityRuntimeConfig({
@@ -110,9 +111,11 @@ export async function runTtsConvert(params: {
   }
   let outputPath = result.audioPath;
   if (params.output && result.audioPath) {
+    const buffer = await fs.readFile(result.audioPath);
+    signal?.throwIfAborted();
     // Match image/video outputs: the extension follows the audio actually returned.
     const written = await writeOutputAsset({
-      buffer: await fs.readFile(result.audioPath),
+      buffer,
       outputPath: params.output,
       outputIndex: 0,
       outputCount: 1,
@@ -341,12 +344,12 @@ export async function runTtsStateMutation(params: {
   const prefsPath = await resolveTtsPrefsPathAsync(config);
   if (params.capability === "tts.enable" || params.capability === "tts.disable") {
     const enabled = params.capability === "tts.enable";
-    setTtsEnabled(prefsPath, enabled);
+    await updateTtsPrefsAsync(prefsPath, { auto: enabled ? "always" : "off" });
     return { enabled };
   }
   if (params.capability === "tts.set-persona") {
     if (!params.persona) {
-      setTtsPersona(prefsPath, null);
+      await updateTtsPrefsAsync(prefsPath, { persona: null });
       return { persona: null };
     }
     const persona = listTtsPersonas(config).find(
@@ -355,7 +358,7 @@ export async function runTtsStateMutation(params: {
     if (!persona) {
       throw new Error(`Unknown TTS persona: ${params.persona}`);
     }
-    setTtsPersona(prefsPath, persona.id);
+    await updateTtsPrefsAsync(prefsPath, { persona: persona.id });
     return { persona: persona.id };
   }
   if (!params.provider) {
@@ -365,6 +368,6 @@ export async function runTtsStateMutation(params: {
   if (!provider) {
     throw new Error(`Unknown speech provider: ${params.provider}`);
   }
-  setTtsProvider(prefsPath, provider);
+  await updateTtsPrefsAsync(prefsPath, { provider });
   return { provider };
 }

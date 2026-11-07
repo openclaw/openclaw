@@ -1,7 +1,11 @@
 import { dynamic, render, type JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, onCleanup, runWithOwner, Show, untrack } from "solid-js";
+import { createMemo, createSignal, For, onSettled, runWithOwner, Show, useContext } from "solid-js";
+import type { MarkdownPrewarmMode } from "../../../components/markdown.ts";
+import { createIdleImport } from "../../../lib/idle-import.ts";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../../lib/presentation.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
@@ -10,34 +14,69 @@ import {
   createSolidRenderLifecycle,
   type SolidRenderLifecycle,
 } from "../solid-render-lifecycle.ts";
-import { ChatHistoryBoundary } from "./chat-history-boundary.tsx";
-import type { TranscriptContent, TranscriptLayoutProps } from "./chat-transcript-layout.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import {
+  TranscriptRowKeyContext,
+  type TranscriptContent,
+  type TranscriptLayoutProps,
+  type TranscriptRow,
+} from "./chat-transcript-layout.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
 import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
 import { nativeRows, type NativeTranscriptView } from "./chat-transcript-rows.ts";
 
+type PrewarmModule = typeof import("./chat-transcript-row-prewarm.ts");
+let prewarmModule: PrewarmModule | null | undefined;
+const prewarmImport = createIdleImport(
+  () => import("./chat-transcript-row-prewarm.ts"),
+  (loaded) => {
+    prewarmModule = loaded;
+  },
+);
+
 function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
   const Row = dynamic(() => nativeRows[props.value.kind]);
-  return <Row {...props.value} />;
-}
-
-function GuardedRow(props: { value: GuardedTranscriptItem }): JSX.Element {
-  // Equal dependency vectors preserve the accepted row across unrelated stream updates.
-  const current = createMemo(() => props.value, {
-    equals: (before, next) => transcriptArraysEqual(before.dependencies, next.dependencies),
-  });
-  return <Show when={current().native}>{(view) => <NativeRow value={view()} />}</Show>;
+  return (
+    <Show
+      when={props.value.kind === "group"}
+      fallback={
+        <ChatLazyBoundary
+          fallback={
+            <div class="chat-group" role="status">
+              {t("common.loading")}
+            </div>
+          }
+        >
+          <Row {...props.value} />
+        </ChatLazyBoundary>
+      }
+    >
+      <Row {...props.value} />
+    </Show>
+  );
 }
 
 function RowContent(props: { value: TranscriptContent }): JSX.Element {
+  // Cut off unchanged rows before the content-kind branch and its child bindings.
+  const current = createMemo(() => props.value, {
+    equals: (before, next) =>
+      before instanceof GuardedTranscriptItem && next instanceof GuardedTranscriptItem
+        ? transcriptArraysEqual(before.dependencies, next.dependencies)
+        : Object.is(before, next),
+  });
+  const native = () => {
+    const value = current();
+    return value instanceof GuardedTranscriptItem ? value.native : undefined;
+  };
+  const fallback = () => {
+    const value = current();
+    return value instanceof GuardedTranscriptItem ? null : value;
+  };
   return (
-    <Show
-      when={props.value instanceof GuardedTranscriptItem ? props.value : undefined}
-      fallback={props.value instanceof GuardedTranscriptItem ? null : props.value}
-    >
-      {(item) => <GuardedRow value={item()} />}
+    <Show when={native()} fallback={fallback()}>
+      {(view) => <NativeRow value={view()} />}
     </Show>
   );
 }
@@ -47,51 +86,97 @@ function TranscriptRows(props: {
   measureRowRefFor: TranscriptLayoutProps["measureRowRefFor"];
   columnRef: (element: HTMLDivElement) => void;
 }) {
+  const presented = useContext(ContentPresentation);
   const virtualRows = createMemo(() => {
     return props.snapshot.virtualizer.getVirtualItems();
   });
+  const getContent = createMemo(() => props.snapshot.getContent);
+  const activeRows = createMemo(() =>
+    virtualRows().filter((row) => props.snapshot.activeRowKeys.has(String(row.key))),
+  );
+  const blockStart = () =>
+    activeRows()[0]?.start ?? props.snapshot.virtualizer.options.scrollMargin;
+  const gaps = createMemo(
+    () =>
+      new Map(
+        activeRows().map((row, index, rows) => {
+          const previous = rows[index - 1];
+          return [
+            row.key,
+            previous && row.index > previous.index + 1 ? row.start - previous.end : 0,
+          ];
+        }),
+      ),
+  );
+  const rowRef = (key: string) => {
+    const measureRef = props.measureRowRefFor(key);
+    return elementRef((element: HTMLDivElement) => {
+      measureRef(element);
+      return () => measureRef(undefined);
+    });
+  };
   return (
     <>
-      <Show when={props.snapshot.header}>{(header) => <ChatHistoryBoundary {...header()} />}</Show>
+      {/* Live controls can retire before a gesture releases the accepted row model. */}
+      <div style={{ height: `${props.snapshot.headerHeight}px`, "transition-property": "none" }}>
+        {props.snapshot.header}
+      </div>
       <div class="chat-virtual-sizer" ref={(element) => props.columnRef(element)}>
         {props.snapshot.overlay}
         <div
           class="chat-virtual-block"
           style={{
-            transform: `translateY(${(virtualRows()[0]?.start ?? props.snapshot.virtualizer.options.scrollMargin) - props.snapshot.virtualizer.options.scrollMargin}px)`,
+            // WebKit 26.4 omits ancestor transforms from top-layer CSS anchor coordinates.
+            top: `${blockStart() - props.snapshot.virtualizer.options.scrollMargin}px`,
           }}
         >
           <For each={virtualRows()} keyed={(row) => row.key}>
-            {(virtualRow, renderedIndex) => {
-              const index = () => virtualRow().index;
-              const row = () => props.snapshot.rows[index()];
-              const content = createMemo(() => props.snapshot.getContent(index()));
-              const gap = () => {
-                const previous = virtualRows()[renderedIndex() - 1];
-                return previous && virtualRow().index > previous.index + 1
-                  ? virtualRow().start - previous.end
-                  : 0;
-              };
-              // The keyed row owns one measurement binding for its entire mounted lifetime.
-              const initialKey = untrack(() => String(virtualRow().key));
-              const measureRef = props.measureRowRefFor(initialKey);
-              onCleanup(() => measureRef(undefined));
+            {(virtualRow) => {
+              const index = createMemo(() => virtualRow().index);
+              const row = createMemo(() => props.snapshot.rows[index()]);
+              const content = createMemo(() => {
+                // Content rows may replace their DOM without replacing the row model.
+                const source = row()?.kind === "content" ? props.snapshot.getContent : getContent();
+                return source(index());
+              });
+              const active = createMemo(() => props.snapshot.activeRowKeys.has(row()?.key ?? ""));
+              const preparing = createMemo(() => row()?.key === props.snapshot.preparingRowKey);
+              const streaming = createMemo(() => row()?.streaming === true);
+              const gap = () => gaps().get(virtualRow().key) ?? 0;
               return (
                 <>
                   <Show when={gap() > 0}>
                     <div aria-hidden="true" style={{ height: `${gap()}px` }} />
                   </Show>
                   <div
-                    ref={measureRef}
+                    ref={[rowRef(String(virtualRow().key))]}
                     class={[
                       "chat-virtual-row",
                       { "chat-virtual-row--first": virtualRow().index === 0 },
                     ]}
-                    style={{ "contain-intrinsic-block-size": `${virtualRow().size}px` }}
+                    style={{
+                      "min-height": `${props.snapshot.layout.rowMinimum(index())}px`,
+                      display: active() ? undefined : preparing() ? "flow-root" : "none",
+                      position: active() ? undefined : "absolute",
+                      top: active() ? undefined : "0",
+                      opacity: active() ? undefined : "0",
+                      "content-visibility":
+                        preparing() || streaming() ? "visible" : active() ? undefined : "hidden",
+                    }}
                     data-index={String(virtualRow().index)}
+                    data-row-size={streaming() ? undefined : String(virtualRow().size)}
                     data-virtual-row-key={row()?.key}
+                    data-prepared-row={active() ? undefined : "true"}
+                    data-preparing-row={preparing() ? "true" : undefined}
+                    data-streaming-row={streaming() ? "true" : undefined}
+                    inert={!active()}
+                    aria-hidden={active() ? undefined : "true"}
                   >
-                    <RowContent value={content()} />
+                    <TranscriptRowKeyContext value={() => row()?.key}>
+                      <ContentPresentation value={() => presented() && (active() || preparing())}>
+                        <RowContent value={content()} />
+                      </ContentPresentation>
+                    </TranscriptRowKeyContext>
                   </div>
                 </>
               );
@@ -105,6 +190,12 @@ function TranscriptRows(props: {
 
 /** One Solid root per session, independent of the caller's render computation. */
 export class ChatTranscriptRenderer {
+  private contentSource?: {
+    rows: readonly TranscriptRow[];
+    renderer: unknown;
+    getContent: (index: number) => TranscriptContent;
+  };
+  private prewarming?: ReturnType<PrewarmModule["createTranscriptRowPrewarmer"]>;
   private element?: HTMLDivElement;
   private column?: HTMLDivElement;
   private accepted?: TranscriptLayoutProps;
@@ -120,6 +211,36 @@ export class ChatTranscriptRenderer {
   private publish?: () => void;
   private readonly presentationChanged = () => this.publishPresentation?.();
 
+  contentFor<T>(
+    rows: readonly TranscriptRow<T>[],
+    renderer: (row: TranscriptRow<T>) => TranscriptContent,
+  ) {
+    // Geometry commits reuse content; a replaced row or renderer still refreshes it.
+    if (this.contentSource?.rows !== rows || this.contentSource.renderer !== renderer) {
+      this.prewarming = undefined;
+      this.contentSource = { rows, renderer, getContent: (index) => renderer(rows[index]!) };
+    }
+    return this.contentSource.getContent;
+  }
+
+  prewarmRow(index: number, mode: MarkdownPrewarmMode = "cold-fragment"): boolean | undefined {
+    const source = this.contentSource;
+    const row = source?.rows[index];
+    if (!source || !row || prewarmModule === null) {
+      return false;
+    }
+    if (!prewarmModule) {
+      // Pending code yields the current preparation slice; visible rows still render normally.
+      void prewarmImport.load().catch(() => {
+        // Visible rendering remains available; the shared loader retries when online.
+        prewarmModule = null;
+      });
+      return undefined;
+    }
+    this.prewarming ??= prewarmModule.createTranscriptRowPrewarmer();
+    return this.prewarming(row, source.getContent(index), mode);
+  }
+
   get columnElement(): HTMLDivElement | undefined {
     return this.column;
   }
@@ -131,7 +252,7 @@ export class ChatTranscriptRenderer {
     };
   }
 
-  private isPresented(): boolean {
+  isPresented(): boolean {
     const presented = this.accepted?.presented ?? false;
     return (
       this.element?.isConnected === true &&
@@ -254,7 +375,7 @@ export class ChatTranscriptRenderer {
           this.lifecycle = lifecycle;
           const snapshot = createMemo(lifecycle.snapshot);
           const capture = (event: Event) => snapshot().captureInteractionResize(event);
-          onCleanup(listen(element, "click", capture, true));
+          onSettled(() => listen(element, "click", capture, true));
           const content = () => (
             <TranscriptMessageElementsContext value={next.messageElements}>
               <TranscriptMediaDisconnect value={this.mediaDisconnect}>
@@ -281,6 +402,9 @@ export class ChatTranscriptRenderer {
         }, element),
       );
     } else {
+      // Read the native offset before row mutations dirty layout. The later
+      // commit still accepts any sizes discovered while mounting those rows.
+      next.layout.commitRange(this.element, next.virtualizer.getTotalSize() + next.headerHeight);
       this.publishPresentation?.();
       this.publish?.();
     }
@@ -298,6 +422,8 @@ export class ChatTranscriptRenderer {
     this.publishPresentation = undefined;
     this.lifecycle = undefined;
     this.accepted = undefined;
+    this.contentSource = undefined;
+    this.prewarming = undefined;
     this.committed = undefined;
     this.commitQueued = false;
     this.layoutEffects.clear();

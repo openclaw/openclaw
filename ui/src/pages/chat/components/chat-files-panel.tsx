@@ -1,25 +1,30 @@
 import { dynamic, type JSX } from "@solidjs/web";
 import {
+  Errored,
   For,
+  Loading,
   Show,
   createMemo,
   createSignal,
-  onCleanup,
   onSettled,
   refresh,
-  untrack,
 } from "solid-js";
+import { McpAppIcon } from "../../../components/mcp-app-icon.tsx";
 import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
   notifyPanelHostedTabsChanged,
   type PanelHostedTab,
 } from "../../../components/panel-hosted-tabs.ts";
 import { PanelTabStrip } from "../../../components/panel-tab-strip-solid.tsx";
-import "../../../components/resizable-divider.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import "../../../components/resizable-divider.ts";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { i18n } from "../../../i18n/index.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { projectI18n, t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
@@ -41,7 +46,13 @@ type Props = {
   folderView: boolean;
   workspace?: SessionWorkspaceProps;
   browserPresented: () => boolean;
-  renderDetail: ((props: { content: SidebarContent; previewId: string }) => JSX.Element) | null;
+  renderDetail:
+    | ((props: {
+        content: SidebarContent;
+        previewId: string;
+        onBrowseFiles: () => void;
+      }) => JSX.Element)
+    | null;
   onSelect: (id: string | null) => void;
   onClose: (id: string) => void | boolean | Promise<boolean>;
 };
@@ -56,12 +67,17 @@ const hostedTabNotifiers = new WeakMap<HTMLElement, () => void>();
 const FILE_COLUMN_MIN_WIDTH = 176;
 
 /** The workspace owns tab order and selection; this view retains retiring app DOM. */
-defineSolidBridge<Props, Methods>(
+export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
   "openclaw-chat-files-panel",
   (props, host) => {
     const contentId = `chat-files-content-${++filesPanelSequence}`;
     const tabFocus = createTabFocus();
     const pages = new Map<string, HTMLElement>();
+    const pageRef = (id: string) =>
+      elementRef((element: HTMLDivElement) => {
+        pages.set(id, element);
+        return () => pages.delete(id);
+      });
     let contentElement!: HTMLDivElement;
     let catalog!: HTMLDivElement;
     // Local geometry survives file navigation, but not a change of session.
@@ -135,7 +151,7 @@ defineSolidBridge<Props, Methods>(
         title: content.kind === "file" ? content.path : label,
         get icon() {
           return content.kind === "mcp-app" ? (
-            <Icon name="puzzle" />
+            <McpAppIcon icons={content.launch.entrypoint.icons ?? []} />
           ) : (
             <AttachmentFileIcon filename={label} mode="preview-with-favicon" />
           );
@@ -176,7 +192,7 @@ defineSolidBridge<Props, Methods>(
     const browseClick = nativeListener("click", showBrowser);
     <button
       ref={[(element) => (browseAction = element), browseClick]}
-      class="rail-header__action"
+      class="oc-icon-button oc-icon-button--28 rail-header__action"
       type="button"
       aria-label={t("chat.sidePanel.files")}
       title={t("chat.sidePanel.files")}
@@ -258,6 +274,9 @@ defineSolidBridge<Props, Methods>(
           <div
             ref={(element) => (catalog = element)}
             class="chat-files-panel__page chat-files-panel__catalog"
+            role="region"
+            aria-label={t("chat.sidePanel.files")}
+            tabindex={-1}
             inert={reading() && !rendered().treeVisible}
             hidden={
               !reading() &&
@@ -299,22 +318,57 @@ defineSolidBridge<Props, Methods>(
           </Show>
           <For each={rendered().previews} keyed={(preview) => preview.id}>
             {(preview) => {
-              // Registration and cleanup follow the keyed row's lifetime, not its current data.
-              const initialPreviewId = untrack(() => preview().id);
-              onCleanup(() => pages.delete(initialPreviewId));
               const entry = () => {
                 rendered();
                 return preview();
               };
-              const detail = () => {
-                const content = entry().content;
-                return content.kind === "loading" || content.kind === "unavailable"
-                  ? undefined
-                  : content;
+              const browseFiles = () => {
+                if (props.activeId !== entry().id) {
+                  return;
+                }
+                const sessionKey = props.sessionKey;
+                showBrowser();
+                onSettled(() => {
+                  if (
+                    host.isConnected &&
+                    props.sessionKey === sessionKey &&
+                    props.activeId === null
+                  ) {
+                    catalog.focus();
+                  }
+                });
               };
+              const FilePath = () => (
+                <span
+                  ref={createTextOverflow(() => entry().label)}
+                  class="sidebar-file-view__path"
+                  title={entry().label}
+                >
+                  {entry().label}
+                </span>
+              );
+              const readResult = createMemo(() => ({ pending: entry().readResult }), {
+                equals: (previous, next) => previous.pending === next.pending,
+              });
+              const source = createMemo(() => entry());
+              const currentContent = createMemo(() => entry().content);
+              const detail = createMemo(() => {
+                const current = source();
+                const pending = readResult().pending;
+                currentContent();
+                const resolved = () => {
+                  const value = current.content;
+                  if (value.kind === "unavailable") {
+                    throw new Error(value.message);
+                  }
+                  return value.kind === "loading" ? undefined : value;
+                };
+                // App views and other tabs without an admitted read mount synchronously.
+                return pending ? pending.then(resolved) : resolved();
+              });
               return (
                 <div
-                  ref={(element) => pages.set(initialPreviewId, element)}
+                  ref={[pageRef(preview().id)]}
                   class="chat-files-panel__page"
                   data-app-tab-id={entry().content.kind === "mcp-app" ? entry().id : undefined}
                   hidden={rendered().activeId !== entry().id || entry().catalogVisible === true}
@@ -324,7 +378,7 @@ defineSolidBridge<Props, Methods>(
                       class="chat-files-panel__fallback-rail sidebar-file-view__path-bar session-panel-rail"
                       data-presentation="desktop"
                     >
-                      <span class="sidebar-file-view__path">{entry().label}</span>
+                      <FilePath />
                     </div>
                   </Show>
                   <Show when={rendered().presentation === "mobile"}>
@@ -337,45 +391,56 @@ defineSolidBridge<Props, Methods>(
                     </div>
                   </Show>
                   <div class="chat-files-panel__reader">
-                    {entry().content.kind === "loading" ? (
-                      <PanelLoadingSkeleton variant="files" label={t("common.loading")} />
-                    ) : entry().content.kind === "unavailable" ? (
-                      <Show
-                        when={rendered().presentation === "desktop"}
+                    <Errored
+                      fallback={(error) => (
+                        <Show
+                          when={rendered().presentation === "desktop"}
+                          fallback={
+                            <InlineAlert tone="danger" role="alert">
+                              {formatUiError(error())}
+                            </InlineAlert>
+                          }
+                        >
+                          <section class="sidebar-file-view sidebar-file-view--desktop">
+                            <div
+                              class="sidebar-file-view__path-bar session-panel-rail"
+                              data-presentation="desktop"
+                            >
+                              <FilePath />
+                            </div>
+                            <div class="sidebar-file-view__workspace-body">
+                              <PanelEmptyState
+                                presentation="desktop"
+                                icon={<Icon name="fileText" />}
+                                heading={t("chat.detailPanel.unavailable")}
+                                description={formatUiError(error())}
+                                action={
+                                  <button type="button" class="btn" onClick={browseFiles}>
+                                    {t("chat.workspaceFiles.browseFiles")}
+                                  </button>
+                                }
+                              />
+                            </div>
+                          </section>
+                        </Show>
+                      )}
+                    >
+                      <Loading
                         fallback={
-                          <div class="callout danger" role="alert">
-                            {(() => {
-                              const content = entry().content;
-                              return content.kind === "unavailable" ? content.message : "";
-                            })()}
-                          </div>
+                          <PanelLoadingSkeleton variant="files" label={t("common.loading")} />
                         }
                       >
-                        <section class="sidebar-file-view sidebar-file-view--desktop">
-                          <div
-                            class="sidebar-file-view__path-bar session-panel-rail"
-                            data-presentation="desktop"
-                          >
-                            <span class="sidebar-file-view__path">{entry().label}</span>
-                          </div>
-                          <div class="sidebar-file-view__workspace-body">
-                            <PanelEmptyState
-                              presentation="desktop"
-                              icon={<Icon name="fileText" />}
-                              heading={t("chat.detailPanel.unavailable")}
-                              description={(() => {
-                                const content = entry().content;
-                                return content.kind === "unavailable" ? content.message : "";
-                              })()}
+                        <Show when={detail()}>
+                          {(content) => (
+                            <Detail
+                              content={content()}
+                              previewId={entry().id}
+                              onBrowseFiles={browseFiles}
                             />
-                          </div>
-                        </section>
-                      </Show>
-                    ) : (
-                      <Show when={detail()}>
-                        {(content) => <Detail content={content()} previewId={entry().id} />}
-                      </Show>
-                    )}
+                          )}
+                        </Show>
+                      </Loading>
+                    </Errored>
                   </div>
                 </div>
               );

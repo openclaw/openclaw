@@ -78,6 +78,9 @@ const assistant = (text: string) =>
   makeAssistantMessageFixture({ content: [{ type: "text", text }] });
 const appendUser = async (manager: SessionManager, text: string, timestamp: number) =>
   expectDefined(await manager.appendMessageAsync(makeUserMessage(text, timestamp)), "seed turn");
+const seedConfig = (maxActiveTranscriptBytes: number | string, enabled?: boolean) => ({
+  agents: { defaults: { compaction: { maxActiveTranscriptBytes, enabled } } },
+});
 
 const allowance = {
   oldBytes: 1000,
@@ -173,7 +176,9 @@ it.each<SeedCase>([
           DEFAULT_COMPACTION_SETTINGS,
           "unresolved",
           {
-            preserveFromEntryId: constraints?.pendingUserEntryId,
+            requestBoundary: constraints?.pendingUserEntryId
+              ? { entryId: constraints.pendingUserEntryId, preserve: true }
+              : undefined,
             budget: budget
               ? {
                   ...resolveCompactionRetentionBudget(budget, []),
@@ -199,7 +204,7 @@ it.each<SeedCase>([
       const maybePrepare = fixture.bind({
         sessionTarget: { ...target, expectedWriterRunId: "seed-writer" },
         contextTokenBudget: contextTokens,
-        config: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: maxBytes } } } },
+        config: seedConfig(maxBytes),
         userTurnTranscriptRecorder: recorder,
       })?.prepareBoundedSeed;
       const prepare = expectDefined(maybePrepare, "missing seed capability");
@@ -249,11 +254,7 @@ it.each([false, true])("preserves the admitted task only for a refresh seed (%s)
     const afterAdmission = await fixture.open();
     await afterAdmission.appendMessageAsync(stale);
     const maybePrepare = fixture.bind({
-      config: {
-        agents: {
-          defaults: { compaction: { enabled: false, maxActiveTranscriptBytes: 8192 } },
-        },
-      },
+      config: seedConfig(8192, false),
       userTurnTranscriptRecorder: recorder,
       ...(refresh ? { pluginRuntimeRefreshMessages: [persisted.message, current] } : {}),
     })?.prepareBoundedSeed;
@@ -274,6 +275,33 @@ it.each([false, true])("preserves the admitted task only for a refresh seed (%s)
     }
   }),
 );
+
+it("charges restored assistant images before selecting the bounded seed", () =>
+  withOpenClawTestState({ label: "assistant-media-seed" }, async (state) => {
+    const fixture = await seedFixture(state, "assistant-media");
+    const manager = await fixture.open();
+    await manager.appendMessageAsync(assistant("Saved badge"));
+    await appendUser(manager, "Recent text", 2);
+    const bound = fixture.bind(
+      { config: seedConfig("20mb", false), contextTokenBudget: 2048 },
+      undefined,
+      {
+        capabilities: {
+          prepareContextMedia: async ({ message }) => ({
+            images:
+              message.role === "assistant"
+                ? [{ type: "image", mimeType: "image/png", data: "prepared-image" }]
+                : [],
+          }),
+        },
+      },
+    );
+    const prepare = expectDefined(bound?.prepareBoundedSeed, "assistant media seed");
+    const seed = await prepare({ assertCurrent: () => {} });
+    expect(seed.some((message) => message.role === "assistant")).toBe(false);
+    expect(JSON.stringify(seed)).toContain("Older history outside that window is omitted");
+    expect(JSON.stringify(seed)).toContain("Recent text");
+  }));
 
 it.each([1, 2])("bounds restored images and reuses their prepared snapshot (%s)", (imageCount) =>
   withOpenClawTestState({ label: "native-media-seed" }, async (state) => {
@@ -315,7 +343,7 @@ it.each([1, 2])("bounds restored images and reuses their prepared snapshot (%s)"
     const bound = fixture.bind(
       {
         contextTokenBudget: 8192,
-        config: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "20mb" } } } },
+        config: seedConfig("20mb"),
       },
       source.signal,
       media,
@@ -348,4 +376,32 @@ it.each([1, 2])("bounds restored images and reuses their prepared snapshot (%s)"
       expect(restore).toHaveBeenCalledTimes(calls);
     }
   }),
+);
+
+it.each(["throws", "rejects"] as const)(
+  "returns the bounded seed when the context observer %s",
+  (failure) =>
+    withOpenClawTestState({ label: "native-seed-observer" }, async (state) => {
+      const fixture = await seedFixture(state, "observer");
+      const manager = await fixture.open();
+      await appendUser(manager, "old".repeat(1000), 1);
+      await appendUser(manager, "recent request", 2);
+      const onAgentEvent = vi.fn(() => {
+        if (failure === "throws") {
+          throw new Error("observer down");
+        }
+        return Promise.reject(new Error("observer down"));
+      });
+      const prepare = expectDefined(
+        fixture.bind({
+          config: seedConfig(1024, false),
+          onAgentEvent,
+        })?.prepareBoundedSeed,
+        "seed capability",
+      );
+      const seed = await prepare({ assertCurrent: () => {} });
+      expect(JSON.stringify(seed)).toContain("Older history outside that window is omitted");
+      expect(seed).toContainEqual(makeUserMessage("recent request", 2));
+      expect(onAgentEvent).toHaveBeenCalledOnce();
+    }),
 );

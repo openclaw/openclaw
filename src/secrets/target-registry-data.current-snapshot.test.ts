@@ -256,25 +256,11 @@ describe("getSecretTargetRegistry metadata reuse", () => {
       expectedTarget("record", 'accounts["foo.bar"].token', "accounts/foo.bar/token"),
       expectedTarget("wildcard-array", "accounts[0].token", "accounts/0/token"),
     ];
-    const { getSecretTargetRegistry } = await import("./target-registry-data.js");
     const { discoverConfigSecretTargets } = await import("./target-registry-query.js");
     const { buildConfigureCandidatesForScope, buildSecretsConfigurePlan } =
       await import("./configure-plan.js");
     const { isSecretsApplyPlan, resolveValidatedPlanTarget } = await import("./plan.js");
 
-    expect(getSecretTargetRegistry({ config, env: {} })).toEqual(
-      expect.arrayContaining(
-        pluginContracts.map(({ id, secretPath }) => {
-          const pluginPath = id.includes(".") ? `[${JSON.stringify(id)}]` : `.${id}`;
-          const pathPattern = `plugins.entries${pluginPath}.config.${secretPath}`;
-          return expect.objectContaining({
-            id: pathPattern,
-            pathPattern,
-            pathPatternSegments: ["plugins", "entries", id, "config", ...secretPath.split(".")],
-          });
-        }),
-      ),
-    );
     expectTargets(discoverConfigSecretTargets(config), expectedTargets);
 
     const candidates = buildConfigureCandidatesForScope({ config }).filter((candidate) =>

@@ -2,7 +2,7 @@ import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-list.read.js";
+import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-selected.read.js";
 import { projectSqliteSessionParticipantsBatch } from "./session-accessor.sqlite-participant-projection.js";
 import type { SessionEntryCreateWithTranscriptContext } from "./session-accessor.types.js";
 import {

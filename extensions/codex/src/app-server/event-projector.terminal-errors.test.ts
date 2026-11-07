@@ -29,6 +29,59 @@ import { prepareCodexServerNotification } from "./protocol-validators.js";
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector terminal errors", () => {
+  it("retains live no-answer terminal classification and native ordering without content", async () => {
+    vi.stubEnv("OPENCLAW_LIVE_TEST", "1");
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          id: "comment",
+          type: "agentMessage",
+          phase: "commentary",
+          text: "PRIVATE-ASSISTANT",
+        },
+      }),
+    );
+    projector.recordDynamicToolResult({
+      callId: "tool-a",
+      tool: "exec",
+      success: false,
+      contentItems: [{ type: "inputText", text: "PRIVATE-TOOL-ERROR" }],
+    });
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", { turn: { id: TURN_ID, status: "completed", items: [] } }),
+    );
+    await projector.closeProjection();
+    const result = fixture.result(projector);
+    expect(result.assistantTexts).toEqual([]);
+    const diagnostics = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "codex_app_server.diagnostic");
+    expect(diagnostics.map((event) => event.data)).toEqual([
+      expect.objectContaining({ phase: "notification", sequence: 1, method: "item/completed" }),
+      expect.objectContaining({
+        phase: "native_item",
+        itemId: "comment",
+        itemType: "agentMessage",
+        itemPhase: "commentary",
+        textLength: 17,
+      }),
+      expect.objectContaining({ phase: "notification", sequence: 2, method: "turn/completed" }),
+      expect.objectContaining({
+        phase: "no_answer",
+        runId: "run-1",
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        nativeStatus: "completed",
+        classification: "empty",
+        terminalKind: "ok",
+        lastToolName: "exec",
+      }),
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toMatch(/PRIVATE/);
+  });
+
   type Projector = Awaited<ReturnType<typeof createProjector>>;
   function fail(projector: Projector, error: Record<string, unknown>, completed = false) {
     return fixture.notify(
@@ -70,12 +123,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     };
   }
   async function compactionFixture(onContextCompacted = vi.fn()) {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector(
-      { ...(await createParams()), onAgentEvent },
-      { onContextCompacted },
-    );
-    return { projector, onAgentEvent, onContextCompacted };
+    return { ...(await fixture.observe({}, { onContextCompacted })), onContextCompacted };
   }
   async function misalignmentProjector(
     detailedExplanation: string | undefined,
@@ -146,8 +194,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     const result = fixture.result(projector);
     expect(result.assistantTexts).toEqual(["final answer"]);
     expectTerminal(result, null, null);
-    expect(result.lastAssistant?.stopReason).toBe("stop");
-    expect(result.lastAssistant?.errorMessage).toBeUndefined();
+    expect(result.lastAssistant).toMatchObject({ stopReason: "stop", errorMessage: undefined });
     expect(onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "run_status",
@@ -402,9 +449,8 @@ describe("CodexAppServerEventProjector usage projection", () => {
   });
 
   it("replaces the resolved window with native context and prompt-token snapshots", async () => {
-    const callback = vi.fn();
-    const projector = await createProjector(
-      { ...(await createParams()), onAgentEvent: callback },
+    const { projector, onAgentEvent: callback } = await fixture.observe(
+      {},
       { initialContextTokens: 1_050_000 },
     );
     expect(result(projector)).toMatchObject({

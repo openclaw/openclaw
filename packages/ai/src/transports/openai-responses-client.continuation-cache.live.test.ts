@@ -1,5 +1,6 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import { captureOpenAIResponses } from "./openai-responses-live-capture.test-support.js";
@@ -36,21 +37,13 @@ function userMessage(text: string, timestamp: number) {
 }
 
 function model(): Model<"openai-responses"> {
-  return {
-    id: LIVE_MODEL_ID,
-    name: LIVE_MODEL_ID,
-    api: "openai-responses",
-    provider: "openai",
+  return makeProviderModel("openai-responses", "openai", LIVE_MODEL_ID, {
     // No compat opt-in and no forward proxy: this is the plain native
     // api.openai.com connection every real OpenClaw user gets by default --
     // the exact path the idle-TTL default and cache-bound code changed.
     baseUrl: "https://api.openai.com/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
-    maxTokens: 8192,
-  } satisfies Model<"openai-responses">;
+  }) satisfies Model<"openai-responses">;
 }
 
 async function run(context: Context, sessionId: string): Promise<AssistantMessage> {

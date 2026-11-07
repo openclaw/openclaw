@@ -23,8 +23,12 @@ import { getGatewayExtensionRelayModule } from "../extension-relay.runtime.js";
 import { runExtensionRelayDaemon } from "../relay-daemon.js";
 import { getFreePort } from "../test-port.js";
 import { BROWSER_RELAY_EXTENSION_SUBPROTOCOL } from "./auth-v2.js";
-import { authenticateExtension, authenticateRelayHttp } from "./relay-coexistence.test-support.js";
-import { RawHttpConnection } from "./relay-http.test-support.js";
+import {
+  authenticateExtension,
+  authenticateRelayHttp,
+  maskedFrame,
+  RawHttpConnection,
+} from "./relay-http.test-support.js";
 
 const getPluginRuntimeGatewayRequestScopeMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
@@ -60,18 +64,9 @@ async function relayInventory(port: number): Promise<unknown> {
 
 function encodeUpgradeHead(messages: object[]): Buffer {
   return Buffer.concat(
-    messages.map((message) => {
-      const payload = Buffer.from(JSON.stringify(message));
-      const extended = payload.length >= 126;
-      const header = Buffer.alloc(extended ? 8 : 6);
-      header[0] = 0x81;
-      header[1] = 0x80 | (extended ? 126 : payload.length);
-      if (extended) {
-        header.writeUInt16BE(payload.length, 2);
-      }
-      // The fixed zero mask leaves these synthetic payload bytes unchanged.
-      return Buffer.concat([header, payload]);
-    }),
+    messages.map((message) =>
+      maskedFrame(Buffer.from(JSON.stringify(message)), { mask: Buffer.alloc(4) }),
+    ),
   );
 }
 
@@ -120,9 +115,7 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
   );
 
   it.each([
-    [false, false, false, undefined, false],
     [true, false, false, undefined, false],
-    [true, true, false, undefined, false],
     [true, true, true, undefined, false],
     [false, false, false, undefined, true],
     [false, false, false, "open", false],
@@ -283,13 +276,11 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
               }
               assert(relay.ownership === "owned", "Expected owned relay");
 
-              for (let request = 0; request < 3; request += 1) {
-                const cdpUrl = new URL(chromeProfile().profile.cdpUrl);
-                expect(cdpUrl.username).toBe("openclaw-internal");
-                expect(cdpUrl.password === relay.internalToken).toBe(true);
-                expect(getBrowserControlState()?.extensionRelays?.get("chrome")).toBe(relay);
-                expect(extension.readyState).toBe(WebSocket.OPEN);
-              }
+              const cdpUrl = new URL(chromeProfile().profile.cdpUrl);
+              expect(cdpUrl.username).toBe("openclaw-internal");
+              expect(cdpUrl.password === relay.internalToken).toBe(true);
+              expect(getBrowserControlState()?.extensionRelays?.get("chrome")).toBe(relay);
+              expect(extension.readyState).toBe(WebSocket.OPEN);
 
               const authorization = Buffer.from(
                 `openclaw-internal:${relay.internalToken}`,

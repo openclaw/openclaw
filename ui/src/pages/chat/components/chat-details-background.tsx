@@ -1,9 +1,11 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo, createSignal } from "solid-js";
-import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
-import { ElapsedTime } from "../../../components/elapsed-time.tsx";
+import { Errored, For, Loading, Show, createMemo, createSignal, latest, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { projectDetailsSubagents } from "../chat-details-snapshot.ts";
+import { hasLoadedDetailsSubagents } from "../chat-spawned-subagent.ts";
 import {
   listSubagents,
   type ChatSubagentActivity as ChatSubagentActivityRow,
@@ -13,14 +15,20 @@ import {
   ChatDetailsDesktopSection,
   createDetailsDesktopReveal,
 } from "./chat-details-desktop-section.tsx";
+import { ChatDetailsProcessRow } from "./chat-details-process-row.tsx";
+import { createDetailsProcessesPresentation } from "./chat-details-processes-presentation.ts";
 import { ChatDetailsSubagents, type ChatDetailsSubagentsProps } from "./chat-details-subagents.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import { ChatSubagentActivity } from "./chat-subagent-activity-live.ts";
+import { createProcessesPresentation } from "./chat-processes-presentation.ts";
+import { ChatSubagentActivity } from "./chat-subagent-activity-lazy.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 type Props = {
   details: ChatDetailsProps;
   presented: boolean;
-  /** Desktop Details omits Processes; other consumers retain the native summary. */
+  /** Desktop renders its own process list; other consumers retain the native summary. */
   showProcesses?: boolean;
   /** Supplied only by the native desktop composition; mobile keeps its own body. */
   desktopSubagents?: {
@@ -31,39 +39,16 @@ type Props = {
 };
 type State = "running" | "queued" | "failed" | "stopped" | "done";
 type Tally = Record<State, number>;
+const PREVIEW_ROWS = 3;
 
 // The bar fills settled work from the start; the text leads with what is still going.
 const SEGMENTS = ["done", "failed", "stopped", "running", "queued"] as const;
 const SUMMARY = ["running", "queued", "done", "failed", "stopped"] as const;
 // Rows list what still needs attention first: live work, then failures.
 const ORDER: Record<State, number> = { running: 0, queued: 1, failed: 2, stopped: 3, done: 4 };
-const PREVIEW_ROWS = 3;
 
-function subagentState(row: ChatSubagentActivityRow): State {
-  return row.status === "waiting" ? "running" : row.status;
-}
-
-function processState(row: SessionProcessSummary): State {
-  return row.status === "running"
-    ? "running"
-    : row.status === "completed"
-      ? "done"
-      : row.status === "failed"
-        ? "failed"
-        : "stopped";
-}
-
-function tally<T>(rows: readonly T[], state: (row: T) => State): Tally {
-  const counts = { running: 0, queued: 0, failed: 0, stopped: 0, done: 0 };
-  for (const row of rows) {
-    counts[state(row)] += 1;
-  }
-  return counts;
-}
-
-function attentionOrder<T>(rows: readonly T[], state: (row: T) => State): T[] {
-  return rows.toSorted((a, b) => ORDER[state(a)] - ORDER[state(b)]);
-}
+const subagentState = (row: ChatSubagentActivityRow): State =>
+  row.status === "waiting" ? "running" : row.status;
 
 /**
  * One collapsible kind of background work. The heading keeps the observed counts
@@ -198,68 +183,56 @@ function DesktopBackgroundGroup(props: {
   );
 }
 
-function ProcessRow(props: { row: SessionProcessSummary; onOpen?: () => void }) {
-  const status = () => t(`chat.processesPanel.status.${props.row.status}`);
-  const lastLine = () => props.row.tail.trimEnd().split("\n").at(-1)?.trim() ?? "";
-  const description = () => [props.row.name, status(), lastLine()].filter(Boolean).join(". ");
-  const content = () => (
-    <>
-      <span class="chat-details__process-icon" data-status={props.row.status} aria-hidden="true">
-        <Icon name="terminal" />
-      </span>
-      <span class="chat-details__process-name">{props.row.name}</span>
-      <span class="chat-details__process-elapsed" aria-hidden="true">
-        <ElapsedTime startMs={props.row.startedAt} endMs={props.row.endedAt ?? null} />
-      </span>
-      <span class="chat-details__process-tail">{lastLine() || status()}</span>
-    </>
-  );
-  return (
-    <div role="listitem" data-process-id={props.row.processId}>
-      <Show
-        when={props.onOpen}
-        fallback={
-          <div class="chat-details__process" title={description()}>
-            {content()}
-          </div>
-        }
-      >
-        <button
-          type="button"
-          class="chat-details__process"
-          title={description()}
-          aria-label={description()}
-          onClick={() => props.onOpen?.()}
-        >
-          {content()}
-        </button>
-      </Show>
-    </div>
-  );
-}
-
 /** The subagents and background processes this session started, as two groups. */
 export function ChatDetailsBackground(
   props: Props,
   processes: () => ProcessesPanelData | undefined,
 ) {
   const [subagentsExpanded, setSubagentsExpanded] = createSignal(false);
+  const activityReady = createMemo(() =>
+    Boolean(hasLoadedDetailsSubagents(props.details) || props.details.subagentSessionsUnavailable),
+  );
   const roster = createMemo(() => listSubagents(props.details));
-  const subagents = createMemo(() => attentionOrder(roster(), subagentState));
+  const subagents = createMemo(() =>
+    roster().toSorted((a, b) => ORDER[subagentState(a)] - ORDER[subagentState(b)]),
+  );
   const unlisted = createMemo(() => subagents().filter((row) => !row.listed));
-  const desktopPresentation = createMemo(() => props.desktopSubagents);
+  const collection = createMemo(() => roster().filter((row) => row.listed));
+  const liveSummary = createMemo(() =>
+    props.desktopSubagents && activityReady()
+      ? projectDetailsSubagents([...collection(), ...unlisted()])
+      : undefined,
+  );
+  const summary = () =>
+    liveSummary() ?? (props.desktopSubagents ? props.details.cachedDetails?.subagents : undefined);
+  const cachedActivity = createMemo(() =>
+    !activityReady() && props.desktopSubagents
+      ? summary()?.rows.filter((row) => row.listed === false)
+      : undefined,
+  );
+  const recordSubagents = (rows: readonly ChatSubagentActivityRow[]) => {
+    if (!props.desktopSubagents || !activityReady()) {
+      return;
+    }
+    const ordinary = rows.filter((row) => !row.listed);
+    props.details.onDetailsSnapshot?.({
+      subagents: projectDetailsSubagents(
+        props.details.subagentSessionsUnavailable ? [] : collection().concat(ordinary),
+      ),
+    });
+  };
   const desktopSubagents = createMemo<ChatDetailsSubagentsProps | undefined>(() => {
-    const presentation = desktopPresentation();
+    const presentation = props.desktopSubagents;
     const snapshot = props.details;
     const openChild = snapshot.onOpenSubagent;
     const openCollection = snapshot.onOpenSubagents;
     if (!presentation || !openChild || !openCollection) {
       return undefined;
     }
-    const current = () => props.presented && props.details === snapshot;
+    const current = () => props.presented && props.details === snapshot && activityReady();
     return {
-      // Keep launch order for T36; its collection summary must name only collection members.
-      rows: roster().filter((row) => row.listed),
+      rows: collection(),
+      presentation: summary(),
       mobile: false,
       workingLabel: presentation.workingLabel,
       onOpenSubagent: (key) => {
@@ -274,25 +247,43 @@ export function ChatDetailsBackground(
       },
     };
   });
-  const subagentTally = createMemo(() => tally(subagents(), subagentState));
+  const subagentTally = createMemo(() => {
+    const counts = { running: 0, queued: 0, failed: 0, stopped: 0, done: 0 };
+    if (cachedActivity()) {
+      for (const entry of summary()?.counts ?? []) {
+        counts[entry.status === "waiting" ? "running" : entry.status] += entry.count;
+      }
+    } else {
+      for (const row of subagents()) {
+        counts[subagentState(row)] += 1;
+      }
+    }
+    return counts;
+  });
   const openSubagents = () => {
-    if (props.presented) {
+    if (props.presented && !cachedActivity()) {
       props.details.onOpenSubagents?.();
     }
   };
   return (
     <>
-      <Show when={subagents().length > 0}>
+      <Show when={liveSummary() && unlisted()} keyed>
+        {(value) => {
+          onSettled(() => recordSubagents(value));
+          return null;
+        }}
+      </Show>
+      <Show when={subagents().length > 0 || (summary()?.total ?? 0) > 0}>
         <Show
           when={desktopSubagents()}
           fallback={
             <BackgroundGroup
-              desktop={desktopPresentation()}
+              desktop={props.desktopSubagents}
               presented={props.presented}
               kind="subagents"
               title={t("chat.sessionDetails.subagents")}
               tally={subagentTally()}
-              total={subagents().length}
+              total={summary()?.total ?? subagents().length}
               icon="bot"
               openAllLabel={t("chat.sessionDetails.allSubagents")}
               onOpenAll={props.details.onOpenSubagents ? openSubagents : undefined}
@@ -302,8 +293,9 @@ export function ChatDetailsBackground(
               {props.presented && (
                 <ChatSubagentActivity
                   rows={subagents()}
+                  presentation={cachedActivity()}
+                  onPresentation={recordSubagents}
                   limit={subagentsExpanded() ? undefined : PREVIEW_ROWS}
-                  compact={true}
                   onOpenSubagent={props.details.onOpenSubagent}
                   onOpenSession={props.details.onSessionSelect}
                 />
@@ -315,11 +307,11 @@ export function ChatDetailsBackground(
             <ChatDetailsDesktopSection
               section="subagents"
               title={t("chat.sessionDetails.subagents")}
-              expanded={desktopPresentation()!.expanded}
+              expanded={props.desktopSubagents!.expanded}
               presented={props.presented}
-              onExpandedChange={desktopPresentation()!.onExpandedChange}
+              onExpandedChange={props.desktopSubagents!.onExpandedChange}
               metadata={
-                <Show when={!desktopPresentation()!.expanded}>
+                <Show when={!props.desktopSubagents!.expanded}>
                   <ChatDetailsSubagents {...data()} collapsed />
                 </Show>
               }
@@ -327,11 +319,16 @@ export function ChatDetailsBackground(
               <ChatDetailsSubagents {...data()} />
               {/* Children outside the collection keep their native session destination/activity. */}
               <Show
-                when={props.presented && desktopPresentation()!.expanded && unlisted().length > 0}
+                when={
+                  props.presented &&
+                  props.desktopSubagents!.expanded &&
+                  (unlisted().length > 0 || (cachedActivity()?.length ?? 0) > 0)
+                }
               >
                 <ChatSubagentActivity
                   rows={unlisted()}
-                  compact={true}
+                  presentation={cachedActivity()}
+                  onPresentation={recordSubagents}
                   onOpenSession={props.details.onSessionSelect}
                 />
               </Show>
@@ -356,57 +353,84 @@ function DetailsProcesses(
     processes: () => ProcessesPanelData | undefined;
   },
 ) {
-  const [processesExpanded, setProcessesExpanded] = createSignal(false);
-  const processRows = createMemo(() =>
-    attentionOrder(props.processes()?.snapshot.rows ?? [], processState),
+  const presentation = createProcessesPresentation(() => props.processes(), true);
+  const processRows = createDetailsProcessesPresentation(
+    () => props.processes()?.snapshot.rows ?? [],
   );
-  const processTally = createMemo(() => tally(processRows(), processState));
-  const visibleProcesses = createMemo(() =>
-    processesExpanded() ? processRows() : processRows().slice(0, PREVIEW_ROWS),
-  );
+  const visibleRows = createMemo(() => processRows().slice(0, 2));
+  const hidden = () => processRows().length - visibleRows().length;
   const processError = () =>
-    processRows().length === 0 ? props.processes()?.snapshot.error : null;
-  const openProcesses = () => {
+    props.processes()?.snapshot.errorKind !== "read" ? props.processes()?.snapshot.error : null;
+  const openProcesses = (instanceId?: string) => {
     if (props.presented) {
-      props.details.onOpenProcesses?.();
+      props.details.onOpenProcesses?.(instanceId);
     }
   };
-  return (
+  const Content = (contentProps: { retry: () => void }) => (
     <Show when={processRows().length > 0 || processError()}>
-      <BackgroundGroup
-        kind="processes"
-        title={t("chat.sessionDetails.processes")}
-        tally={processTally()}
-        total={processRows().length}
-        icon="terminal"
-        openAllLabel={t("chat.sessionDetails.allProcesses")}
-        onOpenAll={props.details.onOpenProcesses ? openProcesses : undefined}
-        expanded={processesExpanded()}
-        onExpandedChange={setProcessesExpanded}
-      >
+      <details class="chat-details__group" data-details-group="processes" open>
+        <summary class="chat-details__caption">
+          <span class="chat-details__caption-title">{t("chat.sessionDetails.processes")}</span>
+          <Icon name="chevronDown" />
+        </summary>
         <Show when={processError()}>
           <div class="chat-summary__automation-error">
-            <span role="status">{t("chat.sessionDetails.processesError")}</span>
+            <span role="alert">{processError()}</span>
             <button
               type="button"
               class="chip chat-summary__automation-retry"
-              onClick={() => void props.processes()?.refresh()}
+              onClick={() => contentProps.retry()}
             >
               {t("common.retry")}
             </button>
           </div>
         </Show>
-        <div role="list" aria-label={t("chat.sessionDetails.processes")}>
-          <For each={visibleProcesses()} keyed={(row) => row.instanceId}>
-            {(row) => (
-              <ProcessRow
-                row={row()}
-                onOpen={props.details.onOpenProcesses ? openProcesses : undefined}
-              />
-            )}
-          </For>
-        </div>
-      </BackgroundGroup>
+        <Show when={processRows().length > 0}>
+          <div role="list" aria-label={t("chat.sessionDetails.processes")}>
+            <For each={visibleRows()} keyed={(row) => row.instanceId}>
+              {(row) => (
+                <ChatDetailsProcessRow
+                  row={row()}
+                  presentation={presentation}
+                  disabled={!props.presented}
+                  hoverDescription
+                  onOpen={props.details.onOpenProcesses ? openProcesses : undefined}
+                />
+              )}
+            </For>
+          </div>
+          <Show when={props.details.onOpenProcesses}>
+            <button
+              class="chat-details-processes__view-all"
+              type="button"
+              disabled={!props.presented}
+              onClick={() => openProcesses()}
+            >
+              {hidden() > 0
+                ? t("chat.sessionDetails.showMore", { count: String(hidden()) })
+                : t("chat.processesPanel.viewAll")}
+            </button>
+          </Show>
+        </Show>
+      </details>
     </Show>
+  );
+  const retry = () => void props.processes()?.refresh();
+  return (
+    <Errored
+      fallback={(_error, reset) => (
+        <Content
+          retry={() => {
+            retry();
+            reset();
+          }}
+        />
+      )}
+    >
+      <Loading on={presentation.scope()} fallback={<Content retry={retry} />}>
+        {(latest(presentation.read), null)}
+        <Content retry={retry} />
+      </Loading>
+    </Errored>
   );
 }

@@ -1,4 +1,4 @@
-import type { Model, StreamOptions } from "../types.js";
+import type { Model, ModelRequestHeaders, StreamOptions } from "../types.js";
 
 function isOpencodeEndpoint(baseUrl: string): boolean {
   const url = URL.parse(baseUrl);
@@ -9,7 +9,7 @@ function isOpencodeEndpoint(baseUrl: string): boolean {
 export function resolveOpencodeSessionHeaders(
   model: Pick<Model, "baseUrl" | "headers">,
   options?: Pick<StreamOptions, "sessionId" | "headers">,
-): Record<string, string> | undefined {
+): ModelRequestHeaders | undefined {
   if (!options?.sessionId || !isOpencodeEndpoint(model.baseUrl)) {
     return options?.headers;
   }

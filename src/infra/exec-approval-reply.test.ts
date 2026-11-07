@@ -1,25 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
-import { listNativeExecApprovalClientLabels } from "./exec-approval-surface.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  describeNativeExecApprovalClientSetup,
+  listNativeExecApprovalClientLabels,
+  supportsNativeExecApprovalClient,
+} from "./exec-approval-surface.js";
 
 // mock-isolation: reply formatting uses fixed channel capabilities without loading plugins.
 vi.mock("./exec-approval-surface.js", () => ({
-  describeNativeExecApprovalClientSetup: vi.fn(
-    ({ channel, accountId }: { channel?: string; accountId?: string }) =>
-      channel === "matrix"
-        ? `Configure \`channels.matrix.accounts.${accountId}.dm.allowFrom\`.`
-        : null,
-  ),
-  listNativeExecApprovalClientLabels: vi.fn(() => ["Discord", "Matrix", "Slack", "Telegram"]),
-  supportsNativeExecApprovalClient: vi.fn((channel?: string | null) =>
-    ["discord", "matrix", "slack", "telegram"].includes((channel ?? "").trim().toLowerCase()),
-  ),
+  describeNativeExecApprovalClientSetup: vi.fn<typeof describeNativeExecApprovalClientSetup>(),
+  listNativeExecApprovalClientLabels: vi.fn<typeof listNativeExecApprovalClientLabels>(),
+  supportsNativeExecApprovalClient: vi.fn<typeof supportsNativeExecApprovalClient>(),
 }));
 
 import {
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
-  buildTypedApprovalActionDescriptors,
-  buildTypedApprovalPresentation,
   buildTypedExecApprovalPendingReplyPayload,
   getExecApprovalReplyMetadata,
   parseExecApprovalCommandText,
@@ -38,47 +33,37 @@ const typedPending = (options: PendingOptions) =>
 const metadata = (execApproval: unknown) =>
   getExecApprovalReplyMetadata({ channelData: { execApproval } });
 
-function approvalButtons(approvalId: string, always = true) {
-  const buttons = [
-    { label: "Allow Once", decision: "allow-once", style: "success" },
-    ...(always ? [{ label: "Allow Always", decision: "allow-always", style: "primary" }] : []),
-    { label: "Deny", decision: "deny", style: "danger" },
-  ];
+function approvalButtons(approvalId: string, decisions: string[]) {
   return {
     blocks: [
       {
         type: "buttons",
-        buttons: buttons.map(({ decision, ...button }) =>
-          Object.assign(button, {
-            action: { type: "approval", approvalId, approvalKind: "exec", decision },
-          }),
-        ),
+        buttons: decisions.map((decision) => ({
+          action: { type: "approval", approvalId, approvalKind: "exec", decision },
+        })),
       },
     ],
   };
 }
 
 describe("exec approval reply helpers", () => {
-  const unavailableReasonCases = [
-    {
-      reason: "initiating-platform-disabled" as const,
-      channelLabel: "Slack",
-      expected:
-        "Exec approval is required, but native chat exec approvals are not configured on Slack.",
-    },
-    {
-      reason: "initiating-platform-unsupported" as const,
-      channelLabel: undefined,
-      expected:
-        "Exec approval is required, but this platform does not support chat exec approvals.",
-    },
-  ] as const;
+  beforeEach(() => {
+    vi.mocked(describeNativeExecApprovalClientSetup).mockReset().mockReturnValue(null);
+    vi.mocked(listNativeExecApprovalClientLabels)
+      .mockReset()
+      .mockReturnValue(["Discord", "Matrix", "Slack", "Telegram"]);
+    vi.mocked(supportsNativeExecApprovalClient).mockReset().mockReturnValue(true);
+  });
 
   it("only suggests exec-capable recovery surfaces without native clients", () => {
     vi.mocked(listNativeExecApprovalClientLabels).mockReturnValueOnce([]);
     const text = buildExecApprovalUnavailableReplyPayload({ reason: "no-approval-route" }).text;
 
     expect(text).toContain("Approve it from the Web UI");
+    expect(listNativeExecApprovalClientLabels).toHaveBeenCalledExactlyOnceWith({
+      host: undefined,
+      nodeId: undefined,
+    });
     expect(text).not.toMatch(/terminal UI|\bTUI\b/i);
   });
 
@@ -98,19 +83,33 @@ describe("exec approval reply helpers", () => {
     expect(text).not.toContain("`openclaw dashboard --no-open` or `openclaw approvals get");
     expect(text).not.toContain("Open the approval inbox with");
     expect(text).not.toContain("exec-approvals list");
+    expect(listNativeExecApprovalClientLabels).toHaveBeenCalledExactlyOnceWith({
+      host: "node",
+      nodeId: "mac-1",
+    });
     expect(text).not.toMatch(/terminal UI|\bTUI\b/i);
   });
 
   it("uses account-scoped disabled setup guidance for the initiating channel", () => {
+    vi.mocked(describeNativeExecApprovalClientSetup).mockReturnValueOnce(
+      "Configure `channels.matrix.accounts.work.dm.allowFrom`.",
+    );
     const text = buildExecApprovalUnavailableReplyPayload({
       reason: "initiating-platform-disabled",
-      channel: "matrix",
+      channel: " Matrix ",
       channelLabel: "Matrix",
       accountId: "work",
     }).text;
 
     expect(text).toContain("`channels.matrix.accounts.work.dm.allowFrom`");
     expect(text).not.toContain("`channels.matrix.dm.allowFrom`");
+    expect(supportsNativeExecApprovalClient).toHaveBeenCalledExactlyOnceWith("matrix");
+    expect(describeNativeExecApprovalClientSetup).toHaveBeenCalledExactlyOnceWith({
+      channel: "matrix",
+      channelLabel: "Matrix",
+      accountId: "work",
+    });
+    expect(listNativeExecApprovalClientLabels).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -141,7 +140,8 @@ describe("exec approval reply helpers", () => {
   it("builds pending reply payloads with trimmed warning text and slug fallback", () => {
     const payload = typedPending({
       warningText: "  Heads up.  ",
-      cwd: "/tmp/work",
+      command: "echo ```danger```",
+      cwd: "C:\\Users\\alice\\project",
       nodeId: "node-1",
       agentId: "ops-agent",
       sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
@@ -160,49 +160,30 @@ describe("exec approval reply helpers", () => {
         sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
       },
     });
-    expect(payload.presentation).toEqual(approvalButtons("req-1"));
+    expect(payload.presentation).toMatchObject(
+      approvalButtons("req-1", ["allow-once", "allow-always", "deny"]),
+    );
     expect(payload.interactive).toBeUndefined();
     expect(payload.text).toContain("Heads up.");
     expect(payload.text).toContain("```txt\n/approve slug-1 allow-once\n```");
-    expect(payload.text).toContain("```sh\necho ok\n```");
+    expect(payload.text).toContain("````sh\necho ```danger```\n````");
+    expect(payload.text).not.toContain("C:\\Users\\alice");
     expect(payload.text).toContain(
-      "Host: gateway\nNode: node-1\nCWD: /tmp/work\nScope: Pay 49.99 EUR to Stripe\nExpires in: 2s",
+      "Host: gateway\nNode: node-1\nCWD: ~/project\nScope: Pay 49.99 EUR to Stripe\nExpires in: 2s",
     );
     expect(payload.text).toContain("Full id: `req-1`");
   });
 
-  it.each([
-    {
-      name: "compact cwd",
-      options: { command: "pwd", cwd: "C:\\Users\\alice\\project" },
-      contains: ["CWD: ~/project"],
-      excludes: ["C:\\Users\\alice"],
-    },
-    {
-      name: "backtick fences",
-      options: { approvalCommandId: " req-cmd-2 ", command: "echo ```danger```", host: "sandbox" },
-      contains: ["```txt\n/approve req-cmd-2 allow-once\n```", "````sh\necho ```danger```\n````"],
-      excludes: ["Expires in:"],
-    },
-    {
-      name: "minute expiry",
-      options: { command: "echo later", expiresAtMs: 1_801_000, nowMs: 1_000 },
-      contains: ["Expires in: 30m"],
-      excludes: [],
-    },
-  ] satisfies Array<{
-    name: string;
-    options: PendingOptions;
-    contains: string[];
-    excludes: string[];
-  }>)("formats pending replies: $name", ({ options, contains, excludes }) => {
-    const { text } = buildExecApprovalPendingReplyPayload(pendingOptions(options));
-    for (const expected of contains) {
-      expect(text).toContain(expected);
-    }
-    for (const forbidden of excludes) {
-      expect(text).not.toContain(forbidden);
-    }
+  it("uses a trimmed command id and omits absent expiry", () => {
+    const { text } = typedPending({ approvalCommandId: " req-cmd-2 ", host: "sandbox" });
+    expect(text).toContain("```txt\n/approve req-cmd-2 allow-once\n```");
+    expect(text).not.toContain("Expires in:");
+  });
+
+  it("formats minute expiry", () => {
+    expect(typedPending({ expiresAtMs: 1_801_000, nowMs: 1_000 }).text).toContain(
+      "Expires in: 30m",
+    );
   });
 
   it("omits allow-always actions when the effective policy requires approval every time", () => {
@@ -223,19 +204,13 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain("```txt\n/approve slug-always allow-once\n```");
     expect(payload.text).not.toContain("allow-always");
     expect(payload.text).toContain("Allow Always is unavailable for this command.");
-    expect(payload.presentation).toEqual(approvalButtons("req-ask-always", false));
+    expect(payload.presentation).toMatchObject(
+      approvalButtons("req-ask-always", ["allow-once", "deny"]),
+    );
     expect(payload.interactive).toBeUndefined();
   });
 
   it.each([".", "broken-\uD800"])("refuses malformed typed approval identity %j", (approvalId) => {
-    const denied = { approvalKind: "exec" as const, allowedDecisions: ["deny"] as const };
-    expect(
-      buildTypedApprovalActionDescriptors({
-        approvalCommandId: approvalId,
-        ...denied,
-      }),
-    ).toEqual([]);
-    expect(buildTypedApprovalPresentation({ approvalId, ...denied })).toBeUndefined();
     expect(
       typedPending({
         approvalId,
@@ -246,23 +221,18 @@ describe("exec approval reply helpers", () => {
   });
 
   it("parses exec approval command text", () => {
-    expect(
-      [
-        "/approve req-1 deny",
-        "approve req-1 allow-once",
-        "/approve@clover req-1 allow-once",
-        "  /approve req-1 always",
-        "/approve req-1 allow-always",
-        "/approve req-1 maybe",
-      ].map(parseExecApprovalCommandText),
-    ).toEqual([
-      { approvalId: "req-1", decision: "deny" },
-      { approvalId: "req-1", decision: "allow-once" },
-      { approvalId: "req-1", decision: "allow-once" },
-      { approvalId: "req-1", decision: "allow-always" },
-      { approvalId: "req-1", decision: "allow-always" },
-      null,
-    ]);
+    for (const [command, decision] of [
+      ["/approve req-1 deny", "deny"],
+      ["approve req-1 allow-once", "allow-once"],
+      ["/approve@clover req-1 allow-once", "allow-once"],
+      ["  /approve req-1 always", "allow-always"],
+      ["/approve req-1 allow-always", "allow-always"],
+      ["/approve req-1 maybe", null],
+    ] as const) {
+      expect(parseExecApprovalCommandText(command)).toEqual(
+        decision ? { approvalId: "req-1", decision } : null,
+      );
+    }
   });
 
   it("builds unavailable payloads for approver DMs", () => {
@@ -278,17 +248,25 @@ describe("exec approval reply helpers", () => {
         execApprovalUnavailable: { reason: "no-approval-route" },
       },
     });
+    expect(supportsNativeExecApprovalClient).not.toHaveBeenCalled();
+    expect(describeNativeExecApprovalClientSetup).not.toHaveBeenCalled();
+    expect(listNativeExecApprovalClientLabels).not.toHaveBeenCalled();
   });
 
-  it.each(unavailableReasonCases)(
-    "builds unavailable payload for reason $reason",
-    ({ reason, channelLabel, expected }) => {
-      const payload = buildExecApprovalUnavailableReplyPayload({
-        reason,
-        channelLabel,
-      });
-      expect(payload.text).toContain(expected);
-      expect(payload.channelData).toEqual({ execApprovalUnavailable: { reason } });
-    },
-  );
+  it.each([
+    [
+      "initiating-platform-disabled",
+      "Slack",
+      "Exec approval is required, but native chat exec approvals are not configured on Slack.",
+    ],
+    [
+      "initiating-platform-unsupported",
+      undefined,
+      "Exec approval is required, but this platform does not support chat exec approvals.",
+    ],
+  ] as const)("builds unavailable payload for reason %s", (reason, channelLabel, expected) => {
+    const payload = buildExecApprovalUnavailableReplyPayload({ reason, channelLabel });
+    expect(payload.text).toContain(expected);
+    expect(payload.channelData).toEqual({ execApprovalUnavailable: { reason } });
+  });
 });

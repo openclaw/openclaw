@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { captureFrame } from "./sidebar-assertions.test-support.ts";
 import { sidebarSessionList } from "./sidebar-contract.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
@@ -13,12 +14,16 @@ suite.define(() => {
       await suite.withPage(
         { hasTouch, viewport: { width: 1280, height: 800 } },
         async ({ page }) => {
-          const sessions = ["Sidebar alignment review", "Release notes"].map((label, index) => ({
-            key: `agent:main:${index === 0 ? "current" : "notes"}`,
-            kind: "direct",
-            label,
-            updatedAt: Date.now(),
-          }));
+          const sessions = [
+            ...["Sidebar alignment review", "Release notes"].map((label, index) => ({
+              key: `agent:main:${index === 0 ? "current" : "notes"}`,
+              kind: "direct",
+              label,
+              updatedAt: Date.now(),
+            })),
+            // Home renders its session glyph only when the main session row exists.
+            { key: "agent:main:main", kind: "direct", label: "Home", updatedAt: Date.now() },
+          ];
           await installMockGateway(page, {
             sessionKey: "agent:main:current",
             presenceUsers: [{ id: "riley", name: "Riley", self: true }],
@@ -73,6 +78,35 @@ suite.define(() => {
           expect(
             Math.abs(agentBox!.y + agentBox!.height / 2 - ownerBox!.y - ownerBox!.height / 2),
           ).toBeLessThanOrEqual(0.5);
+          await rail.locator(".sidebar-footer-bar__home .session-glyph svg").waitFor();
+          const iconInk = await rail.evaluate((element) =>
+            [".sidebar-footer-bar__home svg", ".sidebar-issues-button svg"].map((selector) => {
+              const icon = element.querySelector<SVGElement>(selector)!;
+              let opacity = 1;
+              for (let node: Element | null = icon; node && node !== element;) {
+                opacity *= Number(getComputedStyle(node).opacity);
+                node = node.parentElement;
+              }
+              return { color: getComputedStyle(icon).color, opacity };
+            }),
+          );
+          expect(iconInk[0]).toEqual(iconInk[1]);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && !hasTouch) {
+            const sidebar = page.locator(".sidebar.sidebar--rail");
+            await captureFrame(suite.artifactDir, "sidebar.png", sidebar, [owner]);
+          }
+          const toolbarBox = await page.locator(".sidebar-session-toolbar").boundingBox();
+          // Fresh preferences have no personal sections above the first row.
+          const sessionsBox = await page.locator(".sidebar-sessions").boundingBox();
+          const firstRowBox = await page
+            .locator(".sidebar-sessions .sidebar-recent-session")
+            .first()
+            .boundingBox();
+          expect(toolbarBox).not.toBeNull();
+          expect(sessionsBox).not.toBeNull();
+          expect(firstRowBox).not.toBeNull();
+          expect(sessionsBox!.y - toolbarBox!.y - toolbarBox!.height).toBe(6);
+          expect(firstRowBox!.y - sessionsBox!.y).toBe(0);
         },
       );
     },

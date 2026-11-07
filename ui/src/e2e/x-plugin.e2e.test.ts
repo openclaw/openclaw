@@ -5,9 +5,9 @@ import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
-  installMockGateway,
   reconnectMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
@@ -54,7 +54,7 @@ suite.define(() => {
       async ({ page }) => {
         const pageErrors: string[] = [];
         page.on("pageerror", (error) => pageErrors.push(error.message));
-        const gateway = await installMockGateway(page, {
+        const gateway = await installNativePluginMockGateway(page, {
           nativePlugins: [{ pluginId: "x", rootDir: pluginRoot, source: "src/control-ui.tsx" }],
           operatorScopes: ["operator.admin"],
           featureMethods: [
@@ -89,8 +89,7 @@ suite.define(() => {
         expect(await account.inputValue()).toBe("primary");
         expect(await surface.getByText("Read-only", { exact: true }).count()).toBe(1);
         expect((await gateway.waitForRequest("plugins.controlUi.report")).params).toMatchObject({
-          pluginId: "x",
-          status: "activated",
+          reports: [{ pluginId: "x", status: "activated" }],
         });
 
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {

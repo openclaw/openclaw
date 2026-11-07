@@ -21,7 +21,6 @@ export type MatrixQaCliRunResult = {
 };
 
 export type MatrixQaCliSession = {
-  args: string[];
   endStdin: () => void;
   output: () => { stderr: string; stdout: string };
   wait: () => Promise<MatrixQaCliRunResult>;
@@ -103,13 +102,6 @@ export function startMatrixQaOpenClawCli(params: {
     stderr: Buffer.concat(stderr).toString("utf8"),
     stdout: Buffer.concat(stdout).toString("utf8"),
   });
-  const finish = (result: MatrixQaCliRunResult, error?: Error) => {
-    if (closed) {
-      return;
-    }
-    closed = true;
-    completion.resolve({ result, error });
-  };
   const isWindows = process.platform === "win32";
   const settlement = createQaPosixCommandSettlement({
     child,
@@ -154,16 +146,15 @@ export function startMatrixQaOpenClawCli(params: {
                   : result.exitCode !== 0 && params.allowNonZero !== true
                     ? new Error(formatMatrixQaCliFailure(result, `exited ${result.exitCode}`))
                     : undefined;
-      finish(
-        result,
-        outcome.settlementFailure
-          ? primaryError
-            ? new AggregateError([primaryError, outcome.settlementFailure], primaryError.message, {
-                cause: primaryError,
-              })
-            : outcome.settlementFailure
-          : primaryError,
-      );
+      const error = outcome.settlementFailure
+        ? primaryError
+          ? new AggregateError([primaryError, outcome.settlementFailure], primaryError.message, {
+              cause: primaryError,
+            })
+          : outcome.settlementFailure
+        : primaryError;
+      closed = true;
+      completion.resolve({ result, error });
     },
     onStderrData: (chunk) => stderr.push(Buffer.from(chunk)),
     onStdoutData: (chunk) => stdout.push(Buffer.from(chunk)),
@@ -175,7 +166,6 @@ export function startMatrixQaOpenClawCli(params: {
   }
 
   return {
-    args: params.args,
     endStdin: () => {
       if (!child.stdin.destroyed) {
         child.stdin.end();

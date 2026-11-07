@@ -11,6 +11,8 @@ import {
   pendingReply,
   updateHello,
   updateStatusRequest,
+  methodRequest,
+  requestCalls,
 } from "./overlays-update.test-support.ts";
 
 function admissionTest(status: (sent: boolean) => unknown, getRun: () => unknown = () => ({})) {
@@ -55,14 +57,12 @@ describe("update run response races", () => {
     async (boundary) => {
       const pending = pendingReply({});
       const run = updateRunFixture();
-      const request = vi.fn<RequestFn>(async (method) =>
-        method === "update.runs.get" ? pending.promise : {},
-      );
+      const request = methodRequest("update.runs.get", () => pending.promise);
       const { harness, overlays, expectState } = runTest(request);
       await flushMicrotasks();
       harness.emitEvent("update.run.changed", run);
       await flushMicrotasks();
-      expect(request.mock.calls.some(([method]) => method === "update.runs.get")).toBe(true);
+      expect(requestCalls(request, "update.runs.get")).not.toHaveLength(0);
       if (boundary === "Gateway") {
         harness.gateway.connection.gatewayUrl = "ws://other-gateway.test";
         harness.update({ phase: "connecting", client: null, hello: null });
@@ -99,9 +99,7 @@ describe("update run response races", () => {
       finishedAtMs: 4_000,
       after: { version: "2.0.0" },
     });
-    const replacement = vi.fn<RequestFn>(async (method) =>
-      method === "update.runs.get" ? { run: finished } : {},
-    );
+    const replacement = methodRequest("update.runs.get", () => ({ run: finished }));
     const { harness, overlays, reconnect } = runTest(firstRequest);
     await overlays.runUpdate();
     reconnect();
@@ -126,7 +124,7 @@ describe("update run response races", () => {
     harness.update({ hello: updateHello(undefined, "operator.read") });
     drained.resolve(undefined);
     await running;
-    expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
+    expect(requestCalls(request, "update.run")).toHaveLength(0);
     expect(overlays.snapshot.updateRunning).toBe(false);
   });
   it.each([
@@ -167,7 +165,8 @@ describe("update run response races", () => {
         },
         () => (timing === "reconnect" ? {} : { run: found }),
       );
-      const outcome = timing === "disconnect" ? "outcome is unknown" : "Admission reply lost";
+      const outcome =
+        timing === "disconnect" ? "Couldn’t confirm the update outcome." : "Admission reply lost";
       await flushMicrotasks();
       const operation = settleAtCleanup(overlays.runUpdate());
       await flushMicrotasks();
@@ -222,7 +221,7 @@ describe("update run response races", () => {
           updateStatusBanner: { text: expect.stringContaining(outcome) },
         });
       }
-      expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
+      expect(requestCalls(request, "update.run")).toHaveLength(1);
     },
   );
 });

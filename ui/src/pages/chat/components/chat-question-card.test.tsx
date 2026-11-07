@@ -203,13 +203,11 @@ describe("shared question panel", () => {
     drawGateway(prompt, { onSubmit });
     await panelIn(container);
 
-    expect(
-      container.querySelector('[role="radio"] .chat-question-panel__option-marker'),
-    ).not.toBeNull();
+    expect(container.querySelector('[role="radio"] .oc-radio')).not.toBeNull();
     expect(container.querySelector('[role="radio"] kbd')).not.toBeNull();
     expect(
       container.querySelector(
-        ".chat-question-panel__option--other .chat-question-panel__option-marker",
+        ".chat-question-panel__option--other :is(.chat-question-panel__option-marker, .oc-radio)",
       ),
     ).not.toBeNull();
     expect(container.querySelector(".chat-question-panel__option--other kbd")).not.toBeNull();
@@ -715,10 +713,18 @@ describe("shared question panel", () => {
     await panelIn(container);
     container.querySelector<HTMLButtonElement>('[role="radio"]')!.click();
     flush();
-    container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
+    const firstButton = container.querySelector<HTMLButtonElement>(
+      ".chat-question-panel__advance",
+    )!;
+    firstButton.click();
+    firstButton.click();
+    await waitForSolid(() => expect(firstButton.disabled).toBe(true));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
 
     drawGateway(gatewayPrompt({ id: "another-question" }));
-    flush();
+    await waitForSolid(() => {
+      expect(container.querySelector(".chat-question-panel__advance")).not.toBe(firstButton);
+    });
     drawGateway(prompt, { onSubmit });
     flush();
     const button = container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!;
@@ -728,8 +734,11 @@ describe("shared question panel", () => {
     await older.promise;
     flush();
     expect(button.disabled).toBe(true);
-    newer.resolve();
+    newer.reject(new Error("Question submission failed"));
     await waitForSolid(() => expect(button.disabled).toBe(false));
     expect(onSubmit).toHaveBeenCalledTimes(2);
+    button.click();
+    expect(onSubmit).toHaveBeenCalledTimes(3);
+    expect(onSubmit).toHaveBeenLastCalledWith({ format: ["Compact"] });
   });
 });

@@ -1,10 +1,13 @@
-import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildChildEnv } from "../../scripts/ci-run-node-test-shard.mts";
 import { hasBuildArtifactAffectingChange } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { createNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
+import {
+  createNodeTestShardBundles,
+  createSelectedNodeTestShardBundles,
+} from "../../scripts/lib/ci-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
 import {
   isCiProofTestFile,
@@ -13,26 +16,21 @@ import {
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import {
   gatewayCallsitesGuard,
+  createFixtureGit,
   createChangedNodeTestShards,
   materializeGatewayCallsitesFixture,
   selectedFiles,
   fallbackGroups,
   expectProtectedOwnerExpansion,
+  writeFiles,
 } from "./ci-changed-node-test-plan.test-support.js";
 
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const sourcePolicyTest = "src/infra/fs-safe-import-boundary.test.ts";
-
-function writeFiles(cwd: string, files: Record<string, string>) {
-  for (const [file, source] of Object.entries(files)) {
-    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-    writeFileSync(path.join(cwd, file), source);
-  }
-}
+const lintSuppressionInventory = "test/scripts/lint-suppressions.test.ts";
 
 function createSourceFixture(prefix: string, files: Record<string, string>) {
   const cwd = argvTempDirs.make(prefix);
@@ -81,22 +79,7 @@ function createErasedCoreSourceFixture() {
     "src/example/runtime-before.ts": "export const value = 1;\n",
   });
   materializeGatewayCallsitesFixture(cwd);
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.test",
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "core.hooksPath=/dev/null",
-        ...args,
-      ],
-      { cwd, env: createNestedGitEnv(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
+  const git = createFixtureGit(cwd);
   git("init", "--quiet");
   git("add", ".");
   git("commit", "--quiet", "-m", "fixture baseline");
@@ -122,6 +105,18 @@ function createErasedCoreSourceFixture() {
 }
 
 describe("CI changed Node test plan", () => {
+  it.each([
+    ["extensions/ollama/openclaw.plugin.json", "src/config/defaults.ollama-output-cap.test.ts"],
+    ["test/fixtures/hooks-install/tar-evil-id.tar", "src/hooks/install.test.ts"],
+  ])("keeps the declared file reader when %s changes", (input, reader) => {
+    const cwd = createSourceFixture("changed-declared-input-", {
+      [input]: "{}\n",
+      [reader]: "export {};\n",
+    });
+    expectFiles(createChangedNodeTestShards([input], { cwd }), [reader]);
+    expect(resolvePolicyTestTargets([`${input}.unrelated`], { cwd })).not.toContain(reader);
+  });
+
   it.each([
     ["extensions/copilot/index.ts", ["extensions/copilot/index.test.ts"]],
     ["extensions/copilot/harness.ts", ["extensions/copilot/harness.test.ts"]],
@@ -211,6 +206,9 @@ describe("CI changed Node test plan", () => {
         "src/agents/command/delivery.settle-reset.integration.test.ts",
         "src/auto-reply/reply/commands-acp.owner.test.ts",
         "src/auto-reply/reply/commands-allowlist.owner.test.ts",
+        "src/auto-reply/reply/commands-plugin.channel-native.test.ts",
+        "src/auto-reply/reply/commands-plugin.native-subagents.test.ts",
+        "src/gateway/operator-run-recovery.channel.test.ts",
         "src/gateway/operator-run-recovery.test.ts",
         "src/gateway/server.mcp-session-owner.test.ts",
       ],
@@ -424,7 +422,7 @@ describe("CI changed Node test plan", () => {
   });
 
   it("runs a boundary target once through its local owner", () => {
-    const target = "test/extension-import-boundaries.test.ts";
+    const target = "test/plugin-extension-import-boundary.test.ts";
     const runnerBackend = "blacksmith";
     expect(createChangedNodeTestShards([target], { runnerBackend })).toEqual([
       {
@@ -437,18 +435,13 @@ describe("CI changed Node test plan", () => {
     ]);
     // Local explicit selection still runs only the requested file.
     expect(buildVitestRunPlans([target])).toMatchObject([
-      {
-        config: "test/vitest/vitest.boundary.config.ts",
-        includePatterns: [target],
-        forwardedArgs: [],
-        watchMode: false,
-      },
+      runPlan("test/vitest/vitest.boundary.config.ts", target),
     ]);
   });
 
   it("leaves explicit boundary coverage with the selected artifact owner", () => {
     const companion = "src/agents/live-provider-owner.ts";
-    const target = "test/extension-import-boundaries.test.ts";
+    const target = "test/plugin-extension-import-boundary.test.ts";
     const options = { dedicatedBuildArtifacts: true };
     const shards = createChangedNodeTestShards([target, companion], options);
     expect(shards).not.toBeNull();
@@ -510,6 +503,23 @@ describe("CI changed Node test plan", () => {
     expect(selectedFiles(shards)).not.toContain(unrelated);
   });
 
+  it("keeps both pending-input contracts protected by their worker-source policy", () => {
+    const pendingInputTests = [
+      "src/config/sessions/session-accessor.pending-input-retention.test.ts",
+      "src/config/sessions/session-accessor.pending-inputs.test.ts",
+    ];
+    expect(PR_PROTECTED_RUNTIME_TEST_FILES).toEqual(expect.arrayContaining(pendingInputTests));
+    expect(resolvePolicyTestTargets(["src/config/sessions/session-transcript.worker.ts"])).toEqual(
+      expect.arrayContaining(pendingInputTests),
+    );
+  });
+
+  it("keeps the extracted session database collection proof protected", () => {
+    expect(PR_PROTECTED_RUNTIME_TEST_FILES).toContain(
+      "src/gateway/session-database-retention.test.ts",
+    );
+  });
+
   it("keeps policy scanners beside ordinary importers without claiming complete source ownership", () => {
     const source = "src/test-utils/runtime.ts";
     const consumer = "src/example/runtime.test.ts";
@@ -517,6 +527,7 @@ describe("CI changed Node test plan", () => {
     const createFixture = () =>
       createSourceFixture("changed-policy-scanner-", {
         [source]: "export const value = 1;\n",
+        "src/example/runtime.ts": "export const value = 1;\n",
         [consumer]: 'import "../test-utils/runtime.js";\n',
         [unowned]: "export {};\n",
       });
@@ -541,22 +552,46 @@ describe("CI changed Node test plan", () => {
 
     const sourceInventories = [
       "test/scripts/pr-wrapper-source-closure.test.ts",
-      "test/scripts/pr-worktree-provision.test.ts",
       "test/scripts/eager-import-closure.test.ts",
       "test/scripts/update-restart-module-outcome.test.ts",
       "test/scripts/type-suppression-inventory.test.ts",
       "test/scripts/plugin-sdk-surface-report.test.ts",
+      lintSuppressionInventory,
     ];
-    expect(resolvePolicyTestTargets([source])).toEqual([
+    expect(resolvePolicyTestTargets([source], { cwd })).toEqual([
       ...sourceInventories,
       gatewayCallsitesGuard,
       sourcePolicyTest,
     ]);
-    expect(resolvePolicyTestTargets([source], { completeOwnersOnly: true })).toEqual([]);
-    expect(resolvePolicyTestTargets(["src/example/runtime.ts"])).toEqual([
+    expect(resolvePolicyTestTargets([source], { cwd, completeOwnersOnly: true })).toEqual([]);
+    expect(resolvePolicyTestTargets(["src/example/runtime.ts"], { cwd })).toEqual([
       ...sourceInventories,
       gatewayCallsitesGuard,
     ]);
+  });
+
+  it.each([
+    "scripts/perf/idle-gateway-measure-preload.mjs",
+    "src/example.test.js",
+    "src/.hidden.ts",
+    "extensions/xai/.boundary-stubs/example.d.ts",
+    "extensions/example/.one/.two/file.ts",
+  ])("retains the lint inventory through the actual PR-exempt planner for %s", (changedPath) => {
+    const shards = createChangedNodeTestShards([changedPath], {
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    });
+    expect(shards).not.toBeNull();
+    expect(selectedFiles(shards)).toContain(lintSuppressionInventory);
+  });
+
+  it.each([
+    "scripts/perf/example.mts",
+    "scripts/perf/example.cts",
+    "packages/example/index.js",
+    "docs/example.js",
+  ])("keeps the lint inventory outside unsupported path %s", (changedPath) => {
+    expect(resolvePolicyTestTargets([changedPath])).not.toContain(lintSuppressionInventory);
   });
 
   it("keeps erased-source owner selection independent of history", () => {
@@ -653,65 +688,78 @@ describe("CI changed Node test plan", () => {
     }
   });
 
-  it.each([
-    ...[
-      "src/secrets/runtime-auth-store-admission.ts",
-      "src/agents/prepared-model-runtime.configured.ts",
-    ].map((changedPath) => ({
-      changedPath,
-      expected: ["src/gateway/server.agents.config-readiness.test.ts"],
-    })),
-    {
-      changedPath: "src/gateway/config-reload.ts",
-      expected: [
-        "src/gateway/server.config-patch.test.ts",
-        "src/gateway/server.agents.config-readiness.test.ts",
+  it.each(
+    Array.of<[string[], string[]]>(
+      [
+        [
+          "src/secrets/runtime-auth-store-admission.ts",
+          "src/agents/prepared-model-runtime.configured.ts",
+        ],
+        ["src/gateway/server.agents.config-readiness.test.ts"],
       ],
-    },
-    ...["src/gateway/server-close.ts", "src/gateway/server-run-shutdown.ts"].map((changedPath) => ({
-      changedPath,
-      expected: [
-        "src/gateway/server.agent-execution-shutdown.test.ts",
-        "src/gateway/server.agent-late-admission.test.ts",
-        "test/gateway-session-end-shutdown.e2e.test.ts",
+      [
+        ["src/gateway/config-reload.ts"],
+        [
+          "src/gateway/server.config-patch.test.ts",
+          "src/gateway/server.agents.config-readiness.test.ts",
+        ],
       ],
-    })),
-    // Child-process E2Es: the import graph reaches only the test-instance helper.
-    {
-      changedPath: "src/gateway/server-startup-observers.ts",
-      expected: ["test/gateway-background-process-restart.e2e.test.ts"],
-    },
-    {
-      changedPath: "src/process/command-queue.capacity-groups.ts",
-      expected: ["test/gateway-hook-concurrency.e2e.test.ts"],
-    },
-    {
-      changedPath: "node-runtime-recovery.mjs",
-      expected: ["test/scripts/node-runtime-recovery.built-cli.e2e.test.ts"],
-    },
-    {
-      changedPath: "src/auto-reply/reply/abort.test.ts",
-      expected: ["test/scripts/tsgo-core-test-shards.test.ts"],
-    },
-    {
-      changedPath: "scripts/lib/ci-proof-test-inventory.mts",
-      expected: ["test/vitest-pr-exempt-retention.test.ts"],
-    },
-    {
-      changedPath: "src/plugins/plugin-instance.ts",
-      expected: [
-        "test/scripts/eager-import-closure.test.ts",
-        "test/scripts/pr-worktree-provision.test.ts",
+      [
+        ["src/gateway/server-close.ts", "src/gateway/server-run-shutdown.ts"],
+        [
+          "src/gateway/server.agent-execution-shutdown.test.ts",
+          "src/gateway/server.agent-late-admission.test.ts",
+          "test/gateway-session-end-shutdown.e2e.test.ts",
+        ],
       ],
-    },
-    {
-      changedPath: "scripts/e2e/lib/upgrade-survivor/run.sh",
-      expected: [
-        "test/scripts/package-acceptance-workflow.test.ts",
-        "test/scripts/upgrade-survivor-missing-load-path.test.ts",
+      // Child-process E2Es: the import graph reaches only the test-instance helper.
+      [["src/gateway/server-startup-observers.ts"], ["test/gateway-restart-resume.e2e.test.ts"]],
+      [
+        ["src/process/command-queue.capacity-groups.ts"],
+        ["test/gateway-hook-concurrency.e2e.test.ts"],
       ],
-    },
-  ])(
+      [
+        ["src/sessions/session-controller.steer.ts"],
+        [
+          "test/gateway-restart-resume.e2e.test.ts",
+          "test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts",
+        ],
+      ],
+      [
+        ["src/auto-reply/reply/queue/drain.ts"],
+        ["test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts"],
+      ],
+      [["node-runtime-recovery.mjs"], ["test/scripts/node-runtime-recovery.built-cli.e2e.test.ts"]],
+      [["src/auto-reply/reply/abort.test.ts"], ["test/scripts/tsgo-core-test-shards.test.ts"]],
+      [["scripts/lib/ci-proof-test-inventory.mts"], ["test/vitest-pr-exempt-retention.test.ts"]],
+      [
+        ["src/plugins/plugin-instance.ts"],
+        ["test/scripts/eager-import-closure.test.ts", "test/scripts/pr-worktree-provision.test.ts"],
+      ],
+      [
+        ["scripts/e2e/lib/upgrade-survivor/run.sh"],
+        [
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/upgrade-survivor-missing-load-path.test.ts",
+        ],
+      ],
+      [
+        [
+          "scripts/lib/check-limits.mts",
+          "scripts/lib/release-context.mjs",
+          "scripts/lib/release-version.mjs",
+        ],
+        [
+          "test/scripts/ocm-npm-workspace-deps.test.ts",
+          "test/scripts/control-ui-performance.test.ts",
+        ],
+      ],
+      [
+        ["src/plugins/official-runtime-plugins.ts"],
+        ["src/node-host/codex-node-plugin.integration.test.ts"],
+      ],
+    ).flatMap(([paths, expected]) => paths.map((changedPath) => ({ changedPath, expected }))),
+  )(
     "retains explicit policy guards for $changedPath in automatic CI",
     ({ changedPath, expected }) => {
       const importer = "src/agents/live-model-filter.test.ts";
@@ -731,16 +779,18 @@ describe("CI changed Node test plan", () => {
         const reasons: string[] = [];
         const shards = createChangedNodeTestShards([changedPath], {
           runnerBackend: "github",
-          // Gateway owner watches must survive the default aggressive PR selection.
-          selectionMode: changedPath.startsWith("src/gateway/") ? "aggressive" : "full",
+          // Explicit owner watches must survive the default aggressive PR selection.
+          selectionMode: "aggressive",
           includeReleaseOnlyRuntimeTests: false,
           includePrExemptRuntimeTests: false,
           onFallback: (reason) => reasons.push(reason),
         });
         expect(shards, reasons.join("\n")).not.toBeNull();
         const files = selectedFiles(shards);
+        const unrelated = resolvePolicyTestTargets(["unrelated/path.ts"]);
         for (const guard of expected) {
           expect(files.filter((file) => file === guard)).toHaveLength(1);
+          expect(unrelated).not.toContain(guard);
         }
         expect(files.includes("test/vitest-pr-exempt-retention.test.ts")).toBe(
           expected.includes("test/vitest-pr-exempt-retention.test.ts"),
@@ -837,6 +887,7 @@ describe("CI changed Node test plan", () => {
       job.groups.filter((group) => group.configs.includes(config)),
     );
     expect(owners.length).toBeGreaterThan(1);
+    const envScratch = argvTempDirs.make("changed-command-owner-env-");
     const expectCanonicalCommands = (shards: ReturnType<typeof createChangedNodeTestShards>) => {
       expect(shards).not.toBeNull();
       const groups = fallbackGroups(shards ?? []);
@@ -845,25 +896,78 @@ describe("CI changed Node test plan", () => {
         owners.flatMap((group) => group.includePatterns ?? []).toSorted(),
       );
       expect(selectedOwners.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
-      for (const owner of owners) {
-        const fullJob = expectDefined(
-          full.find((job) => job.groups.includes(owner)),
-          "canonical commands job",
+      // Selected owners retain their singleton worker ceiling when serial rows share setup.
+      const canonical = expectDefined(
+        createSelectedNodeTestShardBundles(selectedFiles(shards), {
+          includePrExemptRuntimeTests: true,
+          includeReleaseOnlyRuntimeTests: true,
+        }),
+        "canonical selected commands jobs",
+      );
+      for (const group of selectedOwners) {
+        const owner = expectDefined(
+          owners.find((candidate) => candidate.shard_name === group.shard_name),
+          "canonical commands owner",
+        );
+        expect(group.configs).toEqual(owner.configs);
+        expect(group.env).toEqual(owner.env);
+        expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
+        expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
+        const ownerJob = expectDefined(
+          canonical.find((job) =>
+            job.groups.some((candidate) => candidate.shard_name === group.shard_name),
+          ),
+          "canonical selected commands job",
+        );
+        const ownerGroup = expectDefined(
+          ownerJob.groups.find((candidate) => candidate.shard_name === group.shard_name),
+          "canonical selected commands group",
         );
         const selectedJob = expectDefined(
-          shards?.find((job) => job.groups?.some((group) => group.shard_name === owner.shard_name)),
+          shards?.find((job) => job.groups?.includes(group)),
           "selected commands job",
         );
-        expect(selectedJob.runner).toBe(fullJob.runner);
-        const singleton = selectedJob.groups?.length === 1 && fullJob.planConcurrency === 2;
-        expect(selectedJob.env).toEqual(
-          singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
-            ? { ...fullJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
-            : fullJob.env,
+        for (const key of [
+          "runner",
+          "pretestBuildMode",
+          "requiresDist",
+          "timeoutMinutes",
+        ] as const) {
+          expect(selectedJob[key], `${group.shard_name} job ${key}`).toEqual(ownerJob[key]);
+        }
+        expect(
+          Object.fromEntries(
+            Object.entries(selectedJob.env ?? {}).filter(
+              ([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS",
+            ),
+          ),
+          `${group.shard_name} job environment`,
+        ).toEqual(
+          Object.fromEntries(
+            Object.entries(ownerJob.env ?? {}).filter(
+              ([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS",
+            ),
+          ),
         );
-        expect(selectedJob.planConcurrency).toBe(singleton ? 1 : fullJob.planConcurrency);
-        expect(selectedJob.pretestBuildMode).toBe(fullJob.pretestBuildMode);
-        expect(selectedJob.timeoutMinutes).toBe(fullJob.timeoutMinutes);
+        const childWorkers = buildChildEnv(
+          { kind: "group", name: group.shard_name, plan: group },
+          {
+            OPENCLAW_VITEST_MAX_WORKERS: selectedJob.planConcurrency === 1 ? "8" : "2",
+            ...selectedJob.env,
+          },
+          envScratch,
+          0,
+        ).OPENCLAW_VITEST_MAX_WORKERS;
+        const ownerChildWorkers = buildChildEnv(
+          { kind: "group", name: ownerGroup.shard_name, plan: ownerGroup },
+          {
+            OPENCLAW_VITEST_MAX_WORKERS: ownerJob.planConcurrency === 1 ? "8" : "2",
+            ...ownerJob.env,
+          },
+          envScratch,
+          0,
+        ).OPENCLAW_VITEST_MAX_WORKERS;
+        expect(childWorkers, `${group.shard_name} child worker ceiling`).toBe(ownerChildWorkers);
       }
       const configs = groups.flatMap((group) => group.configs);
       expect(configs).not.toContain("test/vitest/vitest.cron.config.ts");

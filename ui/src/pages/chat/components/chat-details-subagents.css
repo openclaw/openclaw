@@ -30,7 +30,7 @@
   min-height: var(--details-row-height, 28px);
   padding: var(--details-row-padding-block, 4px) var(--details-row-padding, 0px);
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background: none;
   color: inherit;
   font: inherit;
@@ -38,8 +38,13 @@
   cursor: var(--cursor-action);
 }
 
+/* Avatar ink and badges set their own colors, so only the label recedes. */
+.chat-details-subagents__row--finished {
+  color: var(--muted);
+}
+
 .chat-details-subagents__row:is(:hover, :focus-visible) {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .chat-details-subagents__row:focus-visible {
@@ -54,9 +59,9 @@
   place-items: center;
   width: 20px;
   height: 20px;
-  border-radius: 6px;
-  color: hsl(var(--details-subagent-hue) 32% 65%);
-  background: hsl(var(--details-subagent-hue) 22% 30% / 0.35);
+  border-radius: var(--radius-sm);
+  color: hsl(var(--subagent-avatar-hue) var(--subagent-avatar-ink, 32% 65%));
+  background: hsl(var(--subagent-avatar-hue) var(--subagent-avatar-tint, 22% 30% / 0.35));
 }
 
 .chat-details-subagents__avatar > svg {
@@ -74,20 +79,18 @@
   height: 10px;
   border-radius: 50%;
   background: var(--details-subagent-surface);
-  color: var(--muted);
   box-shadow: 0 0 0 1px var(--details-subagent-surface);
 }
 
 .chat-details-subagents__spinner {
   color: var(--accent);
   display: block;
-  box-sizing: border-box;
   width: 8px;
   height: 8px;
-  border: 1.5px solid currentColor;
-  border-right-color: transparent;
+  background: currentColor;
+  mask: var(--spinner-mask-small);
   border-radius: 50%;
-  animation: details-subagents-spin 1.5s linear infinite;
+  animation: btn-spinner-spin 1.5s linear infinite;
 }
 
 .chat-details-subagents__check {
@@ -108,7 +111,6 @@
 .chat-details-subagents:not(.chat-details-subagents--mobile) .chat-details-subagents__badge {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
   corner-shape: round;
   box-shadow: 0 0 0 1.5px var(--details-subagent-surface);
 }
@@ -116,14 +118,11 @@
 .chat-details-subagents:not(.chat-details-subagents--mobile)
   .chat-details-subagents__badge
   > .chat-details-subagents__spinner {
-  border: 1.25px solid color-mix(in srgb, var(--accent) 30%, var(--details-subagent-surface));
-  border-top-color: var(--accent);
   corner-shape: round;
 }
 
 .chat-details-subagents:not(.chat-details-subagents--mobile) .chat-details-subagents__check {
   stroke-width: 2.5;
-  color: var(--ok);
 }
 
 .chat-details-subagents__name {
@@ -157,7 +156,8 @@
 .chat-details-subagents__stack > .chat-details-subagents__avatar {
   background: color-mix(
     in srgb,
-    hsl(var(--details-subagent-hue) 22% 30%) 35%,
+    hsl(var(--subagent-avatar-hue) var(--subagent-avatar-tint, 22% 30%))
+      var(--subagent-avatar-tint-strength, 35%),
     var(--details-subagent-surface)
   );
   box-shadow: 0 0 0 1px var(--details-subagent-surface);
@@ -175,6 +175,16 @@
 
 .chat-details-subagents__count {
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The summary holds at most two statuses: the lead one beside the avatars, the other trailing. */
+.chat-details-subagents__count:first-child {
+  color: var(--text);
+}
+
+.chat-details-subagents__count:not(:first-child) {
+  margin-inline-start: auto;
 }
 
 .chat-details-subagents__chevron {
@@ -186,19 +196,14 @@
 }
 
 .chat-details-subagents__collapsed {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   color: var(--muted);
 }
 
-.chat-details-subagents__collapsed > .chat-details-subagents__spinner {
-  width: 12px;
-  height: 12px;
-}
-
 .chat-details-subagents--mobile {
   --details-subagent-surface: var(--bg-elevated);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--details-subagent-surface);
   font-size: var(--control-ui-text-md);
 }
@@ -228,7 +233,7 @@
 .chat-details-subagents--mobile .chat-details-subagents__row {
   min-height: 44px;
   padding: 10px 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
 }
 
 .chat-details-subagents--mobile .chat-details-subagents__name {
@@ -242,35 +247,8 @@
   font-size: var(--control-ui-text-sm);
 }
 
-@supports (background-clip: text) {
-  @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
-    .chat-details-subagents--mobile .chat-details-subagents__working {
-      background: linear-gradient(100deg, var(--muted) 30%, var(--text) 50%, var(--muted) 70%);
-      background-size: 250% 100%;
-      background-clip: text;
-      color: transparent;
-      animation: details-subagents-shimmer 1.5s linear infinite;
-    }
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .chat-details-subagents__spinner {
     animation: none;
-  }
-}
-
-@keyframes details-subagents-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes details-subagents-shimmer {
-  from {
-    background-position: 150% 0;
-  }
-  to {
-    background-position: -150% 0;
   }
 }

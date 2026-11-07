@@ -57,7 +57,9 @@ import {
   getRemoteControlUiIngressContext,
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
+  readGatewayIngressTransport,
 } from "./ingress-attribution.js";
+import { isTrustedProxyAddress } from "./net.js";
 import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability.js";
 import {
   handleProviderOAuthCallback,
@@ -131,7 +133,8 @@ export function createGatewayHttpRequestHandler(
     res: ServerResponse,
     expectation?: "continue" | "reject",
   ) => {
-    if (!getRemoteControlUiIngressContext(req)) {
+    // Listener-owned pre-handlers (remote Control UI, OpenClaw ID tunnel) assign first.
+    if (!readGatewayIngressTransport(req)) {
       markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
     }
     return runGatewayHttpRequest(req, res, opts.httpRequestLifetime, () =>
@@ -140,9 +143,7 @@ export function createGatewayHttpRequestHandler(
       ),
     ).catch((error: unknown) => {
       console.error("[gateway-http] failed to finalize request:", error);
-      if (!res.destroyed) {
-        res.destroy(error instanceof Error ? error : undefined);
-      }
+      res.destroy(error instanceof Error ? error : undefined);
     });
   };
 
@@ -257,6 +258,7 @@ export function createGatewayHttpRequestHandler(
       const ingressAttribution = prepareGatewayIngressAttribution({
         req,
         trustedProxies,
+        trustedProxy: getResolvedAuth().trustedProxy,
         allowRealIpFallback,
         // HTTP authorization must observe Tailnet revocation on the next request.
         // WebSocket upgrades retain the ordinary cache because they authenticate once.
@@ -265,7 +267,7 @@ export function createGatewayHttpRequestHandler(
       });
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
-        sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
+        respondPlainText(res, 400, "Bad Request");
         return undefined;
       }
       if (scopedNodeCapability.rewrittenUrl) {
@@ -276,6 +278,27 @@ export function createGatewayHttpRequestHandler(
       const scopedRequestPath = scopedNodeCapability.pathname;
       const pluginPathContext = resolvePluginRoutePathContext(scopedRequestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pluginPathContext);
+      const resolvedAuthValue = getResolvedAuth();
+      // Configured proxies can probe without a client identity; diagnostic details
+      // still require attribution and authorization in the probe owner.
+      if (
+        !remoteIngress &&
+        (ingressAttribution.kind !== "unattributable-proxy" ||
+          isTrustedProxyAddress(ingressAttribution.remoteAddress, trustedProxies)) &&
+        (await handleGatewayProbeRequest(
+          req,
+          res,
+          scopedRequestPath,
+          resolvedAuthValue,
+          trustedProxies,
+          allowRealIpFallback,
+          rateLimiter,
+          getReadiness,
+          getStartup,
+        ))
+      ) {
+        return undefined;
+      }
       if (ingressAttribution.kind === "unattributable-proxy") {
         opts.reportUnattributableProxy?.(ingressAttribution);
         if (
@@ -292,7 +315,6 @@ export function createGatewayHttpRequestHandler(
         return undefined;
       }
       const requestClientIp = ingressAttribution.clientIp;
-      const resolvedAuthValue = getResolvedAuth();
       const routeAuth = {
         auth: resolvedAuthValue,
         cfg: configSnapshot,
@@ -340,22 +362,7 @@ export function createGatewayHttpRequestHandler(
         }
         return true;
       };
-      const requestStages: GatewayHttpRequestStage[] = remoteIngress
-        ? []
-        : [
-            () =>
-              handleGatewayProbeRequest(
-                req,
-                res,
-                scopedRequestPath,
-                resolvedAuthValue,
-                trustedProxies,
-                allowRealIpFallback,
-                rateLimiter,
-                getReadiness,
-                getStartup,
-              ),
-          ];
+      const requestStages: GatewayHttpRequestStage[] = [];
       const addRequestStage = (
         enabled: boolean,
         stage: GatewayHttpRequestStage,

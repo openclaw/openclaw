@@ -117,6 +117,8 @@ on the same branch within 24 hours and the complete input diff is unchanged.
 Skipped jobs cannot advance the comparison base. Missing proof, incomplete
 diffs, or API errors request fresh validation. Each decision reports its reason.
 Both workflows retain their PR scopes and refresh proof daily for dependency drift.
+Plugin Init Scaffold Validation uses GitHub-hosted Ubuntu 24.04 independently of
+restricted Boat admission.
 
 Sandbox Common Smoke runs daily at 05:23 UTC and retains PR and manual runs.
 Plugin NPM Release runs its nonpublishing metadata and unpublished-package pack
@@ -152,7 +154,7 @@ frozen release target or replace an exact-head PR release gate.
 
 ### What stays on pushes
 
-CodeQL retains all seven main-push security categories. CI retains
+CodeQL batches main security scans hourly. CI retains
 `security-fast` (committed private keys and changed-workflow security auditing)
 on its existing non-docs push scope. Pull-request, push, and scheduled CI skip
 production dependency auditing; only release dispatches run it, as a warning.
@@ -488,11 +490,19 @@ Scheduled, manual, and release Matrix checks use the fixed-response mock provide
 
 For normal PRs, follow scoped CI/check evidence instead of treating parity as a required status.
 
+## OpenGrep
+
+OpenGrep PR-diff and manual full scans run on GitHub-hosted Ubuntu 24.04.
+
 ## CodeQL
 
-The `CodeQL` workflow is intentionally a narrow first-pass security scanner, not the full repository sweep. Daily, manual, `main` push, and non-draft pull request guard runs scan Actions workflow code plus the highest-risk JavaScript/TypeScript surfaces with high-confidence security queries filtered to high/critical `security-severity`.
+The `CodeQL` workflow is a narrow first-pass security scanner. Hourly, manual, and non-draft pull request runs scan Actions workflow code and the highest-risk JavaScript/TypeScript surfaces with high-confidence security queries filtered to high/critical `security-severity`.
 
-The pull request guard stays light: it only starts for changes under `.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, `scripts`, `src`, or process-owning bundled plugin runtime paths, and it runs the same high-confidence security matrix as the scheduled workflow. Android and macOS CodeQL stay out of PR defaults.
+Main scans run at minute 23 of every hour, separately from CI. An active scheduled scan finishes; a newer hour can replace pending work. Main pushes do not start another scan. Manual dispatch always runs all seven categories and stays independent of the schedule.
+
+Scheduled admission compares accumulated changes separately for each of the seven categories, against that category's last successful scan. Inputs come from its CodeQL profile's extraction paths; shared workflow, admission, and query configuration changes refresh every category. Supported `paths-ignore` patterns exclude files that CodeQL does not extract; unknown pattern syntax retains the scan. The seven decisions share run, job, and tree metadata within one admission step, while keeping independent successful baselines. Changes limited to comments, blank lines, or standalone `-whitespace` rules in regular `.gitattributes` files do not invalidate extraction; other attribute changes remain shared inputs. When GitHub caps the changed-file list, admission uses an exact Git tree comparison before authorizing a skip. Unchanged inputs skip that category; missing proof, unsupported profiles, incomplete comparisons, and lookup failures run it. Proof older than 24 hours triggers a fresh scan even without source changes. Skipped scans never advance the comparison baseline.
+
+The pull request guard stays light: it starts for root or nested `.gitattributes` changes and changes under `.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, `scripts`, `src`, or process-owning bundled plugin runtime paths, and it runs the same high-confidence security matrix as the scheduled workflow. Attribute changes select all seven categories because checkout transformations can affect either language. Android and macOS CodeQL stay out of PR defaults.
 
 ### Security categories
 
@@ -568,8 +578,9 @@ automatically re-executes those workflows.
 ### Comment automation
 
 Comment jobs reject known no-ops before acquiring a hosted runner. Maintainer
-Command Reactions skips comments without `/` only when using its default command
-list; any nonempty `MAINTAINER_COMMAND_REACTIONS` override retains the full matcher,
+Command Reactions skips comments without a tracked command prefix when using its
+default list. Ordinary links and paths without those prefixes no longer allocate
+a runner. The full parser still checks command boundaries. Any nonempty `MAINTAINER_COMMAND_REACTIONS` override retains the full matcher,
 including commands without slashes. Auto response skips Bot-authored issue
 comments that Barnacle already ignores and targets whose author association
 already exempts them. Its edit admission retains title, body, and PR-base changes.
@@ -704,7 +715,66 @@ General activity is observation, not delivery-by-default. The ClawSweeper agent 
 
 Treat GitHub titles, comments, bodies, review text, branch names, and commit messages as untrusted data throughout this path. They are input for summarization and triage, not instructions for the workflow or agent runtime.
 
-Barnacle treats bug-labeled issues as verification candidates rather than inactivity-close candidates. It may add the `stale` label, which dispatches one exact ClawSweeper review, but it cannot close that issue. ClawSweeper may then apply an evidence-backed resolution; a proven fix on current `main` closes as completed, while current or inconclusive bugs stay open. The stale workflow also audits recent close events and fails when a Barnacle identity closes a bug as `not_planned`.
+### Barnacle inactivity lifecycle
+
+The `Stale` workflow runs at 03:17, 09:17, 15:17 and 21:17 UTC.
+It uses GitHub-hosted Ubuntu so scheduled runs do not depend on restricted Boat admission.
+`scripts/github/stale-lifecycle.mjs` owns issues and PRs, including manual backfills.
+It replaces the old issue action, separate bug marker, inline backfill and global
+48-hour closed-issue locker.
+
+| Item                                      | Qualifying human inactivity | Full notice grace |
+| ----------------------------------------- | --------------------------- | ----------------- |
+| Unassigned ordinary issue or PR           | 7 days                      | 7 days            |
+| Contributor-assigned ordinary issue or PR | 14 days                     | 7 days            |
+| Bug issue, assigned or unassigned         | 30 days                     | 14 days to retest |
+
+Creation age does not override recent human activity. Human comments, reviews,
+content edits, assignment changes and PR head changes restart the clock. Bot
+comments, review ratings and automation-only edits do not. Unknown history,
+ownership or head timing preserves the item. PR exact-head executed CI protection
+remains: a successful named CI gate, or a product check with a successful aggregate.
+
+Security/P0/P1, current maintainer authors/assignees, `no-stale`, `bad-barnacle`,
+pinned/hold/in-progress labels and `clawsweeper:queueable-fix` are protected.
+Issues with `enhancement` retain their existing exemption.
+`clawsweeper:source-repro` and `clawsweeper:fix-shape-clear` describe review evidence,
+not ownership holds. Alone, they do not block the inactivity lifecycle or existing
+reason-driven responses, and do not establish that a repair worker is active.
+Maintainers use `no-stale` for a durable hold, then explicitly remove it when work
+can resume. Known freeform maintainer holds must be normalized or adjudicated
+before migration can close their items; silence is not release of a hold.
+
+Warnings name the full 7- or 14-day grace after the message and reopening/hold
+route. The server's comment creation time starts that grace. Only an unedited comment
+from an authenticated Barnacle bot/app pair with the current v2 item, cohort and
+PR head can start grace. Old warnings and changed cohorts/heads get a fresh notice
+and full new grace. A human posting the same text does not start automated grace.
+
+An unanswered bug retest notice can end in `not_planned` administrative closure.
+It does not assert that the bug is fixed. Actual verification stays evidence-based;
+ClawSweeper receives the stale-bug label event, but its reviews cannot shorten
+Barnacle's grace. Closed issues stay unlocked so later retest replies remain possible.
+The workflow audits recent Barnacle bug closures for authenticated current-policy
+notice/close receipts, human inactivity, the full grace and administrative reason.
+That audit does not reconstruct historical label or ownership changes; live
+admission checks remain responsible for those protections before closure.
+Separately authorized reason-driven responses, such as invalid or spam, are
+audited against the response owner's exact authenticated receipt instead of an
+inactivity notice. They do not assert that a bug was fixed.
+
+The scan completes paginated metadata before effects, uses one identity cursor
+and one 50-close cap across issues/PRs, and checkpoints only completed decisions.
+Missing cursor data cannot shorten grace. Warnings and closes verify exact comment
+readback and re-read state, ownership, activity and head before continuing.
+Failed or uncertain effects stop visibly; the next run reconciles existing receipts.
+
+For a bounded canary, dispatch `stale.yml` with exact `item_numbers`,
+`dry_run=true` and a small `max_closures`. Review the decisions before an approved
+live run of the same executor. Keep held/protected items as unchanged negative
+controls. Production canaries need actual bot notices and the real 7/14-day grace;
+clock-controlled tests prove terminal closure without waiting, but do not establish
+that a production canary has closed. Never adopt a manual warning or shorten grace.
 
 ## Related
 

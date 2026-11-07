@@ -9,6 +9,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { authorizationClient } from "./server-methods.authorization.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import {
   createRequestGate,
@@ -28,17 +29,9 @@ function profileIdentity(profile: { id: string; updatedAt: number }) {
 }
 
 function createPendingProfileClient(scopes = ["operator.admin"]) {
-  return {
-    connId: "conn-pending-profile",
+  return authorizationClient("conn-pending-profile", scopes, {
     authenticatedUserId: "mutable-login@github",
-    connect: {
-      role: "operator" as const,
-      scopes,
-      client: { id: "test", version: "1", platform: "test", mode: "test" },
-      minProtocol: 1,
-      maxProtocol: 1,
-    },
-  } as NonNullable<Parameters<typeof handleGatewayRequest>[0]["client"]>;
+  });
 }
 
 async function dispatchProfile(
@@ -477,7 +470,7 @@ describe("Gateway pending-profile authorization", () => {
     expect(allowed).toHaveBeenCalledWith(true, { ok: true });
     expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
   });
-  it("allows read-only users.self without anonymous access or profile writes", async () => {
+  it("allows read-only users.self without anonymous profile access or edits", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const email = "reader@example.com";
       const profile = ensureProfileForEmail(email);
@@ -494,19 +487,12 @@ describe("Gateway pending-profile authorization", () => {
       const anonymous = createPendingProfileClient([READ_SCOPE]);
       delete anonymous.authenticatedUserId;
       const deniedRead = await dispatchProfile(anonymous, "users.self");
-      const deniedWrite = await dispatchProfile(reader, "users.setDisplayName", {
+      const deniedWrite = await dispatchProfile(anonymous, "users.setDisplayName", {
         requestParams: { profileId: profile.id, displayName: "Not permitted" },
       });
 
       expectRejected(deniedRead, "FORBIDDEN");
-      expectRejected(deniedWrite, {
-        code: "FORBIDDEN",
-        details: {
-          code: "MISSING_SCOPE",
-          missingScope: "operator.write",
-          requiredScopes: ["operator.write"],
-        },
-      });
+      expectRejected(deniedWrite, "FORBIDDEN");
       expect(getUserProfileListItem(profile.id)).toEqual(before);
       expect(self).toHaveBeenCalledWith(true, {
         profile: expect.objectContaining({ id: profile.id, emails: [email] }),

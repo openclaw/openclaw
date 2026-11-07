@@ -1,7 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { createUpdateRunFixture } from "./update-run.test-support.ts";
 
@@ -33,7 +33,7 @@ function button(root: Page | Locator, name: string) {
 }
 
 function confirmationDialog(page: Page) {
-  return page.getByRole("dialog", { name: "Update Gateway", exact: true });
+  return page.getByRole("dialog", { name: "Update and restart?", exact: true });
 }
 
 function gitStatus(sha: string, behind: number, available: Partial<UpdateAvailable> = {}) {
@@ -103,7 +103,7 @@ async function openUpdateCard(page: Page, baseUrl: string) {
     },
   });
   expect((await page.goto(`${baseUrl}chat`))?.status()).toBe(200);
-  await gateway.waitForRequest("chat.startup");
+  await gateway.waitForRequest("sessions.messages.subscribe");
   await gateway.setMethodResponse("update.status", { updateAvailable: UPDATE_AVAILABLE });
   await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
   await page.locator(".sidebar-issues-button:visible").click();
@@ -141,7 +141,7 @@ suite.define(() => {
           methodResponses: { "update.status": stale, "update.run": UPDATE_RUN_RESPONSE },
         });
         expect((await page.goto(suite.server.baseUrl + "chat"))?.status()).toBe(200);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await page.locator(".sidebar-issues-button:visible").click();
         const card = updateCard(page);
         await card.locator("summary").click();
@@ -184,7 +184,7 @@ suite.define(() => {
           await restoreNative(page);
           await button(page, "Retry update").click();
           expect(await confirmationCopy(page).getAttribute("label")).toBe(
-            "Update Mac app + Gateway",
+            "Update Mac app and restart?",
           );
           await button(page, "Update Mac app and restart").click();
           expect(await page.locator("html").getAttribute("data-native-update-posted")).toBe("yes");
@@ -231,11 +231,12 @@ suite.define(() => {
           methodResponses: { "update.status": stale, "update.runs.get": { run } },
         });
         expect((await page.goto(suite.server.baseUrl + "chat"))?.status()).toBe(200);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await page.locator(".sidebar-issues-button:visible").click();
         const card = updateCard(page);
         await card.locator("summary").click();
         await card.locator(".sidebar-update-card__action").click();
+        await waitForConfirmModal(page);
 
         if (owner === "native") {
           await restoreNative(page);
@@ -247,6 +248,7 @@ suite.define(() => {
           ).toHaveLength(0);
           await button(page, "Update Mac app and restart").click();
           expect(await page.locator("html").getAttribute("data-native-update-posted")).toBe("yes");
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
           return;
         }
 
@@ -260,7 +262,7 @@ suite.define(() => {
           message: "Latest target unavailable.",
         });
         await confirmationCopy(page)
-          .getByText("Status could not be refreshed. Check your connection and try again.", {
+          .getByText("Couldn’t refresh update status. Check your connection and try again.", {
             exact: true,
           })
           .waitFor();
@@ -295,7 +297,7 @@ suite.define(() => {
         methodResponses: { "update.status": stale },
       });
       expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await page.locator(".sidebar-issues-button:visible").click();
       const card = updateCard(page);
       await card.waitFor();
@@ -330,7 +332,7 @@ suite.define(() => {
         },
       });
       expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
 
       // The Inbox badge carries dismissible attention; the menu keeps release availability.
       const inboxBadge = page.locator(".sidebar-issues-button__count");
@@ -349,6 +351,7 @@ suite.define(() => {
       const updateIssue = updateCard(page);
       await updateIssue.waitFor();
       const dismissButton = updateIssue.locator(".sidebar-issues-panel__dismiss");
+      await updateIssue.hover();
       await dismissButton.click();
       await updateIssue.waitFor({ state: "detached" });
       await page.keyboard.press("Escape");
@@ -365,7 +368,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await page.reload();
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       expect(await page.locator(".sidebar-issues-button__count").count()).toBe(0);
 
       await gateway.setGatewayBootId("gateway-boot-b");
@@ -384,13 +387,14 @@ suite.define(() => {
         updateAvailable: UPDATE_AVAILABLE,
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const connect = await gateway.waitForRequest("connect");
       const instanceId = (connect.params as { client: { instanceId: string } }).client.instanceId;
       const inboxBadge = page.locator(".sidebar-issues-button__count");
       await inboxBadge.waitFor();
       await page.locator(".sidebar-issues-button").click();
       const updateIssue = updateCard(page);
+      await updateIssue.hover();
       await updateIssue.locator(".sidebar-issues-panel__dismiss").click();
       await updateIssue.waitFor({ state: "detached" });
       await page.keyboard.press("Escape");
@@ -442,10 +446,11 @@ suite.define(() => {
         },
       });
       expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
 
       await page.locator(".sidebar-issues-button").click();
       const scopeGuidance = page.locator('[data-attention-kind="scopeUpgrade"]');
+      await scopeGuidance.hover();
       await scopeGuidance.locator(".sidebar-issues-panel__dismiss").click();
       await scopeGuidance.waitFor({ state: "detached" });
       const updateIssue = updateCard(page);
@@ -523,7 +528,7 @@ suite.define(() => {
       await confirmationCopy(page).locator("openclaw-update-run-view").waitFor();
 
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
-      await button(page, "Close").click();
+      await button(page.locator("openclaw-modal-dialog openclaw-modal-actions"), "Close").click();
       await page.locator(".sidebar-issues-button").click();
       const updateIssue = updateCard(page);
       await updateIssue.locator("summary").click();
@@ -555,7 +560,7 @@ suite.define(() => {
       expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
       await gateway.waitForRequest("config.get");
       await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
-      await button(page, "Update now").click();
+      await button(page, "Update Gateway…").click();
 
       const dialog = confirmationDialog(page);
       await dialog.waitFor();
