@@ -3240,13 +3240,7 @@ select.data-table-pagination__size {
   .sidebar-recent-session .session-action:disabled {
     opacity: 0.35;
   }
-
-  /* Keep the row link hit area clear of the always-tappable actions; the
-     variable was assigned but never consumed, so the link extended under
-     the buttons and row clicks silently hit Pin/Archive/Menu. */
-  .sidebar-recent-session .sidebar-recent-session__link {
-    margin-inline-end: var(--session-row-actions-reserve, 0px);
-  }
+  .sidebar-recent-session .sidebar-recent-session__link{margin-inline-end:var(--session-row-actions-reserve)}
 }
 
 .session-row-host--pinned .session-action--pin svg {
