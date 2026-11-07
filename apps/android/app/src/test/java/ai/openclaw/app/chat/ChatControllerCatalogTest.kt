@@ -355,7 +355,10 @@ class ChatControllerCatalogTest {
       catalog = "refreshFailed"
       controller.handleGatewayEvent("chat.metadata.changed", "{}")
       advanceUntilIdle()
-      assertEquals("Could not refresh models. Tap Refresh to try again.", controller.errorText.value)
+      assertEquals(
+        "Some models could not be refreshed. Available models can still be selected. Tap Refresh to retry.",
+        controller.errorText.value,
+      )
       assertEquals(acceptedChoices, controller.modelCatalog.value)
 
       catalog = "ok"
@@ -368,6 +371,49 @@ class ChatControllerCatalogTest {
       advanceUntilIdle()
       assertEquals("Could not refresh models. Tap Refresh to try again.", controller.errorText.value)
       assertEquals(acceptedChoices, controller.modelCatalog.value)
+    }
+
+  @Test
+  fun catalogDiagnosticsKeepChoicesAndClearOnRecovery() =
+    runTest {
+      val model = """{"id":"current","name":"Current","provider":"fixture","available":true}"""
+      var response = """{"models":[$model]}"""
+      val controller = createScriptedChatController { respond("models.list") { response } }
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      val acceptedChoices = controller.modelCatalog.value
+      assertEquals(1, acceptedChoices.size)
+
+      for ((diagnostics, warning) in listOf(
+        """"refreshFailures":[{"acquisition":"provider","provider":"fixture"}]""" to
+          "Some models could not be refreshed (fixture). Available models can still be selected. Tap Refresh to retry.",
+        """"refreshFailures":[{"acquisition":"native"}]""" to
+          "Native model discovery failed. Available models can still be selected. Tap Refresh to retry.",
+        """"refreshFailures":[{"acquisition":"provider"}],"providerOutcomes":[{"provider":"hidden","status":"unavailable"}]""" to
+          "Some models could not be refreshed. Available models can still be selected. Tap Refresh to retry.",
+        """"providerOutcomes":[{"provider":"fixture","status":"unavailable"}]""" to
+          "Some models could not be refreshed (fixture). Available models can still be selected. Tap Refresh to retry.",
+        """"providerOutcomes":[{"provider":"sibling","status":"unavailable"}]""" to
+          "Some models could not be refreshed. Available models can still be selected. Tap Refresh to retry.",
+      )) {
+        response = """{"models":[$model],"refreshFailed":true,$diagnostics}"""
+        controller.handleGatewayEvent("chat.metadata.changed", "{}")
+        advanceUntilIdle()
+        assertEquals(warning, controller.errorText.value)
+        assertEquals(acceptedChoices, controller.modelCatalog.value)
+      }
+
+      response = """{"models":[$model],"providerOutcomes":[{"provider":"fixture","status":"auth-rejected"}]}"""
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertNull(controller.errorText.value)
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+
+      response = """{"models":[],"refreshFailed":true}"""
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals("Could not refresh models. Tap Refresh to try again.", controller.errorText.value)
+      assertTrue(controller.modelCatalog.value.isEmpty())
     }
 
   private fun supersededMetadataRead() =

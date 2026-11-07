@@ -4,7 +4,8 @@ import { asPositiveSafeInteger as resolvePositiveSafeInteger } from "@openclaw/n
 import type {
   ModelCatalogProviderOutcome,
   ModelChoice,
-} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+  ModelsListResult,
+} from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import { isLocalBaseUrl } from "../../agents/model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
@@ -133,6 +134,26 @@ export function buildPublicModelProjection(
     ...(typeof entry.compat?.supportsTools === "boolean"
       ? { supportsTools: entry.compat.supportsTools }
       : {}),
+  };
+}
+
+export function projectModelCatalogRefreshStatus(params: {
+  snapshot: ModelCatalogSnapshot;
+  pendingProviders: readonly string[] | undefined;
+  isVisibleProvider: (provider: string) => boolean;
+}): Pick<ModelsListResult, "pendingProviders" | "refreshFailed" | "refreshFailures"> {
+  const { snapshot, isVisibleProvider } = params;
+  const pendingProviders = params.pendingProviders?.filter(isVisibleProvider);
+  // Diagnostic labels must not disclose hidden providers or endpoint/profile-shaped values.
+  const refreshFailures = snapshot.refreshFailures?.map(({ acquisition, provider }) =>
+    provider && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(provider) && isVisibleProvider(provider)
+      ? { acquisition, provider }
+      : { acquisition },
+  );
+  return {
+    ...(pendingProviders?.length ? { pendingProviders } : {}),
+    ...(snapshot.refreshFailed ? { refreshFailed: true } : {}),
+    ...(refreshFailures?.length ? { refreshFailures } : {}),
   };
 }
 

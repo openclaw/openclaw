@@ -235,6 +235,9 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     get refreshFailed() {
       return statusSource.refreshFailed;
     },
+    get refreshFailures() {
+      return statusSource.refreshFailures;
+    },
     get pendingProviders() {
       return statusSource.pendingProviders;
     },
