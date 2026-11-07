@@ -1,7 +1,3 @@
-// Gateway owner of experimental OpenClaw ID remote access (Labs).
-// While the Labs switch is off this module does nothing: it starts no child
-// process, opens no sockets and contacts no OpenClaw ID, Discovery or relay
-// service. Everything heavier is imported only after the switch turns on.
 import type { Server as HttpServer } from "node:http";
 import type {
   AuthorityEvent,
@@ -13,9 +9,12 @@ import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 import type { OpenClawIdNodePairingProvenance } from "../../infra/device-pairing.types.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { isOpenClawIdEnabled } from "../../shared/openclaw-id-policy.js";
+// Gateway owner of experimental OpenClaw ID remote access (Labs).
+// While the Labs switch is off this module does nothing: it starts no child
+// process, opens no sockets and contacts no OpenClaw ID, Discovery or relay
+// service. Everything heavier is imported only after the switch turns on.
+import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
 import type {
-  AuthorityAccepted,
-  AuthorityRefusal,
   LinkCommit,
   LinkPreparation,
   DeviceTokenRef,

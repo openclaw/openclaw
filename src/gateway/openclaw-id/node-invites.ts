@@ -8,7 +8,7 @@ import {
   type NodeDescription,
   type Channel,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
-import type { AuthorityAccepted, AuthorityRefusal } from "./authority.js";
+import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
 import type { StoredClaw } from "./claw-store.js";
 import { isPendingExpired } from "./invite-expiry.js";
 import { withSweptInvites } from "./invite-sweep.js";

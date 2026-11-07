@@ -12,12 +12,15 @@ import {
   nodeVerificationCode,
   PENDING_REDEMPTION_TTL_SECONDS,
   signStatement,
+  type MembershipTarget,
+  type StatementSigner,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { VERSION } from "../../version.js";
 import { openclawIdHandlers } from "../server-methods/openclaw-id.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import { createOpenClawIdAuthority } from "./authority.js";
+import type { StoredClaw } from "./claw-store.js";
 import { applyMailboxMessage } from "./mailbox-reader.js";
 import { linkedClaw, nowSeconds, serviceFor } from "./openclaw-id.test-support.js";
 import { createOpenClawIdService } from "./service.js";
@@ -25,6 +28,22 @@ import { createOpenClawIdService } from "./service.js";
 // Exercise the signed mailbox/authority boundary; transport and device pairing have separate owners.
 async function nodeInvite() {
   const claw = await linkedClaw();
+  const stored = claw.authority.current()!;
+  const { nodes: _nodes, node_invites: _invites, ...legacy } = stored.authority!;
+  // Exercise all node lifecycles after loading a persisted pre-node Labs claw.
+  await claw.store.write({ ...stored, authority: legacy } as StoredClaw);
+  claw.authority = createOpenClawIdAuthority(claw.store);
+  claw.sign = async (target: MembershipTarget, signer?: StatementSigner) =>
+    signStatement(
+      "MembershipChange",
+      {
+        claw_id: claw.clawId,
+        seq: (await claw.authority.load())!.authority!.seq + 1,
+        target,
+        issued_at: nowSeconds(),
+      },
+      signer ?? claw.device,
+    );
   const { invite_id, secret } = generateInviteSecret();
   const proofKey = await deriveInviteProofKey(secret);
   const cap = await signStatement(
