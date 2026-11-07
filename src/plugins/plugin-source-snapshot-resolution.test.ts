@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PluginSourceSnapshotEntry } from "./plugin-source-snapshot-entries.js";
+import { collectPluginSnapshotMetadata } from "./plugin-source-snapshot-metadata.js";
 import { selectPluginSnapshotPackageMap } from "./plugin-source-snapshot-package-map.js";
 import {
   createPluginSnapshotResolver,
@@ -52,7 +54,10 @@ function fixture() {
   return { source, add, pkg, config, sourceLinks };
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("authenticated snapshot resolution", () => {
   it("selects import/require, self, imports and patterned package targets without filesystem probes", () => {
@@ -189,6 +194,119 @@ it("resolves a linked package's hoisted dependency from its canonical ancestry",
     expected,
   );
 });
+
+it.each([
+  ["@config/base", { tsconfig: "configs/base.json" }],
+  ["@config/base", { exports: { ".": { types: "./configs/base.json" } } }],
+  ["@config/base/configs/base", {}],
+])("captures and follows package config %s through a dependency link", (base, metadata) => {
+  const f = fixture();
+  const importer = f.add("plugin/index.cjs");
+  const expected = f.add("plugin/value.cjs");
+  f.config("plugin/tsconfig.json", JSON.stringify({ extends: base }));
+  f.pkg("packages/config", metadata);
+  f.config("packages/config/configs/base.json", '{"extends":"./paths.json"}');
+  f.config(
+    "packages/config/configs/paths.json",
+    '{"compilerOptions":{"baseUrl":"../../../plugin","paths":{"@value":["value.cjs"]}}}',
+  );
+  const link = f.add("plugin/node_modules/@config/base", "link");
+  f.sourceLinks.set(link, path.join(root, "packages/config"));
+  const text = new Map([
+    ...f.source.configuration,
+    ...Array.from(
+      f.source.resolution,
+      ([key, value]) => [path.join(key, "package.json"), value] as const,
+    ),
+  ]);
+  const entries = Array.from(f.source.entries, ([filename, entry]): PluginSourceSnapshotEntry => {
+    const common = { path: path.relative(root, filename), identity: "fixture" };
+    if (entry.kind === "file") {
+      return { ...common, kind: "file", contentHash: "fixture", sizeBytes: 0, mode: 0o600 };
+    }
+    if (entry.kind === "link") {
+      return { ...common, kind: "link", target: path.relative(root, f.sourceLinks.get(filename)!) };
+    }
+    return { ...common, kind: "directory" };
+  });
+  const captured = collectPluginSnapshotMetadata(entries, (entry) =>
+    text.get(path.join(root, entry.path))!,
+  );
+  f.source.configuration = new Map(
+    Object.entries(captured.configuration).map(([key, value]) => [path.join(root, key), value]),
+  );
+  expect(
+    createPluginSnapshotResolver(f.source, { tsconfigPaths: true }).resolve(importer, "@value", [
+      "require",
+    ]).canonical,
+  ).toBe(expected);
+});
+
+it("uses captured case for Windows members, aliases, links and metadata", () => {
+  const f = fixture();
+  const importer = f.add("plugin/index.cjs");
+  const expected = f.add("Packages/Dependency/Entry.cjs");
+  f.pkg("Packages/Dependency", { main: "Entry.cjs" });
+  const link = f.add("plugin/node_modules/Dependency", "link");
+  f.sourceLinks.set(link, path.join(root, "Packages/Dependency"));
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  try {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    const resolver = createPluginSnapshotResolver(f.source);
+    expect(resolver.resolve(importer.toUpperCase(), "dependency", ["require"])).toMatchObject({
+      canonical: expected,
+      filename: path.join(link, "Entry.cjs"),
+    });
+    expect(
+      resolver.resolve(importer, path.resolve("INSTALLED-PLUGIN/INDEX.CJS"), ["require"]).canonical,
+    ).toBe(importer);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
+});
+
+it("preserves Jiti fallback extension order, typed JSX, and explicit overrides", () => {
+  vi.stubEnv("JITI_JSX", "1");
+  vi.stubEnv("JITI_EXTENSIONS", undefined);
+  const f = fixture();
+  const importer = f.add("plugin/index.cjs");
+  const jsx = f.add("plugin/view.jsx");
+  const mtsx = f.add("plugin/typed.mtsx");
+  const ctsx = f.add("plugin/typed.ctsx");
+  const mjs = f.add("plugin/ordered.mjs");
+  f.add("plugin/ordered.ts");
+  const resolve = (request: string) =>
+    createPluginSnapshotResolver(f.source).resolve(importer, request, ["require"]).canonical;
+  expect(resolve("./view")).toBe(jsx);
+  expect(resolve("./typed")).toBe(mtsx);
+  expect(resolve("./ordered")).toBe(mjs);
+  vi.stubEnv("JITI_EXTENSIONS", '[".ctsx", ".mtsx"]');
+  expect(resolve("./typed")).toBe(ctsx);
+  expect(
+    createPluginSnapshotResolver(f.source, { extensions: [".mtsx"] }).resolve(importer, "./typed", [
+      "require",
+    ]).canonical,
+  ).toBe(mtsx);
+  expect(() =>
+    createPluginSnapshotResolver(f.source, { extensions: [".mtsx"] }).resolve(importer, "./view", [
+      "require",
+    ]),
+  ).toThrow(expect.objectContaining({ code: "ERR_PLUGIN_SNAPSHOT_DEPENDENCY" }));
+});
+
+it.each(["node", "bun"] as const)(
+  "prefers %s native addon/file resolution before Jiti fallback",
+  (runtime) => {
+    const f = fixture();
+    const importer = f.add("plugin/index.cjs");
+    const addon = f.add("plugin/choice.node");
+    const mjs = f.add("plugin/choice.mjs");
+    const resolver = createPluginSnapshotResolver(f.source, { runtime });
+    expect(resolver.resolve(importer, "./choice", ["require"]).canonical).toBe(
+      runtime === "node" ? addon : mjs,
+    );
+  },
+);
 
 describe("package map selection", () => {
   const select = (map: unknown, request = ".", runtime: "node" | "bun" = "node") =>

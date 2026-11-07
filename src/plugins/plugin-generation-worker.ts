@@ -68,6 +68,7 @@ export type PreparedPluginGenerationArtifact = {
   startScrub?: (
     onFailure: (error: unknown) => Promise<void>,
   ) => Promise<import("./plugin-source-snapshot-scrub.js").PluginSnapshotScrubOutcome>;
+  cancelScrub?: () => Promise<void>;
   onInvalidSnapshot?: (error: unknown) => Promise<void>;
 };
 type PreparationParameters = {
@@ -271,6 +272,7 @@ export async function preparePluginGenerationArtifact(
     artifact: prepared.value as PluginGenerationArtifact,
     attachModuleSource: prepared.attachModuleSource,
     startScrub: prepared.startScrub,
+    cancelScrub: prepared.cancelScrub,
   };
 }
 
@@ -435,7 +437,7 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     (closing ??= (async () => {
       stopObserving();
       try {
-        await scrub?.cancel();
+        const scrubResults = await Promise.allSettled([scrub?.cancel()]);
         if (pending) {
           await (drained ??= createDeferredCore()).promise;
         }
@@ -452,6 +454,7 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
           await pool.close();
         }
         owner.clients.delete(close);
+        throwSettledAggregate(scrubResults, "Plugin snapshot scrub cleanup failed");
       } finally {
         port1.close();
       }
@@ -691,6 +694,7 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
                     captureId,
                     maxFiles: limits.maxFiles,
                     maxBytes: limits.maxBytes,
+                    // SAFETY: The matching worker returns its scrub cursor report for this operation.
                   })) as PluginSourceSnapshotScrubReport,
                 dispose: async () => {
                   await request({
@@ -706,6 +710,9 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
             return scrub.start();
           }
         : undefined,
+      cancelScrub: async () => {
+        await scrub?.cancel();
+      },
     };
   } catch (error) {
     try {

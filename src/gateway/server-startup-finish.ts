@@ -260,6 +260,7 @@ export async function finishGatewayStartup(params: {
           pluginManifestRecords,
           ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
           getCurrentPluginRegistry: () => pluginRuntime.registry,
+          sourceSnapshotScrubs: pluginRuntime.sourceSnapshotScrubs,
           shouldStartPluginServices: () =>
             kernel.pluginRuntimeGeneration.currentServices() === null &&
             kernel.pluginRuntimeGeneration.getReloadStatus() === undefined,

@@ -12,6 +12,8 @@ export const pluginProcessRuntimeEntrypoints = {
   sourceSnapshot: entrypoint("plugin-source-snapshot-artifact"),
   sourceCapture: entrypoint("plugin-generation-capture"),
   snapshotPreparation: entrypoint("plugin-generation-worker"),
+  snapshotWorkerOptions: entrypoint("plugin-preparation-exec-argv.test-support"),
+  nativeResolution: entrypoint("plugin-native-resolution"),
   directoryInventory: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/directory-walk",

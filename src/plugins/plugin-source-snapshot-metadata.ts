@@ -1,10 +1,11 @@
 import path from "node:path";
 import JSON5 from "json5";
 import type { PluginSourceSnapshotEntry } from "./plugin-source-snapshot-entries.js";
+import { createPluginSnapshotResolver } from "./plugin-source-snapshot-resolution.js";
 
 type FileEntry = Extract<PluginSourceSnapshotEntry, { kind: "file" }>;
 
-/** Seal only resolution inputs, including captured relative configuration ancestors. */
+/** Seal only resolution inputs, including captured package and relative configuration ancestors. */
 export function collectPluginSnapshotMetadata(
   entries: PluginSourceSnapshotEntry[],
   read: (entry: FileEntry) => string,
@@ -19,7 +20,8 @@ export function collectPluginSnapshotMetadata(
   const configuration: Record<string, string> = {};
   const pending: FileEntry[] = [];
   for (const entry of files.values()) {
-    const name = path.basename(entry.path);
+    const basename = path.basename(entry.path);
+    const name = process.platform === "win32" ? basename.toLowerCase() : basename;
     if (name === "package.json") {
       resolution[path.dirname(entry.path)] = read(entry);
     } else if (name === "tsconfig.json" || name === "jsconfig.json") {
@@ -32,6 +34,24 @@ export function collectPluginSnapshotMetadata(
       pending.push(entry);
     }
   }
+  const root = path.resolve(".");
+  const resolver = createPluginSnapshotResolver({
+    payloadRoot: root,
+    rootDir: root,
+    sourceAliases: {},
+    sourceLinks: new Map(
+      entries.flatMap((entry) =>
+        entry.kind === "link"
+          ? [[path.join(root, entry.path), path.join(root, entry.target)] as const]
+          : [],
+      ),
+    ),
+    entries: new Map(entries.map((entry) => [path.join(root, entry.path), entry])),
+    resolution: new Map(
+      Object.entries(resolution).map(([key, value]) => [path.join(root, key), value]),
+    ),
+    configuration: new Map(),
+  });
   while (pending.length) {
     const entry = pending.pop()!;
     if (Object.hasOwn(configuration, entry.path)) {
@@ -50,11 +70,11 @@ export function collectPluginSnapshotMetadata(
     }
     const bases: unknown[] = Array.isArray(parsed.extends) ? parsed.extends : [parsed.extends];
     for (const base of bases) {
-      if (typeof base !== "string" || !base.startsWith(".")) {
+      if (typeof base !== "string") {
         continue;
       }
-      const target = path.normalize(path.join(path.dirname(entry.path), base));
-      const parent = files.get(target) ?? files.get(`${target}.json`);
+      const target = resolver.configurationPath(path.join(root, entry.path), base);
+      const parent = target ? files.get(path.relative(root, target)) : undefined;
       if (parent) {
         pending.push(parent);
       }

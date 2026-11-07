@@ -32,6 +32,7 @@ import { notifyPluginHttpRoutesChanged } from "./http-route-owner.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { createPluginSnapshotScrubOwner } from "./plugin-source-snapshot-scrub.js";
 import { settlePreparedMessageToolCatalog } from "./prepared-message-tool-catalog.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
@@ -438,6 +439,7 @@ function installActivePluginRegistry(
 export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir?: string) {
   void workspaceDir;
   const owner: RegistryOwner = { activeRegistry: registry };
+  const sourceSnapshotScrubs = createPluginSnapshotScrubOwner(registry);
   registryOwner.current = owner;
   const gatewayOwner: PluginRegistryGatewayOwner = {
     current: () =>
@@ -451,6 +453,11 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
     const closing: RegistryOwnerClose = {
       preparation: Promise.resolve().then(async () => {
         const previous = owner.activeRegistry;
+        try {
+          await sourceSnapshotScrubs.stop();
+        } catch (error) {
+          log.warn(`plugin snapshot scrub shutdown failed: ${String(error)}`);
+        }
         try {
           if (
             !previous.memoryCapabilities.some(
@@ -475,6 +482,7 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
     return closing;
   };
   return {
+    sourceSnapshotScrubs,
     get registry() {
       return owner.activeRegistry;
     },
@@ -485,6 +493,7 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
       const previous = owner.activeRegistry;
       owner.activeRegistry = next;
       bindPluginRegistryGatewayOwner(next, gatewayOwner);
+      sourceSnapshotScrubs.publish(next);
       notifyPluginHttpRoutesChanged();
       retirePluginRegistryIfUnused(
         previous,

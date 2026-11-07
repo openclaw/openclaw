@@ -187,24 +187,36 @@ Plugin reload reconciles config watcher events after asynchronous metadata prepa
 
 Ordinary plugin source captures use independent files, including copies reached through aliases. On filesystems with copy-on-write support, these captures can share storage without sharing file identity, reducing data writes for large plugins. File containment and receipt validation run during capture; later source edits take effect on the next reload rather than invalidating the existing snapshot.
 
-Managed installs record content and dependency-closure digests from unexecuted source capture. Eager snapshot publication is suspended while startup continues to prepare fresh runtime captures. Existing source snapshots remain owned by the installed index, bound to the install revision, content and dependency-closure digests, platform and ABI, capture format, and resolution options. Native admission, callbacks, and live instances remain independently owned. Install, update, uninstall, and rollback publication still retire displaced snapshots; active readers keep their generation until release.
+Managed installs publish snapshots and record content and dependency-closure digests from unexecuted source capture. Existing source snapshots remain owned by the installed index, bound to the install revision, content and dependency-closure digests, platform and ABI, capture format, and resolution options. Native admission, callbacks, and live instances remain independently owned. Install, update, uninstall, and rollback publication still retire displaced snapshots; active readers keep their generation until release.
 
-The shared-tree snapshot reader is under development and is not enabled. Its version-2
-format binds a read-only real tree to a sealed manifest containing file digests and
+The shared-tree snapshot reader's version-2 format binds a read-only real tree to a sealed manifest containing file digests and
 package/configuration resolution facts. Admission verifies the manifest through a
 pinned guarded open and checks the tree root and owner without scanning every child.
 Each instance has its own module identity and evaluates verified module bytes. Native
 addons keep private, separately admitted companion namespaces. Real `__dirname`,
 `import.meta.url`, assets and helper paths remain available.
+Native admission copies and verifies the owning package and its companion closure
+for each instance. An addon owned by the plugin root can therefore require work
+proportional to the complete plugin, even when JavaScript uses the shared tree.
 
-The reader's full-tree scrub runs in bounded steps on the existing preparation worker
-pool after startup settles. It checks bytes, membership, type, owner, mode, link count
-and exact identities. Unused-file tampering and raw asset reads are detected later by
-this scrub; module verification must happen before evaluation. A validation failure
+The reader's full-tree scrub runs once per start in bounded steps on the existing
+preparation worker pool after startup settles. It checks bytes, membership, type, owner, mode, link count
+and exact identities. Unused-file tampering, raw asset reads, and child processes or preloads launched
+outside the verified loader are detected later by this scrub. This includes direct
+`spawn(process.execPath, [snapshotModule])` and Worker `SHARE_ENV` with
+`NODE_OPTIONS` preloads that execute before the verifier. Those consumers may run
+changed bytes before detection; they retain their existing APIs without a new plugin
+restriction. Everything loaded through the verified loader is verified before
+evaluation, including deferred module loads. A validation failure
 retires that exact snapshot, records a path-bearing diagnostic, and leaves the current
-process running. The next start uses fresh capture. An obsolete format retires quietly.
+process running. The warning and installed-plugin diagnostics identify the failed
+artifact. The next start uses fresh capture, and replacement publication requires a
+capture that matches the install record. An obsolete format retires quietly. The
+scrub runs off-thread at low priority and shutdown cancels and joins it before
+releasing its source generation. Raw changes after a completed pass are detected by
+the next startup scrub; a later verified module load still checks its bytes first.
 
-**Breaking change when this reader is enabled:** managed snapshot generations reject
+**Breaking change:** managed snapshot generations reject
 modules outside their install-time dependency closure, including dynamic `require`
 and re-anchored `createRequire`. `ERR_PLUGIN_SNAPSHOT_DEPENDENCY` names the module;
 declare the dependency and reinstall/update, or use a local development source.

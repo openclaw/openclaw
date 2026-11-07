@@ -1,7 +1,12 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { VERSION } from "../version.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
-import { getPluginConfiguredConditions } from "./plugin-native-resolution.js";
+import { getPluginResolutionPolicy } from "./plugin-native-resolution.js";
+
+export type ManagedPluginSnapshotIdentity = {
+  installOwner: string;
+  installRecordHash: string;
+};
 
 /** Only installer-owned copies can publish a frozen source generation. */
 export function isManagedPluginSnapshotSource(record: PluginInstallRecord): boolean {
@@ -10,6 +15,7 @@ export function isManagedPluginSnapshotSource(record: PluginInstallRecord): bool
 
 /** Capture/resolution inputs not already covered by the source closure itself. */
 export function pluginSourceSnapshotOptionsDigest(env: NodeJS.ProcessEnv = process.env): string {
+  const policy = getPluginResolutionPolicy(env);
   // SAFETY: Bun exposes its revision on this runtime global; Node leaves it absent.
   const bun = (globalThis as typeof globalThis & { Bun?: { revision: string } }).Bun;
   const keys = [
@@ -30,9 +36,10 @@ export function pluginSourceSnapshotOptionsDigest(env: NodeJS.ProcessEnv = proce
     node: process.versions.node,
     bun: process.versions.bun,
     bunRevision: bun?.revision,
-    conditions: [...getPluginConfiguredConditions()].toSorted(),
-    addons: !process.execArgv.includes("--no-addons"),
-    preserveSymlinks: process.execArgv.includes("--preserve-symlinks"),
+    conditions: [...policy.conditions].toSorted(),
+    addons: policy.addons,
+    requireModule: policy.requireModule,
+    preserveSymlinks: policy.preserveSymlinks,
     options: Object.fromEntries(keys.map((key) => [key, env[key] ?? null])),
   });
 }

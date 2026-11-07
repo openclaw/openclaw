@@ -116,6 +116,7 @@ export function installHooks() {
   if (state.installed) {
     return;
   }
+  // SAFETY: Bun defines this optional runtime global and plugin-hook API; Node leaves it absent.
   const bun = (globalThis as typeof globalThis & { Bun?: BunRuntime }).Bun;
   if (bun) {
     bun.plugin({

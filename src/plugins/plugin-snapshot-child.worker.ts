@@ -9,8 +9,10 @@ import {
 import { acquirePluginSharedSourceSnapshotSync } from "./plugin-source-snapshot-artifact.js";
 import { createPluginSharedSnapshotModuleLoader } from "./plugin-source-snapshot-loader.js";
 import { createPluginSharedSnapshotNativeLoader } from "./plugin-source-snapshot-native.js";
+import { preparePluginLoaderAliasesFromContext } from "./sdk-alias.js";
 
-// Loaded synchronously before user preloads. Keep this entry and its import graph TLA-free.
+// Verified child bootstrap; NODE_OPTIONS may run earlier under SHARE_ENV. Keep this graph TLA-free.
+// SAFETY: The parent owns this transferred envelope; its descriptor is parsed below.
 const data = isMainThread ? undefined : (workerData as PluginSnapshotChildWorkerData);
 if (isMainThread && process.argv[2] !== PLUGIN_SNAPSHOT_CHILD_ARG) {
   throw new Error("Plugin snapshot child requires its owner's launch envelope");
@@ -78,15 +80,20 @@ if (envelope.nodeOptions === null) {
 data?.control.unref();
 const children = createPluginSnapshotChildHost({
   snapshot,
+  hostAliasContext: envelope.hostAliasContext,
   workerData: data?.value,
   onInvalidSnapshot: notify,
 });
 const native = createPluginSharedSnapshotNativeLoader(snapshot);
+const aliases = envelope.hostAliasContext
+  ? preparePluginLoaderAliasesFromContext(envelope.hostAliasContext)
+  : undefined;
 const loader = createPluginSharedSnapshotModuleLoader({
   snapshot,
   main: true,
   mainFilename: envelope.entry.filename,
   interceptSourcePaths: true,
+  resolveHostModule: (specifier) => aliases?.resolveAlias(specifier),
   loadBuiltin: (specifier) => children.loadBuiltin(specifier),
   loadNativeModule: checked((filename: string) => native.load(filename)),
 });

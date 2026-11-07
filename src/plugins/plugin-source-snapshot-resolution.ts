@@ -3,8 +3,12 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import JSON5 from "json5";
 import { isPathInside } from "../infra/path-guards.js";
+import { getPluginResolutionPolicy } from "./plugin-native-resolution.js";
 import { PluginSnapshotDependencyError } from "./plugin-snapshot-dependency-error.js";
-import { selectPluginSnapshotPackageMap } from "./plugin-source-snapshot-package-map.js";
+import {
+  resolvePluginSnapshotConfigPath,
+  selectPluginSnapshotPackageMap,
+} from "./plugin-source-snapshot-package-map.js";
 
 type Entry = { kind: "file" | "directory" | "link" };
 type Configuration = { baseUrl?: string; paths?: Record<string, string[]>; pathsOrigin?: string };
@@ -14,6 +18,7 @@ type Package = {
   type?: string;
   exports?: unknown;
   imports?: unknown;
+  tsconfig?: string;
 };
 export type PluginSnapshotResolutionSource = {
   payloadRoot: string;
@@ -47,6 +52,31 @@ function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function configuredExtensions(): readonly string[] {
+  const json = (name: string, fallback: unknown): unknown => {
+    try {
+      return JSON.parse(process.env[name] ?? "");
+    } catch {
+      return fallback;
+    }
+  };
+  const extensions = json("JITI_EXTENSIONS", [
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".ts",
+    ".tsx",
+    ".mts",
+    ".cts",
+    ".mtsx",
+    ".ctsx",
+  ]);
+  if (!Array.isArray(extensions) || !extensions.every((value) => typeof value === "string")) {
+    throw new TypeError("JITI_EXTENSIONS must be an array of file extensions");
+  }
+  return json("JITI_JSX", false) ? [...extensions, ".jsx", ".tsx"] : extensions;
+}
+
 /** Resolve solely from sealed membership and metadata. Never consult live package/config files. */
 export function createPluginSnapshotResolver(
   source: PluginSnapshotResolutionSource,
@@ -55,18 +85,39 @@ export function createPluginSnapshotResolver(
   const packages = new Map<string, Package>();
   const configurations = new Map<string, Configuration>();
   const runtime = options.runtime ?? (process.versions.bun ? "bun" : "node");
-  const extensions = options.extensions ?? [
-    ".js",
-    ".ts",
+  const preserveSymlinks = getPluginResolutionPolicy().preserveSymlinks;
+  const nodeExtensions = [".js", ".json", ".node"];
+  const bunExtensions = [
     ".tsx",
-    ".mjs",
-    ".cjs",
-    ".mts",
+    ".ts",
+    ".jsx",
     ".cts",
+    ".cjs",
+    ".js",
+    ".mjs",
+    ".mts",
     ".json",
     ".node",
   ];
+  const extensions = [
+    ...new Set([...(options.extensions ?? configuredExtensions()), ...nodeExtensions]),
+  ];
   const aliases = Object.keys(options.alias ?? {}).toSorted((a, b) => b.length - a.length);
+  const insensitive = process.platform === "win32";
+  const pathKey = (filename: string) => (insensitive ? filename.toLowerCase() : filename);
+  const memberCase = new Map<string, string>();
+  if (insensitive) {
+    for (const filename of source.entries.keys()) {
+      const key = pathKey(filename);
+      if (memberCase.has(key)) {
+        throw new PluginSnapshotDependencyError(filename);
+      }
+      memberCase.set(key, filename);
+    }
+  }
+  const sourceAliases = new Map(
+    Object.entries(source.sourceAliases).map(([key, value]) => [pathKey(key), value]),
+  );
   const findAncestor = <T>(filename: string, find: (candidate: string) => T | undefined) => {
     for (let parent = filename; ; parent = path.dirname(parent)) {
       const result = find(parent);
@@ -78,30 +129,56 @@ export function createPluginSnapshotResolver(
       }
     }
   };
+  const capturedCase = (filename: string) => {
+    if (!insensitive) {
+      return filename;
+    }
+    const parent = findAncestor(filename, (candidate) =>
+      memberCase.has(pathKey(candidate)) ? candidate : undefined,
+    );
+    return parent
+      ? path.join(memberCase.get(pathKey(parent))!, path.relative(parent, filename))
+      : filename;
+  };
   const payloadPath = (filename: string) => {
     let selected = path.resolve(filename);
     const alias = findAncestor(selected, (parent) =>
-      Object.hasOwn(source.sourceAliases, parent) ? parent : undefined,
+      sourceAliases.has(pathKey(parent)) ? parent : undefined,
     );
     if (alias) {
-      selected = path.join(source.sourceAliases[alias]!, path.relative(alias, selected));
+      selected = path.join(sourceAliases.get(pathKey(alias))!, path.relative(alias, selected));
     }
-    return selected;
+    return capturedCase(selected);
   };
-  const canonicalPath = (filename: string) => {
+  const resolvedPath = (filename: string) => {
     let selected = payloadPath(filename);
     const seen = new Set<string>();
+    const links: Array<{ link: string; target: string }> = [];
     while (!seen.has(selected)) {
       seen.add(selected);
       const link = findAncestor(selected, (parent) =>
         source.sourceLinks.has(parent) ? parent : undefined,
       );
       if (!link) {
-        return selected;
+        let logical = selected;
+        for (const redirect of links.toReversed()) {
+          logical = path.join(redirect.link, path.relative(redirect.target, logical));
+        }
+        return { canonical: selected, logical };
       }
-      selected = path.join(source.sourceLinks.get(link)!, path.relative(link, selected));
+      const target = capturedCase(source.sourceLinks.get(link)!);
+      links.push({ link, target });
+      selected = capturedCase(path.join(target, path.relative(link, selected)));
     }
     throw new PluginSnapshotDependencyError(filename);
+  };
+  const canonicalPath = (filename: string) => resolvedPath(filename).canonical;
+  const modulePath = (filename: string) => {
+    if (isBuiltin(filename)) {
+      return filename;
+    }
+    const selected = resolvedPath(filename);
+    return preserveSymlinks ? selected.logical : selected.canonical;
   };
   const entry = (filename: string) => source.entries.get(canonicalPath(filename));
   const packageAt = (directory: string): Package | undefined => {
@@ -122,6 +199,7 @@ export function createPluginSnapshotResolver(
         ...(typeof parsed.name === "string" ? { name: parsed.name } : {}),
         ...(typeof parsed.main === "string" ? { main: parsed.main } : {}),
         ...(typeof parsed.type === "string" ? { type: parsed.type } : {}),
+        ...(typeof parsed.tsconfig === "string" ? { tsconfig: parsed.tsconfig } : {}),
         ...("exports" in parsed ? { exports: parsed.exports } : {}),
         ...("imports" in parsed ? { imports: parsed.imports } : {}),
       };
@@ -131,53 +209,73 @@ export function createPluginSnapshotResolver(
   };
   const scope = (filename: string) =>
     findAncestor(path.dirname(filename), (directory) => {
-      if (path.basename(directory) === "node_modules") {
+      if (pathKey(path.basename(directory)) === "node_modules") {
         return { directory, value: undefined };
       }
       const value = packageAt(directory);
       return value ? { directory, value } : undefined;
     });
   const asModule = (input: string, suffix = ""): PluginSnapshotResolvedModule => {
-    const filename = payloadPath(input);
-    const canonical = canonicalPath(filename);
+    const { logical: filename, canonical } = resolvedPath(input);
     if (entry(canonical)?.kind !== "file" || !isPathInside(source.payloadRoot, canonical)) {
       throw new PluginSnapshotDependencyError(filename);
     }
-    return { filename, canonical, url: pathToFileURL(canonical).href + suffix };
+    return { filename, canonical, url: pathToFileURL(modulePath(filename)).href + suffix };
   };
   const file = (filename: string, suffix = "") =>
     entry(filename)?.kind === "file" ? asModule(filename, suffix) : undefined;
-  const legacyFile = (filename: string, suffix = "") => {
+  const legacyFile = (filename: string, suffix = "", order = extensions, typedSibling = true) => {
     const direct = file(filename, suffix);
     if (direct) {
       return direct;
     }
-    for (const extension of extensions) {
+    for (const extension of order) {
       const candidate = file(filename + extension, suffix);
       if (candidate) {
         return candidate;
       }
     }
     // Jiti tries appended extensions before a TypeScript sibling of a missing JS path.
-    if (/\.[cm]?jsx?$/.test(filename)) {
+    if (typedSibling && /\.[cm]?jsx?$/.test(filename)) {
       return file(filename.replace(/\.([cm]?)j(sx?)$/, ".$1t$2"), suffix);
     }
     return undefined;
   };
-  const legacyDirectory = (directory: string, suffix = "") => {
+  const legacyDirectory = (
+    directory: string,
+    suffix = "",
+    order = extensions,
+    typedSibling = true,
+  ) => {
     if (entry(directory)?.kind !== "directory") {
       return undefined;
     }
     const main = packageAt(directory)?.main;
     if (main) {
       const target = path.resolve(directory, main);
-      const selected = legacyFile(target, suffix) ?? legacyFile(path.join(target, "index"), suffix);
+      const selected =
+        legacyFile(target, suffix, order, typedSibling) ??
+        legacyFile(path.join(target, "index"), suffix, order, typedSibling);
       if (selected) {
         return selected;
       }
     }
-    return legacyFile(path.join(directory, "index"), suffix);
+    return legacyFile(path.join(directory, "index"), suffix, order, typedSibling);
   };
+  const legacyResolve = (filename: string, suffix = "", nativeOrder?: string[]) =>
+    (nativeOrder
+      ? (legacyFile(filename, suffix, nativeOrder, false) ??
+        legacyDirectory(filename, suffix, nativeOrder, false))
+      : undefined) ??
+    legacyFile(filename, suffix) ??
+    legacyDirectory(filename, suffix);
+  const configurationPath = (importer: string, request: string) =>
+    resolvePluginSnapshotConfigPath(canonicalPath(importer), request, {
+      file: (filename) => (entry(filename)?.kind === "file" ? canonicalPath(filename) : undefined),
+      directory: (filename) => entry(filename)?.kind === "directory",
+      packageAt,
+      runtime,
+    });
   const configAt = (filename: string, seen = new Set<string>()): Configuration => {
     const canonical = canonicalPath(filename);
     const cached = configurations.get(canonical);
@@ -202,8 +300,10 @@ export function createPluginSnapshotResolver(
         continue;
       }
       // Config extends is a captured input, including nonstandard .json names.
-      const target = path.resolve(path.dirname(canonical), base);
-      const selected = source.configuration.has(target) ? target : `${target}.json`;
+      const selected = configurationPath(canonical, base);
+      if (!selected) {
+        throw new PluginSnapshotDependencyError(base);
+      }
       Object.assign(inherited, configAt(selected, new Set(seen)));
     }
     const compiler = object(parsed.compilerOptions) ? parsed.compilerOptions : {};
@@ -243,12 +343,14 @@ export function createPluginSnapshotResolver(
     return selected ? configAt(selected) : undefined;
   };
   const resolve = (
-    importer: string,
+    from: string,
     request: string,
     conditions: readonly string[],
     native = false,
     depth = 0,
+    paths?: readonly string[],
   ): PluginSnapshotResolvedModule => {
+    const importer = modulePath(from);
     if (depth > 64) {
       throw new PluginSnapshotDependencyError(request);
     }
@@ -266,12 +368,37 @@ export function createPluginSnapshotResolver(
       return { filename: builtin, canonical: builtin, url: builtin, external: true };
     }
     const importing = !conditions.includes("require");
+    const nativeOrder = importing
+      ? undefined
+      : runtime === "node"
+        ? nodeExtensions
+        : native
+          ? bunExtensions
+          : undefined;
     let specifier = request;
     const alias = aliases.find((key) => request === key || request.startsWith(`${key}/`));
     if (alias) {
       specifier = options.alias![alias]! + request.slice(alias.length);
     }
     if (specifier.startsWith(".") || specifier.startsWith("file:") || path.isAbsolute(specifier)) {
+      if (paths && specifier.startsWith(".")) {
+        for (const directory of paths) {
+          try {
+            return resolve(
+              path.join(path.resolve(directory), "__resolve__.cjs"),
+              request,
+              conditions,
+              native,
+              depth + 1,
+            );
+          } catch (error) {
+            if (!(error instanceof PluginSnapshotDependencyError)) {
+              throw error;
+            }
+          }
+        }
+        throw new PluginSnapshotDependencyError(request);
+      }
       const url =
         specifier.startsWith("file:") || importing
           ? new URL(specifier, pathToFileURL(importer))
@@ -282,9 +409,7 @@ export function createPluginSnapshotResolver(
       const filename = fileURLToPath(url);
       const suffix = importing ? url.search + url.hash : "";
       const selected =
-        native && importing
-          ? file(filename, suffix)
-          : (legacyFile(filename, suffix) ?? legacyDirectory(filename, suffix));
+        native && importing ? file(filename, suffix) : legacyResolve(filename, suffix, nativeOrder);
       if (!selected) {
         throw new PluginSnapshotDependencyError(request);
       }
@@ -320,7 +445,7 @@ export function createPluginSnapshotResolver(
         true,
       );
     }
-    if (!native) {
+    if (!native || !importing) {
       const configuration = tsconfigFor(importer);
       const mappings = configuration?.paths;
       if (mappings) {
@@ -351,7 +476,7 @@ export function createPluginSnapshotResolver(
               configuration?.baseUrl ?? configuration?.pathsOrigin ?? path.dirname(importer),
               target.replaceAll("*", middle),
             );
-            const selected = legacyFile(resolvedTarget) ?? legacyDirectory(resolvedTarget);
+            const selected = legacyResolve(resolvedTarget, "", nativeOrder);
             if (selected) {
               return selected;
             }
@@ -361,7 +486,7 @@ export function createPluginSnapshotResolver(
       }
       if (configuration?.baseUrl) {
         const target = path.resolve(configuration.baseUrl, specifier);
-        const selected = legacyFile(target) ?? legacyDirectory(target);
+        const selected = legacyResolve(target, "", nativeOrder);
         if (selected) {
           return selected;
         }
@@ -379,16 +504,22 @@ export function createPluginSnapshotResolver(
       throw new PluginSnapshotDependencyError(request);
     }
     const subpath = specifier.slice(packageName.length);
-    const packageDir =
+    let packageDir =
       ownScope?.value?.name === packageName && ownScope.value.exports != null
         ? ownScope.directory
-        : findAncestor(path.dirname(canonicalPath(importer)), (directory) => {
-            if (path.basename(directory) === "node_modules") {
-              return undefined;
-            }
-            const candidate = path.join(directory, "node_modules", packageName);
-            return entry(candidate)?.kind === "directory" ? candidate : undefined;
-          });
+        : undefined;
+    for (const start of paths ?? [path.dirname(modulePath(importer))]) {
+      if (packageDir) {
+        break;
+      }
+      packageDir = findAncestor(path.resolve(start), (directory) => {
+        if (pathKey(path.basename(directory)) === "node_modules") {
+          return undefined;
+        }
+        const candidate = path.join(directory, "node_modules", packageName);
+        return entry(candidate)?.kind === "directory" ? candidate : undefined;
+      });
+    }
     if (!packageDir) {
       throw new PluginSnapshotDependencyError(request);
     }
@@ -399,7 +530,8 @@ export function createPluginSnapshotResolver(
     const target = path.join(packageDir, subpath);
     const selected =
       !subpath || !native || !importing
-        ? (legacyFile(target) ?? legacyDirectory(target))
+        ? // The cold capture owner resolves legacy packages through Node's package resolver on both runtimes.
+          legacyResolve(target, "", importing ? undefined : nodeExtensions)
         : file(target);
     if (!selected) {
       throw new PluginSnapshotDependencyError(request);
@@ -407,8 +539,22 @@ export function createPluginSnapshotResolver(
     return selected;
   };
   return {
-    resolve,
+    resolve: (
+      importer: string,
+      request: string,
+      conditions: readonly string[],
+      native = false,
+      paths?: readonly string[],
+    ) => resolve(importer, request, conditions, native, 0, paths),
     canonicalPath,
+    modulePath,
+    configurationPath,
+    syntaxPlugins(filename: string): Array<"typescript" | "jsx"> {
+      return [
+        ...(/\.[cm]?tsx?$/.test(filename) ? ["typescript" as const] : []),
+        ...(/\.[cm]?[jt]sx$/.test(filename) ? ["jsx" as const] : []),
+      ];
+    },
     isAmbiguous(filename: string) {
       const type = scope(filename)?.value?.type;
       return /\.[jt]sx?$/.test(filename) && type !== "module" && type !== "commonjs";

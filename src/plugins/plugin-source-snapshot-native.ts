@@ -131,6 +131,7 @@ export function createPluginSharedSnapshotNativeLoader(
       if (!text || !isPathInside(boundary, root)) {
         return;
       }
+      // SAFETY: Only checked unknown-valued dependency fields are consumed from authenticated package text.
       const manifest = JSON.parse(text) as Record<string, unknown>;
       const names = new Set<string>();
       for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {

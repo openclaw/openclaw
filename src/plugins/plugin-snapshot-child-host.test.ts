@@ -12,6 +12,7 @@ import {
   stagePluginSharedSourceSnapshot,
 } from "./plugin-source-snapshot-artifact.js";
 import { createPluginSharedSnapshotModuleLoader } from "./plugin-source-snapshot-loader.js";
+import { preparePluginLoaderAliases } from "./sdk-alias.js";
 
 const temporary = createTempDirTracker();
 const releases: Array<() => void | Promise<void>> = [];
@@ -22,7 +23,7 @@ afterEach(async () => {
   temporary.cleanup();
 });
 
-async function fixture() {
+async function fixture(options: { sdk?: boolean } = {}) {
   const stateDir = temporary.make("snapshot-children-");
   const root = path.join(stateDir, "installed");
   fs.mkdirSync(root);
@@ -49,6 +50,58 @@ async function fixture() {
     else process.send(result);
   `,
   );
+  let aliases: ReturnType<typeof preparePluginLoaderAliases> | undefined;
+  if (options.sdk) {
+    const host = path.join(stateDir, "sdk-host");
+    for (const kind of ["src", "dist"]) {
+      fs.mkdirSync(path.join(host, kind, "plugin-sdk"), { recursive: true });
+      fs.writeFileSync(
+        path.join(host, kind, "plugin-sdk", "proof.js"),
+        `export const sdkValue = '${kind}';`,
+      );
+    }
+    fs.writeFileSync(
+      path.join(host, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        type: "module",
+        exports: {
+          "./cli-entry": "./dist/cli-entry.js",
+          "./plugin-sdk/proof": "./dist/plugin-sdk/proof.js",
+        },
+      }),
+    );
+    const outside = path.join(host, "private.cjs");
+    fs.writeFileSync(outside, "module.exports = 'not a public SDK alias';");
+    fs.writeFileSync(
+      path.join(root, "sdk-child.cjs"),
+      `const {parentPort}=require('node:worker_threads');
+       const {sdkValue}=require('openclaw/plugin-sdk/proof');
+       let outsideCode; try { require(${JSON.stringify(outside)}); } catch(error) { outsideCode=error.code; }
+       const result={sdkValue,outsideCode}; if(parentPort)parentPort.postMessage(result);else process.send(result);`,
+    );
+    fs.writeFileSync(
+      path.join(root, "sdk-child.mjs"),
+      `import {parentPort} from 'node:worker_threads';
+       import {sdkValue} from '@openclaw/plugin-sdk/proof';
+       let outsideCode; try { await import(${JSON.stringify(outside)}); } catch(error) { outsideCode=error.code; }
+       const result={sdkValue,outsideCode}; if(parentPort)parentPort.postMessage(result);else process.send(result);`,
+    );
+    fs.writeFileSync(
+      path.join(root, "sdk-parent.cjs"),
+      `const {Worker,parentPort}=require('node:worker_threads');
+       const {sdkValue}=require('openclaw/plugin-sdk/proof');
+       const child=new Worker(require('node:path').join(__dirname,'sdk-child.cjs'));
+       child.once('error',error=>{throw error;});
+       child.once('message',nested=>{const result={sdkValue,nested};if(parentPort)parentPort.postMessage(result);else process.send(result);});`,
+    );
+    aliases = preparePluginLoaderAliases({
+      modulePath: path.join(root, "controller.cjs"),
+      moduleUrl: import.meta.url,
+      devSourceRoot: host,
+      pluginSdkResolution: "dist",
+    });
+  }
   const capture = withPluginSourceCaptureStorage({ stateDir, placement: "state" }, () =>
     capturePluginSourceSnapshot(root),
   );
@@ -82,6 +135,7 @@ async function fixture() {
   const warnings: Array<{ artifactPath: string; message: string }> = [];
   const host = createPluginSnapshotChildHost({
     snapshot,
+    hostAliasContext: aliases?.context,
     onInvalidSnapshot: (failure) => {
       warnings.push(failure);
     },
@@ -89,6 +143,7 @@ async function fixture() {
   releases.push(() => host.disposeAsync());
   const loader = createPluginSharedSnapshotModuleLoader({
     snapshot,
+    resolveHostModule: (specifier) => aliases?.resolveAlias(specifier),
     loadBuiltin: (specifier) => host.loadBuiltin(specifier),
     loadNativeModule() {
       throw new Error("fixture does not contain native files");
@@ -98,7 +153,7 @@ async function fixture() {
   const require = loader.requireFor(path.join(snapshot.rootDir, "controller.cjs"));
   const { Worker } = require("node:worker_threads") as typeof import("node:worker_threads");
   const { fork } = require("node:child_process") as typeof import("node:child_process");
-  const launch = (kind: "worker" | "fork", filename: string, preload = false) => {
+  const launch = async (kind: "worker" | "fork", filename: string, preload = false) => {
     const entry = path.join(snapshot.rootDir, filename);
     const execArgv = preload ? ["--require", path.join(snapshot.rootDir, "preload.cjs")] : [];
     const child =
@@ -119,8 +174,33 @@ async function fixture() {
       });
     });
   };
-  return { snapshot, descriptor, stateDir, launch, host, warnings };
+  return { snapshot, descriptor, stateDir, launch, host, warnings, require };
 }
+
+it.each(["sdk-child.cjs", "sdk-child.mjs"])(
+  "keeps the parent's approved SDK aliases in %s workers and forks",
+  async (filename) => {
+    const subject = await fixture({ sdk: true });
+    expect(subject.require("openclaw/plugin-sdk/proof")).toMatchObject({ sdkValue: "dist" });
+    for (const kind of ["worker", "fork"] as const) {
+      await expect(subject.launch(kind, filename)).resolves.toMatchObject({
+        sdkValue: "dist",
+        outsideCode: "ERR_PLUGIN_SNAPSHOT_DEPENDENCY",
+      });
+    }
+  },
+  30_000,
+);
+
+it("retains the selected SDK context in descendants of workers and forks", async () => {
+  const subject = await fixture({ sdk: true });
+  for (const kind of ["worker", "fork"] as const) {
+    await expect(subject.launch(kind, "sdk-parent.cjs")).resolves.toMatchObject({
+      sdkValue: "dist",
+      nested: { sdkValue: "dist", outsideCode: "ERR_PLUGIN_SNAPSHOT_DEPENDENCY" },
+    });
+  }
+}, 30_000);
 
 it.each(["child.cjs", "child.mjs"])(
   "verifies %s in independent workers and forks",
@@ -178,3 +258,70 @@ it("installs verification before user preloads", async () => {
     await expect(subject.launch(kind, "child.cjs", true)).rejects.toThrow(/preload.cjs/);
   }
 }, 30_000);
+
+it("reports host-side child launch verification failures", async () => {
+  const subject = await fixture();
+  const entry = path.join(subject.snapshot.rootDir, "child.cjs");
+  fs.chmodSync(entry, 0o666);
+  for (const kind of ["worker", "fork"] as const) {
+    await expect(subject.launch(kind, "child.cjs")).rejects.toMatchObject({
+      code: "PLUGIN_SOURCE_SNAPSHOT_INVALID",
+    });
+  }
+  expect(subject.warnings).toHaveLength(2);
+  expect(subject.warnings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        artifactPath: subject.descriptor.artifact.path,
+        message: expect.stringContaining("child.cjs"),
+      }),
+    ]),
+  );
+});
+
+it.runIf(!process.versions.bun)(
+  "preserves SHARE_ENV preload ordering with delayed scrub detection",
+  async () => {
+    const subject = await fixture();
+    const preload = path.join(subject.snapshot.rootDir, "preload.cjs");
+    const original = process.env.NODE_OPTIONS;
+    fs.chmodSync(preload, 0o600);
+    fs.writeFileSync(preload, "globalThis.preloadValue = 'changed-before-verifier';");
+    const threads = subject.host.loadBuiltin(
+      "node:worker_threads",
+    ) as typeof import("node:worker_threads");
+    try {
+      process.env.NODE_OPTIONS = `--require ${JSON.stringify(preload)}`;
+      const child = new threads.Worker(path.join(subject.snapshot.rootDir, "child.cjs"), {
+        env: threads.SHARE_ENV,
+        execArgv: [],
+      });
+      const result = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        child.once("message", resolve);
+        child.once("error", reject);
+        child.once("exit", (code) => {
+          if (code) {
+            reject(new Error(`worker exit ${code}`));
+          }
+        });
+      });
+      expect(result.preload).toBe("changed-before-verifier");
+      expect(subject.warnings).toEqual([]);
+      const scrub = subject.snapshot.createScrub();
+      try {
+        await expect(scrub.step({ maxFiles: 16, maxBytes: 256 * 1024 })).rejects.toThrow(
+          /preload.cjs/,
+        );
+      } finally {
+        await scrub.dispose();
+      }
+    } finally {
+      if (original === undefined) {
+        delete process.env.NODE_OPTIONS;
+      } else {
+        process.env.NODE_OPTIONS = original;
+      }
+    }
+  },
+  30_000,
+);

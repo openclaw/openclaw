@@ -497,9 +497,10 @@ export function acquirePluginSourceSnapshot(params: SnapshotAcquisitionParameter
 export function acquirePluginSharedSourceSnapshot(
   params: SnapshotAcquisitionParameters,
 ): Promise<AcquiredPluginSharedSourceSnapshot> {
+  // SAFETY: shared=true selects createPluginSharedSnapshotView in the acquisition generator.
   return acquireSnapshot(params, true) as Promise<AcquiredPluginSharedSourceSnapshot>;
 }
-/** Trusted child bootstrap installs verification before any user preload can execute. */
+/** Installs the verified loader for the supported child bootstrap. */
 export function acquirePluginSharedSourceSnapshotSync(
   params: Omit<SnapshotAcquisitionParameters, "assertCurrent"> & { assertCurrent: () => void },
 ): AcquiredPluginSharedSourceSnapshot {
@@ -513,6 +514,7 @@ export function acquirePluginSharedSourceSnapshotSync(
     }
     step = operation.next();
   }
+  // SAFETY: The shared acquisition generator completed after each authority checkpoint above.
   return step.value as AcquiredPluginSharedSourceSnapshot;
 }
 async function acquireSnapshot(params: SnapshotAcquisitionParameters, shared: boolean) {

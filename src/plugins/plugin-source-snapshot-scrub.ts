@@ -1,4 +1,7 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
+import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
+import { getPluginInstance, type PluginInstanceHandle } from "./plugin-instance-scope.js";
 import type {
   PluginSourceSnapshotScrub,
   PluginSourceSnapshotScrubReport,
@@ -6,39 +9,179 @@ import type {
 import type { PluginRegistry } from "./registry-types.js";
 
 type RegisteredScrub = {
+  registry: RegistryScrubs;
   start(): Promise<PluginSnapshotScrubOutcome>;
+  cancel(): Promise<void>;
   result?: Promise<PluginSnapshotScrubOutcome>;
+  settled?: boolean;
+  lifetime?: ScrubLifetime;
 };
-const registries = new WeakMap<PluginRegistry, Set<RegisteredScrub>>();
+type RegistryScrubs = {
+  entries: Set<RegisteredScrub>;
+  started: boolean;
+  stopped: boolean;
+  lifetime?: ScrubLifetime;
+};
+type ScrubLifetime = {
+  current?: RegistryScrubs;
+  started: boolean;
+  stopped: boolean;
+  pending: Set<RegisteredScrub>;
+};
+const registries = new WeakMap<PluginRegistry, RegistryScrubs>();
+const instanceScrubs = new WeakMap<PluginInstanceHandle, RegisteredScrub>();
+
+function registryScrubs(registry: PluginRegistry): RegistryScrubs {
+  let owner = registries.get(registry);
+  if (!owner) {
+    registries.set(registry, (owner = { entries: new Set(), started: false, stopped: false }));
+  }
+  return owner;
+}
+
+function trackEntry(entry: RegisteredScrub, lifetime: ScrubLifetime | undefined) {
+  if (lifetime && !entry.settled) {
+    entry.lifetime = lifetime;
+    lifetime.pending.add(entry);
+  }
+}
+
+function startEntry(entry: RegisteredScrub, lifetime?: ScrubLifetime) {
+  trackEntry(entry, lifetime);
+  if (!entry.result) {
+    entry.result = Promise.resolve().then(() => entry.start());
+    const settle = () => {
+      entry.settled = true;
+      entry.lifetime?.pending.delete(entry);
+      entry.lifetime = undefined;
+    };
+    void entry.result.then(settle, (error: unknown) => {
+      settle();
+      process.emitWarning(`Plugin snapshot scrub cleanup failed: ${String(error)}`);
+    });
+  }
+  return entry.result;
+}
 
 export function registerPluginSnapshotScrub(
-  registry: PluginRegistry,
+  instance: PluginInstanceHandle,
   start: RegisteredScrub["start"],
+  cancel: RegisteredScrub["cancel"],
 ) {
-  let entries = registries.get(registry);
-  if (!entries) {
-    registries.set(registry, (entries = new Set()));
+  if (!instance.owner || instance.owner.revoked || !instance.acceptingCalls) {
+    throw new PluginInventoryRetiredError();
   }
-  const entry: RegisteredScrub = { start };
-  entries.add(entry);
-  return () => {
-    entries.delete(entry);
+  const owner = registryScrubs(instance.owner.registry);
+  const entry: RegisteredScrub = { registry: owner, start, cancel };
+  owner.entries.add(entry);
+  instanceScrubs.set(instance, entry);
+  const remove = () => {
+    entry.registry.entries.delete(entry);
+    if (instanceScrubs.get(instance) === entry) {
+      instanceScrubs.delete(instance);
+    }
   };
+  instance.onModuleDispose(remove);
+  if (owner.started && !owner.stopped && !owner.lifetime?.stopped) {
+    void startEntry(entry, owner.lifetime);
+  }
+  return remove;
+}
+
+/** Publication has adopted exact live instances before selecting their scrub owner. */
+function adoptInstanceScrubs(registry: PluginRegistry, current: RegistryScrubs) {
+  for (const record of registry.plugins) {
+    const instance = getPluginInstance(record);
+    const entry = instance && instanceScrubs.get(instance);
+    if (
+      !instance ||
+      !entry ||
+      instance.owner?.registry !== registry ||
+      instance.owner.revoked ||
+      !instance.acceptingCalls ||
+      instance.disposing
+    ) {
+      continue;
+    }
+    entry.registry.entries.delete(entry);
+    entry.registry = current;
+    if (!entry.settled) {
+      current.entries.add(entry);
+    }
+  }
 }
 
 /** Registration has settled; the scrub driver yields before entering the preparation pool. */
-export function startPluginSnapshotScrubs(registry: PluginRegistry): void {
-  for (const entry of registries.get(registry) ?? []) {
-    entry.result ??= entry.start();
-    void entry.result.catch((error: unknown) =>
-      process.emitWarning(`Plugin snapshot scrub cleanup failed: ${String(error)}`),
-    );
+export function startPluginSnapshotScrubs(
+  registry: PluginRegistry,
+): Promise<PluginSnapshotScrubOutcome[]> {
+  const owner = registryScrubs(registry);
+  if (owner.stopped || owner.lifetime?.stopped) {
+    return Promise.resolve([]);
   }
+  owner.started = true;
+  return Promise.all([...owner.entries].map((entry) => startEntry(entry, owner.lifetime)));
 }
 
-export async function settlePluginSnapshotScrubs(registry: PluginRegistry) {
-  startPluginSnapshotScrubs(registry);
-  return await Promise.all([...(registries.get(registry) ?? [])].map((entry) => entry.result!));
+/** The Gateway owner selects generations; only post-ready starts their background work. */
+export function createPluginSnapshotScrubOwner(registry: PluginRegistry) {
+  const lifetime: ScrubLifetime = { started: false, stopped: false, pending: new Set() };
+  let stopping: Promise<void> | undefined;
+  const publish = (next: PluginRegistry) => {
+    if (lifetime.stopped) {
+      return;
+    }
+    const current = registryScrubs(next);
+    adoptInstanceScrubs(next, current);
+    current.lifetime = lifetime;
+    lifetime.current = current;
+    for (const entry of current.entries) {
+      if (entry.result) {
+        trackEntry(entry, lifetime);
+      }
+    }
+    if (lifetime.started) {
+      // Individual entry failures already report their diagnostics.
+      void startPluginSnapshotScrubs(next).catch(() => {});
+    }
+  };
+  publish(registry);
+  return {
+    publish,
+    start() {
+      lifetime.started = true;
+      if (lifetime.stopped || !lifetime.current) {
+        return Promise.resolve([]);
+      }
+      lifetime.current.started = true;
+      return Promise.all([...lifetime.current.entries].map((entry) => startEntry(entry, lifetime)));
+    },
+    stop() {
+      if (!stopping) {
+        lifetime.stopped = true;
+        const entries = new Set([...lifetime.pending, ...(lifetime.current?.entries ?? [])]);
+        lifetime.current = undefined;
+        stopping = Promise.allSettled([...entries].map(async (entry) => await entry.cancel())).then(
+          (results) =>
+            throwSettledAggregate(results, "Plugin source snapshot scrub shutdown failed"),
+        );
+      }
+      return stopping;
+    },
+  };
+}
+
+/** Stop the worker cursors before the registry releases their retained source custody. */
+export async function stopPluginSnapshotScrubs(registry: PluginRegistry): Promise<void> {
+  const owner = registries.get(registry);
+  if (!owner) {
+    return;
+  }
+  owner.stopped = true;
+  const results = await Promise.allSettled(
+    [...owner.entries].map(async (entry) => await entry.cancel()),
+  );
+  throwSettledAggregate(results, "Plugin source snapshot scrub shutdown failed");
 }
 
 export type PluginSnapshotScrubOutcome = {

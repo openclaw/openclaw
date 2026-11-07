@@ -7,7 +7,7 @@ import { createPluginSharedSnapshotModuleLoader } from "./plugin-source-snapshot
 import { createPluginSharedSnapshotNativeLoader } from "./plugin-source-snapshot-native.js";
 import { preparePluginLoaderAliases } from "./sdk-alias.js";
 
-/** Dormant until the shared reader's compatibility and performance gates pass. */
+/** Bind one verified module namespace to the installation and instance owners. */
 export function bindPluginSharedSnapshotModuleLoader(
   params: PluginInstanceModuleLoaderParams,
   rebind: (params: PluginInstanceModuleLoaderParams) => void,
@@ -33,10 +33,15 @@ export function bindPluginSharedSnapshotModuleLoader(
       pluginSdkResolution: params.pluginSdkResolution,
     });
     const report = params.preparedArtifact?.onInvalidSnapshot;
-    const child = createPluginSnapshotChildHost({ snapshot, onInvalidSnapshot: report });
+    const child = createPluginSnapshotChildHost({
+      snapshot,
+      hostAliasContext: aliases.context,
+      onInvalidSnapshot: report,
+    });
     let native: ReturnType<typeof createPluginSharedSnapshotNativeLoader> | undefined;
     const loader = createPluginSharedSnapshotModuleLoader({
       snapshot,
+      onInvalidSnapshot: (error) => void report?.(error),
       resolveHostModule: (specifier) => aliases.resolveAlias(specifier),
       loadBuiltin: (specifier) => child.loadBuiltin(specifier),
       loadNativeModule: (filename) =>
@@ -57,20 +62,7 @@ export function bindPluginSharedSnapshotModuleLoader(
     });
     const bind = preparePluginModuleLoaderRecovery(params, sharedArtifact, rebind);
     bind(
-      (source) => {
-        try {
-          return loader.requireModule(sharedArtifact.resolve(source));
-        } catch (error) {
-          if (
-            error instanceof Error &&
-            "code" in error &&
-            error.code === "PLUGIN_SOURCE_SNAPSHOT_INVALID"
-          ) {
-            void report?.(error);
-          }
-          throw error;
-        }
-      },
+      (source) => loader.requireModule(sharedArtifact.resolve(source)),
       (source) => sharedArtifact.hasSource(source),
     );
     return true;

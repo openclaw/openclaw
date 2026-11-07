@@ -1,5 +1,5 @@
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 type PackageMapContext = {
   packageDir: string;
@@ -231,4 +231,73 @@ export function selectPluginSnapshotPackageMap(map: unknown, context: PackageMap
     );
   }
   return selected;
+}
+
+/** Match the TypeScript configuration lookup used by Jiti without consulting the live tree. */
+export function resolvePluginSnapshotConfigPath(
+  importer: string,
+  request: string,
+  source: {
+    file: (filename: string) => string | undefined;
+    directory: (filename: string) => boolean;
+    packageAt: (directory: string) => { exports?: unknown; tsconfig?: string } | undefined;
+    runtime: "node" | "bun";
+  },
+): string | undefined {
+  const configFile = (filename: string) =>
+    source.file(filename) ??
+    (!filename.endsWith(".json") ? source.file(`${filename}.json`) : undefined);
+  if (request.startsWith(".") || path.isAbsolute(request)) {
+    return configFile(
+      path.resolve(path.dirname(importer), request === ".." ? "../tsconfig.json" : request),
+    );
+  }
+  const parts = request.split("/");
+  const packageName = parts.splice(0, request.startsWith("@") ? 2 : 1).join("/");
+  if (!packageName || request.includes("\\") || request.includes("%")) {
+    return undefined;
+  }
+  let directory = path.dirname(importer);
+  for (;;) {
+    const candidate = path.join(directory, "node_modules", packageName);
+    if (source.directory(candidate)) {
+      const subpath = parts.join("/");
+      const metadata = source.packageAt(candidate);
+      if (metadata?.exports != null) {
+        const selected = selectPluginSnapshotPackageMap(metadata.exports, {
+          packageDir: candidate,
+          request: subpath ? `./${subpath}` : ".",
+          conditions: new Set(["require", "types"]),
+          internal: false,
+          runtime: source.runtime,
+          resolvePackage: () => {
+            throw new Error("Invalid configuration export");
+          },
+        });
+        return selected.protocol === "file:" ? source.file(fileURLToPath(selected)) : undefined;
+      }
+      const configured = source.file(
+        path.join(candidate, subpath || metadata?.tsconfig || "tsconfig.json"),
+      );
+      if (configured) {
+        return configured;
+      }
+      const target = path.join(candidate, subpath);
+      const suffixed = !target.endsWith(".json") ? source.file(`${target}.json`) : undefined;
+      if (suffixed) {
+        return suffixed;
+      }
+      if (source.directory(target)) {
+        return source.file(
+          path.join(target, source.packageAt(target)?.tsconfig || "tsconfig.json"),
+        );
+      }
+      return undefined;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      return undefined;
+    }
+    directory = parent;
+  }
 }

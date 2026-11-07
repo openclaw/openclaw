@@ -1,5 +1,6 @@
 import type { MessagePort } from "node:worker_threads";
 import { z } from "zod";
+import type { PluginLoaderAliasContext } from "./plugin-cache-sdk.js";
 import { PluginSourceSnapshotDescriptorSchema } from "./plugin-source-snapshot.types.js";
 
 const ChildEntrySchema = z.discriminatedUnion("kind", [
@@ -12,6 +13,16 @@ const ChildEntrySchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+const HostAliasContextSchema = z
+  .strictObject({
+    packageRoot: z.string().nullable(),
+    orderedKinds: z.array(z.enum(["dist", "src"])).readonly(),
+    includePrivateQa: z.boolean(),
+    trustedPrivateOwners: z.array(z.string()).readonly(),
+    bundledPlugin: z.boolean(),
+  })
+  .readonly() satisfies z.ZodType<PluginLoaderAliasContext>;
+
 /** Private launch envelope. The host retains physical custody until child exit. */
 export const PluginSnapshotChildEnvelopeSchema = z.strictObject({
   version: z.literal(1),
@@ -22,6 +33,7 @@ export const PluginSnapshotChildEnvelopeSchema = z.strictObject({
   execArgv: z.array(z.string()),
   argv: z.array(z.string()),
   nodeOptions: z.string().nullable(),
+  hostAliasContext: HostAliasContextSchema.optional(),
 });
 export type PluginSnapshotChildEnvelope = z.infer<typeof PluginSnapshotChildEnvelopeSchema>;
 export type PluginSnapshotChildWorkerData = {

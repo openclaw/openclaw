@@ -395,6 +395,7 @@ function createPreparationSession(context: CaptureCommand) {
                 artifact = own(
                   snapshot && command.sourceSnapshot?.shared
                     ? createPluginSharedSnapshotGeneration(
+                        // SAFETY: The shared command selects retained shared custody or shared acquisition above.
                         snapshot as AcquiredPluginSharedSourceSnapshot,
                       )
                     : snapshot

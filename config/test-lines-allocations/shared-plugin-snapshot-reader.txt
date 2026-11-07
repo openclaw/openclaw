@@ -1,2 +1,2 @@
-# Shared snapshot regressions cover authenticated module bytes, relative metadata, worker custody, independent native/child instances, lazy publication, retirement and cancellation.
-1600
+# Shared snapshot regressions: authenticated reads, resolution/cache and symlink parity, verified children, delayed raw reads, adoption and joined scrubs.
+2937

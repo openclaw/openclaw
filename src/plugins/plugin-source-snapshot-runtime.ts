@@ -20,6 +20,7 @@ import {
 } from "./plugin-source-snapshot-artifact.js";
 import { collectInstalledPluginSourceSnapshots } from "./plugin-source-snapshot-collection.js";
 import {
+  type ManagedPluginSnapshotIdentity,
   isManagedPluginSnapshotSource,
   pluginSourceSnapshotOptionsDigest,
 } from "./plugin-source-snapshot-options.js";
@@ -31,6 +32,7 @@ import {
 
 /** Select only a current committed installation; metadata alone never authorizes persisted code. */
 export async function prepareInstalledPluginGenerationArtifact(params: {
+  installation: ManagedPluginSnapshotIdentity;
   pluginId: string;
   rootDir: string;
   source: string;
@@ -55,9 +57,11 @@ export async function prepareInstalledPluginGenerationArtifact(params: {
     !record ||
     !isManagedPluginSnapshotSource(record) ||
     !row.installRecordHash ||
+    installOwner !== params.installation.installOwner ||
+    row.installRecordHash !== params.installation.installRecordHash ||
     hashJson(record) !== row.installRecordHash
   ) {
-    return { ...(await preparePluginGenerationArtifact(params)), assertCurrent: async () => {} };
+    throw new PluginInventoryRetiredError();
   }
   let selected: InstalledPluginIndexRecord = row;
   const assertCurrent = async () => {
@@ -214,16 +218,14 @@ export async function prepareInstalledPluginGenerationArtifact(params: {
     }
     const artifact = prepared.artifact;
     const scrub = prepared.startScrub;
+    const cancelScrub = prepared.cancelScrub;
     const observedSnapshot = selected.sourceSnapshot;
-    const failures = new Set<Promise<void>>();
+    let retirement: Promise<void> | undefined;
     const invalidate = (error: unknown): Promise<void> => {
-      const pending = retireInvalid(error)
-        .catch((failure: unknown) => {
-          process.emitWarning(`Plugin source snapshot retirement failed: ${String(failure)}`);
-        })
-        .finally(() => failures.delete(pending));
-      failures.add(pending);
-      return pending;
+      // All readers of this admission report to one retirement, including deferred loads.
+      return (retirement ??= retireInvalid(error).catch((failure: unknown) => {
+        process.emitWarning(`Plugin source snapshot retirement failed: ${String(failure)}`);
+      }));
     };
     const retireInvalid = async (error: unknown) => {
       const artifactPath = pluginSourceSnapshotArtifactPath(observedSnapshot) ?? params.rootDir;
@@ -261,9 +263,19 @@ export async function prepareInstalledPluginGenerationArtifact(params: {
       );
     };
     artifact.disposeAsync = async () => {
-      await Promise.all(failures);
-      await disposeAsync();
-      await collectInstalledPluginSourceSnapshots(stateDir);
+      try {
+        await cancelScrub?.();
+      } finally {
+        try {
+          await retirement;
+        } finally {
+          try {
+            await disposeAsync();
+          } finally {
+            await collectInstalledPluginSourceSnapshots(stateDir);
+          }
+        }
+      }
     };
     return {
       ...prepared,

@@ -196,6 +196,7 @@ export function createPluginSharedSnapshotView(params: {
       fs.closeSync(pinned.fd);
       throw error;
     }
+    // SAFETY: The file-kind check above rejected non-file entries before guarded open.
     return { filename: selected.filename, entry: selected.entry as FileEntry, fd: pinned.fd };
   };
   const readVerifiedFile = (filename: string): Buffer =>

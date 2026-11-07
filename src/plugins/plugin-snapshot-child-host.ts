@@ -10,6 +10,7 @@ import {
   runtimeNeedsTypeScriptLoader,
   resolveRuntimeWorkerUrl,
 } from "../infra/runtime-worker-url.js";
+import type { PluginLoaderAliasContext } from "./plugin-cache-sdk.js";
 import {
   PLUGIN_SNAPSHOT_CHILD_ARG,
   type PluginSnapshotChildEnvelope,
@@ -25,6 +26,7 @@ const require = createRequire(import.meta.url);
 /** Builtin facades are scoped to one snapshot instance, including its descendant lifetime. */
 export function createPluginSnapshotChildHost(params: {
   snapshot: AcquiredPluginSharedSourceSnapshot;
+  hostAliasContext?: PluginLoaderAliasContext;
   workerData?: unknown;
   onInvalidSnapshot?: (failure: PluginSnapshotChildFailure) => void | Promise<void>;
 }) {
@@ -32,6 +34,27 @@ export function createPluginSnapshotChildHost(params: {
   const preload = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.pluginSnapshotChildPreload);
   const children = new Map<Child, Promise<void>>();
   let disposed = false;
+  const verifySnapshot = <T>(run: () => T): T => {
+    try {
+      return run();
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "PLUGIN_SOURCE_SNAPSHOT_INVALID"
+      ) {
+        void (async () => {
+          await params.onInvalidSnapshot?.({
+            artifactPath: params.snapshot.descriptor.artifact.path,
+            message: error.message,
+          });
+        })().catch((failure: unknown) =>
+          process.emitWarning(`Plugin snapshot validation reporting failed: ${String(failure)}`),
+        );
+      }
+      throw error;
+    }
+  };
   const envelope = (
     entry: PluginSnapshotChildEnvelope["entry"],
     execArgv: string[],
@@ -46,6 +69,7 @@ export function createPluginSnapshotChildHost(params: {
     execArgv,
     argv,
     nodeOptions: nodeOptions ?? null,
+    hostAliasContext: params.hostAliasContext,
   });
   const preloads = (execPath = process.execPath) => {
     const filename = fileURLToPath(preload);
@@ -74,8 +98,10 @@ export function createPluginSnapshotChildHost(params: {
     if (disposed) {
       throw new Error("Plugin snapshot child owner has been disposed");
     }
-    params.snapshot.assertCurrent();
-    return params.snapshot.retain();
+    return verifySnapshot(() => {
+      params.snapshot.assertCurrent();
+      return params.snapshot.retain();
+    });
   };
   const track = (child: Child, lease: AcquiredPluginSharedSourceSnapshot) => {
     const settled = new Promise<void>((resolve) => {
@@ -97,6 +123,7 @@ export function createPluginSnapshotChildHost(params: {
     ) {
       return false;
     }
+    // SAFETY: The launch id selects our envelope; the consumed failure fields are validated below.
     const message = value as PluginSnapshotChildControl;
     if (
       message.failure?.artifactPath !== params.snapshot.descriptor.artifact.path ||
@@ -137,7 +164,7 @@ export function createPluginSnapshotChildHost(params: {
       };
     }
     const target = filename instanceof URL ? fileURLToPath(filename) : path.resolve(filename);
-    params.snapshot.assertMemberPath(target);
+    verifySnapshot(() => params.snapshot.assertMemberPath(target));
     return { kind: "file" as const, filename: target };
   };
   const Worker = new Proxy(workerThreads.Worker, {
@@ -201,7 +228,7 @@ export function createPluginSnapshotChildHost(params: {
     try {
       const filename =
         modulePath instanceof URL ? fileURLToPath(modulePath) : path.resolve(modulePath);
-      params.snapshot.assertMemberPath(filename);
+      verifySnapshot(() => params.snapshot.assertMemberPath(filename));
       const launch = envelope(
         { kind: "file", filename },
         options.execArgv ?? process.execArgv,
@@ -228,6 +255,7 @@ export function createPluginSnapshotChildHost(params: {
         }
         return emit(event, ...values);
       };
+      // SAFETY: track preserves the child object returned by childProcess.fork above.
       return track(child, lease) as childProcess.ChildProcess;
     } catch (error) {
       lease.release();

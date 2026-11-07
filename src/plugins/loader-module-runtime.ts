@@ -186,7 +186,7 @@ export function createPluginModuleLoader(options: {
     standalone?: boolean;
     /** Installer-proven identity when the plugin source cannot change in place. */
     immutableInstallIdentity?: string;
-    managedSourceSnapshot?: boolean;
+    managedSourceSnapshot?: import("./plugin-source-snapshot-options.js").ManagedPluginSnapshotIdentity;
   };
   // Only uncached inspections of immutable installs may share evaluated code.
   const inspection = (owner: Owner) =>
@@ -277,6 +277,7 @@ export function createPluginModuleLoader(options: {
           ? await (
               await import("./plugin-source-snapshot-runtime.js")
             ).prepareInstalledPluginGenerationArtifact({
+              installation: owner.managedSourceSnapshot,
               pluginId: owner.record.id,
               rootDir: owner.rootDir,
               source: modulePath,
@@ -320,10 +321,11 @@ export function createPluginModuleLoader(options: {
           );
           if (preparedArtifact.startScrub) {
             const startScrub = preparedArtifact.startScrub;
-            const removeScrub = registerPluginSnapshotScrub(owner.registry, () =>
-              startScrub(async () => {}),
+            registerPluginSnapshotScrub(
+              instance,
+              () => startScrub(async () => {}),
+              async () => await preparedArtifact.cancelScrub?.(),
             );
-            instance.onModuleDispose(removeScrub);
           }
         } catch (error) {
           await preparedArtifact.artifact.disposeAsync();

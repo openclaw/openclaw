@@ -20,8 +20,12 @@ import {
 } from "./plugin-cache.js";
 import * as worker from "./plugin-generation-worker.js";
 import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
+import { PluginInstance } from "./plugin-instance.js";
+import { bindPluginSharedSnapshotModuleLoader } from "./plugin-shared-snapshot-module-loader.js";
+import { createPluginSnapshotChildHost } from "./plugin-snapshot-child-host.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import { collectPluginSourceSnapshots } from "./plugin-source-snapshot-artifact.js";
+import type { ManagedPluginSnapshotIdentity } from "./plugin-source-snapshot-options.js";
 import { prepareInstalledPluginGenerationArtifact } from "./plugin-source-snapshot-runtime.js";
 import {
   PluginSourceSnapshotDescriptorSchema,
@@ -51,7 +55,10 @@ async function withFixture(
     read: () => ReturnType<typeof parseInstalledPluginIndex>;
     writeSnapshot: (descriptor: PluginSourceSnapshotDescriptor) => Promise<void>;
     refresh: (record: PluginInstallRecord) => Promise<unknown>;
-    prepare: () => ReturnType<typeof prepareInstalledPluginGenerationArtifact>;
+    prepare: (
+      installation?: ManagedPluginSnapshotIdentity,
+    ) => ReturnType<typeof prepareInstalledPluginGenerationArtifact>;
+    removeInstallation: () => Promise<unknown>;
     selectInventory: () => void;
     inventoryRetired: () => boolean;
   }) => Promise<void>,
@@ -69,7 +76,7 @@ async function withFixture(
     "package-owner",
   );
   const entry = candidate.source;
-  const source = "export const value = 'installed';\n";
+  const source = "export const value = 'installed'; export const deferred = () => import('dep');\n";
   fs.writeFileSync(entry, source);
   fs.writeFileSync(
     path.join(rootDir, "package.json"),
@@ -139,8 +146,21 @@ async function withFixture(
               await store.write(current);
             },
             refresh,
-            prepare: async () => {
+            removeInstallation: () =>
+              refreshPersistedInstalledPluginIndexWithReceipt({
+                env,
+                candidates: [],
+                installRecords: {},
+                reason: "source-changed",
+              }),
+            prepare: async (
+              installation = {
+                installOwner: "package-owner",
+                installRecordHash: read()!.plugins[0]!.installRecordHash!,
+              },
+            ) => {
               const prepared = await prepareInstalledPluginGenerationArtifact({
+                installation,
                 pluginId: "demo",
                 rootDir,
                 source: entry,
@@ -172,6 +192,31 @@ async function withFixture(
   );
 }
 
+it.each(["removed", "replaced"] as const)(
+  "rejects a %s installation before preparing a stale managed candidate",
+  async (change) => {
+    await withFixture(true, async (fixture) => {
+      const installation = {
+        installOwner: "package-owner",
+        installRecordHash: fixture.read()!.plugins[0]!.installRecordHash!,
+      };
+      if (change === "removed") {
+        await fixture.removeInstallation();
+      } else {
+        await fixture.refresh({ ...fixture.record, spec: "demo@2.0.0" });
+      }
+      const prepare = vi.spyOn(worker, "preparePluginGenerationArtifact");
+      const outcome = await fixture.prepare(installation).then(
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error }),
+      );
+      await outcome.value?.artifact.disposeAsync();
+      expect(outcome.error).toBeInstanceOf(PluginInventoryRetiredError);
+      expect(prepare).not.toHaveBeenCalled();
+    });
+  },
+);
+
 it("keeps the selected inventory alive while replacing an invalid named snapshot", async () => {
   try {
     await withFixture(true, async (fixture) => {
@@ -194,6 +239,70 @@ it("keeps the selected inventory alive while replacing an invalid named snapshot
   } finally {
     resetPluginCache();
   }
+});
+
+it("allows raw child reads, then retires corruption at scrub and recaptures next start", async () => {
+  await withFixture(true, async (fixture) => {
+    const first = await fixture.prepare();
+    await first.artifact.disposeAsync();
+    const bad = PluginSourceSnapshotDescriptorSchema.parse(
+      fixture.read()?.plugins[0]?.sourceSnapshot,
+    );
+    const prepared = await fixture.prepare();
+    const host = createPluginSnapshotChildHost({ snapshot: prepared.artifact.sharedSnapshot! });
+    const childPath = prepared.artifact.resolve(
+      path.join(fixture.rootDir, "node_modules", "dep", "index.js"),
+    );
+    const { spawn } = host.loadBuiltin("node:child_process") as typeof import("node:child_process");
+    const launch = () =>
+      new Promise<string>((resolve, reject) => {
+        const child = spawn(process.execPath, [childPath], {
+          env: { ...process.env, NODE_OPTIONS: "" },
+        });
+        let output = "";
+        let errors = "";
+        child.stdout.on("data", (chunk) => {
+          output += String(chunk);
+        });
+        child.stderr.on("data", (chunk) => {
+          errors += String(chunk);
+        });
+        child.once("error", reject);
+        child.once("close", (code) => (code === 0 ? resolve(output) : reject(new Error(errors))));
+      });
+    try {
+      expect(await launch()).toBe("");
+      fs.chmodSync(childPath, 0o600);
+      fs.writeFileSync(childPath, "console.log('changed child bytes');\n");
+      // Raw execution is deliberately outside the verified loader, like raw asset reads.
+      expect(await launch()).toBe("changed child bytes\n");
+      expect(fixture.warnings).toEqual([]);
+      expect((await prepared.startScrub!(async () => {})).status).toBe("failed");
+      expect(fixture.read()?.plugins[0]).not.toHaveProperty("sourceSnapshot");
+      expect(fixture.warnings).toEqual([
+        expect.objectContaining({
+          source: bad.artifact.path,
+          message: expect.stringContaining("index.js"),
+        }),
+      ]);
+      expect(fixture.read()?.plugins[0]?.sourceSnapshotWarning?.artifactPath).toBe(
+        bad.artifact.path,
+      );
+    } finally {
+      await host.disposeAsync();
+      await prepared.artifact.disposeAsync();
+    }
+    const next = await fixture.prepare();
+    try {
+      expect(
+        PluginSourceSnapshotDescriptorSchema.parse(fixture.read()?.plugins[0]?.sourceSnapshot)
+          .generation,
+      ).not.toBe(bad.generation);
+      expect(fs.readFileSync(next.artifact.resolve(fixture.entry), "utf8")).toContain("installed");
+    } finally {
+      await next.artifact.disposeAsync();
+    }
+  });
 });
 
 it("keeps legacy installations without a digest on the fresh capture path", async () => {
@@ -347,9 +456,15 @@ it.each(invalidSnapshots.flatMap((damage) => [false, true].map((edited) => ({ da
   },
 );
 
-it.each(["used", "unused"] as const)(
-  "retires %s corruption at load or scrub and recaptures next start",
-  async (use) => {
+it.each(
+  (["used", "unused"] as const).flatMap((use) =>
+    (process.platform === "win32" ? (["bytes"] as const) : (["bytes", "permissions"] as const)).map(
+      (damage) => ({ use, damage }),
+    ),
+  ),
+)(
+  "retires $use $damage corruption at load or scrub and recaptures next start",
+  async ({ use, damage }) => {
     await withFixture(true, async (fixture) => {
       const first = await fixture.prepare();
       await first.artifact.disposeAsync();
@@ -363,8 +478,10 @@ it.each(["used", "unused"] as const)(
           ? fixture.entry
           : path.join(fixture.rootDir, "node_modules", "dep", "index.js");
       const member = prepared.artifact.resolve(source);
-      fs.chmodSync(member, 0o600);
-      fs.writeFileSync(member, "changed");
+      fs.chmodSync(member, damage === "permissions" ? 0o666 : 0o600);
+      if (damage === "bytes") {
+        fs.writeFileSync(member, "changed");
+      }
       try {
         if (use === "used") {
           let failure: unknown;
@@ -494,5 +611,53 @@ it("refuses binding and releases capture when the installed owner changes during
     expect(capturedRoot).toBeDefined();
     expect(fs.existsSync(capturedRoot!)).toBe(false);
     expect(fixture.read()?.plugins[0]).not.toHaveProperty("sourceSnapshot");
+  });
+});
+
+it("automatically retires a snapshot after a deferred module verification failure", async () => {
+  await withFixture(true, async (fixture) => {
+    const first = await fixture.prepare();
+    await first.artifact.disposeAsync();
+    const descriptor = PluginSourceSnapshotDescriptorSchema.parse(
+      fixture.read()?.plugins[0]?.sourceSnapshot,
+    );
+    const prepared = await fixture.prepare();
+    const instance = new PluginInstance("demo");
+    bindPluginSharedSnapshotModuleLoader(
+      {
+        instance,
+        origin: "global",
+        source: fixture.entry,
+        rootDir: fixture.rootDir,
+        preparedArtifact: prepared,
+      },
+      () => {
+        throw new Error("unexpected recovery");
+      },
+    );
+    try {
+      const loaded = instance.loadModule(fixture.entry) as {
+        deferred: () => Promise<unknown>;
+      };
+      const dependency = prepared.artifact.resolve(
+        path.join(fixture.rootDir, "node_modules", "dep", "index.js"),
+      );
+      fs.chmodSync(dependency, 0o600);
+      fs.writeFileSync(dependency, "module.exports = 'altered';\n");
+      await expect(loaded.deferred()).rejects.toMatchObject({
+        code: "PLUGIN_SOURCE_SNAPSHOT_INVALID",
+      });
+      // Disposal joins owner-held retirement without explicitly reporting the failure.
+      await instance.dispose();
+      expect(fixture.read()?.plugins[0]).not.toHaveProperty("sourceSnapshot");
+      expect(fixture.read()?.plugins[0]?.sourceSnapshotWarning?.artifactPath).toBe(
+        descriptor.artifact.path,
+      );
+      expect(fixture.warnings).toHaveLength(1);
+      expect(fixture.warnings[0]?.message).toContain("Retiring this snapshot");
+    } finally {
+      await instance.dispose();
+      await prepared.artifact.disposeAsync();
+    }
   });
 });
