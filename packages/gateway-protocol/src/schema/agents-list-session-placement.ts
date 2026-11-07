@@ -19,8 +19,9 @@ export const AgentsListPlacementProperties = {
   ),
 };
 
-/** Empty by default; clients opt into the session placement policy projection. */
+/** Defaults retain the full roster; clients can request lightweight projections. */
 export const AgentsListParamsSchema = closedObject({
+  includeAvatars: Type.Optional(Type.Boolean()),
   includeSessionPlacement: Type.Optional(Type.Boolean()),
 });
 
