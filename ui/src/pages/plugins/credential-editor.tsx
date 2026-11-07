@@ -29,6 +29,7 @@ import type { ConfigNodeRenderParams } from "../../components/config-form.node.s
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -39,9 +40,9 @@ import {
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../lib/ime.ts";
-import { t } from "../../lib/reactive/i18n.ts";
 import "./credential-editor.css";
 import "./custom-elements.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 
 registerPluginManagementEnglish();
 const credentialReferenceParts = ["provider", "id"] as const;
@@ -380,9 +381,9 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   const Failure = (feedback: { message: string; dialog?: boolean }) => (
     <>
       {feedback.dialog ? (
-        <p role="alert" class="callout danger">
+        <InlineAlert tone="danger" role="alert">
           {feedback.message}
-        </p>
+        </InlineAlert>
       ) : (
         <div role="alert">
           {feedback.message}
@@ -641,7 +642,9 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                     </For>
                     <p class="muted">{t(`pluginsPage.credentials.help.${reference.source}`)}</p>
                     {unresolved() ? (
-                      <p class="callout warn">{t("pluginsPage.credentials.unresolved")}</p>
+                      <InlineAlert tone="warning">
+                        {t("pluginsPage.credentials.unresolved")}
+                      </InlineAlert>
                     ) : null}
                   </>
                 )}
