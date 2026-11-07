@@ -104,6 +104,35 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
   expect(await readdir(scratch)).toEqual([]);
 });
 
+it("snapshot output errors clean up scratch databases", async () => {
+  const dir = tempDirs.make("knowledge-source-output-");
+  const scratch = tempDirs.make("knowledge-source-scratch-");
+  const input = path.join(dir, "input.jsonl");
+  await writeFile(input, jsonl([{ id: "a", payload: { text: "hello" } }]));
+  for (const name of ["output.jsonl", "output.jsonl.gz"]) {
+    const output = path.join(dir, name);
+    await mkdir(output);
+    expect(() =>
+      run(
+        manifestScript,
+        [
+          "snapshot",
+          ...flags({
+            provider: "discord",
+            "source-key": "discord:guild:channel",
+            "coverage-start": "2026-09-25T00:00:00Z",
+            "coverage-end": "2026-09-26T00:00:00Z",
+            input,
+            output,
+          }),
+        ],
+        { timeout: 10_000, env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch } },
+      ),
+    ).toThrow(/EISDIR/);
+    expect(await readdir(scratch)).toEqual([]);
+  }
+});
+
 it("newest prior observation wins independent of argument order and partial snapshots do not prove deletion", async () => {
   const dir = tempDirs.make("knowledge-source-ingest-");
   const at = (n: number) => [
