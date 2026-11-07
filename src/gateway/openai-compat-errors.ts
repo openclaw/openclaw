@@ -5,6 +5,7 @@ import type { FailoverReason } from "../agents/failover/signal.js";
 import { TLS_CERTIFICATE_ERROR_USER_TEXT } from "../agents/failover/user-copy.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { SessionWorkStartError } from "../config/sessions/session-work-start.js";
+import { isSessionWorkStartInvalidatedError } from "../config/sessions/work-start-error.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 
 export type OpenAiCompatError = {
@@ -43,6 +44,17 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
       error: {
         message: "Session is archived. Restore it in the Control UI before retrying.",
         type: "invalid_request_error",
+      },
+    };
+  }
+  if (isSessionWorkStartInvalidatedError(err)) {
+    // Changed/invalidated work starts are retryable conflicts, not internal errors.
+    return {
+      status: 409,
+      error: {
+        message: err instanceof Error ? err.message : "Session changed while starting work. Retry.",
+        type: "invalid_request_error",
+        code: (err as { code?: string }).code,
       },
     };
   }
