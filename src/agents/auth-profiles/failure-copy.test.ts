@@ -29,6 +29,8 @@ const RECOVERY_BY_REASON = {
   context_overflow: true,
   model_not_found: false,
   session_expired: true,
+  // A local relay refusal is not a credential state, so its copy must not push re-login.
+  session_authority: false,
   empty_response: true,
   no_error_details: true,
   unclassified: true,

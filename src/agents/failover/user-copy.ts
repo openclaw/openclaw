@@ -621,6 +621,9 @@ const AUTH_PROFILE_COOLDOWN_COPY = {
   auth: (provider: string) =>
     `Couldn't sign in to ${provider}. Your saved login looks expired or no longer works.`,
   auth_permanent: (provider: string) => `${provider} isn't accepting your saved login anymore.`,
+  // Never a credential state, but the map is exhaustive: keep the copy off sign-in advice.
+  session_authority: (provider: string) =>
+    `${provider} refused this request before sending it. Start a fresh request with /new.`,
   format: authProfileUnavailableCopy,
   rate_limit: (provider: string) =>
     `${provider} is asking us to slow down. Please wait a moment before trying again.`,

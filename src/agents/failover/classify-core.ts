@@ -40,6 +40,7 @@ import {
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
+  isCodexLocalAuthorizationRefusalMessage,
   isOverloadedErrorMessage,
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
@@ -73,6 +74,9 @@ const PRIORITY_MESSAGE_CLASSIFIERS: ReadonlyArray<
 > = [
   [isUnsupportedImageInputErrorMessage, "format"],
   [isClaudeCliAuthError, "auth"],
+  // The private Codex relay refuses a request before it reaches the provider, so its
+  // refusal is authority for that run only and must not cool down a healthy credential.
+  [isCodexLocalAuthorizationRefusalMessage, "session_authority"],
   [isSessionTranscriptValidationErrorMessage, "format"],
   [isCliSessionExpiredErrorMessage, "session_expired"],
   [isModelNotFoundErrorMessage, "model_not_found"],

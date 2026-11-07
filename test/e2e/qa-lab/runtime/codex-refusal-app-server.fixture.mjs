@@ -26,6 +26,13 @@ const failures = {
     message: "An error occurred while processing your request. Synthetic detail.",
     codexErrorInfo: "internalServerError",
   },
+  // The private inference relay denies the run before the provider is touched, and the
+  // native transport keeps only the body's message in this status-bearing prose.
+  "local-owner": {
+    message:
+      "unexpected status 403 Forbidden: Codex cannot verify the owner of this model request. Start a fresh request before retrying., url: http://127.0.0.1:20128/backend-api/codex/responses",
+    codexErrorInfo: "other",
+  },
 };
 if (!requestLog || !appServerVersion || !Object.hasOwn(failures, failureKind)) {
   throw new Error("missing Codex refusal fixture environment");

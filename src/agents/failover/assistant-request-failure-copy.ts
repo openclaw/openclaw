@@ -79,6 +79,8 @@ const ASSISTANT_REQUEST_FAILURE_COPY = {
   auth: "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
   auth_permanent:
     "The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`.",
+  session_authority:
+    "This request was refused before it reached the AI service, so your sign-in still works. Start a fresh request with /new, or ask a gateway administrator to update the model policy.",
   format: PROVIDER_SCHEMA_REJECTION_USER_TEXT,
   rate_limit: "The AI service needs a short break. Please try again in a few minutes.",
   overloaded: "The AI service is busy. Please try again in a moment, or choose another model.",

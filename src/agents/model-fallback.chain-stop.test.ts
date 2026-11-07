@@ -239,6 +239,30 @@ it.each(stopCases)(
   },
 );
 
+it("stops the chain for a local Codex authority refusal without blaming a candidate model", async () => {
+  const refusal = new Error(
+    "unexpected status 403 Forbidden: Codex cannot verify the owner of this model request. Start a fresh request before retrying., url: http://127.0.0.1:20128/backend-api/codex/responses",
+  );
+  const run = vi.fn().mockRejectedValueOnce(refusal).mockResolvedValueOnce("must not run");
+  const onError = vi.fn();
+  const onFallbackStep = vi.fn<ModelFallbackStepHandler>();
+  await expect(
+    runWithModelFallback({ ...fallbackOptions, run, onError, onFallbackStep }),
+  ).rejects.toBe(refusal);
+  expect(run).toHaveBeenCalledOnce();
+  expect(onError).not.toHaveBeenCalled();
+  expect(onFallbackStep).not.toHaveBeenCalled();
+  await capture.flush();
+  // Recorded as a local coordination stop: the chain surfaces the refusal itself
+  // rather than recording a fallback decision against the candidate model.
+  const records = fallbackRecords();
+  expect(records).toHaveLength(1);
+  expect(records[0]?.attributes).toMatchObject({
+    event: "model_fallback_chain_stopped",
+    reason: "local_runtime_coordination",
+  });
+});
+
 it.each([
   {
     name: "cannot be read",

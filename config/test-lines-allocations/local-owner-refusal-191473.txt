@@ -1,0 +1,4 @@
+# Local Codex owner refusal (#191473): 188-line Gateway turn proof that the shared
+# OAuth profile keeps serving the next sibling run, plus the classifier, chain-stop,
+# HTTP-projection and copy regressions that pin the same reason at each owner boundary.
+292

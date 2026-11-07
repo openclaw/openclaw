@@ -14,6 +14,8 @@ export const FAILOVER_PROBE_STATUS = {
   context_overflow: "unknown",
   model_not_found: "format",
   session_expired: "unknown",
+  // A local relay refusal says nothing about the credential or the provider's health.
+  session_authority: "unknown",
   empty_response: "unknown",
   no_error_details: "unknown",
   unclassified: "unknown",

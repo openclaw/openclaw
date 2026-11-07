@@ -8,6 +8,7 @@ import {
 import {
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
+  isCodexLocalAuthorizationRefusalMessage,
   isRateLimitErrorMessage,
 } from "./message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
@@ -228,6 +229,11 @@ export function classifyFailoverClassificationFromHttpStatus(
   if (status === 401 || status === 403) {
     if (opts?.preserveProviderSignalClassification && messageClassification) {
       return messageClassification;
+    }
+    // The local relay refused on behalf of this run; the credential never answered, so it
+    // stays out of the auth path that cools down every agent sharing the profile.
+    if (message && isCodexLocalAuthorizationRefusalMessage(message)) {
+      return toReasonClassification("session_authority");
     }
     if (message && isAuthPermanentErrorMessage(message)) {
       return toReasonClassification("auth_permanent");

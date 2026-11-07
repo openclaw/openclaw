@@ -25,6 +25,7 @@ const doctorUiConsumers = [
   "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts",
   "test/e2e/qa-lab/runtime/codex-auth-doctor-migration-product-proof.e2e.test.ts",
   "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
+  "test/e2e/qa-lab/runtime/codex-local-refusal-profile-health.e2e.test.ts",
   "test/e2e/qa-lab/runtime/doctor-auth-secretref-checks.e2e.test.ts",
   "test/e2e/qa-lab/runtime/gateway-codex-refusal-product-proof.e2e.test.ts",
 ].map((file) => ({ file, configs: aiPackageConsumer.configs, dir: "" }));

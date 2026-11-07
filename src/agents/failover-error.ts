@@ -186,6 +186,9 @@ const FAILOVER_STATUS = new Map<FailoverReason, number>([
   ["overloaded", 503],
   ["auth", 401],
   ["auth_permanent", 403],
+  // The local relay refused this run on authority grounds, which API clients read as a
+  // permission rejection rather than the retryable server failure an unmapped reason gets.
+  ["session_authority", 403],
   ["timeout", 408],
   ["tls_certificate", 502],
   ["context_overflow", 413],
@@ -738,6 +741,11 @@ export function resolveModelFallbackError(
   }
   const failoverError = coerceToFailoverError(err, context);
   if (failoverError) {
+    // A host-owned authority refusal says nothing about the candidate model: choosing
+    // another model cannot re-establish the run's owner, so the chain surfaces it as-is.
+    if (failoverError.reason === "session_authority") {
+      return { kind: "coordination", error: err };
+    }
     return { kind: "failover", error: failoverError };
   }
   if (hasMissingToolResultFailure(err) || staleLifecycleFailure) {

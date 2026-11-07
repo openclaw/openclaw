@@ -191,6 +191,43 @@ describe("failover classification", () => {
     expect(classifyFailoverReason(message)).toBe("timeout");
   });
 
+  it("classifies a local Codex relay refusal as run authority instead of credential auth", () => {
+    // The private relay answers these itself, so the native flattened prose must not
+    // be read as the shared credential failing for every agent that reuses it.
+    // This is the form Codex actually surfaces: the JSON body is reduced to `error.message`.
+    expect(
+      classifyFailoverReason(
+        "unexpected status 403 Forbidden: Codex cannot verify the owner of this model request. Start a fresh request before retrying., url: http://127.0.0.1:20128/backend-api/codex/responses",
+        noPlugin,
+      ),
+    ).toBe("session_authority");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","status":403,"error":{"type":"invalid_request_error","code":"model_permission_denied","message":"Codex cannot verify the owner of this model request. Start a fresh request before retrying."}}',
+        noPlugin,
+      ),
+    ).toBe("session_authority");
+    expect(
+      classifyFailoverSignal(
+        {
+          status: 403,
+          message:
+            "Your operator role cannot use this model. Choose an allowed model or ask a gateway administrator to update your role's model policy.",
+        },
+        noPlugin,
+      ),
+    ).toMatchObject({ kind: "reason", reason: "session_authority" });
+  });
+
+  it("keeps a provider-side model_permission_denied refusal on the auth path", () => {
+    expect(
+      classifyFailoverReason(
+        '{"status":403,"error":{"type":"permission_error","code":"model_permission_denied","message":"The model is not available for your account."}}',
+        noPlugin,
+      ),
+    ).toBe("auth");
+  });
+
   it("keeps HTTP 429 overload wording in rate-limit backoff and copy", () => {
     const message =
       '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}';
