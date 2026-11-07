@@ -123,13 +123,27 @@ it.each(["default", "per-agent"])(
             const evaluate = (agentId = "main") =>
               evaluateDecisionV2InRegistry(batch, decisionOptions({ agentId }), registry, config);
             try {
+              // Match the other source-only provider fixtures: compilation is setup,
+              // not part of the native request's unchanged operation deadline.
+              const importStartedAt = performance.now();
+              await import("../agents/decision-inference.js");
+              const importElapsedMs = Math.round(performance.now() - importStartedAt);
               await using prepared = await prepareDecisionRuntime(
                 config,
                 "clawrouter",
                 "openai/gpt-6-luna",
                 "main",
               );
+              const evaluateStartedAt = performance.now();
               const outcome = await evaluate();
+              const evaluation = {
+                importElapsedMs,
+                evaluateElapsedMs: Math.round(performance.now() - evaluateStartedAt),
+                nativeRequests: requests.filter(
+                  (request) => request.path === "/v1/native/openai/v1/decisions",
+                ).length,
+              };
+              console.info("[clawrouter-fixture-timing] " + JSON.stringify(evaluation));
               expect(
                 listDecisionModels({ config, snapshot: prepared.snapshot.metadataSnapshot }),
               ).toContainEqual(
@@ -142,7 +156,7 @@ it.each(["default", "per-agent"])(
               expect(
                 outcome,
                 outcome.status === "unavailable"
-                  ? "Decision unavailable: " + outcome.reason
+                  ? `Decision unavailable: ${outcome.reason}; ${JSON.stringify(evaluation)}`
                   : undefined,
               ).toMatchObject({
                 status: "ok",

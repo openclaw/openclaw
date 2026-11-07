@@ -208,6 +208,16 @@ export function createStateStartupCorpusFixture() {
                   repairPrefixedConfig: true,
                   doctorOnlyStateMigrations: true,
                   preparePluginMetadataSnapshot: true,
+                  measure: async (name, run) => {
+                    // Retain the interrupted inner phase in the existing bounded,
+                    // failure-only report without changing the two-pass deadline.
+                    diagnostics.stage(`doctor-${pass + 1}:${name}:start`);
+                    try {
+                      return await run();
+                    } finally {
+                      diagnostics.stage(`doctor-${pass + 1}:${name}:done`);
+                    }
+                  },
                 }),
               );
               phase("startup-config-read");

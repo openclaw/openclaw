@@ -1,0 +1,3 @@
+# Exact +55 LF lines: existing Doctor/startup failure diagnostics and ClawRouter
+# source setup, preserving operation deadlines, cleanup, and all assertions.
+55
