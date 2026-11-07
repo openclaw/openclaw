@@ -284,6 +284,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                     preserveExistingDefaultModel: true,
                     ...(workspaceDir ? { workspaceDir } : {}),
                     signal,
+                    assertCurrent,
                     isRemote: true,
                     beforePersistentEffect: () => {
                       signal.throwIfAborted();

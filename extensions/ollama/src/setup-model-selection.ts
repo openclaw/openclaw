@@ -3,6 +3,7 @@ import {
   selectPreferredLocalModelId,
   type ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isHostedOllamaCloud } from "./defaults.js";
 import { getOllamaLatestDedupeKey } from "./model-id.js";
 import {
@@ -156,6 +157,7 @@ export async function inspectOllamaModelsForSetup(
   baseUrl: string,
   models: OllamaModelWithContext[],
   signal?: AbortSignal,
+  fetchWithGuard?: typeof fetchWithSsrFGuard,
 ): Promise<{ inspected: OllamaModelWithContext[]; inspectionFailures: string[] }> {
   const apiBase = resolveOllamaApiBase(baseUrl);
   const inspected: OllamaModelWithContext[] = [];
@@ -169,6 +171,7 @@ export async function inspectOllamaModelsForSetup(
           const showInfo = await readOllamaModelShowInfo(apiBase, model.name, {
             timeoutMs: 3000,
             signal,
+            fetchWithGuard,
             auditContext: "ollama-setup.tools-scan",
           });
           return mergeOllamaModelShowInfo(model, showInfo);
@@ -193,9 +196,11 @@ export async function discoverOllamaModelsForSetup(params: {
   includeRemoteModels?: boolean;
   inspectTools?: boolean;
   signal?: AbortSignal;
+  fetchWithGuard?: typeof fetchWithSsrFGuard;
 }) {
   const { reachable, models: listedModels } = await fetchOllamaModels(params.baseUrl, {
     signal: params.signal,
+    fetchWithGuard: params.fetchWithGuard,
   });
   // Filter before probe caps so remote stubs cannot crowd out Local only models.
   const models =
@@ -207,10 +212,16 @@ export async function discoverOllamaModelsForSetup(params: {
     !reachable
       ? { inspected: [], inspectionFailures: [] }
       : params.inspectTools
-        ? await inspectOllamaModelsForSetup(params.baseUrl, firstModels, params.signal)
+        ? await inspectOllamaModelsForSetup(
+            params.baseUrl,
+            firstModels,
+            params.signal,
+            params.fetchWithGuard,
+          )
         : {
             inspected: await enrichOllamaModelsWithContext(params.baseUrl, firstModels, {
               signal: params.signal,
+              fetchWithGuard: params.fetchWithGuard,
             }),
             inspectionFailures: [],
           };
@@ -223,6 +234,7 @@ export async function discoverOllamaModelsForSetup(params: {
       params.baseUrl,
       models.slice(OLLAMA_CONTEXT_ENRICH_LIMIT),
       params.signal,
+      params.fetchWithGuard,
     );
     inspection.inspected.push(...remainingScan.inspected);
     inspection.inspectionFailures.push(...remainingScan.inspectionFailures);

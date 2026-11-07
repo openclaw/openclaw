@@ -45,7 +45,7 @@ describe("ollama lazy imports", () => {
       createOllamaNodeInferenceTool: () => ({ execute: async () => ({ content: [] }) }),
     });
     mockRuntime("setup", "./src/setup.runtime.js", {
-      promptAndConfigureOllama: async () => ({ config: {} }),
+      runOllamaInteractiveSetup: async () => ({ profiles: [], configPatch: {} }),
     });
     mockRuntime("stream", "./src/stream.runtime.js", {
       createConfiguredOllamaStreamFn: () => async () => ({ transport: "ollama" }),
