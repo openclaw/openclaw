@@ -655,7 +655,6 @@ it("remeasures panes from a plain owner geometry commit while preserving hidden 
   transcriptDomState.measuredRowHeight = 180;
   emitTranscriptResize(mainScroller, 640, 600);
   renderTranscripts();
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   await flushDeferredRowPrune();
   expect(viewportChanged).toHaveBeenCalledOnce();
   expect(transcriptSize(mainPanel)).toBe(720);

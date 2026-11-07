@@ -531,6 +531,7 @@ it("parks retained rows without layout and restores their resized geometry and n
     expect(Math.abs(viewport.scrollHeight - extent)).toBeLessThanOrEqual(1);
 
     host.style.width = "480px";
+    session.syncViewportGeometry();
     await settleLayout();
     expect(row.getClientRects()).toHaveLength(0);
     expect(virtualizer.itemSizeCache.get(key)).toBeCloseTo(height, 1);

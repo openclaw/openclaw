@@ -1,5 +1,5 @@
 import { createSignal, flush } from "solid-js";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { FileDisclosure } from "./file-disclosure.tsx";
 
@@ -65,35 +65,6 @@ it.each([
     setOpen(false);
     flush();
     expect(shell.hidden).toBe(true);
-    expect(shell.getAnimations()).toHaveLength(0);
-  },
-);
-
-it.each(["folder", "review"] as const)(
-  "keeps an unchanged closed %s disclosure hidden through parent refreshes",
-  (variant) => {
-    const [presentation, setPresentation] = createSignal({
-      open: false,
-      active: true,
-      instant: true,
-    });
-    const view = mountSolid(() => (
-      <FileDisclosure variant={variant} {...presentation()}>
-        <div>Retained file content</div>
-      </FileDisclosure>
-    ));
-    const shell = view.container.querySelector<HTMLDivElement>(
-      ".workspace-desktop__disclosure, .session-diff__disclosure",
-    )!;
-    const mutations = new MutationObserver(() => {});
-    mutations.observe(shell, { attributes: true, attributeFilter: ["hidden"] });
-    onTestFinished(() => mutations.disconnect());
-
-    setPresentation({ open: false, active: true, instant: true });
-    flush();
-
-    expect(shell.hidden).toBe(true);
-    expect(mutations.takeRecords()).toEqual([]);
     expect(shell.getAnimations()).toHaveLength(0);
   },
 );

@@ -334,8 +334,11 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
 Continuous gestures are opt-in with `--steps gestures`: pointer sweeps and wheel
 scrolling over Sidebar, Chat, Advanced Settings and Sessions; transcript selection
 across the virtual window and within a message; sidebar/split dividers; window
-resizing; and mobile portrait/landscape viewport changes. Fixtures use 100/2,000
-messages and 100/1,000 sessions (Sessions still renders its 100-row page, and
+resizing; and mobile portrait/landscape viewport changes. The window-resize
+scenario retains the Review panel; `gesture-window-resize-details-{realistic,large}`
+also explicitly opens the session Details inspector and checks that it stays open.
+Fixtures use 100/2,000 messages and 100/1,000 sessions (Sessions still renders its
+100-row page, and
 Advanced Settings has 303 fields in both variants). Pointer and wheel input target
 60 Hz; viewport commands serialize to preserve driver correctness. Each result
 records actual delivery cadence, rAF interval median/p95 and counts above 16.7/33 ms,
@@ -352,15 +355,7 @@ the gesture's bounds/assertion and settle work; dividing by native input count i
 an amortized cost, not causal per-event attribution. Missing engine fields remain
 null. `--gesture-geometry` additionally captures bounded geometry-read stacks;
 read attempts are not proof of forced layout, and this diagnostic instrumentation
-must not be used for timing acceptance. `--gesture-transcript-geometry` is a
-separate diagnostic for resize gestures: it samples active transcript row
-adjacency, visible `.chat-text` containment (respecting collapsed disclosures),
-and the virtual row size against the owner's unscaled fractional border box.
-It fails on visible overlap or clipped text above 0.5 px, missing samples, or
-final cache/DOM size disagreement above 0.5 px. It reads layout each frame;
-never use its timings or native pass counts for acceptance or combine it with
-`--gesture-geometry`. Pseudo-elements, decorations, images and top-layer overlays
-are outside this text-fixture diagnostic; inspect those separately when present.
+must not be used for timing acceptance.
 
 Idle scenarios default to a 30-second Node-side measurement window. Use
 `--idle-duration-ms` for a bounded diagnostic or rotated comparison; the manifest
