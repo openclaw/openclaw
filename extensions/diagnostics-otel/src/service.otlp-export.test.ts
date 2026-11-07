@@ -1,3 +1,5 @@
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,6 +17,7 @@ import {
 import { expect, onTestFinished, test, vi } from "vitest";
 import { runModelCallAndCaptureTraceparent } from "../../../test/e2e/qa-lab/runtime/otel-model-call.test-support.js";
 import { startLocalOtlpReceiver } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
+import { resolveOtelHttpAgentOptions } from "./service-exporter.js";
 import { createDiagnosticsOtelService } from "./service.js";
 import {
   captureOtelDiagnostics,
@@ -440,6 +443,31 @@ async function expectSafeStartupFailure(
     expect(JSON.stringify(vi.mocked(logger).mock.calls)).not.toContain(sentinel);
   }
 }
+
+test.skipIf(process.platform === "win32")(
+  "rejects FIFO TLS material before the SDK reads it",
+  () => {
+    const certDir = mkdtempSync(path.join(tmpdir(), "openclaw-otel-tls-"));
+    onTestFinished(() => rmSync(certDir, { force: true, recursive: true }));
+    const certificate = path.join(certDir, "private-certificate.pipe");
+    execFileSync("mkfifo", [certificate]);
+    // A finite producer releases the old blocking reader without a timer race.
+    const writer = spawn(
+      process.execPath,
+      ["-e", "require('node:fs').writeFileSync(process.argv[1], 'pipe certificate')", certificate],
+      { stdio: "ignore" },
+    );
+    const closed = once(writer, "close");
+    onTestFinished(async () => {
+      writer.kill();
+      await closed;
+    });
+    process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE = certificate;
+    expect(() =>
+      resolveOtelHttpAgentOptions({ url: undefined, signalIdentifier: "TRACES" }),
+    ).toThrow(UNREADABLE_TLS_ERROR);
+  },
+);
 
 test.each(["missing", "default-endpoint", "untrimmed", "empty", "mTLS"] as const)(
   "rejects %s TLS material without exposing its path",

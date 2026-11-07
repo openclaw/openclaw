@@ -1,8 +1,9 @@
-import { readFileSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import nodePath from "node:path";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { collectErrorGraphCandidates, readErrorName } from "openclaw/plugin-sdk/error-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
+import { readRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
   readNonBlankString,
@@ -93,7 +94,11 @@ function readOtelEnvFile(params: {
     return undefined;
   }
   try {
-    const material = readFileSync(nodePath.resolve(process.cwd(), filePath));
+    // Follow the selected link, then reject special files before opening them.
+    // A raw FIFO read can otherwise block the Gateway's startup thread.
+    const { buffer: material } = readRegularFileSync({
+      filePath: realpathSync(nodePath.resolve(process.cwd(), filePath)),
+    });
     if (material.length > 0) {
       return material;
     }
