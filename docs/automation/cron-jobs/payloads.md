@@ -77,6 +77,15 @@ edited or the job is recreated. Agent-created script payloads, condition trigger
 whose creator captured Codex app authority store the creating turn's tools instead: scripts
 reach MCP only through servers their list names, and app authority is bound to that list.
 
+When authoring a finite `payload.toolsAllow` for Codex Gateway shell access, use
+the canonical capabilities `exec` and `process` (CLI: `--tools exec,process`).
+Codex exposes those OpenClaw tools as `gateway_exec` and `gateway_process`
+within the conversation. Host-attested aliases can resolve to their canonical
+capabilities during capture; a tool's name alone does not establish that authority.
+The captured Gateway target and approval restrictions still apply to scheduled
+execution. Naming `exec` cannot widen the creator's tool access or turn a
+Gateway-pinned grant into an unrestricted shell grant.
+
 Earlier releases saved a copy of the creating turn's tool list on agent-created agent turns.
 That copy could miss tools the creator had, such as the native shell. Those jobs now run with
 their owner conversation's tools, like a `*` job; the stored copy is left as it is. Jobs whose
