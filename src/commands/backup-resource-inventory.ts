@@ -130,6 +130,7 @@ export async function createBackupResourcePlan(params: {
   workspaceDirs: readonly string[];
   excludedWorkspaceDirs: readonly string[];
   excludedWorktreeTemplateDirs?: readonly string[];
+  excludedMigrationBackupPaths?: readonly string[];
   agentRoots: readonly BackupAgentRoot[];
   pluginResources: readonly ResolvedPluginBackupResource[];
   pluginRoots: readonly string[];
@@ -205,11 +206,15 @@ export async function createBackupResourcePlan(params: {
     (resource) => `${resource.kind}\0${resource.sourcePath}`,
   );
   const protectedPaths = [...protectedPathSet].toSorted();
-  // Workspace exclusions stop traversal but are not regenerable resources;
-  // protected nested owners remain reachable through isIncluded below.
+  // Workspace exclusions and requested migration-original omissions stop traversal
+  // but are not regenerable resources; protected nested owners remain reachable.
   const excludedPaths = [
     ...uniqueRegenerableRoots.map((resource) => resource.sourcePath),
-    ...new Set(params.excludedWorkspaceDirs.map((dir) => path.resolve(dir))),
+    ...new Set(
+      [...params.excludedWorkspaceDirs, ...(params.excludedMigrationBackupPaths ?? [])].map(
+        (excluded) => path.resolve(excluded),
+      ),
+    ),
   ].toSorted((left, right) => right.length - left.length || left.localeCompare(right));
 
   const resources = {
