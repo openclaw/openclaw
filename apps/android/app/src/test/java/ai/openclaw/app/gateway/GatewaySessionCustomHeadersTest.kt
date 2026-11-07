@@ -683,6 +683,128 @@ class GatewaySessionCustomHeadersTest {
     }
 
   @Test
+  fun fileDownloadSurvivesSlowTransferButNotStalledTransfer() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val json = Json { ignoreUnknownKeys = true }
+      val connected = CompletableDeferred<Unit>()
+      val fileArtifactId = "artifact_managed_media_44444444-4444-4444-8444-444444444444"
+      val filePath = "/api/chat/media/outgoing/main/44444444-4444-4444-8444-444444444444/full?mediaTicket=file-ticket"
+      val fileBytes = ByteArray(8192) { it.toByte() }
+      val server =
+        MockWebServer().apply {
+          dispatcher =
+            object : Dispatcher() {
+              override fun dispatch(request: RecordedRequest): MockResponse {
+                if (request.path?.startsWith("/api/chat/media/outgoing/") == true) {
+                  val body = Buffer().write(fileBytes)
+                  // Slow but moving: about 800 ms in total, never 400 ms without a byte.
+                  if (request.requestUrl?.queryParameter("test") != "stalled") {
+                    return MockResponse().setHeader("Content-Type", "application/pdf").setBody(body).throttleBody(1024, 100, TimeUnit.MILLISECONDS)
+                  }
+                  return MockResponse().setHeader("Content-Type", "application/pdf").setBody(body).throttleBody(1, 5, TimeUnit.SECONDS)
+                }
+                return MockResponse().withWebSocketUpgrade(
+                  object : WebSocketListener() {
+                    override fun onOpen(
+                      webSocket: WebSocket,
+                      response: Response,
+                    ) {
+                      webSocket.send(CONNECT_CHALLENGE_FRAME)
+                    }
+
+                    override fun onMessage(
+                      webSocket: WebSocket,
+                      text: String,
+                    ) {
+                      val frame = json.parseToJsonElement(text).jsonObject
+                      val id = frame["id"]?.jsonPrimitive?.content ?: return
+                      when (frame["method"]?.jsonPrimitive?.content) {
+                        "connect" -> {
+                          webSocket.send(
+                            """{"type":"res","id":"$id","ok":true,"payload":{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}""",
+                          )
+                        }
+
+                        "artifacts.download" -> {
+                          val path =
+                            if (frame["params"]
+                                ?.jsonObject
+                                ?.get("artifactId")
+                                ?.jsonPrimitive
+                                ?.content == "stalled"
+                            ) {
+                              "$filePath&test=stalled"
+                            } else {
+                              filePath
+                            }
+                          webSocket.send(
+                            """{"type":"res","id":"$id","ok":true,"payload":{"artifact":{"id":"file","type":"file","mimeType":"application/pdf","download":{"mode":"url"}},"url":"$path"}}""",
+                          )
+                        }
+                      }
+                    }
+                  },
+                )
+              }
+            }
+          start()
+        }
+      val stableId = "manual|127.0.0.1|${server.port}"
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val session =
+        GatewaySession(
+          scope = scope,
+          identityStore = testDeviceIdentityStore(app),
+          deviceAuthStore = NoopDeviceAuthStore(),
+          onConnected = { if (!connected.isCompleted) connected.complete(Unit) },
+          onDisconnected = {},
+          onEvent = { _, _ -> },
+          mediaIdleTimeoutMs = 400,
+        )
+
+      try {
+        session.connect(
+          endpoint = GatewayEndpoint(stableId, "test", "127.0.0.1", server.port, tlsEnabled = false),
+          token = "bootstrap-token",
+          bootstrapToken = null,
+          password = null,
+          options =
+            GatewayConnectOptions(
+              role = "operator",
+              scopes = listOf("operator.read"),
+              caps = emptyList(),
+              commands = emptyList(),
+              permissions = emptyMap(),
+              client =
+                GatewayClientInfo(
+                  id = "openclaw-android-test",
+                  displayName = "Android Test",
+                  version = "1.0.0-test",
+                  platform = "android",
+                  mode = "ui",
+                  instanceId = "android-test-instance",
+                  deviceFamily = "android",
+                  modelIdentifier = "test",
+                ),
+            ),
+          tls = null,
+        )
+        withTimeout(TEST_TIMEOUT_MS) { connected.await() }
+
+        val slow = session.loadMediaArtifact(stableId, "main", "main", fileArtifactId, GatewayMediaKind.File) as? GatewayLoadedMedia.Buffered
+        assertArrayEquals(fileBytes, slow?.bytes)
+        // A stalled transfer still fails fast, as an IOException or no result.
+        val stalled = runCatching { session.loadMediaArtifact(stableId, "main", "main", "stalled", GatewayMediaKind.File) }
+        assertTrue(stalled.exceptionOrNull() is IOException || stalled.getOrNull() == null)
+      } finally {
+        session.disconnectAndJoin()
+        scope.cancel()
+        server.shutdown()
+      }
+    }
+
+  @Test
   fun preparingPlaybackInterceptorRetries202WithoutSurfacingLoadError() {
     val server = MockWebServer()
     server.enqueue(MockResponse().setResponseCode(202).setBody("""{"status":"preparing"}"""))

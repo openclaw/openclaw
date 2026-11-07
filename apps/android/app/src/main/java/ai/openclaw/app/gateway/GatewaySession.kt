@@ -336,6 +336,9 @@ internal suspend fun awaitGatewayReconnectSignal(
 
 internal const val GATEWAY_CONNECT_TIMEOUT_MS = 20_000L
 
+// Ticketed media downloads fail after this long without a byte, not after this long in total.
+internal const val GATEWAY_MEDIA_IDLE_TIMEOUT_MS = 20_000L
+
 /**
  * WebSocket RPC session that maintains gateway connection lifecycle, auth, events, and node invokes.
  */
@@ -350,6 +353,7 @@ class GatewaySession(
   private val onInvoke: (suspend (GatewayNodeInvokeRequest) -> InvokeResult)? = null,
   private val customHeadersProvider: ((stableId: String) -> Map<String, String>)? = null,
   private val connectTimeoutMs: Long = GATEWAY_CONNECT_TIMEOUT_MS,
+  private val mediaIdleTimeoutMs: Long = GATEWAY_MEDIA_IDLE_TIMEOUT_MS,
   private val webSocketFactory: ((OkHttpClient, Request, WebSocketListener) -> WebSocket)? = null,
   private val lifecycleDispatcher: CoroutineDispatcher = Dispatchers.IO,
   private val ingressAuthorizationProvider: ((GatewayEndpoint) -> GatewayIngressAuthorization?)? = null,
@@ -1332,21 +1336,21 @@ class GatewaySession(
           request.header(name, value)
         }
         // Exported documents must not follow a redirect outside the ticketed Gateway route.
+        // A large file needs more than 20 seconds in total. Only a stalled transfer should fail.
         val downloadClient =
-          if (kind == GatewayMediaKind.File) {
-            client
-              .newBuilder()
-              .followRedirects(false)
-              .followSslRedirects(false)
-              .build()
-          } else {
-            client
-          }
+          client
+            .newBuilder()
+            .readTimeout(mediaIdleTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .apply {
+              if (kind == GatewayMediaKind.File) {
+                followRedirects(false)
+                followSslRedirects(false)
+              }
+            }.build()
         val retry = GatewayPlaybackRetryState()
         repeat(Int.MAX_VALUE) {
           if (!retry.canAttempt()) return@withContext null
           val call = downloadClient.newCall(request.build())
-          call.timeout().timeout(20, java.util.concurrent.TimeUnit.SECONDS)
           var retryDelayMs: Long? = null
           call.execute().use { response ->
             if (response.code == 202 && playbackRendition) {
