@@ -169,7 +169,7 @@ export function createResponsesTerminalController(params: {
       }
       // Continuation retains this terminal item, whose ciphertext can differ from item.done.
       block.thinkingSignature = JSON.stringify(
-        normalizeOpenAIResponsesReasoningReplayItem(item, model.api),
+        normalizeOpenAIResponsesReasoningReplayItem(item, model.api, model.provider),
       );
       if (item.encrypted_content && options?.reasoningReplayMetadata) {
         Object.assign(block, {

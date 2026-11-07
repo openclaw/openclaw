@@ -522,7 +522,7 @@ export async function processResponsesStream<TApi extends Api>(
           const contentText = item.content?.map((c) => c.text).join("\n\n") || "";
           outputSlot.block.thinking = summaryText || contentText || outputSlot.block.thinking;
           outputSlot.block.thinkingSignature = JSON.stringify(
-            normalizeOpenAIResponsesReasoningReplayItem(item, model.api),
+            normalizeOpenAIResponsesReasoningReplayItem(item, model.api, model.provider),
           );
           outputs.set(
             item,
