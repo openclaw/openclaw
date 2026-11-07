@@ -85,6 +85,9 @@ suite.define(() => {
         await gateway.waitForRequest("openclawId.status");
         const button = menu.getByRole("button", { name: "Sign in with OpenClaw ID", exact: true });
         await button.waitFor();
+        if (process.env.OCID_POPUP_EVIDENCE) {
+          await page.screenshot({ path: `${suite.artifactDir}/account-menu.png` });
+        }
         const [popup] = await Promise.all([context.waitForEvent("page"), button.click()]);
         await popup.waitForURL(authorizationUrl);
         await popup.getByRole("button", { name: "Continue" }).waitFor();
@@ -92,6 +95,7 @@ suite.define(() => {
         const geometry = await popup.evaluate(() => ({
           width: innerWidth,
           height: innerHeight,
+          outerHeight,
           left: screenX,
           top: screenY,
           openerDetached: opener === null,
@@ -116,10 +120,16 @@ suite.define(() => {
         }
         expect(geometry.openerDetached).toBe(true);
         expect(geometry.width).toBe(Math.min(520, parent.availableWidth));
-        // Headed Chromium consumes one requested content pixel for its popup border.
-        expect(
-          Math.abs(geometry.height - Math.min(720, parent.availableHeight)),
-        ).toBeLessThanOrEqual(1);
+        // Chromium caps the whole window to the screen, leaving less content space for chrome.
+        const chromeHeight = geometry.outerHeight - geometry.height;
+        const expectedHeight = Math.min(720, parent.availableHeight - chromeHeight);
+        expect(Math.abs(geometry.height - expectedHeight)).toBeLessThanOrEqual(1);
+        const form = await popup.locator("main").boundingBox();
+        if (!form) {
+          throw new Error("Sign-in form is not visible");
+        }
+        expect(form.y + form.height).toBeLessThanOrEqual(geometry.height);
+        expect(form.x + form.width).toBeLessThanOrEqual(geometry.width);
         // Chromium's window manager may constrain requested placement to the work area.
         expect(geometry.left).toBeGreaterThan(parent.left);
         await popup.close();
