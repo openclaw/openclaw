@@ -1,2 +1,0 @@
-35
-# Real snapshot/plan regression fixes locale-dependent content hashes and checks canonical bytes.

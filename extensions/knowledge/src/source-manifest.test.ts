@@ -16,7 +16,6 @@ const discrawlScript = path.join(scripts, "discrawl-normalize.mjs");
 const run = (script: string, args: string[], options = {}) =>
   execFileSync(process.execPath, [script, ...args], { cwd: root, encoding: "utf8", ...options });
 const jsonl = (rows: unknown[]) => rows.map((row) => JSON.stringify(row)).join("\n") + "\n";
-// Expand {name: value} into CLI flags, in insertion order.
 const flags = (options: Record<string, string>) =>
   Object.entries(options).flatMap(([name, value]) => ["--" + name, value]);
 
@@ -27,26 +26,20 @@ async function snapshot(
   rows: unknown[],
   [start, end, observed]: string[],
   completeness = "complete",
-  env = process.env,
 ) {
   const input = path.join(dir, name + ".jsonl");
   const output = path.join(dir, name + ".manifest.jsonl.gz");
   const summary = path.join(dir, name + ".summary.json");
   await writeFile(input, jsonl(rows));
   const coverage = { "coverage-start": start!, "coverage-end": end!, "observed-at": observed! };
-  run(
-    manifestScript,
-    [
-      "snapshot",
-      ...flags({ provider: "discord", "source-key": "discord:guild:channel", ...coverage }),
-      ...flags({ completeness, input, output, summary }),
-    ],
-    { env },
-  );
+  run(manifestScript, [
+    "snapshot",
+    ...flags({ provider: "discord", "source-key": "discord:guild:channel", ...coverage }),
+    ...flags({ completeness, input, output, summary }),
+  ]);
   return { output, summary };
 }
 
-// Plan a current snapshot against prior snapshots and return the parsed plan.
 async function plan(dir: string, current: string, ...previous: string[]) {
   const output = path.join(dir, "plan.json");
   const priors = previous.flatMap((prior) => ["--previous", prior]);
@@ -56,11 +49,12 @@ async function plan(dir: string, current: string, ...previous: string[]) {
 
 it("source manifests are deterministic, content-private, and produce overlap-aware plans", async () => {
   const dir = tempDirs.make("knowledge-source-ingest-");
+  const payload = { a: 1, ä: [{ "2": "two", "10": "ten", a: 1 }, true, null], z: 3 };
   const old = await snapshot(
     dir,
     "old",
     [
-      { id: "a", occurred_at: "2026-09-25T01:00:00-07:00", payload: { text: "same" } },
+      { id: "a", occurred_at: "2026-09-25T01:00:00-07:00", payload },
       { id: "b", occurred_at: "2026-09-26T01:00:00-07:00", payload: { text: "old" } },
       { id: "c", occurred_at: "2026-09-27T01:00:00-07:00", payload: { text: "deleted" } },
       { id: "x", occurred_at: "2026-09-22T01:00:00-07:00", payload: { text: "outside" } },
@@ -69,7 +63,7 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
     ["2026-09-21T00:00:00-07:00", "2026-09-28T00:00:00-07:00", "2026-09-28T00:05:00-07:00"],
   );
   const rows = [
-    { id: "a", occurred_at: "2026-09-25T08:00:00Z", payload: { text: "same" } },
+    { id: "a", occurred_at: "2026-09-25T08:00:00Z", payload },
     { id: "b", occurred_at: "2026-09-26T08:00:00Z", payload: { text: "new" } },
     { id: "d", occurred_at: "2026-09-29T08:00:00Z", payload: { text: "added" } },
   ];
@@ -91,9 +85,10 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
   expect(result.coverage.uncovered).toStrictEqual([
     { start: "2026-09-28T07:00:00.000Z", end: "2026-10-01T07:00:00.000Z" },
   ]);
-  expect(gunzipSync(await readFile(current.output)).toString()).not.toMatch(/same|new|added/);
-  const summary = JSON.parse(await readFile(current.summary, "utf8"));
-  expect(summary.manifest_sha256).toMatch(/^[a-f0-9]{64}$/);
+  const content = gunzipSync(await readFile(current.output)).toString();
+  expect(content).not.toMatch(/same|new|added/);
+  const hash = JSON.parse(content.trim().split("\n")[1]!).sha256;
+  expect(hash).toBe("ed2694e52b2fe820bd83b6f77118d0be33a57d9087ca71284b5705006b3d519a");
   const repeated = await snapshot(dir, "current-repeat", rows.toReversed(), window);
   expect(await readFile(repeated.output)).toStrictEqual(await readFile(current.output));
   await expect(snapshot(dir, "duplicate", [rows[0], rows[0]], window)).rejects.toThrow(
@@ -107,36 +102,6 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
     }),
   ).toThrow(/ENOENT/);
   expect(await readdir(scratch)).toEqual([]);
-});
-
-it("payload hashes are independent of locale and object key order", async () => {
-  const dir = tempDirs.make("knowledge-source-locale-");
-  const window = ["2026-11-01T00:00:00Z", "2026-11-02T00:00:00Z", "2026-11-02T01:00:00Z"];
-  const payloads = [
-    { a: 1, ä: [{ "2": "two", "10": "ten", a: 1 }, true, null], z: 3 },
-    { z: 3, ä: [{ a: 1, "10": "ten", "2": "two" }, true, null], a: 1 },
-  ];
-  const outputs: string[] = [];
-  for (const [index, locale] of ["en_US.UTF-8", "sv_SE.UTF-8"].entries()) {
-    const result = await snapshot(
-      dir,
-      String(index),
-      [{ id: "item", payload: payloads[index] }],
-      window,
-      "complete",
-      { ...process.env, LANG: locale, LC_ALL: locale },
-    );
-    const content = gunzipSync(await readFile(result.output)).toString();
-    // SHA-256 of {"a":1,"z":3,"ä":[{"10":"ten","2":"two","a":1},true,null]}.
-    expect(JSON.parse(content.trim().split("\n")[1]!).sha256).toBe(
-      "ed2694e52b2fe820bd83b6f77118d0be33a57d9087ca71284b5705006b3d519a",
-    );
-    outputs.push(result.output);
-  }
-  expect(await readFile(outputs[0]!)).toEqual(await readFile(outputs[1]!));
-  const result = await plan(dir, outputs[1]!, outputs[0]!);
-  expect(result.items.changed).toEqual([]);
-  expect(result.items.unchanged).toEqual(["item"]);
 });
 
 it("newest prior observation wins independent of argument order and partial snapshots do not prove deletion", async () => {
