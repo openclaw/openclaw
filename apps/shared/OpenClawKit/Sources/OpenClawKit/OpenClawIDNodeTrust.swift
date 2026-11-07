@@ -129,6 +129,7 @@ public enum OpenClawIDNodeTrust {
 
     /// Merges an observation inside the state owner's transaction: pin never decreases, and the
     /// newest snapshot is selected by seq then issued_at (including a refused/stale observation).
+    /// Binding retirement is an independent high-water fact, never erased by newer membership.
     public static func mergeObservation(_ candidate: OpenClawIDNodeTrustState,
                                         with current: OpenClawIDNodeTrustState?) throws -> OpenClawIDNodeTrustState {
         guard let current else { return candidate }
@@ -139,7 +140,7 @@ public enum OpenClawIDNodeTrust {
         return .init(clawID: candidate.clawID, rootFingerprint: candidate.rootFingerprint,
             bindingSequence: max(candidate.bindingSequence, current.bindingSequence),
             snapshotSequence: newest.snapshotSequence, snapshotIssuedAt: newest.snapshotIssuedAt,
-            snapshotBindingSequence: newest.snapshotBindingSequence)
+            snapshotBindingSequence: max(candidate.snapshotBindingSequence, current.snapshotBindingSequence))
     }
 
     private static func olderSnapshot(_ candidate: OpenClawIDNodeTrustState,
