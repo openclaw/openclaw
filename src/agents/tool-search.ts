@@ -300,7 +300,7 @@ function resolveSearchParameters(searchDefaultLimit: number): AnyAgentTool["para
 
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
-  const runtime = new ToolSearchRuntime(ctx, config, { validateInput: true });
+  const runtime = new ToolSearchRuntime(ctx, config, { validateInput: true, coerceInput: true });
   return [
     {
       name: TOOL_SEARCH_RAW_TOOL_NAME,
