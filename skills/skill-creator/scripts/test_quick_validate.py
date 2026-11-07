@@ -102,6 +102,39 @@ metadata: |
                 self.assertFalse(valid)
                 self.assertEqual(message, expected)
 
+    def test_fallback_distinguishes_inline_comments_from_scalar_content(self):
+        skill_dir = self.temp_dir / "comment-skill"
+        skill_dir.mkdir()
+        cases = [
+            ("comment-skill # identifier", "Summarize reports", True),
+            ('"comment-skill" # identifier', "Summarize reports", True),
+            ("comment-skill", "Summarize reports # <notes>", True),
+            ("comment-skill", '"Summarize reports" # <notes>', True),
+            ("comment-skill", "Summarize user's reports # <notes>", True),
+            ("comment-skill", 'Summarize "reports" # <notes>', True),
+            ("comment-skill", r'"Summarize \"reports\" # now" # <notes>', True),
+            ("comment-skill", "'Summarize user''s # reports' # <notes>", True),
+            ("comment-skill", "# notes", False),
+            ("comment-skill", '"" # notes', False),
+            ("comment-skill", '"Summarize # <reports>"', False),
+            ("comment-skill", r'"Summarize \" # <reports>" # notes', False),
+            ("comment-skill", "'Summarize user''s # <reports>' # notes", False),
+            ("comment-skill", "Summarize#<reports>", False),
+            ("comment-skill", "|\n  Summarize # <reports>", False),
+        ]
+        previous_yaml = quick_validate.yaml
+        quick_validate.yaml = None
+        try:
+            for name, description, expected in cases:
+                with self.subTest(name=name, description=description):
+                    (skill_dir / "SKILL.md").write_text(
+                        f"---\nname: {name}\ndescription: {description}\n---\n", encoding="utf-8"
+                    )
+                    valid, message = quick_validate.validate_skill(skill_dir)
+                    self.assertEqual(valid, expected, message)
+        finally:
+            quick_validate.yaml = previous_yaml
+
     def test_accepts_openclaw_invocation_frontmatter(self):
         skill_dir = self.temp_dir / "invocable-skill"
         skill_dir.mkdir(parents=True, exist_ok=True)
