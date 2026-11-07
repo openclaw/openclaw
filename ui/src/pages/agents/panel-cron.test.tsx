@@ -100,60 +100,6 @@ function jobRow(container: HTMLElement, name: string) {
 }
 
 describe("Agent Cron native reads and actions", () => {
-  it("does not flash the empty state while the first jobs read is still pending", async () => {
-    const jobs = createDeferred<CronJobsListResult>();
-    const { container } = mount((method, params) => {
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      if (isRecord(params) && params.limit === 50) {
-        return jobs.promise;
-      }
-      return pageOf([]);
-    });
-    // The first read is in flight: no "No automations yet." until it settles.
-    await waitForSolid(() => expect(container.textContent).not.toContain("No automations yet."));
-    jobs.resolve(pageOf([job("first")]));
-    await waitForSolid(() => expect(container.textContent).toContain("Job first"));
-  });
-
-  it("shows the read error without an empty state or pagination footer before an inventory is established", async () => {
-    let failJobs = true;
-    const { container } = mount((method, params) => {
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      if (isRecord(params) && params.limit === 50 && failJobs) {
-        throw new Error("Synthetic jobs unavailable");
-      }
-      return pageOf([job("first")]);
-    });
-    await waitForSolid(() =>
-      expect(container.textContent).toContain("Synthetic jobs unavailable"),
-    );
-    expect(container.textContent).not.toContain("No automations yet.");
-    expect(container.textContent).not.toContain("0 of");
-    failJobs = false;
-    button(container, "Refresh").click();
-    await waitForSolid(() => {
-      expect(container.textContent).not.toContain("Synthetic jobs unavailable");
-      expect(container.textContent).toContain("Job first");
-    });
-  });
-
-  it("shows the empty state only once the settled read confirms no jobs", async () => {
-    const { container } = mount((method, params) => {
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 0, nextWakeAtMs: null };
-      }
-      if (isRecord(params) && params.limit === 50) {
-        return pageOf([]);
-      }
-      return pageOf([]);
-    });
-    await waitForSolid(() => expect(container.textContent).toContain("No automations yet."));
-  });
-
   it("shows ready jobs independently, retries failed reads without replacing job rows", async () => {
     const status = createDeferred();
     let first = true;
@@ -195,26 +141,27 @@ describe("Agent Cron native reads and actions", () => {
     expect(jobRow(container, "Job ready")).toBe(row);
   });
 
-  it("keeps refresh pending until a failed read's sibling finishes", async () => {
-    const status = createDeferred();
+  it("keeps unsettled inventory out of empty state and retries initial errors", async () => {
     const jobs = createDeferred<CronJobsListResult>();
-    const { container } = mount((method, params) => {
-      if (method === "cron.status") {
-        return status.promise;
-      }
-      if (isRecord(params) && params.limit === 50) {
-        return jobs.promise;
-      }
-      return pageOf([]);
-    });
+    const status = createDeferred();
+    let result = jobs.promise;
+    const { container } = mount((method) => (method === "cron.status" ? status.promise : result));
     await waitForSolid(() => expect(button(container, "Refresh").disabled).toBe(true));
-    status.reject(new Error("Synthetic status unavailable"));
-    await waitForSolid(() => {
-      expect(container.textContent).toContain("Synthetic status unavailable");
-      expect(button(container, "Refresh").disabled).toBe(true);
-    });
-    jobs.resolve(pageOf([]));
+    expect(container.textContent).not.toContain("No automations yet.");
+    expect(container.textContent).not.toContain("0 of");
+    jobs.reject(new Error("Synthetic jobs unavailable"));
+    await waitForSolid(() => expect(container.textContent).toContain("Synthetic jobs unavailable"));
+    expect(button(container, "Refresh").disabled).toBe(true);
+    status.resolve({ enabled: true, jobs: 0, nextWakeAtMs: null });
     await waitForSolid(() => expect(button(container, "Refresh").disabled).toBe(false));
+    expect(container.textContent).not.toContain("No automations yet.");
+    expect(container.textContent).not.toContain("0 of");
+    result = Promise.resolve(pageOf([]));
+    button(container, "Refresh").click();
+    await waitForSolid(() => expect(container.textContent).toContain("No automations yet."));
+    result = Promise.resolve(pageOf([job("first")]));
+    button(container, "Refresh").click();
+    await waitForSolid(() => expect(container.textContent).toContain("Job first"));
   });
 
   it("retains loaded rows during an admitted page append", async () => {

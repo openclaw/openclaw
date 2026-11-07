@@ -221,9 +221,7 @@ export function AgentCron(
             </For>
             <CronReadBoundary read={params.read().jobs}>
               {(pending) =>
-                params.readState().cronJobsSnapshotRevision === null ? (
-                  undefined
-                ) : (
+                params.readState().cronJobsSnapshotRevision === null ? undefined : (
                   <CronJobsPagination
                     jobsShown={params.readState().cronJobs.length}
                     jobsTotal={params.readState().cronJobsTotal}
