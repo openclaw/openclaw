@@ -94,9 +94,9 @@ conversation history. The Control UI does not consume that event; it calls the
 ## Selection popup (Control UI)
 
 Highlighting text inside a chat message in the Control UI opens a small
-selection popup. Hover or keyboard-focus **Ask in…** to reveal its destinations:
+selection popup with **Add to chat**, **Ask in side chat**, and **New session**:
 
-- **Side chat** opens Side chat and pre-fills its composer with a quoted
+- **Ask in side chat** opens Side chat and pre-fills its composer with a quoted
   draft so you can type your own question about the selection.
 - **New session** opens the new-session launcher with the selection attached
   instead; that starts an ordinary session rather than a side question.

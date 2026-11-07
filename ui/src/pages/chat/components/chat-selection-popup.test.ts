@@ -127,14 +127,16 @@ describe("chat selection popup", () => {
     expect(popup()).toBeNull();
   });
 
-  it("offers side chat and new session as destinations of one Ask in group", async () => {
+  it("routes New session to the new-session launcher", async () => {
     const thread = selection("route this passage", 5);
     await pointerUp(thread);
-    const group = popup()!.querySelector<HTMLElement>("[role=group]")!;
-    expect(group.getAttribute("aria-label")).toBe("Ask in…");
-    const [sideChat, newSession] = group.querySelectorAll("button");
-    expect(sideChat.getAttribute("aria-label")).toBe("Ask in side chat");
-    newSession.click();
+    const buttons = [...popup()!.querySelectorAll("button")];
+    // This fixture has no composer, so Add to chat is not offered.
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "Ask in side chat",
+      "New session",
+    ]);
+    buttons[1].click();
     expect(onAskNewSessionSpy).toHaveBeenCalledWith({
       text: "route",
       start: 0,

@@ -39,7 +39,6 @@ suite.define(() => {
         });
         await source.dispatchEvent("pointerup", { button: 0, pointerType: "mouse" });
         const toolbar = page.getByRole("toolbar", { name: "Selection actions" });
-        await toolbar.getByRole("group", { name: "Ask in…", exact: true }).hover();
         await toolbar.getByRole("button", { name: "Ask in side chat", exact: true }).click();
         const input = page
           .getByRole("dialog", { name: "Comment", exact: true })
@@ -104,7 +103,7 @@ suite.define(() => {
         await source.dispatchEvent("pointerup", { button: 0, pointerType: "mouse" });
         await page
           .getByRole("toolbar", { name: "Selection actions" })
-          .getByRole("button", { name: "Add to message", exact: true })
+          .getByRole("button", { name: "Add to chat", exact: true })
           .click();
         const editor = page.getByRole("dialog", { name: "Comment", exact: true });
         const comment = "Keep this main-chat inline comment.";

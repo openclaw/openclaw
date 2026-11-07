@@ -97,7 +97,7 @@ function commentEditor(page: Page) {
 }
 async function addComment(page: Page, comment: string, passage = selectedText) {
   await selectText(selectedSource(page, passage));
-  await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to message").click();
+  await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to chat").click();
   await commentEditor(page).getByRole("textbox").fill(comment);
   await commentEditor(page).getByRole("textbox").press("Enter");
 }
@@ -145,7 +145,6 @@ suite.define(() => {
             expect(await toolbar.count()).toBe(0);
             await selectText(text);
           }
-          await toolbar.getByRole("group", { name: "Ask in…", exact: true }).hover();
           await button(toolbar, "Ask in side chat").click();
           await editor.waitFor({ state: "visible" });
           if (scenario === "normal") {
@@ -243,7 +242,7 @@ suite.define(() => {
         const source = selectedSource(page);
         await source.waitFor({ state: "visible" });
         await selectText(source);
-        await button(page, "Add to message").tap();
+        await button(page, "Add to chat").tap();
         await comment.fill("Check the rollback steps. 🦞");
         await button(editor, "Save comment").tap();
         await pendingChip.tap();
@@ -264,7 +263,7 @@ suite.define(() => {
         await sentQuote.waitFor({ state: "visible" });
         await pollText(sent).toContain("Check the rollback steps. 🦞");
         await selectText(source);
-        await button(page, "Add to message").tap();
+        await button(page, "Add to chat").tap();
         await comment.fill("Remove only this pending comment.");
         await button(editor, "Save comment").tap();
         await button(pendingChip, "Remove all comments").tap();
@@ -296,7 +295,7 @@ suite.define(() => {
           page.getByRole("button", { name: `Edit comment ${number}`, exact: true });
         const open = async () => {
           await selectText(text);
-          await button(toolbar, "Add to message").click();
+          await button(toolbar, "Add to chat").click();
           await editor.waitFor({ state: "visible" });
         };
         const bounded = async (locator: Locator) => {
@@ -388,7 +387,7 @@ suite.define(() => {
       await page.mouse.wheel(0, -32);
       await waitForChatScrollIdle(page);
       await selectText(text.locator("strong"));
-      await button(page, "Add to message").click();
+      await button(page, "Add to chat").click();
       await submitComment(comment, "Keep this pin on its original passage.");
       const pin = button(page, "Edit comment 1");
       const aligned = async () => {
@@ -515,10 +514,7 @@ suite.define(() => {
       const paragraph = page.locator(".chat-bubble .chat-text p");
       await paragraph.waitFor({ state: "visible" });
       await selectText(paragraph);
-      await button(
-        page.getByRole("toolbar", { name: "Selection actions" }),
-        "Add to message",
-      ).click();
+      await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to chat").click();
       await button(commentEditor(page), "Save comment").click();
       await button(page, "Send message").click();
       const params = await sentMessage(gateway);
@@ -533,9 +529,7 @@ suite.define(() => {
       await composer.fill(draft);
       await selectText(selectedSource(page));
       await toolbar.waitFor({ state: "visible" });
-      const destinations = toolbar.getByRole("group", { name: "Ask in…", exact: true });
-      await destinations.hover();
-      await button(destinations, "Ask in new session").click();
+      await button(toolbar, "Ask in new session").click();
       const palette = page.locator("openclaw-command-palette");
       const input = palette.locator(".cmd-palette__input");
       await input.waitFor({ state: "visible" });

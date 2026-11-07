@@ -1537,101 +1537,17 @@ openclaw-chat-video-player {
 .chat-selection-popup {
   display: flex;
   gap: 2px;
+  padding: 3px;
   animation: fade-in 0.12s var(--ease-out);
 }
 
+/* A compact strip on every pointer type: it floats over the transcript. */
 .chat-selection-popup button {
   gap: 6px;
-  padding: 6px 10px;
+  min-height: 24px;
+  padding: 3px 8px;
   font-size: 12px;
   white-space: nowrap;
-}
-
-.chat-selection-popup__ask {
-  display: flex;
-}
-
-/* Label and destinations each collapse through a 0fr/1fr grid column, so the
-   swap animates their intrinsic widths without measuring them. */
-.chat-selection-popup__ask-label,
-.chat-selection-popup__ask-options {
-  display: grid;
-  transition: grid-template-columns 0.16s var(--ease-out);
-}
-
-.chat-selection-popup__ask-label {
-  grid-template-columns: 1fr;
-}
-
-.chat-selection-popup__ask-options {
-  grid-template-columns: 0fr;
-}
-
-.chat-selection-popup__ask-label > span,
-.chat-selection-popup__ask-options > span {
-  display: flex;
-  gap: 2px;
-  min-width: 0;
-  overflow: hidden;
-  transition: opacity 0.12s var(--ease-out);
-}
-
-.chat-selection-popup__ask-options > span {
-  opacity: 0;
-}
-
-.chat-selection-popup__ask-label > span > span {
-  display: flex;
-  align-items: center;
-  min-height: var(--menu-item-height);
-  padding: 6px 10px;
-  font-size: 12px;
-  white-space: nowrap;
-  color: var(--text);
-}
-
-.chat-selection-popup__ask:is(:hover, :focus-within) .chat-selection-popup__ask-label {
-  grid-template-columns: 0fr;
-}
-
-.chat-selection-popup__ask:is(:hover, :focus-within) .chat-selection-popup__ask-label > span {
-  opacity: 0;
-}
-
-.chat-selection-popup__ask:is(:hover, :focus-within) .chat-selection-popup__ask-options {
-  grid-template-columns: 1fr;
-}
-
-.chat-selection-popup__ask:is(:hover, :focus-within) .chat-selection-popup__ask-options > span {
-  opacity: 1;
-}
-
-/* Precise pointers get a compact toolbar; touch keeps the menu row height. */
-@media (pointer: fine) {
-  .chat-selection-popup {
-    padding: 3px;
-  }
-
-  .chat-selection-popup button,
-  .chat-selection-popup__ask-label > span > span {
-    min-height: 24px;
-    padding: 3px 8px;
-  }
-}
-
-/* Touch has no hover to reveal destinations; show them directly. */
-@media (hover: none) {
-  .chat-selection-popup__ask-label {
-    display: none;
-  }
-
-  .chat-selection-popup__ask-options {
-    grid-template-columns: 1fr;
-  }
-
-  .chat-selection-popup__ask-options > span {
-    opacity: 1;
-  }
 }
 
 /* The conversation's top-right gutter, owned by one column so its members

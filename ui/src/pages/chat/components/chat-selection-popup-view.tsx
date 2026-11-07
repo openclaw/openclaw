@@ -68,33 +68,19 @@ export function showChatSelectionToolbar(
               {t("chat.messages.addToChat")}
             </button>
           ) : undefined}
-          {/* Hover or focus swaps "Ask in…" for its two destinations in place;
-              touch shows the destinations directly. */}
-          <div class="chat-selection-popup__ask" role="group" aria-label={t("chat.messages.askIn")}>
-            <span class="chat-selection-popup__ask-label" aria-hidden="true">
-              <span>
-                <span>{t("chat.messages.askIn")}</span>
-              </span>
-            </span>
-            <span class="chat-selection-popup__ask-options">
-              <span>
-                <button
-                  type="button"
-                  aria-label={t("chat.messages.askInSideChat")}
-                  onClick={() => activate(() => actions.onAskSideChat(source, anchor))}
-                >
-                  {t("chat.messages.sideChatOption")}
-                </button>
-                <button
-                  type="button"
-                  aria-label={t("chat.messages.askInNewSession")}
-                  onClick={() => activate(() => actions.onAskNewSession(source))}
-                >
-                  {t("chat.messages.newSessionOption")}
-                </button>
-              </span>
-            </span>
-          </div>
+          <button
+            type="button"
+            onClick={() => activate(() => actions.onAskSideChat(source, anchor))}
+          >
+            {t("chat.messages.askInSideChat")}
+          </button>
+          <button
+            type="button"
+            aria-label={t("chat.messages.askInNewSession")}
+            onClick={() => activate(() => actions.onAskNewSession(source))}
+          >
+            {t("chat.messages.newSessionOption")}
+          </button>
         </div>
       </Portal>
     ),
@@ -106,11 +92,6 @@ export function showChatSelectionToolbar(
     actions.paneId,
     dispose,
   );
-  // Expanding the destinations grows the toolbar rightward; slide left only
-  // by the overflow so the hovered label stays under the pointer.
-  const resize = new ResizeObserver(() => keepChatSelectionPopupInView(popup));
-  resize.observe(popup);
-  signal.addEventListener("abort", () => resize.disconnect());
   listen(
     document,
     "selectionchange",
@@ -122,16 +103,6 @@ export function showChatSelectionToolbar(
     },
     { signal },
   );
-}
-
-function keepChatSelectionPopupInView(popup: HTMLElement) {
-  const viewport = window.visualViewport;
-  const minLeft = (viewport?.offsetLeft ?? 0) + 8;
-  const right = minLeft - 8 + (viewport?.width ?? window.innerWidth) - 16;
-  const bounds = popup.getBoundingClientRect();
-  if (bounds.right > right) {
-    popup.style.left = `${Math.max(minLeft, right - bounds.width)}px`;
-  }
 }
 
 export function positionChatSelectionPopup(popup: HTMLElement, anchor: DOMRect) {
