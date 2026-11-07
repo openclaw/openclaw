@@ -6,6 +6,22 @@ it("normalizes positive fractional limits without emitting empty chunks", () => 
   expect(chunkText("😀😀", 0.5)).toEqual(["😀", "😀"]);
 });
 
+it("treats a non-finite limit as unbounded instead of dropping the message", () => {
+  // NaN bounds nothing: comparing text against it is always false, so the pre-fix range
+  // ended at NaN and every caller slicing by it sent an empty string.
+  const text = "Hello from OpenClaw — this outbound message must never vanish.";
+  const whole = [{ start: 0, end: text.length }];
+  for (const limit of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    expect(chunkText(text, limit)).toEqual([text]);
+    expect(chunkTextRanges(text, { limit })).toEqual(whole);
+    expect(chunkTextRanges(text, { limit, mode: "preferred" })).toEqual(whole);
+  }
+  // A non-positive limit keeps its documented whole-text behavior.
+  expect(chunkText(text, -1)).toEqual([text]);
+  expect(chunkText("", Number.NaN)).toEqual([]);
+  expect(chunkTextRanges("", { limit: Number.NaN })).toEqual([]);
+});
+
 it("keeps grapheme boundaries and surrogate-safe progress in each chunking mode", () => {
   const common = [
     { text: "aaaaaaaaaa👨‍👩‍👧‍👦Z", limit: 12, expected: ["aaaaaaaaaa", "👨‍👩‍👧‍👦Z"] },

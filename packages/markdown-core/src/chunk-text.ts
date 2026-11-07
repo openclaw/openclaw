@@ -9,7 +9,13 @@ export { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/ut
 
 function normalizeChunkLimit(limit: number): number {
   // String slicing truncates fractional indexes, so positive limits need an integer progress step.
-  return Number.isFinite(limit) && limit > 0 ? resolveIntegerOption(limit, 1, { min: 1 }) : limit;
+  // A non-finite limit bounds nothing: `Number.isFinite` is false for NaN and ±Infinity, and every
+  // comparison against NaN is false, which would emit a `{ start: 0, end: NaN }` range that slices
+  // to an empty message. Report those as unbounded (non-positive) so the caller keeps whole text.
+  if (!Number.isFinite(limit)) {
+    return 0;
+  }
+  return limit > 0 ? resolveIntegerOption(limit, 1, { min: 1 }) : limit;
 }
 
 export type TextChunkRange = {
