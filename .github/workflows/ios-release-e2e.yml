@@ -20,6 +20,8 @@ jobs:
   diagnostic:
     runs-on: xcode-27
     timeout-minutes: 150
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
     steps:
       - name: Initialize private evidence and verify recipient
         shell: bash
@@ -44,7 +46,9 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: .diagnostic-control
           persist-credentials: false
-          sparse-checkout: scripts/diagnostics/release37-ios-share.py
+          sparse-checkout: |
+            scripts/diagnostics/release37-ios-share.py
+            scripts/diagnostics/release37-xcodebuild.py
           sparse-checkout-cone-mode: false
       - name: Verify exact source and record identity
         shell: bash
@@ -75,6 +79,51 @@ jobs:
           toolchain="$(awk -F '"' '/^channel =/ {print $2; exit}' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
           test -n "$toolchain"
           rustup toolchain install "$toolchain" --profile minimal --component rust-src >> "$RUNNER_TEMP/ios-share-private/toolchain.log" 2>&1
+      - name: Verify original stack and isolate package resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/ios-share-private"
+          xcodebuild -version > "$evidence/exact-xcode.txt"
+          grep -Fx 'Xcode 27.1' "$evidence/exact-xcode.txt"
+          grep -Fx 'Build version 27A9275' "$evidence/exact-xcode.txt"
+          xcrun simctl list devices available --json > "$evidence/available-devices.json"
+          xcrun simctl list runtimes --json > "$evidence/available-runtimes.json"
+          python3 - "$evidence" <<'PY'
+          import json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          devices = json.loads((root / "available-devices.json").read_text())["devices"]
+          selected = next((runtime, device) for runtime, rows in devices.items()
+                          for device in rows if device.get("isAvailable") and device["name"].startswith("iPhone"))
+          assert selected[0] == "com.apple.CoreSimulator.SimRuntime.iOS-27-0", selected
+          assert selected[1]["name"] == "iPhone 18 Pro", selected
+          runtime = next(r for r in json.loads((root / "available-runtimes.json").read_text())["runtimes"]
+                         if r["identifier"] == selected[0])
+          assert runtime["buildversion"] == "24A434", runtime
+          (root / "selected-simulator.json").write_text(json.dumps({"device": selected[1], "runtime": runtime}, indent=2))
+          PY
+          real_xcodebuild="$(xcrun --find xcodebuild)"
+          "$real_xcodebuild" -help > "$evidence/xcodebuild-help.txt" 2>&1
+          for flag in -disablePackageRepositoryCache -clonedSourcePackagesDirPath -packageCachePath; do
+            grep -q -- "$flag" "$evidence/xcodebuild-help.txt"
+          done
+          packages="$RUNNER_TEMP/ios-share-packages"
+          mkdir -p "$packages/sources" "$packages/cache"
+          echo "IOS_DIAGNOSTIC_XCODEBUILD=$real_xcodebuild" >> "$GITHUB_ENV"
+          echo "IOS_DIAGNOSTIC_PACKAGES=$packages" >> "$GITHUB_ENV"
+          ln -s "$GITHUB_WORKSPACE/.diagnostic-control/scripts/diagnostics/release37-xcodebuild.py" "$RUNNER_TEMP/ios-share-tools/xcodebuild"
+          shasum -a 256 .diagnostic-control/scripts/diagnostics/release37-xcodebuild.py > "$evidence/cache-wrapper.sha256"
+      - name: Resolve frozen project dependencies before starting simulator tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/ios-share-private"
+          ./scripts/ios-configure-signing.sh > "$evidence/project-preparation.log" 2>&1
+          ./scripts/ios-write-version-xcconfig.sh >> "$evidence/project-preparation.log" 2>&1
+          node scripts/ios-write-swift-filelist.mjs >> "$evidence/project-preparation.log" 2>&1
+          xcodegen generate --spec apps/ios/project.yml --project apps/ios >> "$evidence/project-preparation.log" 2>&1
+          xcodebuild -project apps/ios/OpenClaw.xcodeproj -scheme OpenClawUITests -resolvePackageDependencies > "$evidence/package-resolution.log" 2>&1
+          python3 -c 'import pathlib, shutil, sys; [shutil.copy2(p, pathlib.Path(sys.argv[1]) / "Package.resolved") for p in pathlib.Path("apps/ios").rglob("Package.resolved")]' "$evidence"
       - name: Run unchanged attachment driver with passive share-service capture
         shell: bash
         env:
@@ -115,3 +164,4 @@ jobs:
           rm -rf -- "$RUNNER_TEMP/ios-share-private"
           rm -f -- "$RUNNER_TEMP/ios-share-evidence.tar.gz"
           rm -rf -- "$GITHUB_WORKSPACE/apps/ios/build/LifecycleTestResults"
+          rm -rf -- "$RUNNER_TEMP/ios-share-packages"
