@@ -323,6 +323,7 @@ class TalkModeManager internal constructor(
   val conversation: StateFlow<List<VoiceConversationEntry>> = _conversation
 
   private var recognizer: SpeechRecognizer? = null
+  private var nativeMuteCompletion: CompletableDeferred<Unit>? = null
   private var restartJob: Job? = null
   private var stopRequested = false
 
@@ -488,8 +489,13 @@ class TalkModeManager internal constructor(
       microphoneGeneration.incrementAndGet()
       if (!_isEnabled.value) return
       if (muted) {
+        if (nativeMuteCompletion != null) return
         val pttCaptureId = activePttCaptureId
-        val nativeTranscript = lastTranscript.trim().takeIf { realtimeSessionId == null && _isListening.value }
+        val nativeRecognizer = recognizer?.takeIf { realtimeSessionId == null && _isListening.value && pttCaptureId == null }
+        if (nativeRecognizer != null) {
+          finishNativeRecognitionOnMute(nativeRecognizer)
+          return
+        }
         _isListening.value = false
         retireRecognizer()
         if (pttCaptureId != null) {
@@ -499,18 +505,58 @@ class TalkModeManager internal constructor(
           return
         }
         // A native silence job may already own a submitted turn; never cancel it.
-        // If recognition has words not yet submitted, finish those pre-mute words.
-        if (!nativeTranscript.isNullOrEmpty()) {
-          listeningMode = false
-          silenceJob?.cancel()
-          silenceJob = gatewayWorkScope.launch { finalizeTranscript(nativeTranscript) }
-        }
       } else if (realtimeSessionId != null && realtimeCapturePause == null) {
         _isListening.value = !_isMicrophoneMuted.value
       } else if (listeningMode && !currentStatus.awaitingAgent && !_isSpeaking.value && activePttCaptureId == null) {
         start()
       }
     }
+  }
+
+  private fun finishNativeRecognitionOnMute(owner: SpeechRecognizer) {
+    listeningMode = false
+    _isListening.value = false
+    restartJob?.cancel()
+    restartJob = null
+    silenceJob?.cancel()
+    val completion = CompletableDeferred<Unit>()
+    nativeMuteCompletion = completion
+    // Keep the current callback owner until the speech service emits its final
+    // hypothesis. Destroying it here discards words not yet present in the partial.
+    val stopListening =
+      Runnable {
+        synchronized(realtimeCapturePauseLock) {
+          if (nativeMuteCompletion !== completion || recognizer !== owner) return@Runnable
+          runCatching { owner.stopListening() }.onFailure { completion.complete(Unit) }
+        }
+      }
+    if (Looper.myLooper() == mainHandler.looper) {
+      stopListening.run()
+    } else if (!mainHandler.post(stopListening)) {
+      completion.complete(Unit)
+    }
+    silenceJob =
+      gatewayWorkScope.launch(start = CoroutineStart.LAZY) {
+        withContext(Dispatchers.Main) {
+          if (nativeMuteCompletion !== completion || recognizer !== owner) return@withContext
+          withTimeoutOrNull(pushToTalkReleaseGraceMs) { completion.await() }
+          val transcript =
+            synchronized(realtimeCapturePauseLock) {
+              if (nativeMuteCompletion !== completion || recognizer !== owner) return@withContext
+              nativeMuteCompletion = null
+              val text = lastTranscript.trim()
+              retireRecognizer()
+              clearRecognizedTranscript()
+              text
+            }
+          if (transcript.isNotEmpty()) {
+            finalizeTranscript(transcript)
+          } else if (_isEnabled.value && !stopRequested) {
+            start()
+          }
+        }
+      }
+    silenceJob?.start()
   }
 
   /**
@@ -1092,6 +1138,8 @@ class TalkModeManager internal constructor(
 
   private fun retireRecognizer() =
     synchronized(realtimeCapturePauseLock) {
+      nativeMuteCompletion?.cancel()
+      nativeMuteCompletion = null
       val retired = recognizer ?: return@synchronized
       recognizer = null
       val completion = CompletableDeferred<Unit>()
@@ -2372,6 +2420,10 @@ class TalkModeManager internal constructor(
     isFinal: Boolean,
   ) {
     val trimmed = text.trim()
+    nativeMuteCompletion?.let { completion ->
+      if (!completion.isCompleted && trimmed.isNotEmpty()) lastTranscript = trimmed
+      return
+    }
     if (activePttCaptureId != null) {
       if (trimmed.isNotEmpty()) {
         if (isFinal) {
@@ -3125,6 +3177,10 @@ class TalkModeManager internal constructor(
       override fun onError(error: Int) =
         withCurrentRecognition(owner, captureId) {
           if (stopRequested) return@withCurrentRecognition
+          nativeMuteCompletion?.let {
+            it.complete(Unit)
+            return@withCurrentRecognition
+          }
           _isListening.value = false
           val pushToTalkActive = activePttCaptureId != null
           if (pushToTalkActive) {
@@ -3173,6 +3229,10 @@ class TalkModeManager internal constructor(
         withCurrentRecognition(owner, captureId) {
           val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
           list.firstOrNull()?.let { handleTranscript(it, isFinal = true) }
+          nativeMuteCompletion?.let {
+            it.complete(Unit)
+            return@withCurrentRecognition
+          }
           if (activePttCaptureId != null) {
             _isListening.value = false
             pttReleaseCompletion?.let {

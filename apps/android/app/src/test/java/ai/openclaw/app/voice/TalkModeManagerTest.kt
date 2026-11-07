@@ -1326,22 +1326,34 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun microphoneMuteFinishesOnlyAlreadyRecognizedNativeSpeech() =
+  fun microphoneMuteWaitsForNativeFinalWordsAndSubmitsOnce() =
     runBlocking {
       withNativeTalk { proof, sends ->
         val retired = currentRecognizer()
         retired.triggerOnPartialResults(recognitionResults("Already spoken"))
         proof.manager.setMicrophoneMuted(true)
+        proof.scheduler.runCurrent()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertFalse("Mute must request final recognition before destroying its owner", retired.isDestroyed)
+        assertTrue(sends.isEmpty())
+        proof.manager.setMicrophoneMuted(false)
+        proof.scheduler.runCurrent()
+        assertFalse("Unmute must wait for the draining utterance", proof.manager.isListening.value)
+        proof.manager.setMicrophoneMuted(true)
+        assertFalse("A second mute must not discard the draining utterance", retired.isDestroyed)
+        retired.triggerOnResults(recognitionResults("Already spoken final words"))
         awaitTalkWork(proof) { proof.synthesizer.requested.isCompleted }
         assertTrue(retired.isDestroyed)
         assertEquals(1, sends.size)
         assertEquals(
-          "Already spoken",
+          "Already spoken final words",
           sends
             .single()
             .getValue("message")
             .jsonPrimitive.content,
         )
+        retired.triggerOnResults(recognitionResults("Late duplicate"))
+        retired.triggerOnPartialResults(recognitionResults("Muted background"))
         proof.manager.setMicrophoneMuted(false)
         proof.scheduler.runCurrent()
         assertFalse("Unmute must not start a second capture during reply preparation", proof.manager.isListening.value)
@@ -1350,6 +1362,71 @@ class TalkModeManagerTest {
         awaitTalkWork(proof) { proof.player.playCalls == 1 }
         proof.player.finished.complete(Unit)
         awaitTalkWork(proof) { proof.manager.isListening.value }
+      }
+    }
+
+  @Test
+  fun microphoneMuteUsesNativePartialOnErrorEmptyFinalOrTimeout() =
+    runBlocking {
+      for (termination in listOf("error", "empty", "timeout")) {
+        withNativeTalk { proof, sends ->
+          val draining = currentRecognizer()
+          draining.triggerOnPartialResults(recognitionResults("Preserve this partial"))
+          proof.manager.setMicrophoneMuted(true)
+          proof.scheduler.runCurrent()
+          shadowOf(Looper.getMainLooper()).idle()
+          when (termination) {
+            "error" -> draining.triggerOnError(SpeechRecognizer.ERROR_NETWORK)
+            "empty" -> draining.triggerOnResults(recognitionResults(""))
+            "timeout" -> proof.scheduler.advanceTimeBy(5_001)
+          }
+          awaitTalkWork(proof) { sends.isNotEmpty() }
+          assertEquals(
+            "Preserve this partial",
+            sends
+              .single()
+              .getValue("message")
+              .jsonPrimitive.content,
+          )
+          assertTrue(draining.isDestroyed)
+          draining.triggerOnResults(recognitionResults("Too late"))
+          proof.scheduler.runCurrent()
+          assertEquals(1, sends.size)
+          assertFalse(proof.manager.isListening.value)
+        }
+      }
+    }
+
+  @Test
+  fun microphoneMuteAcceptsFinalOnlyNativeSpeechButStopDiscardsPendingSpeech() =
+    runBlocking {
+      for (stop in listOf(false, true)) {
+        withNativeTalk { proof, sends ->
+          val draining = currentRecognizer()
+          proof.manager.setMicrophoneMuted(true)
+          proof.scheduler.runCurrent()
+          shadowOf(Looper.getMainLooper()).idle()
+          if (stop) proof.manager.stopAllCapture()
+          draining.triggerOnResults(recognitionResults("Final without a partial"))
+          if (stop) {
+            proof.scheduler.advanceTimeBy(5_001)
+            proof.scheduler.runCurrent()
+            shadowOf(Looper.getMainLooper()).idle()
+            assertTrue(sends.isEmpty())
+            assertFalse(proof.manager.isEnabled.value)
+          } else {
+            awaitTalkWork(proof) { sends.isNotEmpty() }
+            assertEquals(
+              "Final without a partial",
+              sends
+                .single()
+                .getValue("message")
+                .jsonPrimitive.content,
+            )
+          }
+          assertTrue(draining.isDestroyed)
+          assertFalse(proof.manager.isListening.value)
+        }
       }
     }
 
