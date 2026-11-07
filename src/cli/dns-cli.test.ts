@@ -159,6 +159,29 @@ describe("dns-cli probe bounds", () => {
                 .filter((line) => /^\d+:\s/.test(line))
                 .map((line) => line.replace(/^\d+:\s*/, ""));
             }
+            // Fresh destinations carry the parent's inherited policy in the
+            // real inspection; the emulation keeps it empty off macOS.
+            let inheritedParent: string[] = [];
+            if (realPlatform === "darwin" && !inspected) {
+              const parentListing = actualSpawnSync("/bin/ls", ["-lde", path.dirname(cur)], {
+                encoding: "utf-8",
+              });
+              inheritedParent = String(parentListing.stdout ?? "")
+                .split("\n")
+                .map((line) => line.trim())
+                .filter((line) => /^\d+:\s/.test(line) && line.includes("file_inherit"))
+                .map((line) =>
+                  line
+                    .replace(/^\d+:\s*/, "")
+                    .replace(/file_inherit/g, "")
+                    .replace(/directory_inherit/g, "")
+                    .replace(/limit_inherit/g, "")
+                    .replace(/only_inherit/g, "")
+                    .replace(/\s+/g, " ")
+                    .trim(),
+                )
+                .filter((entry) => entry.length > 0);
+            }
             return spawnOk(
               JSON.stringify({
                 target: cur,
@@ -170,10 +193,18 @@ describe("dns-cli probe bounds", () => {
                     }
                   : undefined,
                 acl,
+                inheritedParent,
               }),
             );
           } catch {
-            return spawnOk(JSON.stringify({ target: requested, existing: undefined, acl: [] }));
+            return spawnOk(
+              JSON.stringify({
+                target: requested,
+                existing: undefined,
+                acl: [],
+                inheritedParent: [],
+              }),
+            );
           }
         }
         return spawnOk();

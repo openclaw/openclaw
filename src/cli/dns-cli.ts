@@ -148,9 +148,9 @@ function readInheritedMacOsAclEntries(dirPath: string): string[] {
     .map((entry) =>
       entry
         .replace(/\bfile_inherit\b/g, "")
-        .replace(/\bdir_inherit\b/g, "")
+        .replace(/\bdirectory_inherit\b/g, "")
         .replace(/\blimit_inherit\b/g, "")
-        .replace(/\bonlyinherit\b/g, "")
+        .replace(/\bonly_inherit\b/g, "")
         .replace(/\s+/g, " ")
         .trim(),
     )
@@ -318,10 +318,18 @@ export function privilegedInspectionScript(): string {
     "  cur = path.isAbsolute(link) ? link : path.join(path.dirname(cur), link);",
     "}",
     "let existing;",
+    "let inheritedParent = [];",
     "try {",
     "  const st = fs.statSync(cur);",
     "  existing = { uid: st.uid, gid: st.gid, mode: st.mode & 0o7777 };",
-    "} catch (error) {}",
+    "} catch (error) {",
+    '  const parent = require("node:child_process").spawnSync("/bin/ls", ["-lde", path.dirname(cur)], { encoding: "utf-8" });',
+    "  if (parent.status !== 0) {",
+    '  process.stderr.write((parent.stderr || "ls -lde failed") + "\\n");',
+    "    process.exit(1);",
+    "  }",
+    '  inheritedParent = String(parent.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line) && line.includes("file_inherit")).map((line) => line.replace(/^\\d+:\\s*/, "").replace(/\\bfile_inherit\\b/g, "").replace(/\\bdirectory_inherit\\b/g, "").replace(/\\blimit_inherit\\b/g, "").replace(/\\bonly_inherit\\b/g, "").replace(/\\s+/g, " ").trim()).filter((entry) => entry.length > 0);',
+    "}",
     // A destination that does not exist yet is a privileged first creation:
     // there is no policy to capture, and ls would fail on the missing path.
     "let acl = [];",
@@ -333,7 +341,7 @@ export function privilegedInspectionScript(): string {
     "  }",
     '  acl = String(listed.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line)).map((line) => line.replace(/^\\d+:\\s*/, ""));',
     "}",
-    "process.stdout.write(JSON.stringify({ target: cur, existing, acl }));",
+    "process.stdout.write(JSON.stringify({ target: cur, existing, acl, inheritedParent }));",
   ].join("");
 }
 
@@ -341,6 +349,7 @@ function inspectPrivilegedDestination(filePath: string): {
   target: string;
   existing: { uid: number; gid: number; mode: number } | undefined;
   aclEntries: string[];
+  inheritedParentEntries: string[];
 } {
   const script = privilegedInspectionScript();
   const inspected = spawnSync("sudo", [process.execPath, "-e", script, filePath], {
@@ -352,14 +361,24 @@ function inspectPrivilegedDestination(filePath: string): {
     target: string;
     existing: { uid: number; gid: number; mode: number } | undefined;
     acl: string[];
+    inheritedParent: string[];
   };
-  return { target: parsed.target, existing: parsed.existing, aclEntries: parsed.acl };
+  return {
+    target: parsed.target,
+    existing: parsed.existing,
+    aclEntries: parsed.acl,
+    inheritedParentEntries: parsed.inheritedParent,
+  };
 }
 
 /** Publish through a privileged staging file when the operator's path is not writable. */
 function publishConfigFileWithSudo(filePath: string, content: string): void {
-  const { target, existing, aclEntries } = inspectPrivilegedDestination(filePath);
-  const inheritedEntries = existing ? [] : readInheritedMacOsAclEntries(path.dirname(target));
+  const { target, existing, aclEntries, inheritedParentEntries } =
+    inspectPrivilegedDestination(filePath);
+  // The parent policy comes from the root inspection: the unprivileged read
+  // cannot reach a root-owned parent, and ordinary publication captures it
+  // directly.
+  const inheritedEntries = existing ? [] : inheritedParentEntries;
   const tempPath = path.join(
     path.dirname(target),
     `.${path.basename(target)}.openclaw-${process.pid}.tmp`,
