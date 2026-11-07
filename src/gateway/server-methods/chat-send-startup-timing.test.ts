@@ -179,10 +179,27 @@ test.each([
         }),
       },
     ),
-    notice:
-      "The request was interrupted because OpenClaw storage is busy. Check its status before trying again.",
+    notice: "The request was interrupted because OpenClaw storage is busy.",
     errorKind: undefined,
     diagnostic: undefined,
+  },
+  {
+    name: "storage capacity",
+    failure: Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" }),
+    notice: "OpenClaw couldn't save your conversation because the disk is full.",
+    errorKind: undefined,
+    diagnostic: undefined,
+  },
+  {
+    name: "concise public preflight",
+    failure: new AgentHarnessPreflightError("private preparation diagnostic", {
+      userMessage:
+        "This workspace is unavailable. Ask the operator to review its setup before retrying.",
+    }),
+    notice: "This workspace is unavailable.",
+    errorKind: undefined,
+    diagnostic:
+      "This workspace is unavailable. Ask the operator to review its setup before retrying.",
   },
   {
     name: "safe preflight permission",

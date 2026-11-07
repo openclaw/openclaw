@@ -51,8 +51,7 @@ suite.define(() => {
   it("keeps startup failure guidance visible without inventing recovery activity", async () => {
     await suite.withPage(diagnosticContext, async ({ page }) => {
       const runId = "workspace-startup-failure";
-      const summary =
-        "The request was interrupted because OpenClaw storage is busy. Check its status before trying again.";
+      const summary = "The request was interrupted because OpenClaw storage is busy.";
       await installMockGateway(page, {
         sessionKey,
         historyMessages: [
@@ -90,9 +89,8 @@ suite.define(() => {
         });
         await writeFile(path.join(directory, "startup-failure.png"), frame.png);
       }
-      expect(await notice.locator(".chat-run-failure__summary").textContent()).toBe(
-        "Check any completed work before trying again.",
-      );
+      expect(await notice.locator(".chat-run-failure__summary").count()).toBe(0);
+      expect(await notice.textContent()).not.toContain("Check any completed work");
       expect(await notice.textContent()).not.toContain("Automatic recovery has stopped");
       await page.reload();
       await notice.locator(".chat-run-failure__toggle").click();

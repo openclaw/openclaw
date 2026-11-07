@@ -136,14 +136,14 @@ type PendingDispatchLifecycleError = {
 
 function resolveDesktopChatSendErrorNotice(error: unknown): string | undefined {
   const storageFailure = classifyGatewayStorageFailure(error);
-  if (storageFailure === "SQLITE_BUSY" || storageFailure === "SQLITE_LOCKED") {
-    return "The request was interrupted because OpenClaw storage is busy. Check its status before trying again.";
-  }
-  return (
-    resolveChatSendStorageErrorMessage(error) ??
-    renderAgentHarnessPreflightUserMessage(error, { audience: "desktop" }) ??
-    renderFailoverCodeUserCopy(describeFailoverError(error).code)
-  );
+  const notice =
+    storageFailure === "SQLITE_BUSY" || storageFailure === "SQLITE_LOCKED"
+      ? "The request was interrupted because OpenClaw storage is busy."
+      : (resolveChatSendStorageErrorMessage(error) ??
+        renderAgentHarnessPreflightUserMessage(error, { audience: "desktop" }) ??
+        renderFailoverCodeUserCopy(describeFailoverError(error).code));
+  // Desktop notices state the failure, without the following recovery advice.
+  return notice?.split(/(?<=[.!?])\s+|\r?\n/u, 1)[0];
 }
 
 function formatChatSendError(error: unknown): string {

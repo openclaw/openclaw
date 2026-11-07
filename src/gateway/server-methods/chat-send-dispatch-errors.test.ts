@@ -315,8 +315,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
                 details: {
                   runId,
                   error: diagnostic,
-                  desktopNotice:
-                    "The request was interrupted because OpenClaw storage is busy. Check its status before trying again.",
+                  desktopNotice: "The request was interrupted because OpenClaw storage is busy.",
                 },
               }),
             ]);
