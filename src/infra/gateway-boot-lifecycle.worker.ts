@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { updateConfigMachineStateInDatabase } from "../state/config-machine-state-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import type {
   GatewayBootLifecycleCompletion,
   GatewayRestartResumeWindow,
+  GatewayRestartResumeWindows,
 } from "./gateway-boot-lifecycle.js";
 import {
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
@@ -20,10 +22,11 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 
-type GatewayBootLifecycleDatabase = Pick<DB, "gateway_boot_lifecycle">;
+type GatewayBootLifecycleDatabase = Pick<DB, "gateway_boot_lifecycle" | "agent_databases">;
 
 // Keep forensic history longer than the crash-loop window.
 const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
+const RESTART_RECOVERY_KEY = "gateway.restartRecovery";
 const gatewayLifecycleLog = createSubsystemLogger("gateway/lifecycle");
 
 export const gatewayBootOperations = {
@@ -43,7 +46,7 @@ export const gatewayBootOperations = {
         : undefined;
     const id = randomUUID();
     try {
-      const restartResumeWindow = runOpenClawStateWriteTransaction(({ db }) => {
+      const recovery = runOpenClawStateWriteTransaction(({ db }) => {
         const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
         const boots = kysely
           .selectFrom("gateway_boot_lifecycle")
@@ -97,15 +100,66 @@ export const gatewayBootOperations = {
             reason: null,
           }),
         );
-        return window;
+        // Registration precedes every durable run, including shared stores and refused schemas.
+        // Keep exact intervals until that physical agent completes recovery, across clean boots.
+        const owners = executeSqliteQuerySync(
+          db,
+          kysely.selectFrom("agent_databases").select("agent_id").distinct(),
+        ).rows;
+        const restartResumeWindows =
+          updateConfigMachineStateInDatabase<GatewayRestartResumeWindows>(
+            db,
+            RESTART_RECOVERY_KEY,
+            (pending = {}) => {
+              const retained = Object.fromEntries<GatewayRestartResumeWindow[]>(
+                owners.flatMap(({ agent_id: agentId }) => {
+                  const windows = Object.hasOwn(pending, agentId) ? pending[agentId]! : [];
+                  if (window) {
+                    const last = windows.at(-1);
+                    if (last && last.endedAt === window.startedAt) {
+                      last.endedAt = window.endedAt;
+                    } else {
+                      windows.push(window);
+                    }
+                  }
+                  return windows.length ? [[agentId, windows]] : [];
+                }),
+              );
+              return Object.keys(retained).length ? retained : undefined;
+            },
+            nowMs,
+          );
+        return { restartResumeWindow: window, restartResumeWindows };
       }, context.stateOptions());
-      return { decision, id, ...(restartResumeWindow ? { restartResumeWindow } : {}) };
+      return { decision, id, ...recovery };
     } catch (err) {
       // A failed history append must not discard an already-tripped breaker decision.
       gatewayLifecycleLog.warn(`failed to persist gateway boot start; fail-open: ${String(err)}`);
       return { decision, id: undefined };
     }
   },
+  "gatewayBoot.recoveredAgent": (input: { agentId: string; through: number }, context) =>
+    runOpenClawStateWriteTransaction(({ db }) => {
+      updateConfigMachineStateInDatabase<GatewayRestartResumeWindows>(
+        db,
+        RESTART_RECOVERY_KEY,
+        (pending) => {
+          if (!pending || !Object.hasOwn(pending, input.agentId)) {
+            return pending;
+          }
+          const remaining = pending[input.agentId]?.filter(
+            (window) => window.endedAt > input.through,
+          );
+          if (remaining?.length) {
+            pending[input.agentId] = remaining;
+          } else {
+            delete pending[input.agentId];
+          }
+          return Object.keys(pending).length ? pending : undefined;
+        },
+        Date.now(),
+      );
+    }, context.stateOptions()),
   "gatewayBoot.complete": (
     input: {
       bootId: string;
