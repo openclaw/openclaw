@@ -17,6 +17,7 @@ import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { isManagedOnlyBrowserRequest } from "../request-policy.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
+import { isBrowserTargetCrashed } from "../target-crash.js";
 import { resolveBrowserTabOrThrow } from "../target-id.js";
 import {
   browserNavigationPolicyForProfile,
@@ -196,6 +197,12 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       tabs = results;
     }
     signal.throwIfAborted();
+    // Only observation-backed crashes are marked; listing never probes every tab.
+    tabs = tabs.map((tab) =>
+      isBrowserTargetCrashed(profileCtx.profile.cdpUrl, tab.targetId)
+        ? { ...tab, crashed: true as const }
+        : tab,
+    );
     // Only an isolated browser owned by OpenClaw may follow the preview size.
     // Attached sessions and remote CDP browsers retain their existing viewport.
     return {

@@ -8,6 +8,7 @@ import { getPwAiModule } from "../pw-ai-module.js";
 import type { InteractionTargetOptions } from "../pw-tools-core.interactions.navigation.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
+import { toBrowserTargetCrashedError } from "../target-crash.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
 import {
   getProfileContext,
@@ -37,6 +38,12 @@ export function handleRouteError(
 ) {
   if (isProfileRestartRequiredError(err)) {
     throw err;
+  }
+  // Snapshot probes record the crash on the tab; action routes only carry the
+  // tab-scoped guidance because no target id reaches this boundary.
+  const crashed = toBrowserTargetCrashedError(err);
+  if (crashed) {
+    return jsonError(res, 409, crashed.message);
   }
   const browserMapped =
     options?.mapBrowserError === false ? undefined : toBrowserErrorResponse(err);

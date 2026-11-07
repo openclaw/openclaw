@@ -23,6 +23,7 @@ import type {
   ProfileRuntimeState,
 } from "./server-context.types.js";
 import { dispatchBrowserTabClose } from "./session-tab-store.js";
+import { isBrowserTargetCrashed } from "./target-crash.js";
 import { resolveBrowserTabOrThrow, resolveTargetIdFromTabs } from "./target-id.js";
 
 type SelectionDeps = {
@@ -166,13 +167,28 @@ export function createProfileSelectionOps({
         : new Error(formatErrorMessage(lastListError));
     }
 
+    // Prefer a healthy tab for implicit selection; an explicit target still reaches
+    // the crash guidance instead of silently switching pages.
+    if (targetId === undefined) {
+      const healthyCandidates = candidates.filter(
+        (tab) => !isBrowserTargetCrashed(profile.cdpUrl, tab.targetId),
+      );
+      if (healthyCandidates.length > 0) {
+        candidates = healthyCandidates;
+      }
+    }
+
     const stickyTargetId = runtime.lastTargetId ?? undefined;
     // Sticky selection is an identity promise: a missing target requires a fresh
-    // explicit choice. Without one, prefer page tabs over background targets.
+    // explicit choice. A crash-observed sticky target instead falls back to a
+    // healthy page so the dead tab cannot wedge implicit selection.
     const chosen = targetId
       ? resolveBrowserTabOrThrow(targetId, candidates)
       : stickyTargetId
-        ? candidates.find((tab) => tab.targetId === stickyTargetId)
+        ? (candidates.find((tab) => tab.targetId === stickyTargetId) ??
+          (isBrowserTargetCrashed(profile.cdpUrl, stickyTargetId)
+            ? (candidates.find((tab) => (tab.type ?? "page") === "page") ?? candidates.at(0))
+            : undefined))
         : (candidates.find((tab) => (tab.type ?? "page") === "page") ?? candidates.at(0));
 
     if (!chosen) {

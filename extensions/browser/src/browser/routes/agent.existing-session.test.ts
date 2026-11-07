@@ -188,7 +188,11 @@ vi.mock("../chrome-mcp-routing.js", async (importOriginal) => ({
 }));
 
 // mock-isolation: Keep CDP capture unavailable while proving existing-session routing.
-vi.mock("../cdp.js", () => ({ captureScreenshot: vi.fn(), snapshotAria: vi.fn() }));
+vi.mock("../cdp.js", () => ({
+  assertCdpTargetResponsive: vi.fn(async () => {}),
+  captureScreenshot: vi.fn(),
+  snapshotAria: vi.fn(),
+}));
 
 // mock-isolation: Control navigation decisions without resolving or connecting synthetic targets.
 vi.mock("../navigation-guard.js", () => navigation);
