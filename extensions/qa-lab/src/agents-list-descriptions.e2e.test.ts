@@ -4,7 +4,6 @@ import { expect, it } from "vitest";
 import { createQaGatewayChild } from "./gateway-child.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
-
 // Public HTTP discovery proof; no model inference or external delivery is needed by this tool.
 it(
   "bounds configured descriptions without changing the authorized Gateway roster",
