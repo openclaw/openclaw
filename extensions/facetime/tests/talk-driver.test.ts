@@ -9,7 +9,8 @@ import {
 } from "./talk-driver.test-support.js";
 
 const { resolveFaceTimeConfig } = await import("../src/config.js");
-const { resolveFaceTimeRealtimeProvider } = await import("../src/talk-driver-config.js");
+const { MAX_TRANSCRIPT_ENTRY_CHARS, resolveFaceTimeRealtimeProvider } =
+  await import("../src/talk-driver-config.js");
 const { startFaceTimeTalkDriver } = await import("../src/talk-driver.js");
 
 describe("FaceTime talk driver lifecycle", () => {
@@ -431,5 +432,34 @@ describe("FaceTime talk driver lifecycle", () => {
     expect(mocks.sessionParams?.instructions).toContain("Never claim you retried");
     expect(mocks.sessionParams?.instructions).not.toContain("Lobster");
     expect(mocks.sessionParams?.instructions).not.toContain("Omar");
+  });
+});
+
+describe("FaceTime talk driver transcript entry caps", () => {
+  beforeEach(resetTalkDriverMocks);
+
+  it("keeps emoji whole when capping transcript entries for the consult prompt", async () => {
+    mocks.consult.mockResolvedValue({ text: "Consult answer." });
+    await startReadyFaceTimeTalkDriver();
+    mocks.sessionParams?.onTranscript?.(
+      "user",
+      `${"x".repeat(MAX_TRANSCRIPT_ENTRY_CHARS - 1)}😀tail`,
+      true,
+    );
+
+    void mocks.sessionParams?.onToolCall({
+      itemId: "item-consult",
+      callId: "call-consult",
+      name: "openclaw_agent_consult",
+      args: { question: "What did I say?" },
+    });
+    await vi.waitFor(() => expect(mocks.consult).toHaveBeenCalledOnce());
+    const consultParams = mocks.consult.mock.calls[0]?.[0] as {
+      transcript: Array<{ role: string; text: string }>;
+    };
+
+    const entry = consultParams.transcript.at(-1);
+    expect(entry?.role).toBe("user");
+    expect(entry?.text).toBe("x".repeat(MAX_TRANSCRIPT_ENTRY_CHARS - 1));
   });
 });
