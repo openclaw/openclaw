@@ -7,8 +7,8 @@ struct ShareAttachmentSummary: Equatable {
     var fileCount = 0
     var unknownCount = 0
 
-    mutating func recordUnclassifiedProvider(didLoadContent: Bool) {
-        if !didLoadContent {
+    mutating func recordUnclassifiedProvider(didIncludeContent: Bool) {
+        if !didIncludeContent {
             self.unknownCount += 1
         }
     }
@@ -53,9 +53,6 @@ struct ShareAttachmentSummary: Equatable {
         }
 
         guard !details.isEmpty else { return nil }
-        details.append(NSLocalizedString(
-            "Remove omitted items and share again.",
-            comment: "Share extension omitted attachment recovery"))
         return details.joined(separator: " ")
     }
 
@@ -84,5 +81,48 @@ enum ShareAttachmentBlockReason: Equatable {
             return .omitted(omissionMessage)
         }
         return nil
+    }
+}
+
+/// Recovery must name only actions the current share can actually offer.
+enum ShareImportRecovery {
+    case save
+    case selectDestination
+    case unreadableDestination
+
+    var canSave: Bool {
+        if case .save = self { return true }
+        return false
+    }
+
+    var message: String {
+        switch self {
+        case .save:
+            NSLocalizedString(
+                "Choose Save to OpenClaw to keep every item, then open the app to review and import.",
+                comment: "Share extension available import recovery")
+        case .selectDestination:
+            NSLocalizedString(
+                "Open OpenClaw, select the intended Gateway and chat, then share again.",
+                comment: "Share extension missing import destination recovery")
+        case .unreadableDestination:
+            NSLocalizedString(
+                "The saved chat destination could not be read.",
+                comment: "Share extension unreadable import destination recovery") + " " +
+                Self.selectDestination.message
+        }
+    }
+}
+
+extension ShareAttachmentBlockReason {
+    func message(recovery: ShareImportRecovery) -> String {
+        let reason: String = switch self {
+        case .imageProcessingFailed:
+            NSLocalizedString(
+                "The shared image could not be prepared.",
+                comment: "Share extension image processing failure")
+        case let .omitted(message): message
+        }
+        return reason + " " + recovery.message
     }
 }

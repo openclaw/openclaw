@@ -21,6 +21,7 @@ final class ShareViewController: UIViewController {
     }
 
     private struct ExtractedShareContent {
+        var originalText: String
         var payload: SharedContentPayload
         var attachments: [LoadedAttachment]
         var attachmentSummary: ShareAttachmentSummary
@@ -29,6 +30,10 @@ final class ShareViewController: UIViewController {
 
     private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "ShareExtension")
     private let composeView = ShareComposeView()
+    private var importTarget: SharedDraftTarget?
+    private var importRecovery: ShareImportRecovery = .selectDestination
+    private var didCancel = false
+    private var isSaving = false
     private var didPrepareDraft = false
     private var isSending = false
     private var pendingAttachments: [ShareAttachment] = []
@@ -42,7 +47,11 @@ final class ShareViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         self.composeView.onSend = { [weak self] in self?.handleSendTap() }
+        self.composeView.onSave = { [weak self] in
+            Task { await self?.saveForNativeChat() }
+        }
         self.composeView.onCancel = { [weak self] in
+            self?.didCancel = true
             self?.extensionContext?.completeRequest(returningItems: nil)
         }
     }
@@ -64,13 +73,24 @@ final class ShareViewController: UIViewController {
     private func prepareDraft() async {
         ShareGatewayRelaySettings.saveLastEvent("Share opened.")
         self.composeView.apply(.preparing)
+        do {
+            self.importTarget = try await SharedDraftInbox.shared.destination()
+            self.importRecovery = self.importTarget == nil ? .selectDestination : .save
+        } catch {
+            self.importRecovery = .unreadableDestination
+            ShareGatewayRelaySettings.saveLastEvent(
+                "Share import destination could not be read; open OpenClaw and select a chat.")
+        }
         let extracted = await self.extractSharedContent()
+        guard !self.didCancel else { return }
         let payload = extracted.payload
         self.pendingAttachments = extracted.attachments.map(\.payload)
         self.attachmentBlockReason = ShareAttachmentBlockReason.resolve(
             hasImageProcessingError: extracted.attachmentError != nil,
             summary: extracted.attachmentSummary)
-        let message = ShareDraftComposer.compose(from: payload)
+        let message = self.attachmentBlockReason == nil
+            ? ShareDraftComposer.compose(from: payload) : extracted.originalText
+        self.composeView.canSave = self.importRecovery.canSave && self.attachmentBlockReason != nil
         self.composeView.setDraft(message)
         self.composeView.setAttachmentPreviews(extracted.attachments.map(\.preview))
         self.composeView.focusDraft()
@@ -224,6 +244,7 @@ final class ShareViewController: UIViewController {
     private func extractSharedContent() async -> ExtractedShareContent {
         guard let items = self.extensionContext?.inputItems as? [NSExtensionItem] else {
             return ExtractedShareContent(
+                originalText: "",
                 payload: SharedContentPayload(title: nil, url: nil, text: nil),
                 attachments: [],
                 attachmentSummary: ShareAttachmentSummary(),
@@ -249,6 +270,7 @@ final class ShareViewController: UIViewController {
         }
         attachmentSummary.acceptedImageCount = attachments.count
         return ExtractedShareContent(
+            originalText: providerContent.originalText,
             payload: providerContent.payload,
             attachments: attachments,
             attachmentSummary: attachmentSummary,
@@ -279,17 +301,40 @@ final class ShareViewController: UIViewController {
             preview: self.boundedPreview(from: image))
     }
 
+    private func saveForNativeChat() async {
+        guard !self.isSaving, !self.isSending, !self.didCancel, let target = self.importTarget,
+              let items = self.extensionContext?.inputItems as? [NSExtensionItem]
+        else { return }
+        self.isSaving = true
+        self.composeView.apply(.saving)
+        let text = self.composeView.draftText
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-share-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            self.isSaving = false
+            try? FileManager.default.removeItem(at: directory)
+        }
+        do {
+            let files = try await ShareContentExtractor.preserveFiles(from: items, into: directory)
+            guard !self.didCancel else { return }
+            try await SharedDraftInbox.shared.save(text: text, target: target, files: files)
+            self.composeView.apply(.saved)
+            // Share extensions cannot publicly foreground their containing app.
+            // Leave this instruction visible until the user taps Done.
+            self.composeView.showSavedImport()
+        } catch {
+            self.composeView.apply(.blocked(error.localizedDescription))
+        }
+    }
+
     private func applyAttachmentBlockReason(_ blockReason: ShareAttachmentBlockReason) {
         switch blockReason {
         case .imageProcessingFailed:
             ShareGatewayRelaySettings.saveLastEvent("Share blocked: image processing failed.")
-            self.composeView.apply(.blocked(NSLocalizedString(
-                "The shared image could not be prepared.",
-                comment: "Share extension image processing failure")))
-        case let .omitted(message):
+        case .omitted:
             ShareGatewayRelaySettings.saveLastEvent("Share blocked: attachment(s) omitted.")
-            self.composeView.apply(.blocked(message))
         }
+        self.composeView.apply(.blocked(blockReason.message(recovery: self.importRecovery)))
     }
 
     /// Previews are retained for the sheet's lifetime; keep them bounded so

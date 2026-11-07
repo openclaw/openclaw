@@ -13,6 +13,58 @@ extension OpenClawChatViewModel {
     /// Bound memory for resize input independently of the encoded upload budget.
     private static let maxImageSourceBytes = 64 * 1024 * 1024
 
+    /// Imports only into the captured, empty composer. Reuses Files staging and
+    /// its advertised budgets; never invokes send or creates outbox work.
+    /// Prepare off-composer; publish the whole selection only after revalidating its owner.
+    public func importSharedDraft(
+        text: String,
+        files: [URL],
+        isDestinationCurrent: @MainActor () -> Bool) async -> Bool
+    {
+        guard isDestinationCurrent(), self.input.isEmpty, self.attachments.isEmpty,
+              !self.isAttachmentOwnerPinned, !self.isSubmittingDraft
+        else {
+            self.errorText = String(
+                localized: "Send or clear the original chat's draft before importing. Your saved share is unchanged.")
+            return false
+        }
+        let session = self.currentSessionSnapshot()
+        self.beginAttachmentStaging()
+        defer { self.endAttachmentStaging() }
+        let revision = self.composerRevision(for: self.sessionKey)
+        let limits = await self.transport.attachmentLimits()
+        var prepared: [OpenClawPendingAttachment] = []
+        do {
+            for file in files {
+                try Task.checkCancellation()
+                guard self.isCurrentSession(session), isDestinationCurrent() else { throw CancellationError() }
+                let attachment = try await self.prepareFileAttachment(
+                    url: file,
+                    fileName: file.lastPathComponent,
+                    mimeType: Self.mimeType(for: file) ?? "application/octet-stream",
+                    advertisedLimits: limits,
+                    expectedSession: session)
+                guard self.validateAttachmentBudget(prepared + [attachment], limits: limits ?? .legacyClientFallback)
+                else { throw ChatAttachmentReadError.tooLarge }
+                prepared.append(attachment)
+            }
+            try Task.checkCancellation()
+            guard self.isCurrentSession(session), isDestinationCurrent(), self.input.isEmpty,
+                  self.composerRevision(for: self.sessionKey) == revision,
+                  self.attachments.isEmpty,
+                  self.validateAttachmentBudget(prepared, limits: limits ?? .legacyClientFallback)
+            else { throw CancellationError() }
+            self.attachments = prepared
+            self.input = text
+            self.errorText = nil
+            return true
+        } catch {
+            self.errorText = String(
+                localized: "Import failed. Check the original chat and file limits, then retry. Nothing was sent.")
+            return false
+        }
+    }
+
     public func addAttachments(urls: [URL]) {
         self.addAttachments(urls: urls, for: nil)
     }
@@ -236,15 +288,38 @@ extension OpenClawChatViewModel {
         advertisedLimits: GatewayAttachmentLimits?,
         expectedSession: SessionSnapshot? = nil) async -> ChatAttachmentReadError?
     {
+        do {
+            let attachment = try await self.prepareImageAttachment(
+                url: url,
+                data: data,
+                fileName: fileName,
+                mimeType: mimeType,
+                advertisedLimits: advertisedLimits,
+                expectedSession: expectedSession)
+            guard self.ownsAttachmentSession(expectedSession) else { return nil }
+            return self.stageAttachment(attachment, limits: advertisedLimits ?? .legacyClientFallback) ? nil : .tooLarge
+        } catch {
+            return error as? ChatAttachmentReadError ?? .unreadable
+        }
+    }
+
+    private func prepareImageAttachment(
+        url: URL?,
+        data: Data,
+        fileName: String,
+        mimeType: String,
+        advertisedLimits: GatewayAttachmentLimits?,
+        expectedSession: SessionSnapshot? = nil) async throws -> OpenClawPendingAttachment
+    {
         let limits = advertisedLimits ?? .legacyClientFallback
-        guard self.ownsAttachmentSession(expectedSession) else { return nil }
+        guard self.ownsAttachmentSession(expectedSession) else { throw CancellationError() }
         guard !data.isEmpty else {
             errorText = String(format: String(localized: "Could not attach: %@"), fileName)
-            return .unreadable
+            throw ChatAttachmentReadError.unreadable
         }
         if data.count > Self.maxImageSourceBytes {
             errorText = String(format: String(localized: "Too large to send: %@"), fileName)
-            return .tooLarge
+            throw ChatAttachmentReadError.tooLarge
         }
         let uti: UTType = {
             if let url {
@@ -254,7 +329,7 @@ extension OpenClawChatViewModel {
         }()
         guard uti.conforms(to: .image) else {
             errorText = String(localized: "Only image attachments are supported right now")
-            return .unreadable
+            throw ChatAttachmentReadError.unreadable
         }
 
         let processed: Data
@@ -263,22 +338,22 @@ extension OpenClawChatViewModel {
                 try ChatImageProcessor.processForUpload(data: data)
             }.value
         } catch {
-            guard self.ownsAttachmentSession(expectedSession) else { return nil }
+            guard self.ownsAttachmentSession(expectedSession) else { throw CancellationError() }
             errorText = String(
                 format: String(localized: "Could not process %1$@: %2$@"),
                 fileName,
                 error.localizedDescription)
-            return .unreadable
+            throw ChatAttachmentReadError.unreadable
         }
 
         // Image processing runs off actor. Revalidate the draft owner before
         // publishing either the attachment or any session-scoped error state.
-        guard self.ownsAttachmentSession(expectedSession) else { return nil }
+        guard self.ownsAttachmentSession(expectedSession) else { throw CancellationError() }
         if processed.count > limits.maxImageBytes {
             errorText = String(
                 format: String(localized: "Too large to send: %@"),
                 fileName)
-            return .tooLarge
+            throw ChatAttachmentReadError.tooLarge
         }
 
         let outputFileName: String = {
@@ -287,14 +362,12 @@ extension OpenClawChatViewModel {
         }()
 
         let preview = OpenClawPlatformImage(data: processed)
-        return self.stageAttachment(
-            OpenClawPendingAttachment(
-                url: url,
-                data: processed,
-                fileName: outputFileName,
-                mimeType: "image/jpeg",
-                preview: preview),
-            limits: limits) ? nil : .tooLarge
+        return OpenClawPendingAttachment(
+            url: url,
+            data: processed,
+            fileName: outputFileName,
+            mimeType: "image/jpeg",
+            preview: preview)
     }
 
     func addVideoAttachment(
@@ -330,8 +403,26 @@ extension OpenClawChatViewModel {
         advertisedLimits: GatewayAttachmentLimits?,
         expectedSession: SessionSnapshot?) async throws
     {
-        let limits = advertisedLimits ?? .legacyClientFallback
+        let attachment = try await self.prepareFileAttachment(
+            url: url,
+            fileName: fileName,
+            mimeType: mimeType,
+            advertisedLimits: advertisedLimits,
+            expectedSession: expectedSession)
         guard self.ownsAttachmentSession(expectedSession) else { return }
+        guard self.stageAttachment(attachment, limits: advertisedLimits ?? .legacyClientFallback)
+        else { throw ChatAttachmentReadError.tooLarge }
+    }
+
+    private func prepareFileAttachment(
+        url: URL,
+        fileName: String,
+        mimeType: String,
+        advertisedLimits: GatewayAttachmentLimits?,
+        expectedSession: SessionSnapshot?) async throws -> OpenClawPendingAttachment
+    {
+        let limits = advertisedLimits ?? .legacyClientFallback
+        guard self.ownsAttachmentSession(expectedSession) else { throw CancellationError() }
         let hasSecurityScope = url.startAccessingSecurityScopedResource()
         defer {
             if hasSecurityScope { url.stopAccessingSecurityScopedResource() }
@@ -339,33 +430,28 @@ extension OpenClawChatViewModel {
         let isImage = mimeType.hasPrefix("image/")
         let maximumSourceBytes = isImage ? Self.maxImageSourceBytes : limits.maxBytes
         let data = try await Self.readAttachmentData(from: url, maximumBytes: maximumSourceBytes)
-        guard self.ownsAttachmentSession(expectedSession) else { return }
+        guard self.ownsAttachmentSession(expectedSession) else { throw CancellationError() }
         if isImage {
-            if let error = await self.stageImageAttachment(
+            return try await self.prepareImageAttachment(
                 url: url,
                 data: data,
                 fileName: fileName,
                 mimeType: mimeType,
                 advertisedLimits: advertisedLimits,
                 expectedSession: expectedSession)
-            {
-                throw error
-            }
-            return
         }
 
         var thumbnailData: Data?
         if mimeType.hasPrefix("video/") {
             thumbnailData = await Self.videoThumbnailData(data: data, fileExtension: url.pathExtension)
         }
-        guard self.ownsAttachmentSession(expectedSession) else { return }
-        guard self.stageAttachment(OpenClawPendingAttachment(
+        guard self.ownsAttachmentSession(expectedSession) else { throw CancellationError() }
+        return OpenClawPendingAttachment(
             url: nil,
             data: data,
             fileName: fileName,
             mimeType: mimeType,
-            preview: thumbnailData.flatMap(OpenClawPlatformImage.init(data:))), limits: limits)
-        else { throw ChatAttachmentReadError.tooLarge }
+            preview: thumbnailData.flatMap(OpenClawPlatformImage.init(data:)))
     }
 
     private func ownsAttachmentSession(_ expectedSession: SessionSnapshot?) -> Bool {

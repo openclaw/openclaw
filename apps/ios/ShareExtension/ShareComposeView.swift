@@ -21,6 +21,10 @@ final class ShareComposeView: UIView, UITextViewDelegate {
 
     var onSend: (() -> Void)?
     var onCancel: (() -> Void)?
+    var onSave: (() -> Void)?
+    var canSave = false {
+        didSet { self.updateControls() }
+    }
 
     var draftText: String {
         self.textView.text ?? ""
@@ -37,6 +41,7 @@ final class ShareComposeView: UIView, UITextViewDelegate {
     private let statusSpinner = UIActivityIndicatorView(style: .medium)
     private let statusIcon = UIImageView()
     private let statusLabel = UILabel()
+    private let saveButton = UIButton(configuration: .plain())
     private let sendButton = UIButton(configuration: ShareComposeView.makeSendConfiguration())
     private var status: ShareComposeStatus = .preparing
 
@@ -87,6 +92,14 @@ final class ShareComposeView: UIView, UITextViewDelegate {
             self.showFooter(
                 text: NSLocalizedString("Preparing share…", comment: "Share extension preparation status"),
                 icon: nil)
+        case .saving:
+            self.showFooter(text: NSLocalizedString("Saving share…", comment: "Share import status"), icon: nil)
+        case .saved:
+            self.showFooter(
+                text: NSLocalizedString(
+                    "Saved for 48 hours. Open OpenClaw to review and import into the original chat. Nothing was sent.",
+                    comment: "Share import manual open instructions"),
+                icon: (name: "checkmark.circle.fill", tint: .systemGreen))
         case .ready:
             self.statusContainer.isHidden = true
         case .sending:
@@ -103,6 +116,14 @@ final class ShareComposeView: UIView, UITextViewDelegate {
                 icon: (name: "exclamationmark.triangle.fill", tint: .systemOrange))
         }
         self.updateControls()
+    }
+
+    func showSavedImport() {
+        var configuration = self.cancelButton.configuration
+        configuration?.attributedTitle = Self.attributedTitle(
+            NSLocalizedString("Done", comment: "Saved share dismiss action"), style: .body)
+        self.cancelButton.configuration = configuration
+        self.cancelButton.isEnabled = true
     }
 
     func focusDraft() {
@@ -126,6 +147,11 @@ final class ShareComposeView: UIView, UITextViewDelegate {
         let hasDraftText = !self.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let controls = ShareComposeControlState.resolve(status: self.status, hasDraftText: hasDraftText)
         self.sendButton.isEnabled = controls.isSendEnabled
+        self.saveButton.isHidden = !self.canSave
+        switch self.status {
+        case .ready, .failed, .blocked: self.saveButton.isEnabled = self.canSave
+        default: self.saveButton.isEnabled = false
+        }
         self.cancelButton.isEnabled = controls.isCancelEnabled
         self.textView.isEditable = controls.isEditable
         self.placeholderLabel.isHidden = !self.draftText.isEmpty
@@ -198,6 +224,14 @@ final class ShareComposeView: UIView, UITextViewDelegate {
         self.statusLabel.numberOfLines = 0
         self.statusLabel.textAlignment = .center
 
+        var saveConfiguration = UIButton.Configuration.plain()
+        saveConfiguration.attributedTitle = Self.attributedTitle(
+            NSLocalizedString("Save to OpenClaw", comment: "Preserve share for native chat import"), style: .body)
+        saveConfiguration.baseForegroundColor = Self.accent
+        self.saveButton.configuration = saveConfiguration
+        self.saveButton.accessibilityIdentifier = "share-compose.save"
+        self.saveButton.addAction(UIAction { [weak self] _ in self?.onSave?() }, for: .touchUpInside)
+
         self.sendButton.accessibilityIdentifier = "share-compose.send"
         self.sendButton.addAction(UIAction { [weak self] _ in self?.onSend?() }, for: .touchUpInside)
         self.sendButton.configurationUpdateHandler = { button in
@@ -228,6 +262,7 @@ final class ShareComposeView: UIView, UITextViewDelegate {
             self.attachmentsRow,
             self.statusContainer,
             self.sendButton,
+            self.saveButton,
         ])
         contentStack.axis = .vertical
         contentStack.spacing = 12

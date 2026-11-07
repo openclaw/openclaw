@@ -41,6 +41,47 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 - **Settings** opens the Dashboard settings pages when connected with `operator.admin`; the native Gateway screen remains available for connection and pairing.
 - Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported Gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when Gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
+## Recover a blocked share
+
+The share sheet sends up to three prepared images directly. If it cannot send
+all selected items, **Save to OpenClaw** preserves the original shared text and
+document, video, and image bytes instead of sending an incomplete selection.
+Open a paired Gateway and the intended native chat in OpenClaw once before
+sharing; Share captures that chat's Gateway, agent, and session when it opens.
+A later selection change does not retarget an already saved share. If Share has
+no saved destination or cannot read it, its recovery message asks you to open
+OpenClaw, select the intended Gateway and chat, and share again instead of
+promising an unavailable Save action. Additional text or URL providers that do
+not fit the direct-send draft also block sending rather than being omitted.
+
+After saving, tap **Done** and open OpenClaw yourself. iOS does not provide a
+supported way for a Share extension to foreground its containing app. Tap
+**Saved shares**, review the text, filenames, and destination, select that same
+Gateway, agent, and chat through the normal app UI, then choose **Import into
+original chat**. Existing composer text or attachments are never replaced. Send
+or clear that draft before importing. Review the imported draft and tap **Send**
+when ready; saving, opening, and importing never send a message automatically.
+
+Saved shares use a separate, protected SQLite inbox in the existing App Group,
+not the chat outbox or the app-private chat database. Original bytes and metadata
+commit together. The inbox holds at most 50 shares, 50 attachments across those
+shares, and 48 MiB of combined text and attachment payloads; each share's text is
+limited to 128 KiB. These are local preservation bounds, not permission to exceed
+the Gateway's smaller per-image and combined-message attachment limits. Import
+uses the existing native Files pipeline, including image processing and current
+Gateway budgets. If an item cannot be preserved or the complete selection cannot
+be staged, the operation fails visibly rather than omitting it. A failed import
+keeps the saved share available for retry.
+
+Each saved share expires after 48 hours. Expired payloads are inaccessible and
+are deleted the next time the inbox is accessed, including on app foreground.
+**Discard saved share** deletes an import immediately; successful complete staging
+also deletes its inbox copy. Cancelling review does not discard it. Imported
+attachments then have the same in-memory composer lifetime as files selected
+normally; review and send them before closing the app. The inbox is excluded
+from backup. Temporary provider copies and import files are removed when their
+operation finishes; the system owns cleanup after an interrupted process.
+
 ## Chat text size
 
 Chat uses a 13.5-point base text size for a denser transcript. It still follows
