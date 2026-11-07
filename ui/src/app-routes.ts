@@ -38,8 +38,7 @@ import { page as channelsPage } from "./pages/channels/route.ts";
 import { pages as chatPages } from "./pages/chat/route.ts";
 import type { ChatRouteData } from "./pages/chat/session-route-data.ts";
 import { page as cloudWorkersPage } from "./pages/cloud-workers/route.tsx";
-import { canonicalGeneralSettingsLocation } from "./pages/config/route-data.ts";
-import { pages as configPages } from "./pages/config/route.ts";
+import { canonicalSettingsLocation, pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
 import { page as cronPage } from "./pages/cron/route.tsx";
 import { page as custodianPage } from "./pages/custodian/route.tsx";
@@ -170,9 +169,9 @@ function canonicalRouteLocation(
   location: RouteLocation,
   basePath: string,
 ): RouteLocation {
-  return routeId === "config"
-    ? canonicalGeneralSettingsLocation(location, basePath)
-    : routeId === "model-setup"
+  return (
+    canonicalSettingsLocation(routeId, location, basePath) ??
+    (routeId === "model-setup"
       ? canonicalModelSetupLocation(location, basePath)
       : routeId === "workboard"
         ? (resolveWorkboardRouteLocation(location, basePath).canonicalLocation ?? location)
@@ -180,7 +179,8 @@ function canonicalRouteLocation(
           ? canonicalPluginTabLocation(location, basePath)
           : routeId === "plugins" || routeId === "plugin-settings"
             ? (canonicalPluginsRouteLocation(location, basePath) ?? location)
-            : location;
+            : location)
+  );
 }
 
 export function createApplicationRouter(): ApplicationRouter {
@@ -196,12 +196,9 @@ export function createApplicationRouter(): ApplicationRouter {
       if (context.nativeConversation?.interceptNavigation(requested)) {
         return Promise.resolve();
       }
-      const canonical =
-        location || routeId === "config" || routeId === "model-setup"
-          ? canonicalRouteLocation(routeId, requested, context.basePath)
-          : undefined;
+      const canonical = canonicalRouteLocation(routeId, requested, context.basePath);
       const destination =
-        canonical && (routeId === "config" || routeId === "model-setup")
+        canonical.pathname !== requested.pathname
           ? (routeIdFromPath(canonical.pathname, context.basePath) ?? routeId)
           : routeId;
       // Retired URLs must not mount a page between two live destinations.

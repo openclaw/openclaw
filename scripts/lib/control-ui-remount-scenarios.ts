@@ -22,13 +22,19 @@ const panels: readonly AgentsPanel[] = [
   "memory",
 ];
 
-async function visit(page: Page, id: RouteId, pathname = pathForRoute(id), search = "") {
+async function visit(
+  page: Page,
+  id: RouteId,
+  pathname = pathForRoute(id),
+  search = "",
+  landed = id,
+) {
   await page.evaluate(
     ({ id: routeId, pathname: path, search: routeSearch }) =>
       window.openclawControlUi!.navigate(routeId, { pathname: path, search: routeSearch }),
     { id, pathname, search },
   );
-  await waitForControlUiRoute(page, { routeId: id === "model-setup" ? "model-providers" : id });
+  await waitForControlUiRoute(page, { routeId: landed });
 }
 
 async function agentPanelReady(page: Page, panel: AgentsPanel) {
@@ -67,6 +73,7 @@ export function createEngineRemountScenarios(): EngineScenario[] {
     sourcePath: string;
     to: RouteId;
     targetPath: string;
+    search?: string;
     landed?: RouteId;
   }> = [
     {
@@ -91,6 +98,24 @@ export function createEngineRemountScenarios(): EngineScenario[] {
       targetPath: "/settings/model-setup",
       landed: "model-providers",
     },
+    {
+      name: "new-settings-bookmark",
+      from: "new-session",
+      sourcePath: "/new",
+      to: "settings",
+      targetPath: "/settings",
+      search: "?keep=1",
+      landed: "chat",
+    },
+    {
+      name: "new-moved-settings-bookmark",
+      from: "new-session",
+      sourcePath: "/new",
+      to: "communications",
+      targetPath: "/communications",
+      search: "?section=channels",
+      landed: "channels",
+    },
   ];
   for (const pair of historyPairs) {
     for (const direction of ["back", "forward"] as const) {
@@ -102,7 +127,7 @@ export function createEngineRemountScenarios(): EngineScenario[] {
         expected: `Native history ${direction} preserves owners across ${pair.name}.`,
         prepare: async (page) => {
           await waitForControlUiRoute(page, { routeId: pair.from });
-          await visit(page, pair.to, pair.targetPath);
+          await visit(page, pair.to, pair.targetPath, pair.search, pair.landed);
           if (direction === "forward") {
             await page.goBack();
             await waitForControlUiRoute(page, { routeId: pair.from });
