@@ -1,0 +1,2 @@
+292
+# Apple Silicon Metal detection, resource-tier selection, native preset overrides, and consent/verification/rollback regressions for #194650.

@@ -16,7 +16,11 @@ import {
 import { detectLlamaCppHardware, formatLlamaCppMemory } from "./hardware.js";
 import { resolveManagedLlamaServerPaths, selectLlamaServerAsset } from "./llama-server-assets.js";
 import { ensureLlamaServerInstalled } from "./llama-server-install.js";
-import { assertMediaPresetLimits, type ManagedLlamaModel } from "./llama-server-preset.js";
+import {
+  LLAMA_CPP_METAL_DEVICE,
+  assertMediaPresetLimits,
+  type ManagedLlamaModel,
+} from "./llama-server-preset.js";
 import {
   ensureLlamaCppModel,
   prepareManagedLlamaServer,
@@ -97,19 +101,32 @@ export async function runLlamaCppMediaSetup(
     );
   }
   const cacheDir = resolveLlamaCppModelCacheDir(existing);
-  const hardware = await detectLlamaCppHardware({ cacheDir, signal: ctx.signal });
-  if (hardware.platform !== "linux" || hardware.arch !== "x64") {
+  const hardware = await detectLlamaCppHardware({
+    cacheDir,
+    signal: ctx.signal,
+    verifyMetal: true,
+  });
+  const appleSilicon = hardware.platform === "darwin" && hardware.arch === "arm64";
+  if (!appleSilicon && (hardware.platform !== "linux" || hardware.arch !== "x64")) {
     await ctx.prompter.note(
-      `Automatic local OCR and vision setup currently supports Linux x64 with CPU execution only; this Gateway is ${hardware.platform}/${hardware.arch}. Use this command on a Linux x64 Gateway, or configure another image provider. Existing llama.cpp chat and embedding setup is unchanged.`,
+      `Automatic local OCR and vision setup supports Linux x64 with CPU execution and Apple Silicon Macs with Metal; this Gateway is ${hardware.platform}/${hardware.arch}. On Apple Silicon, use a native arm64 Node runtime. Otherwise use a supported Gateway or configure another image provider. Existing llama.cpp chat and embedding setup is unchanged.`,
       "Local media unavailable",
     );
     return { profiles: [] };
   }
-  const asset = selectLlamaServerAsset(hardware.platform, hardware.arch, { kind: "cpu" });
+  if (appleSilicon && hardware.accelerator.kind !== "metal") {
+    await ctx.prompter.note(
+      `${hardware.accelerator.kind === "cpu" ? hardware.accelerator.reason : "Apple Metal is unavailable."} Automatic local media on Apple Silicon requires Metal. Existing configuration is unchanged.`,
+      "Local media unavailable",
+    );
+    return { profiles: [] };
+  }
+  const backend = appleSilicon ? "metal" : "cpu";
+  const asset = selectLlamaServerAsset(hardware.platform, hardware.arch, { kind: backend });
   const degraded =
-    hardware.accelerator.kind === "cpu"
+    backend === "metal" || hardware.accelerator.kind === "cpu"
       ? undefined
-      : "Initial local media support uses CPU execution even when an accelerator is detected.";
+      : "Local media on Linux uses CPU execution even when an accelerator is detected.";
   const cached = new Map<string, string>();
   for (const recipe of LLAMA_CPP_MEDIA_RECIPES) {
     for (const artifact of [recipe.model, recipe.projector]) {
@@ -131,7 +148,7 @@ export async function runLlamaCppMediaSetup(
     .stat(resolveManagedLlamaServerPaths(asset).command)
     .then((stat) => stat.isFile())
     .catch(() => false);
-  const recommendation = recommendLlamaCppMedia(hardware, {
+  const recommendation = recommendLlamaCppMedia(hardware, backend, {
     artifactSha256: new Set(cached.keys()),
     runtime: runtimeCached,
   });
@@ -140,7 +157,7 @@ export async function runLlamaCppMediaSetup(
     return { profiles: [] };
   }
   const recipes = [recommendation.ocr, recommendation.vision];
-  assertMediaPresetLimits(existing?.localService?.args ?? [], recipes);
+  assertMediaPresetLimits(existing?.localService?.args ?? [], recipes, backend);
   const artifacts = [
     ...new Map(
       recipes
@@ -155,6 +172,9 @@ export async function runLlamaCppMediaSetup(
     message: [
       `Gateway host: ${os.hostname()} (${hardware.platform}/${hardware.arch})`,
       `Backend: ${asset.backend.toUpperCase()}`,
+      hardware.cpuModel
+        ? `Processor: ${hardware.cpuModel}${hardware.cpuCores ? ` (${hardware.cpuCores} available CPU cores)` : ""}.`
+        : undefined,
       degraded ?? (hardware.accelerator.kind === "cpu" ? hardware.accelerator.reason : undefined),
       `RAM: ${formatLlamaCppMemory(hardware.totalMemoryBytes)} total, ${formatLlamaCppMemory(hardware.availableMemoryBytes)} available.`,
       `Disk: ${formatLlamaCppMemory(hardware.availableDiskBytes ?? 0)} model volume; ${formatLlamaCppMemory(hardware.availableRuntimeDiskBytes ?? 0)} runtime volume (${hardware.sharedDisk ? "shared budget" : "separate budgets"}).`,
@@ -188,7 +208,7 @@ export async function runLlamaCppMediaSetup(
   try {
     ctx.assertCurrent?.();
     await ensureLlamaServerInstalled({ asset, signal: ctx.signal });
-    const device = "none";
+    const device = backend === "metal" ? LLAMA_CPP_METAL_DEVICE : "none";
     for (const artifact of artifacts) {
       ctx.assertCurrent?.();
       const file = await ensureLlamaCppModel({
