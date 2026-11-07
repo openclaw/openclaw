@@ -156,8 +156,8 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
         }
         queues.push({
           pending: queue.pending.length,
-          draining: !!queue.drainPromise,
-          holder: !!queue.holder,
+          draining: Boolean(queue.drainPromise),
+          holder: Boolean(queue.holder),
           operation: queue.holder?.operation,
           started: queue.holder?.startedAt !== undefined,
           finished: queue.holder?.finishedAt !== undefined,
