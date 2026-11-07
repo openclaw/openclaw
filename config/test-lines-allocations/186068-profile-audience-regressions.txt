@@ -1,0 +1,5 @@
+441
+# #186068 / PR #188494: net audience-boundary regression and fixture growth.
+# Covers canonical profile/session admission, no private bootstrap opens,
+# shared/public/delegated tool denial, live revocation, safe writes, and aliases.
+# Uses existing owners and preserves the shared test-line baseline.
