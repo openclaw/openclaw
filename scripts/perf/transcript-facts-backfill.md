@@ -44,6 +44,9 @@ snapshot. For the49k path use `--start-position 48488 --pause-ms 0
 `--duty-ratio 20` delays by max(pause-ms,20×measured BEGIN-through-COMMIT wall).
 This is a native pacing model; the foreground probe separately consumes the
 actual host owner’s returned delays, including contention backoff.
+The host charges admitted publication execution, including worker preparation and
+reply delivery, while excluding foreground FIFO waiting. Returned delay divided by
+twenty is therefore not a native transaction duration.
 `--allocation-iterations 100` collects a separate sampled allocation/CPU pass before
 and after, and zero omits that pass. Traced CPU is supporting evidence, not the
 untraced timing comparison. Five untraced hydration samples establish medians/spread,

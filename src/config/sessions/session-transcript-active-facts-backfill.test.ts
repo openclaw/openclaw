@@ -86,7 +86,16 @@ it("fills historical active facts exactly and resumes without rereading covered 
     expect(first.rowsFilled).toBeLessThanOrEqual(16);
     expect(first.done).toBe(false);
     // Losing the process cursor starts an index-only coverage scan, not another payload fill.
-    const open = vi.spyOn(workerStores, "openOpenClawAgentSqliteWorkerStoreV2");
+    const openStore = workerStores.openOpenClawAgentSqliteWorkerStoreV2;
+    const open = vi
+      .spyOn(workerStores, "openOpenClawAgentSqliteWorkerStoreV2")
+      .mockImplementation((options, authority, publication) =>
+        openStore(options, authority, {
+          ...publication,
+          observeWriteExecution: (elapsedMs) =>
+            publication.observeWriteExecution?.(Math.max(100, elapsedMs)),
+        }),
+      );
     const resume = createSessionTranscriptFactsBackfill({
       database: f.scope,
       assertCurrent: () => signal.throwIfAborted(),
@@ -94,6 +103,9 @@ it("fills historical active facts exactly and resumes without rereading covered 
       log: { info() {}, warn() {} },
     });
     try {
+      await resume.runBatch(); // Index-only discovery has its own yield.
+      // A short native transaction still charges the writer's preparation/reply occupancy.
+      expect((await resume.runBatch()).delayMs).toBeGreaterThanOrEqual(2_000);
       while (!(await resume.runBatch()).complete) {
         signal.throwIfAborted();
       }

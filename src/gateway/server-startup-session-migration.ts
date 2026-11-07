@@ -72,8 +72,8 @@ export function createGatewaySessionFactsBackfillScheduler(params: {
               log: params.log,
             });
           }
-          // A foreground arrival can wait for this bounded transaction. One indivisible
-          // cold read can exceed its soft budget; the next delay limits writer duty cycle.
+          // Foreground arrivals can wait for the publication, including preparation/reply.
+          // An indivisible cold read can exceed the native budget; pacing limits average duty.
           ({ complete, delayMs } = await backfill.runBatch());
           if (complete) {
             backfill = undefined;

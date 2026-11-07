@@ -3234,23 +3234,27 @@ prioritizes sessions updated within seven days, largest active path first, then
 older sessions by size, and finishes each session before advancing. Background
 writer admission waits for the foreground FIFO to drain; active runs and other
 background work do not prevent progress. The delay after each batch is at least
-250 ms and twenty times its transaction duration. Lock contention doubles a
+250 ms and twenty times its admitted publication execution, including worker
+preparation and reply delivery and bounded below by the native transaction duration.
+Waiting behind foreground work is excluded. Index-only discovery receives the same
+execution-time charge. Lock contention doubles a
 separate backoff up to five seconds; a clean batch resets it. One worker client
 serves the pass and closes on completion or cancellation. Drain cancels pending work and permits only an already
 admitted bounded transaction to settle. This work never runs during database
 open, migration, or readiness.
 
-A foreground operation arriving mid-transaction waits for that transaction.
-An indivisible cold payload read or commit can exceed the soft time budget;
-the following delay limits the backfill's writer duty cycle.
+A foreground operation arriving after background admission can wait for its whole
+publication, including preparation and reply delivery. An indivisible cold payload
+read, commit, or runtime pause can exceed the soft time budget; the following delay
+limits average writer duty, not the duration of an individual foreground wait.
 
 Each transaction reads the current active rows and derives facts with the same
 helpers as ordinary writers. Cold, rebuilding, and malformed rows retain their
 fallback. Progress comes from the companion primary key: restart scans bounded
 active identity ranges but does not reread covered payloads. No progress table,
 schema change, or new setting is introduced. Progress logs report filled and
-skipped rows, visited sessions, payload bytes, maximum batch duration, and lock
-contention. A completed pass can leave skipped rows or rows invalidated behind
+skipped rows, visited sessions, payload bytes, maximum native batch and admitted
+execution durations, and lock contention. A completed pass can leave skipped rows or rows invalidated behind
 its cursor unknown; ordinary writers or the next restart can cover them.
 
 PostgreSQL keeps ordinary writer population and the existing fallback. Its

@@ -33,6 +33,8 @@ export function createSessionTranscriptFactsBackfill(params: {
   let pauses = 0;
   let lastReport = 0;
   let contentionDelayMs = 250;
+  let writeExecutionMs = 0;
+  let maxWriteExecutionMs = 0;
   let closed = false;
   let client:
     | Promise<OpenClawAgentSqliteWorkerStoreV2<TranscriptActiveFactsBackfillOperations>>
@@ -67,6 +69,10 @@ export function createSessionTranscriptFactsBackfill(params: {
           ),
           input: undefined,
           priority: "background",
+          observeWriteExecution: (elapsedMs) => {
+            writeExecutionMs = elapsedMs;
+            maxWriteExecutionMs = Math.max(maxWriteExecutionMs, elapsedMs);
+          },
         },
       );
       const store = await client;
@@ -90,7 +96,10 @@ export function createSessionTranscriptFactsBackfill(params: {
         if (sessions.length === 0) {
           await close();
         }
-        return { complete: sessions.length === 0, delayMs: 250 };
+        return {
+          complete: sessions.length === 0,
+          delayMs: Math.max(250, 20 * writeExecutionMs),
+        };
       }
       const session = sessions[sessionIndex];
       if (!session) {
@@ -103,7 +112,12 @@ export function createSessionTranscriptFactsBackfill(params: {
         { signal: params.signal },
       );
       contentionDelayMs = batch.busy ? Math.min(5_000, contentionDelayMs * 2) : 250;
-      const delayMs = Math.max(250, 20 * batch.elapsedMs, contentionDelayMs);
+      // Charge preparation and reply delivery while holding the writer, not foreground FIFO wait.
+      const delayMs = Math.max(
+        250,
+        20 * Math.max(batch.elapsedMs, writeExecutionMs),
+        contentionDelayMs,
+      );
       afterPosition = batch.afterPosition;
       rowsFilled += batch.rowsFilled;
       rowsSkipped += batch.rowsSkipped;
@@ -121,7 +135,8 @@ export function createSessionTranscriptFactsBackfill(params: {
           `session: transcript facts backfill ${complete ? "pass complete" : "progress"}: ` +
             `${rowsFilled} rows filled, ${rowsSkipped} rows skipped, ` +
             `${sessionIndex}/${sessions.length} sessions visited, ${bytesRead} payload bytes, ` +
-            `${batchMs.toFixed(1)} ms maximum batch, ${pauses} lock-contention pauses`,
+            `${batchMs.toFixed(1)} ms maximum batch, ${pauses} lock-contention pauses, ` +
+            `${maxWriteExecutionMs.toFixed(1)} ms maximum admitted execution`,
         );
         lastReport = now;
       }
