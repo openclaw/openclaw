@@ -126,3 +126,23 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
   ).rejects.toThrow(/incomplete input/iu);
   await expect(fs.stat(refusedTarget)).rejects.toMatchObject({ code: "ENOENT" });
 });
+
+it("does not run load_extension from a restored trigger", async () => {
+  createGlobalDatabase(sourcePath);
+  withDatabase(sourcePath, (source) => {
+    source.exec("CREATE TABLE trigger_values (value INTEGER NOT NULL) STRICT;");
+  });
+  await dump({ role: "global" });
+  const schemaPath = path.join(outputPath, "schema.sql");
+  const schema = await fs.readFile(schemaPath, "utf8");
+  await fs.writeFile(
+    schemaPath,
+    `${schema}\nCREATE TRIGGER evil_load AFTER INSERT ON trigger_values BEGIN\n  SELECT load_extension('not-a-module');\nEND;\n`,
+  );
+  await restore({ role: "global" });
+  expect(() =>
+    withDatabase(targetPath, (database) => {
+      database.exec("INSERT INTO trigger_values VALUES (1)");
+    }),
+  ).toThrow(/not authorized|unsafe use/iu);
+});
