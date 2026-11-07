@@ -25,6 +25,13 @@ describe("buildGithubCopilotReplayPolicy", () => {
     expect(policy).not.toHaveProperty("toolCallIdMode");
   });
 
+  it("keeps runtime context append-only for prefix-binding Claude models", () => {
+    expect(buildPolicy("anthropic-messages", "claude-opus-5.5")).toMatchObject({
+      appendOnlyRuntimeContext: true,
+      dropThinkingBlocks: true,
+    });
+  });
+
   it("claims no policy for OpenAI-compatible transports", () => {
     expect(buildPolicy("openai-responses", "gpt-5.4")).toBeUndefined();
     expect(buildPolicy("openai-completions", "gemini-3.1-pro-preview")).toBeUndefined();
