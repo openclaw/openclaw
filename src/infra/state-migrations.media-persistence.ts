@@ -42,7 +42,10 @@ import {
   clearOpenClawAgentDatabaseOpenFailure,
 } from "../state/openclaw-agent-db.js";
 import { AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
-import { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
+import {
+  hasOpenClawDatabaseQuarantineRecord,
+  readOpenClawDatabaseQuarantineFailure,
+} from "../state/openclaw-quarantine-store.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
@@ -151,6 +154,7 @@ async function migrateAgentDatabase(params: {
       userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
       !hasPendingCurrentVersionAgentDatabaseMigration(database) &&
       !agentDatabaseLifecycle.terminal.peek(params.pathname) &&
+      !hasOpenClawDatabaseQuarantineRecord(params.pathname, { env: params.env }) &&
       !readOpenClawDatabaseQuarantineFailure("agent", params.pathname, {
         env: params.env,
         fresh: true,
@@ -252,6 +256,7 @@ async function migrateAgentDatabase(params: {
     if (
       integrityChanges.length > 0 ||
       agentDatabaseLifecycle.terminal.peek(params.pathname) ||
+      hasOpenClawDatabaseQuarantineRecord(params.pathname, { env: params.env }) ||
       readOpenClawDatabaseQuarantineFailure("agent", params.pathname, {
         env: params.env,
         fresh: true,
