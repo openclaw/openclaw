@@ -487,6 +487,7 @@ export function registerTimeoutSuccessAnnouncementTest({
         value: {
           execution: { outcome: { status: "ok", endedAt: 1_250 } },
           completion: {
+            resultText: "Finished successfully.",
             terminalReply: { disposition: "visible", text: "Finished successfully." },
           },
         },
@@ -502,6 +503,7 @@ export function registerTimeoutSuccessAnnouncementTest({
         expect.objectContaining({
           childRunId: "run-timeout-then-ok",
           outcome: expect.objectContaining({ status: "ok", endedAt: 1_250 }),
+          terminalReply: { disposition: "visible", text: "Finished successfully." },
         }),
       );
 

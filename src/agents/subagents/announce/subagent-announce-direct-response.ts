@@ -27,6 +27,7 @@ type DirectAnnounceResponseContext = {
   params: {
     sourceTool?: string;
     expectsCompletionMessage: boolean;
+    requireVisibleReply?: boolean;
     requesterIsSubagent: boolean;
   };
   parentOnly: boolean;
@@ -81,7 +82,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
     directAnnounceResponse: unknown,
   ): SubagentAnnounceDeliveryResult | Promise<SubagentAnnounceDeliveryResult> => {
     if (isGatewayAgentRunPending(directAnnounceResponse)) {
-      return parentOnly || params.sourceTool === "subagent_settle"
+      return parentOnly || params.requireVisibleReply || params.sourceTool === "subagent_settle"
         ? {
             delivered: false,
             path: "direct",
@@ -93,6 +94,18 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
 
     const directAnnounceResult = getGatewayAgentResult(directAnnounceResponse);
     const directAnnounceRecord = asOptionalRecord(directAnnounceResponse);
+    if (
+      directAnnounceRecord?.status === "ok" &&
+      directAnnounceResult?.meta?.inputAlreadyDelivered === true &&
+      !directAnnounceResult.meta.error &&
+      !directAnnounceResult.meta.aborted &&
+      directAnnounceResult.meta.yielded !== true &&
+      directAnnounceResult.meta.continuationPending !== true
+    ) {
+      // The host matched this exact input to a committed completion. This is
+      // an idempotent acknowledgment, not authored silence or a new visible final.
+      return buildRequesterCompletionDeliveryResult(false, undefined);
+    }
     const effectiveReplyExpectation =
       directAnnounceResult?.meta?.terminalReplyExpectation === "result-required"
         ? "result-required"
@@ -132,6 +145,9 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       !directAnnounceResult?.meta?.aborted;
     const requiresSettleReply = params.sourceTool === "subagent_settle";
     const acceptsIntentionalSilentCompletion =
+      // Peer handoffs explicitly owe a visible reply; optional settlement keeps
+      // the external conversation's existing intentional-silence policy.
+      !(params.requireVisibleReply && params.sourceTool === "sessions_send") &&
       effectiveReplyExpectation !== "result-required" &&
       !requiresSettleReply &&
       requesterCompletedSuccessfully &&
@@ -140,7 +156,9 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       directAnnounceResult?.meta?.continuationPending !== true;
     const requiresAutomaticFinalReceipt =
       shouldDeliverAgentFinal &&
-      (params.expectsCompletionMessage || params.sourceTool === "subagent_settle");
+      (params.expectsCompletionMessage ||
+        params.requireVisibleReply ||
+        params.sourceTool === "subagent_settle");
     const automaticEvidence = getAutomaticDeliveryEvidence(directAnnounceResult ?? {});
     const directDeliveryFailure =
       (shouldDeliverAgentFinal || requiresMessageToolDelivery) && directAnnounceResult
@@ -161,6 +179,8 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
     }
     if (
       (isSubagentCompletion || params.sourceTool === "subagent_settle") &&
+      !params.requireVisibleReply &&
+      effectiveReplyExpectation !== "result-required" &&
       requesterCompletedSuccessfully &&
       !hasVisibleNonSilentGatewayPayload &&
       directAnnounceResult?.meta?.yielded !== true &&
@@ -287,7 +307,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         hasFinalMessagingToolDelivery || (shouldDeliverAgentFinal && automaticFinalDelivered);
       const hasVisibleCompletionReply =
         hasRequesterVisibleFinalDelivery ||
-        (!shouldDeliverAgentFinal && hasMessagingToolDelivery) ||
+        (!shouldDeliverAgentFinal && !params.requireVisibleReply && hasMessagingToolDelivery) ||
         // Nested requesters and internal sessions observe the final in their transcript.
         // Unresolved external origins still require delivery evidence.
         (!requiresMessageToolDelivery &&
@@ -303,7 +323,8 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       if (
         !hasVisibleCompletionReply &&
         !acceptsIntentionalSilentCompletion &&
-        (effectiveReplyExpectation === "result-required" ||
+        (params.requireVisibleReply ||
+          effectiveReplyExpectation === "result-required" ||
           requiresSettleReply ||
           (params.expectsCompletionMessage &&
             (shouldDeliverAgentFinal ||

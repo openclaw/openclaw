@@ -159,6 +159,81 @@ function expectNoReplay(fixture: ReturnType<typeof setup>, dispatches = 1) {
   expect(fixture.send).not.toHaveBeenCalled();
 }
 
+it.each([
+  "delivered",
+  "processing only",
+  "silent",
+  "pending",
+  "replaced",
+  "committed replay",
+  "failed replay",
+  "aborted replay",
+  "pending replay",
+  "errored replay",
+  "yielded replay",
+  "continuing replay",
+] as const)("requires the original peer requester and a visible receipt (%s)", async (outcome) => {
+  const fixture = setup("sessions_send");
+  fixture.params.completionRequesterSessionId = "requester-session";
+  fixture.params.completionRequesterLifecycleRevision = "requester-revision";
+  if (outcome === "replaced") {
+    fixture.params.completionRequesterSessionId = "previous-requester-session";
+  }
+  fixture.dispatchDone.resolve(
+    outcome.includes("replay")
+      ? {
+          status:
+            outcome === "failed replay"
+              ? "error"
+              : outcome === "pending replay"
+                ? "accepted"
+                : "ok",
+          result: {
+            meta: {
+              inputAlreadyDelivered: true,
+              terminalReply: { disposition: "silent" },
+              aborted: outcome === "aborted replay",
+              yielded: outcome === "yielded replay",
+              continuationPending: outcome === "continuing replay",
+              ...(outcome === "errored replay" ? { error: { message: "replay failed" } } : {}),
+            },
+          },
+        }
+      : outcome === "pending"
+        ? { status: "accepted" }
+        : {
+            status: "ok",
+            inputProcessingCompleted: true,
+            ...(outcome === "delivered"
+              ? {
+                  result: {
+                    payloads: [{ text: "Synthesized result" }],
+                    deliveryStatus: sentDeliveryStatus,
+                  },
+                }
+              : outcome === "silent"
+                ? { result: { payloads: [], meta: { terminalReply: { disposition: "silent" } } } }
+                : {}),
+          },
+  );
+  const result = await fixture.startDelivery();
+  expect(result.delivered).toBe(outcome === "delivered" || outcome === "committed replay");
+  expect(result.requesterVisibleFinalDelivered === true).toBe(outcome === "delivered");
+  if (outcome === "replaced") {
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+  } else {
+    expect(fixture.dispatch).toHaveBeenCalledOnce();
+    expect(fixture.dispatch.mock.calls[0]?.[1]).toMatchObject({
+      expectedExistingSessionId: "requester-session",
+      expectedExistingSessionLifecycleRevision: "requester-revision",
+      deliver: true,
+      inputProvenance: expect.objectContaining({ sourceTool: "sessions_send" }),
+    });
+    expect(fixture.dispatch.mock.calls[0]?.[2]).toMatchObject({ replyExpectation: "required" });
+  }
+  expect(fixture.send).not.toHaveBeenCalled();
+});
+
 it("preserves the direct completion phase without replacing controller custody", async () => {
   const fixture = setup("subagent_announce");
   const expected = { delivered: true, path: "direct" };

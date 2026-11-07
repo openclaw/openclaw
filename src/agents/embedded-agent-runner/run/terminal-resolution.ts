@@ -23,6 +23,7 @@ import type { ResolvedProviderAuth } from "../../model-auth.js";
 import {
   createMissingReplyNotice,
   isHostMissingReplyNoticeText,
+  isRequiredRequesterSettlement,
   MISSING_REPLY_NOTICE_TEXT,
   resolveReplyExpectation,
   shouldDeliverMissingReplyNotice,
@@ -138,6 +139,7 @@ export function resolveSettledTurnFinalizationRequest(input: {
     terminalReplyExpectation: resolveReplyExpectation(input.runParams),
     replyDeliveryState: input.replyDeliveryState ?? "missing",
     allowEmptyStopContinuation: true,
+    allowNoToolFinalization: isRequiredRequesterSettlement(input.runParams),
     payloadCount,
     hasTerminalToolPresentation: input.hasTerminalToolPresentation,
     aborted: terminalAborted,
@@ -499,23 +501,19 @@ async function completeEmbeddedRun(
     stopReason,
     ...(!error ? { yielded: input.attempt.yieldDetected === true } : {}),
   });
-  if (error) {
-    if (input.authProfileId) {
-      const assistant = input.attemptAssistant;
-      try {
-        await input.maybeMarkAuthProfileFailure({
-          profileId: input.authProfileId,
-          reason: input.assistantProfileFailureReason,
-          modelId: input.modelId,
-          retryAfterMs: assistant && buildAssistantFailoverSignal(assistant).retryAfterMs,
-        });
-      } catch (bookkeepingError) {
-        log.warn(
-          `terminal auth bookkeeping failed; preserving result: ${String(bookkeepingError)}`,
-        );
-      }
+  if (error && input.authProfileId) {
+    const assistant = input.attemptAssistant;
+    try {
+      await input.maybeMarkAuthProfileFailure({
+        profileId: input.authProfileId,
+        reason: input.assistantProfileFailureReason,
+        modelId: input.modelId,
+        retryAfterMs: assistant && buildAssistantFailoverSignal(assistant).retryAfterMs,
+      });
+    } catch (bookkeepingError) {
+      log.warn(`terminal auth bookkeeping failed; preserving result: ${String(bookkeepingError)}`);
     }
-  } else {
+  } else if (!error) {
     markEmbeddedRunAuthProfileSuccess({
       authProfileStateMode: input.runParams.authProfileStateMode,
       profileId: input.authProfileId,
@@ -655,6 +653,7 @@ async function completeEmbeddedRun(
         ...(error
           ? { error }
           : {
+              inputAlreadyDelivered: input.attempt.inputAlreadyDelivered,
               ...(input.attempt.yieldDetected ? { yielded: true } : {}),
               ...(input.attempt.yieldAcknowledgment
                 ? { yieldAcknowledgment: input.attempt.yieldAcknowledgment }

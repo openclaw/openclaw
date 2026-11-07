@@ -85,6 +85,7 @@ export function registerSessionsSendPrivateCompletionTests(
         requesterAgentId: "main",
         requesterSessionKey: sessionKey,
         requesterSessionId: sessionId,
+        requesterStorePath: "/synthetic/requester/sessions.json",
         targetAgentId: "main",
         targetSessionKey: childSessionKey,
         custody: {

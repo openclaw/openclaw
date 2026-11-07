@@ -18,6 +18,7 @@ import {
 } from "../agents/cron-creator-authority-context.js";
 import * as runWait from "../agents/run-wait.js";
 import * as completionDelivery from "../agents/subagents/announce/subagent-announce-completion-delivery.js";
+import { SessionFollowupCompletion } from "../agents/subagents/completion/session-followup-completion.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { revokeRequesterCronAuthority } from "../agents/subagents/requester-cron-authority.js";
@@ -88,12 +89,23 @@ function completeRun(runId: string, text: string) {
   return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1, terminalReply } };
 }
 
-it.for(["success", "child error", "owner revoked", "owner reassigned", "new user turn"] as const)(
-  "enforces owner authority at the final plugin write after an inline wait expires (%s)",
-  async (outcome, { signal }) => {
+it.for([
+  { flow: "child", outcome: "success" },
+  { flow: "child", outcome: "child error" },
+  { flow: "child", outcome: "owner revoked" },
+  { flow: "child", outcome: "owner reassigned" },
+  { flow: "child", outcome: "new user turn" },
+  { flow: "child", outcome: "new user while waiting" },
+  { flow: "peer", outcome: "success" },
+  { flow: "peer", outcome: "owner revoked" },
+  { flow: "peer", outcome: "owner reassigned" },
+] as const)(
+  "enforces owner authority at the final plugin write after an inline wait expires ($flow: $outcome)",
+  async ({ flow, outcome }, { signal }) => {
+    const visiblePeer = flow === "peer";
     const root = tempDirs.make("openclaw-followup-owner-");
     const parent = "agent:main:main";
-    const child = "agent:main:subagent:owner-proof";
+    const child = visiblePeer ? "agent:peer:main" : "agent:main:subagent:owner-proof";
     const parentId = "owner-proof-parent";
     const originalRun = "owner-proof-original";
     const parentIdentity = { sessionKey: parent, sessionId: parentId, agentId: "main" };
@@ -103,14 +115,23 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       wait(awaitGateBeforeSettlement(entered, work, message));
     const effectPath = path.join(root, "effect.txt");
     testState.sessionStorePath = path.join(root, "sessions.json");
+    testState.agentsConfig = { entries: { main: {}, peer: {} } };
     await writeSessionStore({
       entries: {
         [parent]: { sessionId: parentId, updatedAt: 1 },
-        [child]: { sessionId: "owner-proof-child", spawnedBy: parent, spawnDepth: 1, updatedAt: 1 },
+        [child]: {
+          sessionId: "owner-proof-child",
+          ...(!visiblePeer ? { spawnedBy: parent, spawnDepth: 1 } : {}),
+          updatedAt: 1,
+        },
       },
     });
     await prepareGatewayReplyRuntimeForTest();
-    const config = { ...getRuntimeConfig(), commands: { ownerAllowFrom: ["discord:owner-proof"] } };
+    const config = {
+      ...getRuntimeConfig(),
+      commands: { ownerAllowFrom: ["discord:owner-proof"] },
+      tools: { sessions: { visibility: "all" as const }, agentToAgent: { enabled: true } },
+    };
     setRuntimeConfigSnapshot(config);
     publishSystemEventStoreConfig(config);
     const sender = { senderId: "owner-proof", channel: "discord" };
@@ -128,6 +149,8 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
     const requesterAccepted = createDeferred();
     const completionSettled = createDeferred();
     let childRunId: string | undefined;
+    let closeCompletion: (() => void) | undefined;
+    let readCompletionProgress: (() => SessionFollowupCompletion["progress"]) | undefined;
     let requesterReceipt: unknown;
     const stopObservingCompletion = subscribeSubagentRunChanges("persistence", () => {
       const entry = childRunId ? subagentRuns.get(childRunId) : undefined;
@@ -142,12 +165,34 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
         completionSettled.resolve();
       }
     });
+    const onCompletionClosed = () => completionSettled.resolve();
+    const observePeerCompletion = visiblePeer
+      ? vi.spyOn(SessionFollowupCompletion.prototype, "take").mockImplementationOnce(function (
+          this: SessionFollowupCompletion,
+          timeoutMs,
+        ) {
+          observePeerCompletion?.mockRestore();
+          const pending = this.take(timeoutMs);
+          if (timeoutMs !== undefined) {
+            readCompletionProgress = () => this.progress;
+            expect(this.request.visibleReply).toBe(true);
+            expect(this.request.targetAgentId).toBe("peer");
+            this.signal.addEventListener("abort", onCompletionClosed, { once: true });
+            closeCompletion = () => {
+              this.close();
+              this.signal.removeEventListener("abort", onCompletionClosed);
+            };
+            inlineWaitStarted.resolve();
+          }
+          return pending;
+        })
+      : undefined;
     const waitForReply = runWait.waitForAgentRunReply;
     const observeInlineWait = vi
       .spyOn(runWait, "waitForAgentRunReply")
       .mockImplementation((params) => {
         const pending = waitForReply(params);
-        if (params.timeoutMs === 1_000) {
+        if (!visiblePeer && params.timeoutMs === 1_000) {
           inlineWaitStarted.resolve();
         }
         return pending;
@@ -175,6 +220,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
     let pluginError: unknown;
     let parentError: unknown;
     let originalClosed = false;
+    let effectWrites = 0;
     const builder = createTestPluginRegistry();
     const artifact = {
       source: path.join(root, "index.js"),
@@ -229,6 +275,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
             await effectMayFinish.promise;
             context.assertInvocationCurrent();
             fs.writeFileSync(effectPath, "authorized effect");
+            effectWrites += 1;
             return { content: [{ type: "text", text: "written" }], details: {} };
           },
         }),
@@ -240,7 +287,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       const runId = expectDefined(opts.runId, "Gateway run ID");
       // The simulated command replaces session-preparation, which publishes these run facts.
       registerAgentRunContext(runId, {
-        agentId: "main",
+        agentId: visiblePeer && opts.sessionKey === child ? "peer" : "main",
         sessionKey: opts.sessionKey,
         sessionId: opts.sessionKey === child ? "owner-proof-child" : parentId,
       });
@@ -263,9 +310,16 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
         expect(originalClosed).toBe(true);
         expect(opts.inputProvenance).toMatchObject({
           kind: "inter_session",
-          sourceTool: "subagent_announce",
+          sourceTool: visiblePeer ? "sessions_send" : "subagent_announce",
           sourceSessionKey: child,
         });
+        if (visiblePeer) {
+          expect(opts).toMatchObject({
+            deliver: true,
+            channel: "discord",
+            to: "channel:owner-proof",
+          });
+        }
         const admitted = await admission.admit("embedded");
         const caller = createAdmittedGatewayToolCallerIdentity({
           admittedRunContext: admitted,
@@ -333,7 +387,15 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
                 createOpenClawTools({
                   runId: originalRun,
                   ...toolOptions,
-                  config: { ...config, tools: { sessions: { visibility: "all" } } },
+                  config,
+                  ...(visiblePeer
+                    ? {
+                        requesterReplyExpectation: "required" as const,
+                        agentChannel: "discord",
+                        agentAccountId: "default",
+                        agentTo: "channel:owner-proof",
+                      }
+                    : {}),
                 }).find((tool) => tool.name === "sessions_send"),
                 "sessions_send tool",
               );
@@ -352,6 +414,9 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
         releaseAgentRunDelegatedAuthority(authority);
         clearAgentRunContext(originalRun);
         originalClosed = true;
+        if (outcome === "new user while waiting") {
+          revokeRequesterCronAuthority(parent);
+        }
         childMayFinish.resolve();
       }
       await gate(
@@ -361,12 +426,17 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       );
       // Cross the native accepted-ack yield without advancing run deadlines.
       await vi.advanceTimersByTimeAsync(10);
-      await gate(
-        pluginEntered.promise,
-        parentFinished.promise,
-        "Requester ended before plugin invocation",
-      );
-      expect([parentError, pluginError]).toEqual([undefined, undefined]);
+      if (outcome === "new user while waiting") {
+        await wait(parentFinished.promise);
+      } else {
+        await gate(
+          pluginEntered.promise,
+          parentFinished.promise,
+          "Requester ended before plugin invocation",
+        );
+        expect(pluginError).toBeUndefined();
+      }
+      expect(parentError).toBeUndefined();
       if (outcome === "owner revoked" || outcome === "owner reassigned") {
         setRuntimeConfigSnapshot({
           ...config,
@@ -379,21 +449,36 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       await wait(parentFinished.promise);
       await wait(completionSettled.promise);
       expect(parentError).toBeUndefined();
-      expect(requesterReceipt).toMatchObject({ status: "ok", inputProcessingCompleted: true });
-      expect(subagentRuns.get(expectDefined(childRunId, "child run ID"))).toMatchObject({
-        delivery: { status: "delivered" },
-      });
+      expect(requesterReceipt).toMatchObject({ status: "ok" });
+      if (visiblePeer) {
+        // This command fixture performs no channel send. It proves the plugin
+        // effect, while the completion must still report the missing visible receipt.
+        expect(readCompletionProgress?.().phase).toBe("failed");
+      } else {
+        expect(requesterReceipt).toMatchObject({ inputProcessingCompleted: true });
+        expect(subagentRuns.get(expectDefined(childRunId, "child run ID"))).toMatchObject({
+          delivery: { status: "delivered" },
+        });
+      }
       if (outcome === "success" || outcome === "child error") {
         expect(pluginError).toBeUndefined();
+        expect(effectWrites).toBe(1);
         expect(fs.readFileSync(effectPath, "utf8")).toBe("authorized effect");
       } else {
         expect(pluginError).toBeInstanceOf(Error);
-        expect(String(pluginError)).toMatch(/owner identity is no longer active/);
+        expect(String(pluginError)).toMatch(
+          outcome === "new user while waiting"
+            ? /owner_authority_required/
+            : /owner identity is no longer active/,
+        );
+        expect(effectWrites).toBe(0);
         expect(fs.existsSync(effectPath)).toBe(false);
       }
     } finally {
       unblock();
+      closeCompletion?.();
       stopObservingCompletion();
+      observePeerCompletion?.mockRestore();
       observeInlineWait.mockRestore();
       observeRequesterAdmission.mockRestore();
       if (vi.isFakeTimers()) {

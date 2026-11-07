@@ -45,15 +45,18 @@ export function startSessionsSendReplyFlow(
     return Promise.resolve();
   }
   const { completion } = params;
+  // Visible channel returns retain their receipt owner; ordinary peers keep session authority.
+  const requesterCompletion =
+    params.replyMode !== "peer" || completion?.request.visibleReply ? completion : undefined;
   const continueOwned = async <T>(run: () => Promise<T>) =>
-    params.replyMode === "peer"
-      ? runWithGatewayToolContinuationContext(run, { retainRequester: true })
-      : completion
-        ? completion.request.custody.run(run)
-        : runWithGatewayToolContinuationContext(run);
+    requesterCompletion
+      ? requesterCompletion.request.custody.run(run)
+      : runWithGatewayToolContinuationContext(
+          run,
+          params.replyMode === "peer" ? { retainRequester: true } : undefined,
+        );
   const run = async () => {
     const settledReply = params.reply ?? (await completion?.take());
-    const requesterCompletion = params.replyMode === "peer" ? undefined : completion;
     const deliverRequesterReply: Parameters<
       typeof runSessionsSendA2AFlow
     >[0]["deliverRequesterReply"] = requesterCompletion
@@ -67,6 +70,55 @@ export function startSessionsSendReplyFlow(
           const request = requesterCompletion.request;
           const idempotencyKey = `announce:sessions-send:${request.runId}:completion`;
           const timeoutMs = resolveSubagentAnnounceTimeoutMs(getRuntimeConfig());
+          if (request.visibleReply) {
+            const { sendSubagentAnnounceDirectly } =
+              await import("../subagents/announce/subagent-announce-direct-delivery.js");
+            const isCurrent = () => {
+              try {
+                requesterCompletion.assertCurrent();
+                return true;
+              } catch {
+                return false;
+              }
+            };
+            const deliver = () =>
+              sendSubagentAnnounceDirectly({
+                requesterSessionKey: request.requesterSessionKey,
+                requesterAgentId: request.requesterAgentId,
+                targetRequesterSessionKey: request.requesterSessionKey,
+                completionRequesterSessionId: request.requesterSessionId,
+                completionRequesterLifecycleRevision: params.requesterSession?.lifecycleRevision,
+                triggerMessage: annotateInterSessionPromptText(
+                  `${extraSystemPrompt}\n\n${message}`,
+                  {
+                    kind: "inter_session",
+                    sourceSessionKey: request.targetSessionKey,
+                    sourceTool: "sessions_send",
+                  },
+                ),
+                sourceSessionKey: request.targetSessionKey,
+                sourceTool: "sessions_send",
+                expectsCompletionMessage: false,
+                requireVisibleReply: true,
+                requesterIsSubagent: false,
+                directIdempotencyKey: idempotencyKey,
+                directOrigin: params.requesterOrigin,
+                signal: requesterCompletion.signal,
+                isSourceSessionEffectsAllowed: isCurrent,
+                isSourceSessionAdmissionAllowed: isCurrent,
+              });
+            const delivery = await requesterCompletion.withRequesterRun(idempotencyKey, () =>
+              request.requesterAuthority
+                ? request.requesterAuthority.run(idempotencyKey, deliver)
+                : deliver(),
+            );
+            if (!delivery.delivered) {
+              throw new Error(
+                delivery.error ?? "Requester completion has no visible delivery receipt.",
+              );
+            }
+            return;
+          }
           let accepted = false;
           const inputProvenance = {
             kind: "inter_session" as const,
@@ -189,6 +241,7 @@ export function startSessionsSendReplyFlow(
     return runSessionsSendA2AFlow({
       ...params,
       deliverRequesterReply,
+      requireVisibleReply: completion?.request.visibleReply,
       reply: settledReply,
     });
   };
@@ -206,6 +259,7 @@ export function startSessionsSendReplyFlow(
   })
     .then(() => completion?.close())
     .catch((error: unknown) => {
+      completion?.failProgress();
       completion?.close(error);
       admitted.resolve();
       log.warn("sessions_send reply flow admission failed", {

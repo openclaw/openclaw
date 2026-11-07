@@ -1,10 +1,12 @@
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   mergeAcceptedSessionSpawnsForRun,
   type AcceptedSessionSpawn,
 } from "../accepted-session-spawn.js";
+import type { ReplyExpectation } from "../reply-completion.js";
 import { withFollowupRequest } from "../subagents/completion/session-followup-completion.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
@@ -78,7 +80,7 @@ export async function startSessionsSendFollowup(
   return { start, completion };
 }
 
-/** Eligible followups retain their accepted result through the existing completion owner. */
+/** Accepted followups keep one result owner through target yields and requester delivery. */
 export async function dispatchSessionsSendFollowup(
   params: Parameters<typeof startSessionsSendAgentRun>[0],
   replyContext: Parameters<typeof startSessionsSendFollowup>[2],
@@ -91,6 +93,7 @@ export async function dispatchSessionsSendFollowup(
     requesterSessionKey: string;
     requesterAgentId: string;
     requesterTurnRunId?: string;
+    requesterReplyExpectation?: ReplyExpectation;
     targetSession?: AgentStepSession;
     withRequesterAuthority?: <T>(run: () => T) => T;
   },
@@ -125,6 +128,21 @@ export async function dispatchSessionsSendFollowup(
       ? requesterTurn
       : undefined;
   const completionTurn = isCronRequester ? undefined : registryTurn;
+  const visiblePeerReply = Boolean(
+    replyContext.replyMode === "peer" &&
+    options.requesterReplyExpectation === "required" &&
+    options.requesterTurnRunId &&
+    options.nativeChild &&
+    !params.expectedSessionId &&
+    params.mode !== "steer" &&
+    sameRequester &&
+    options.requesterSessionKey !== params.sessionStoreTarget.canonicalKey &&
+    replyContext.requesterSession &&
+    replyContext.requesterOrigin?.channel &&
+    replyContext.requesterOrigin.to &&
+    !isInternalMessageChannel(replyContext.requesterOrigin.channel) &&
+    getGatewayToolCallerIdentity()?.sessionEventDelivery !== false,
+  );
   // A queued self-send has no separate recipient to observe it with operator.write.
   // Keep the original run's result, without registering the session as its own child.
   const ownSessionCompletion =
@@ -135,12 +153,14 @@ export async function dispatchSessionsSendFollowup(
   const request =
     !("ok" in active) &&
     (registryTurn ||
+      visiblePeerReply ||
       ownSessionCompletion ||
       (replyContext.replyMode === "one-way" && options.ownChild)) &&
     sameRequester
       ? await prepareSessionsSendFollowup({
           runId: params.runId,
           requesterTurnRunId: options.requesterTurnRunId,
+          visibleReply: visiblePeerReply,
           withRequesterAuthority: options.withRequesterAuthority,
           requesterAgentId: options.requesterAgentId,
           requesterSessionKey: options.requesterSessionKey,

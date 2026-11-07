@@ -41,6 +41,7 @@ export type AgentDeliveryEvidence = {
   requesterContinuationSettled?: unknown;
   successfulCronAdds?: unknown;
   meta?: {
+    inputAlreadyDelivered?: unknown;
     yielded?: unknown;
     continuationPending?: unknown;
     error?: unknown;

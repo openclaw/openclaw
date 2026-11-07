@@ -135,6 +135,7 @@ it("keeps a structured Anthropic refusal terminal across retry and fallback", as
         openclawRunError: { runId: started.runId, summary: REFUSAL_NOTICE },
       });
       expect(refusals[0]).not.toHaveProperty("details.error");
+      expect(refusals[0]).not.toHaveProperty("openclawRunError.error");
       expect(JSON.stringify({ terminal, history })).not.toContain(REFUSAL_EXPLANATION);
 
       const receipts: Record<string, unknown>[] = [];

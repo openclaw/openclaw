@@ -5,6 +5,8 @@ import {
 } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { captureExecRequestCancellation } from "../../agents/bash-process-control.js";
+import { listSessionFollowupCompletions } from "../../agents/subagents/completion/session-followup-completion.js";
+import type { FollowupCompletionOwner } from "../../agents/subagents/completion/session-followup-completion.types.js";
 import { captureExecRequestSubagentSelection } from "../../agents/subagents/registry/subagent-control-scope.js";
 import { killAllControlledSubagentRuns } from "../../agents/subagents/registry/subagent-control.js";
 import type { SubagentRequestSessionOrigin } from "../../agents/subagents/registry/subagent-exec-request-ownership.js";
@@ -66,6 +68,7 @@ export type ChannelStopCapture = {
   idleMcpRetirements: readonly NonNullable<ReturnType<typeof captureSessionMcpRuntimeRetirement>>[];
   commands: readonly ReturnType<typeof captureExecRequestCancellation>[];
   requestRunIds: ReadonlySet<string>;
+  followups: readonly FollowupCompletionOwner[];
 };
 
 /** Attach one selected conversation's session identity without re-capturing its resources. */
@@ -131,17 +134,28 @@ export function captureChannelSessionStop(params: {
     operations: candidates.flatMap((candidate) => candidate.capture.operations),
     resolveGatewayContext: params.resolveGatewayContext,
   });
-  return captureChannelStopResources(controller, params.sessionId, {
-    sessionKey: key,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-  });
+  const followups = key
+    ? listSessionFollowupCompletions({
+        requesterSessionKey: key,
+        requesterAgentId: params.agentId,
+        requesterStorePath: params.storePath,
+      }).filter(
+        (owner) => !params.sessionId || owner.request.requesterSessionId === params.sessionId,
+      )
+    : [];
+  return captureChannelStopResources(
+    controller,
+    params.sessionId,
+    { sessionKey: key, sessionId: params.sessionId, agentId: params.agentId },
+    followups,
+  );
 }
 
 function captureChannelStopResources(
   controller: SessionControllerStopCapture,
   capturedSessionId?: string,
   commandTarget?: ExecRequestIdentity,
+  followups: readonly FollowupCompletionOwner[] = [],
 ): ChannelStopCapture {
   const selectedSessionId =
     controller.activeInputs[0]?.claim?.operation?.sessionId ??
@@ -192,6 +206,7 @@ function captureChannelStopResources(
   ];
   return {
     controller,
+    followups,
     sessionId: selectedSessionId,
     stoppedSessions: commandTarget
       ? [{ agentId: commandTarget.agentId, sessionKey: commandTarget.sessionKey }]
@@ -222,6 +237,11 @@ function combineChannelStopCaptures(captures: readonly ChannelStopCapture[]): Ch
     ),
     commands: captures.flatMap((capture) => capture.commands),
     requestRunIds: new Set(captures.flatMap((capture) => [...capture.requestRunIds])),
+    followups: captures.flatMap((capture) =>
+      capture.followups.filter(
+        (owner) => !capture.sessionId || owner.request.requesterSessionId === capture.sessionId,
+      ),
+    ),
   };
 }
 
@@ -277,6 +297,14 @@ export function abortSessionRunTargetWithOutcome(params: {
         for (const commands of resolveCapture().commands) {
           params.assertCurrent?.();
           aborted = commands.cancel() || aborted;
+        }
+        // The peer can serve other requests; Stop closes only this captured requester obligation.
+        for (const owner of resolveCapture().followups) {
+          params.assertCurrent?.();
+          if (!owner.signal.aborted) {
+            owner.close(new Error("Requester stopped delegated followup."));
+            aborted = true;
+          }
         }
         return aborted ? "aborted" : "unchanged";
       },

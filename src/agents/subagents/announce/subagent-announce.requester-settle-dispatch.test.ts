@@ -250,7 +250,7 @@ describe("requester settle dispatch deadline", () => {
     { name: "all consumed, empty reply", undelivered: false, silent: false },
     { name: "one undelivered, NO_REPLY", undelivered: true, silent: true },
   ])(
-    "settles a yielded cohort according to its remaining results: $name",
+    "retains a yielded cohort until its own final is delivered: $name",
     async ({ undelivered, silent }) => {
       vi.useFakeTimers();
       const context = createContext();
@@ -270,8 +270,13 @@ describe("requester settle dispatch deadline", () => {
         }
       });
       useDirectDelivery();
+      let attempt = 0;
       startTurn.mockImplementation(async ({ preflight, io }) => {
         acceptTurn({ preflight, io });
+        if (attempt++ > 0) {
+          finishTurn(io, "Consolidated requester final.");
+          return;
+        }
         io.emitFinal([
           true,
           {
@@ -288,13 +293,25 @@ describe("requester settle dispatch deadline", () => {
       const run = () =>
         withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
 
-      await expect(run()).resolves.toBe(true);
-      expect(startTurn).toHaveBeenCalledOnce();
-      expect(completeBatch).toHaveBeenCalledOnce();
-      expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
-      await vi.advanceTimersByTimeAsync(30_000);
       await expect(run()).resolves.toBe(false);
       expect(startTurn).toHaveBeenCalledOnce();
+      expect(completeBatch).not.toHaveBeenCalled();
+      for (const child of children) {
+        expect(child.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: 1 });
+      }
+      await expect(run()).resolves.toBe(false);
+      expect(startTurn).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(run()).resolves.toBe(true);
+      expect(startTurn).toHaveBeenCalledTimes(2);
+      expect(completeBatch).toHaveBeenCalledOnce();
+      expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({
+        delivered: true,
+        requesterVisibleFinalDelivered: true,
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expect(run()).resolves.toBe(false);
+      expect(startTurn).toHaveBeenCalledTimes(2);
       expect(completeBatch).toHaveBeenCalledOnce();
     },
   );

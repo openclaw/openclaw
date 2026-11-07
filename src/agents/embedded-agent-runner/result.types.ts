@@ -140,6 +140,8 @@ export type EmbeddedAgentRunMeta = {
   /** Optional content-free facts from the selected failed agent attempt. */
   agentTerminal?: AgentTerminalSnapshot;
   durationMs: number;
+  /** Matching persisted input already completed; acknowledge it without a new reply or send. */
+  inputAlreadyDelivered?: true;
   agentMeta?: EmbeddedAgentMeta;
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
