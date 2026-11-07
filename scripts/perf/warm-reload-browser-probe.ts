@@ -22,6 +22,9 @@ export function summarizeDetailsGeometry(
   let sectionInsertions = 0;
   let sectionRemovals = 0;
   const sectionTopMovementPx: Record<string, number> = {};
+  let environmentHeightMovementPx = 0;
+  let outputsTopMovementPx = 0;
+  let automationsTopMovementPx = 0;
   for (let index = 1; index < populated.length; index++) {
     const before = new Map(populated[index - 1]!.sections.map((row) => [row.section, row]));
     const after = new Map(populated[index]!.sections.map((row) => [row.section, row]));
@@ -32,15 +35,25 @@ export function summarizeDetailsGeometry(
         const movement = Math.abs(to.top - from.top);
         topMovementPx += movement;
         sectionTopMovementPx[id] = (sectionTopMovementPx[id] ?? 0) + movement;
+        if (id === "outputs") {
+          outputsTopMovementPx += movement;
+        }
+        if (id === "automations") {
+          automationsTopMovementPx += movement;
+        }
       } else if (to) {
         sectionInsertions++;
       } else {
         sectionRemovals++;
       }
       heightMovementPx += Math.abs((to?.height ?? 0) - (from?.height ?? 0));
+      if (id === "environment") {
+        environmentHeightMovementPx += Math.abs((to?.height ?? 0) - (from?.height ?? 0));
+      }
     }
   }
   const first = populated[0];
+  const firstEnvironment = first?.sections.find((row) => row.section === "environment");
   return {
     firstPopulatedMs: first?.at ?? null,
     firstHasAutomations: first?.sections.some((row) => row.section === "automations") ?? false,
@@ -49,6 +62,13 @@ export function summarizeDetailsGeometry(
     finalSubagentHeightPx:
       populated.at(-1)?.sections.find((row) => row.section === "subagents")?.height ?? 0,
     sectionTopMovementPx,
+    firstEnvironmentHeightPx: firstEnvironment?.height ?? null,
+    firstEnvironmentBranchVisible: firstEnvironment?.environmentBranchVisible ?? null,
+    lastEnvironmentHeightPx:
+      populated.at(-1)?.sections.find((row) => row.section === "environment")?.height ?? null,
+    environmentHeightMovementPx,
+    outputsTopMovementPx,
+    automationsTopMovementPx,
     topMovementPx,
     heightMovementPx,
     totalVerticalMovementPx: topMovementPx + heightMovementPx,
@@ -76,6 +96,15 @@ export function installWarmReloadBrowserProbe(
     allBoardWidgetsVisibleMs: null as number | null,
     cachedBoardLayoutMs: null as number | null,
     firstPaintedRowsMs: null as number | null,
+    firstDetailsDomMs: null as number | null,
+    firstDetailsPaintMs: null as number | null,
+    detailsFrames: [] as Array<{
+      atMs: number;
+      populated: boolean;
+      docked: boolean;
+      height: number;
+      sections: number;
+    }>,
     bottomParagraphPaintMs: null as number | null,
     transcriptTextPaintMs: null as number | null,
     pluginsCompleteMs: null as number | null,
@@ -241,6 +270,9 @@ export function installWarmReloadBrowserProbe(
     if (identifier === "openclaw-transcript" && typeof renderTime === "number" && renderTime > 0) {
       data.firstPaintedRowsMs ??= renderTime;
     }
+    if (identifier === "openclaw-details" && typeof renderTime === "number" && renderTime > 0) {
+      data.firstDetailsPaintMs ??= renderTime;
+    }
     if (
       identifier === "openclaw-transcript-bottom" &&
       typeof renderTime === "number" &&
@@ -362,7 +394,8 @@ export function installWarmReloadBrowserProbe(
         const element = node instanceof Element ? node : node.parentElement;
         if (
           !element ||
-          (!element.closest(".chat-virtual-row") && !element.querySelector(".chat-virtual-row"))
+          (!element.closest(".chat-virtual-row, .chat-details-session") &&
+            !element.querySelector(".chat-virtual-row, .chat-details-session"))
         ) {
           continue;
         }
@@ -372,10 +405,13 @@ export function installWarmReloadBrowserProbe(
           const parent = text.parentElement;
           if (
             text.textContent?.trim() &&
-            parent?.closest(".chat-virtual-row") &&
+            parent?.closest(".chat-virtual-row, .chat-details-session") &&
             !parent.hasAttribute("elementtiming")
           ) {
-            parent.setAttribute("elementtiming", "openclaw-transcript");
+            parent.setAttribute(
+              "elementtiming",
+              parent.closest(".chat-details-session") ? "openclaw-details" : "openclaw-transcript",
+            );
           }
         }
       }
@@ -540,6 +576,7 @@ export function installWarmReloadBrowserProbe(
   let previous = "";
   let previousRows = "";
   let previousContextRing = "";
+  let previousDetails = "";
   const sample = () => {
     if (data.stopped) {
       stopGateway?.();
@@ -663,6 +700,28 @@ export function installWarmReloadBrowserProbe(
       });
     }
     const rows = rowElements.length;
+    const panel = document.querySelector(".chat-pane-cache__pane--active .chat-details");
+    if (panel) {
+      const session = panel.querySelector(".chat-details-session");
+      const populated = Boolean(
+        session?.textContent?.trim() &&
+        session.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
+      );
+      const details = {
+        populated,
+        docked: panel.classList.contains("chat-details--docked"),
+        height: populated ? session!.getBoundingClientRect().height : 0,
+        sections: panel.querySelectorAll("[data-details-group]").length,
+      };
+      const signature = JSON.stringify(details);
+      if (signature !== previousDetails) {
+        data.detailsFrames.push({ atMs: performance.now(), ...details });
+        previousDetails = signature;
+      }
+      if (populated) {
+        data.firstDetailsDomMs ??= performance.now();
+      }
+    }
     const sidebarRowElements = [
       ...document.querySelectorAll("openclaw-app-sidebar [data-session-key]"),
     ];

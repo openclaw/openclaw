@@ -548,8 +548,8 @@ div.chat-thread:where(.chat-thread--annotations) {
     letter-spacing: normal;
   }
 
-  & .chat-pane__session-title {
-    padding-inline-end: 0;
+  & .chat-pane__header-leading {
+    gap: 0;
   }
 
   /* Align visible lettering with the glyph centerline without moving hit areas. */

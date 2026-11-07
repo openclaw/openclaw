@@ -5,109 +5,73 @@ openclaw-pending-session-create {
   min-width: 0;
   min-height: 0;
 }
-
-/* Chat pane error alert. The pane strips its own padding, so the alert
-   carries its own inset as a centered card instead of stretching into a
-   full-bleed bar; visual language mirrors the connection pill (status dot
-   on an elevated surface) with a danger accent. */
 .chat-error {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  width: 100%;
+  max-width: var(--chat-thread-max-width, 48rem);
   align-self: center;
-  max-width: min(36rem, calc(100% - 32px));
-  margin: 12px 16px 4px;
-  padding: 10px 14px;
-  border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border));
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--danger) 9%, var(--bg-elevated));
-  box-shadow: var(--shadow-lg);
-  color: var(--text-strong);
-  font-size: 13px;
-  line-height: 1.5;
-  animation: chat-error-enter 0.25s var(--ease-out);
 }
 
-@keyframes chat-error-enter {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
+/* Persistent errors keep their recovery action beside the title in every
+ * state: expanding details must not move it, and narrow panes must not strand
+ * it on its own row. Details span the full width below. */
+.chat-error .app-toast__content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 2px 12px;
+}
+
+.chat-error .app-toast__body {
+  display: contents;
+}
+
+.chat-error .app-toast__message,
+.chat-error .app-toast__description {
+  grid-column: 1;
+}
+
+.chat-error .app-toast__body > .lazy-view-error__details {
+  grid-column: 1 / -1;
+}
+
+.chat-error .app-toast__content > :not(.app-toast__body) {
+  grid-row: 1;
+  grid-column: 2;
+  margin-block-start: -4px;
+}
+
+/* The long discard label would squeeze the message into a sliver on phones. */
+@media (max-width: 560px) {
+  .chat-error .app-toast__content > .chat-error__discard {
+    grid-row: auto;
+    grid-column: 1 / -1;
+    justify-self: start;
+    margin-block-start: 6px;
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .chat-error {
-    animation: none;
-  }
-}
-
-.chat-error__content {
-  flex: 1;
-  min-width: 0;
-  overflow-wrap: anywhere;
-  user-select: text;
+/* Persistent errors do not time out, so their dismiss control stays visible
+ * and sits inside the card: a corner badge would be clipped by scrolling
+ * composer containers on phones. */
+.chat-error > .app-toast__dismiss {
+  position: static;
+  flex: none;
+  margin: -1px -6px 0 -4px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  opacity: 1;
+  scale: 1;
 }
 
 @media (max-width: 560px) {
-  .chat-error:has(> :is(.chat-error__discard, .chat-error__refresh)) {
-    grid-template-columns: 18px minmax(0, 1fr);
-  }
-
   .chat-error__discard,
   .chat-error__refresh {
-    grid-column: 2;
-    justify-self: start;
     white-space: normal;
     text-align: start;
   }
 }
 
-.chat-error:has(details[open]) {
-  align-items: start;
-}
-
-.chat-error__summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  list-style: none;
-  cursor: var(--cursor-action);
-}
-
-.chat-error__summary::-webkit-details-marker {
-  display: none;
-}
-
-.chat-error__summary strong {
-  flex: 1;
-  min-width: 0;
-  white-space: normal;
-}
-
-.chat-error__summary > span {
-  flex: 0 0 auto;
-  color: var(--muted);
-}
-
-@media (max-width: 560px) {
-  .chat-error__summary {
-    flex-wrap: wrap;
-  }
-
-  .chat-error__summary strong {
-    flex-basis: 100%;
-  }
-}
-
-.chat-error__chevron {
-  display: inline-flex;
-}
-
-.chat-error__chevron svg,
 .chat-topbar-notices .chat-composer-neighbor-card__icon svg,
 .task-suggestion__instructions-chevron svg,
 .chat-pr__checks-menu-header svg,
@@ -117,7 +81,6 @@ openclaw-pending-session-create {
   height: 14px;
 }
 
-.chat-error__content[open] .chat-error__chevron,
 .chat-workspace-conflict-notice:not([open]) .chat-workspace-conflict-notice__chevron,
 .chat-pr__checks[open] .chat-pr__checks-chevron svg,
 .chat-ci__job[open] > summary .chat-ci__chevron,
@@ -127,23 +90,6 @@ openclaw-pending-session-create {
 }
 
 /* Preserve the received diagnostic as text beyond the bounded summary. */
-.chat-error__diagnostic {
-  max-height: min(16rem, 35dvh);
-  margin: 10px 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font: inherit;
-  user-select: text;
-}
-
-.chat-error__summary:focus-visible,
-.chat-error__diagnostic:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: var(--radius-sm);
-}
 
 .chat-error__dismiss {
   display: inline-flex;
@@ -413,7 +359,6 @@ openclaw-pending-session-create {
   color: color-mix(in srgb, var(--danger) 80%, var(--text));
 }
 
-.chat-composer-neighbor-card.chat-error,
 .chat-composer-neighbor-card.chat-cloud-disk-space-notice,
 .chat-composer-neighbor-card.chat-workspace-conflict-notice {
   width: calc(100% - 36px);
@@ -483,16 +428,6 @@ openclaw-pending-session-create {
 
 .chat-topbar-notices .chat-composer-neighbor-card__copy span {
   display: none;
-}
-
-.chat-topbar-notices .chat-error__dismiss {
-  width: 24px;
-  height: 24px;
-  margin: -1px -3px -1px 0;
-}
-
-.chat-topbar-notices .chat-error:has(details[open]) {
-  border-radius: var(--radius-lg);
 }
 
 .chat-workspace-conflict-notice {
@@ -1713,12 +1648,6 @@ openclaw-chat-video-player {
   gap: 2px;
 }
 
-.session-suggestion__action {
-  width: 28px;
-  height: 28px;
-}
-
-.session-suggestion__action svg,
 .task-suggestion__header-action svg,
 .chat-pr__icon svg,
 .chat-pr__warning svg,
@@ -3237,7 +3166,6 @@ openclaw-chat-ci-details {
 
 .chat-annotation-editor .chat-annotation-editor__delete {
   margin-right: auto;
-  padding: 4px;
 }
 
 .chat-provider-review-dialog__content {

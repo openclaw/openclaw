@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { prewarmChatSnapshot } from "./chat-snapshot-prewarm.ts";
+import * as detailsLoader from "./components/chat-details-desktop-loader.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import * as database from "./session-snapshot-database.ts";
 import {
@@ -48,6 +49,30 @@ afterEach(async () => {
 });
 
 describe("routed transcript prewarm", () => {
+  it.each([
+    { viewport: 1000, wide: true, loads: 0 },
+    { viewport: 2200, wide: true, loads: 1 },
+    { viewport: 2200, wide: false, loads: 0 },
+  ])("prewarms wide Details only in its saved viewport: $viewport/$wide", async (scenario) => {
+    vi.stubGlobal("innerWidth", scenario.viewport);
+    const load = vi
+      .spyOn(detailsLoader, "loadChatDetailsDesktopComposition")
+      .mockRejectedValue(new Error("Stopped at the module boundary"));
+    const writer = new snapshots.SessionSnapshotStore();
+    const snapshot = {
+      ...stored,
+      details: {
+        locale: "en",
+        docking: { layout: '[2200,224,false,"horizontal","main",null]', wide: scenario.wide },
+      },
+    };
+    writeSnapshotFixture(writer, key, snapshot);
+    await writer.flush();
+    await prewarmChatSnapshot(key);
+    expect(load).toHaveBeenCalledTimes(scenario.loads);
+    expect(await writer.read(key)).toEqual(snapshot);
+  });
+
   it("publishes scoped invalidation before database cleanup settles", async () => {
     const scopePrefix = key.slice(0, key.indexOf("\u0000") + 1);
     const listener = vi.fn();
