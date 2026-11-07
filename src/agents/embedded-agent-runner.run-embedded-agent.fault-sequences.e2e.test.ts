@@ -806,6 +806,7 @@ it.each([false, true])(
         return {
           ...makeEmbeddedRunnerAttempt({
             providerRetryMaxRetries: 3,
+            assistantTexts: failed ? [] : ["Recovered"],
             lastAssistant: buildEmbeddedRunnerAssistant({
               provider,
               model: params.modelId,
