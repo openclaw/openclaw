@@ -116,6 +116,9 @@ export async function handleGatewayProbeRequest(
     body = JSON.stringify({ ok: true, status });
   }
   res.statusCode = statusCode;
+  if (statusCode === 503) {
+    res.setHeader("Retry-After", "1");
+  }
   // Node suppresses the HEAD body but never synthesizes Content-Length; set it
   // explicitly so probes keep GET/HEAD header parity (RFC 9110 §8.6).
   res.setHeader("Content-Length", String(Buffer.byteLength(body)));

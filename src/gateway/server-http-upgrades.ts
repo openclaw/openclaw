@@ -466,7 +466,10 @@ export function attachGatewayUpgradeHandler(opts: {
       const remoteAddress = (socket as { remoteAddress?: string }).remoteAddress ?? "unknown";
       const errorMessage = err instanceof Error ? err.message : String(err);
       log?.warn(`ws upgrade error from ${remoteAddress}: ${errorMessage}`);
-      rejectWebSocketUpgrade(socket, { status: 503 });
+      rejectWebSocketUpgrade(socket, {
+        status: 503,
+        headers: { "Cache-Control": "no-store", "Retry-After": "1" },
+      });
     });
   };
   opts.httpServer.on("upgrade", (req, socket, head) => {
