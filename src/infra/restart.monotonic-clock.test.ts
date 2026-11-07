@@ -12,7 +12,7 @@ import {
   requestGatewayRestartWithSignalAdmission,
   resetGatewayRestartStateForInProcessRestart,
   scheduleGatewayRestart,
-} from "./restart.js";
+} from "./restart-runtime.js";
 
 const restartSignalHandler = () => {};
 
