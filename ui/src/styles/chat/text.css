@@ -641,45 +641,14 @@
   }
 }
 
+/* Drawn by the shared checkbox (styles/checkbox.css); this only places it on
+   the item's first line. */
 :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox) {
-  appearance: none;
   position: absolute;
   inset-block-start: calc((1lh - var(--space-4)) / 2);
   inset-inline-start: 0;
-  inline-size: var(--space-4);
-  block-size: var(--space-4);
   margin: 0;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--input);
   opacity: 1;
-}
-
-:is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked) {
-  border-color: var(--primary);
-  background: var(--primary);
-  color: var(--primary-foreground);
-}
-
-:is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked)::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: currentColor;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 8 3 3 7-7'/%3E%3C/svg%3E")
-    center / 13px no-repeat;
-}
-
-@media (forced-colors: active) {
-  :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox) {
-    appearance: auto;
-    background: none;
-    border: initial;
-  }
-
-  :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked)::after {
-    content: none;
-  }
 }
 
 :is(.chat-text, .chat-thinking) :where(details[open] > summary) {

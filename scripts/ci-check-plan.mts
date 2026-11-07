@@ -15,6 +15,7 @@ type CheckRow = {
   check_name: string;
   task: string;
   runner: string;
+  runner_label?: string;
   type_graph_names_json?: string;
   core_type_graph_names_json?: string;
   core_type_concurrency?: number;
@@ -287,9 +288,16 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
       });
       centralLintSelection = JSON.stringify(central);
     } else if (hosted) {
+      // Reuse an admitted SDK consumer for the tail instead of preparing it again centrally.
+      const tailOwner = input.lintCoreMatrix.include.findLast(
+        ({ stripe: stripeIndex }) => stripeIndex < 6 && selectedStripes.includes(stripeIndex),
+      )?.stripe;
       coreLint = input.lintCoreMatrix.include.flatMap((template) => {
         const current = coreLint.find((row) => row.stripe === template.stripe);
-        const extensionStripes = selectedStripes.includes(template.stripe) ? [template.stripe] : [];
+        const extensionStripes = selectedStripes.filter(
+          (stripeIndex) =>
+            stripeIndex === template.stripe || (stripeIndex === 6 && template.stripe === tailOwner),
+        );
         if (!current && extensionStripes.length === 0) {
           return [];
         }
@@ -316,7 +324,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
       centralLintSelection = JSON.stringify(
         withExtensions(
           central,
-          selectedStripes.filter((stripeIndex) => stripeIndex === 6),
+          selectedStripes.filter((stripeIndex) => stripeIndex === 6 && tailOwner === undefined),
         ),
       );
     } else {
@@ -468,11 +476,17 @@ function parseInput(value: unknown): CiCheckPlanInput {
         !isRecord(row) ||
         typeof row.check_name !== "string" ||
         typeof row.task !== "string" ||
-        typeof row.runner !== "string"
+        typeof row.runner !== "string" ||
+        (row.runner_label !== undefined && typeof row.runner_label !== "string")
       ) {
         throw new Error("Check planning requires canonical check templates");
       }
-      return { check_name: row.check_name, task: row.task, runner: row.runner };
+      return {
+        check_name: row.check_name,
+        task: row.task,
+        runner: row.runner,
+        ...(typeof row.runner_label === "string" ? { runner_label: row.runner_label } : {}),
+      };
     }),
     coreTypeMatrix: matrix(value.coreTypeMatrix, stripe),
     lintCoreMatrix: matrix(value.lintCoreMatrix, stripe),

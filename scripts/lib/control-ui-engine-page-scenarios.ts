@@ -10,7 +10,12 @@ import type {
 import type { UserProfile } from "../../packages/gateway-protocol/src/schema/users.ts";
 import type { loadVoiceWakeConfig } from "../../src/infra/voicewake.ts";
 import type { ModelAuthStatusResult } from "../../ui/src/api/types.ts";
-import { APP_ROUTE_IDS, pathForRoute, type RouteId } from "../../ui/src/app-route-paths.ts";
+import {
+  APP_ROUTE_IDS,
+  pathForRoute,
+  pathForTerminalSession,
+  type RouteId,
+} from "../../ui/src/app-route-paths.ts";
 import type { ColdLoadRpcRecord } from "../../ui/src/test-helpers/control-ui-cold-load-probe-init.ts";
 import { createColdLoadProbeInitScript } from "../../ui/src/test-helpers/control-ui-cold-load-probes.ts";
 import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
@@ -48,6 +53,7 @@ type NoChangeAction = PageAction & {
 };
 type PageDefinition = {
   ready: string;
+  pathname?: string;
   rows?: { selector: string; minimum: number; totalSelector?: string };
   /** Keep the measurement open through incremental mounting, after first visibility. */
   completion?: { selector: string; minimum: number; maximum?: number }[];
@@ -100,6 +106,96 @@ export const enginePageFixtureCounts = {
   advancedControls: 437,
 };
 const quantity = enginePageFixtureCounts;
+
+type TerminalOutputSnapshot = {
+  drawnAtMs: number;
+  visibleAtMs: number;
+  width: number;
+  height: number;
+};
+declare global {
+  interface Window {
+    openclawEngineTerminalSelectionAtMs: number;
+    openclawEngineTerminalOutput: {
+      reset: () => void;
+      read: () => TerminalOutputSnapshot | null;
+    };
+  }
+}
+
+/** Observe emitted bundles without replacing the terminal runtime or adding a product hook. */
+function installTerminalOutputProbe() {
+  const marker = "OpenClaw mock terminal";
+  const entries = new Map<
+    HTMLCanvasElement,
+    { tail: string; drawnAtMs: number; visibleAtMs: number }
+  >();
+  // The wrapper below forwards each call with its original canvas receiver.
+  // oxlint-disable-next-line typescript/unbound-method
+  const fillText = CanvasRenderingContext2D.prototype.fillText;
+  CanvasRenderingContext2D.prototype.fillText = function (...args) {
+    fillText.apply(this, args);
+    const canvas = this.canvas;
+    if (!(canvas instanceof HTMLCanvasElement) || !canvas.closest(".tp-host")) {
+      return;
+    }
+    let entry = entries.get(canvas);
+    if (!entry) {
+      entry = { tail: "", drawnAtMs: 0, visibleAtMs: 0 };
+      entries.set(canvas, entry);
+    }
+    if (entry.drawnAtMs) {
+      return;
+    }
+    entry.tail = (entry.tail + args[0]).slice(-marker.length);
+    if (entry.tail !== marker) {
+      return;
+    }
+    entry.drawnAtMs = performance.now();
+    const observed = entry;
+    let visibleFrames = 0;
+    const sample = () => {
+      if (entries.get(canvas) !== observed || !canvas.isConnected) {
+        return;
+      }
+      const visible =
+        canvas.checkVisibility() &&
+        canvas.width > 0 &&
+        canvas.height > 0 &&
+        canvas.closest(".tp-viewport")?.getAttribute("aria-hidden") !== "true";
+      visibleFrames = visible ? visibleFrames + 1 : 0;
+      if (visibleFrames === 2) {
+        observed.visibleAtMs = performance.now();
+      } else {
+        requestAnimationFrame(sample);
+      }
+    };
+    requestAnimationFrame(sample);
+  };
+  window.openclawEngineTerminalOutput = {
+    reset: () => entries.clear(),
+    read: () => {
+      for (const [canvas, entry] of entries) {
+        if (entry.visibleAtMs && canvas.isConnected && canvas.checkVisibility()) {
+          return {
+            drawnAtMs: entry.drawnAtMs,
+            visibleAtMs: entry.visibleAtMs,
+            width: canvas.width,
+            height: canvas.height,
+          };
+        }
+      }
+      return null;
+    },
+  };
+}
+
+async function waitForTerminalOutput(page: Page) {
+  await page.waitForFunction(() => window.openclawEngineTerminalOutput.read() !== null);
+  const output = await page.evaluate(() => window.openclawEngineTerminalOutput.read());
+  assert(output, "Expected the mock banner drawn in a visible terminal canvas");
+  return output;
+}
 const excluded: Partial<Record<RouteId, string>> = {
   chat: "Chat transcript is owned by the active transcript lane.",
   dashboard: "Board and Board tabs are owned by the active Board lane.",
@@ -1717,6 +1813,8 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
         let readyFrames = 0;
         let completeFrames = 0;
         let readyMs: number | undefined;
+        let previousAnchorTop: number | undefined;
+        const scrollport = document.getElementById("control-ui-main")!;
         const probe = () => {
           const snapshot = window.openclawControlUi?.snapshot();
           const route = snapshot?.route;
@@ -1772,8 +1870,26 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
           if (readyFrames >= 2) {
             readyMs ??= performance.now() - started;
           }
+          // General redirects to the Language anchor. Controls can be ready
+          // before its smooth scroll finishes. A busy frame can pause scrolling,
+          // so require its destination as well as consecutive stable frames.
+          const anchorTop =
+            routeId === "config"
+              ? document.getElementById("settings-language")?.getBoundingClientRect().top
+              : undefined;
+          const anchorSettled =
+            routeId !== "config" ||
+            (anchorTop !== undefined &&
+              anchorTop >= -1 &&
+              anchorTop < window.innerHeight &&
+              (Math.abs(anchorTop - scrollport.getBoundingClientRect().top) < 1 ||
+                Math.abs(scrollport.scrollHeight - scrollport.clientHeight - scrollport.scrollTop) <
+                  1) &&
+              anchorTop === previousAnchorTop);
+          previousAnchorTop = anchorTop;
           const contentReady =
             pageReady &&
+            anchorSettled &&
             (!completion ||
               completion.every(({ selector: contentSelector, minimum, maximum }) => {
                 const count = document.querySelectorAll(contentSelector).length;
@@ -1798,7 +1914,7 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
       }),
     {
       id,
-      pathname: pathForRoute(id),
+      pathname: definition.pathname ?? pathForRoute(id),
       search: definition.search ?? "",
       landed: definition.landed ?? id,
       selector: definition.ready,
@@ -1808,10 +1924,41 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
   );
 }
 
+/** Recorded in the new document, so driver navigation and polling do not define readiness. */
+function installColdPageReadiness(options: { routeId: RouteId; selector: string }) {
+  const timing = { startedAtMs: 0, readyMs: 0, readyAtMs: 0, contentReadyMs: 0 };
+  Reflect.set(window, "__engineColdPageReadiness", timing);
+  let readyFrames = 0;
+  const probe = () => {
+    const snapshot = window.openclawControlUi?.snapshot();
+    const route = snapshot?.route;
+    const visible = [...document.querySelectorAll(options.selector)].some((target) =>
+      target.checkVisibility(),
+    );
+    const pageReady =
+      snapshot?.routeReady &&
+      route?.status === "success" &&
+      route.matches[0]?.routeId === options.routeId &&
+      route.pendingMatches.length === 0 &&
+      visible;
+    readyFrames = pageReady ? readyFrames + 1 : 0;
+    if (readyFrames >= 2) {
+      // Performance time zero is this document's navigation start.
+      timing.readyAtMs = performance.now();
+      timing.readyMs = timing.readyAtMs;
+      timing.contentReadyMs = timing.readyAtMs;
+    } else {
+      requestAnimationFrame(probe);
+    }
+  };
+  requestAnimationFrame(probe);
+}
+
 /** One fresh context per phase preserves first-visit lazy imports and isolates local drafts. */
 export function createEnginePageScenarios(
   gatewayLatencyMs = 0,
   pageOrigin: "new-session" | "chat" = "new-session",
+  baseUrl?: string,
 ): readonly EngineScenario[] {
   const originSessionKey = "agent:main:interaction-a";
   const boot = async (page: Page) => {
@@ -2016,6 +2163,225 @@ export function createEnginePageScenarios(
       return [visit, revisit, action, leave, firstAdvancedOpen].concat(noChanges);
     }
     if (id === "terminal") {
+      const outputCommon = {
+        ...common,
+        setup: async (page: Page) => {
+          await page.addInitScript(installTerminalOutputProbe);
+        },
+      };
+      const firstCreateDefinition: PageDefinition = {
+        ...definition,
+        ready: "openclaw-terminal-page .tp-session-menu .tp-session.is-current",
+      };
+      const setupSelectionTiming = async (page: Page) => {
+        await outputCommon.setup(page);
+        await page.addInitScript((selector) => {
+          window.openclawEngineTerminalSelectionAtMs = 0;
+          document.addEventListener(
+            "click",
+            (event) => {
+              if (
+                event.isTrusted &&
+                event.target instanceof Element &&
+                event.target.closest(selector)
+              ) {
+                window.openclawEngineTerminalSelectionAtMs = performance.now();
+              }
+            },
+            { capture: true, passive: true },
+          );
+        }, firstCreateDefinition.ready);
+      };
+      const outputEvidence = async (page: Page, target: PageDefinition) => {
+        await page.evaluate(() => window.openclawEngineTerminalOutput.reset());
+        const timing = await measureVisit(page, "terminal", target);
+        // Generic Terminal opens its first shell behind the Sessions picker.
+        // Select that shell; the + action would create a second one instead.
+        if (!target.pathname) {
+          await page.locator(firstCreateDefinition.ready).click();
+        }
+        const output = await waitForTerminalOutput(page);
+        assert(output.visibleAtMs >= timing.startedAtMs);
+        const pickerSelectedAtMs = target.pathname
+          ? null
+          : await page.evaluate(() => window.openclawEngineTerminalSelectionAtMs);
+        if (pickerSelectedAtMs !== null) {
+          assert(
+            pickerSelectedAtMs >= timing.startedAtMs && pickerSelectedAtMs <= output.visibleAtMs,
+          );
+        }
+        await page.locator("openclaw-terminal-page .tp-composer input").waitFor();
+        const readyAtMs = Math.max(timing.readyAtMs, output.visibleAtMs);
+        return {
+          visitStartedAtMs: timing.startedAtMs,
+          routeControlsReadyMs: timing.readyMs,
+          visitReadyMs: readyAtMs - timing.startedAtMs,
+          visitReadyAtMs: readyAtMs,
+          firstOutputDrawMs: output.drawnAtMs - timing.startedAtMs,
+          firstOutputVisibleMs: output.visibleAtMs - timing.startedAtMs,
+          ...(pickerSelectedAtMs === null
+            ? {}
+            : { pickerSelectionToOutputMs: output.visibleAtMs - pickerSelectedAtMs }),
+          canvasWidth: output.width,
+          canvasHeight: output.height,
+          syntheticTerminal: true,
+        };
+      };
+      const firstCreate: EngineScenario = {
+        ...outputCommon,
+        id: "page-terminal-first-create-visit",
+        setup: setupSelectionTiming,
+        expected:
+          "From a settled origin, the first Terminal visit creates exactly one shell and reveals its rendered synthetic banner.",
+        prepare: boot,
+        run: async (page, gateway) => {
+          assert.equal((await gateway.getRequests("terminal.open")).length, 0);
+          const evidence = await outputEvidence(page, firstCreateDefinition);
+          assert.equal((await gateway.getRequests("terminal.open")).length, 1);
+          assert.equal((await gateway.getRequests("terminal.attach")).length, 0);
+          return { ...evidence, openedSessions: 1, attachedSessions: 0 };
+        },
+      };
+      const attachedSession = {
+        sessionId: "engine-detached-terminal",
+        agentId: "main",
+        shell: "/bin/zsh",
+        cwd: "/workspace/openclaw",
+        confined: false,
+      };
+      const firstAttach: EngineScenario = {
+        ...outputCommon,
+        id: "page-terminal-first-attach-visit",
+        expected:
+          "From a settled origin, the first Terminal visit attaches one existing synthetic shell and renders its replay, without creating a new shell.",
+        fixtureOverrides: (sandbox, base) => {
+          const fixture = common.fixtureOverrides(sandbox, base);
+          const buffer = "OpenClaw mock terminal\r\nRestored synthetic shell output.\r\n$ ";
+          return {
+            ...fixture,
+            methodResponses: {
+              ...fixture.methodResponses,
+              "terminal.list": {
+                sessions: [{ ...attachedSession, attached: false, createdAtMs: time }],
+              },
+              "terminal.attach": { ...attachedSession, buffer, seq: buffer.length },
+            },
+          };
+        },
+        prepare: boot,
+        run: async (page, gateway) => {
+          const evidence = await outputEvidence(page, {
+            ...definition,
+            pathname: pathForTerminalSession(attachedSession.sessionId),
+            ready: "openclaw-terminal-page .tp-composer input",
+          });
+          assert.equal((await gateway.getRequests("terminal.open")).length, 0);
+          const attaches = await gateway.getRequests("terminal.attach");
+          assert.equal(attaches.length, 1);
+          assert.deepEqual(attaches[0]!.params, { sessionId: attachedSession.sessionId });
+          return { ...evidence, openedSessions: 0, attachedSessions: 1 };
+        },
+      };
+      const outputRevisit: EngineScenario = {
+        ...outputCommon,
+        id: "page-terminal-first-output-revisit",
+        setup: setupSelectionTiming,
+        expected:
+          "Return from settled About to the first shell's rendered replay without opening another shell.",
+        prepare: async (page, gateway) => {
+          await boot(page);
+          await firstCreate.run(page, gateway);
+          await navigate(page, "about");
+          await ready(page, "about", definitions.about!);
+          // The runner settles native route preloads, network idle and fonts after prepare.
+        },
+        run: async (page, gateway) => {
+          const openedBefore = (await gateway.getRequests("terminal.open")).length;
+          const attachedBefore = (await gateway.getRequests("terminal.attach")).length;
+          const evidence = await outputEvidence(page, firstCreateDefinition);
+          assert.equal((await gateway.getRequests("terminal.open")).length, openedBefore);
+          assert.equal((await gateway.getRequests("terminal.attach")).length, attachedBefore + 1);
+          return { ...evidence, openedSessions: 0, attachedSessions: 1 };
+        },
+      };
+      const coldVisits: EngineScenario[] = baseUrl
+        ? [
+            { source: firstCreate, attach: false, target: firstCreateDefinition },
+            {
+              source: firstAttach,
+              attach: true,
+              target: {
+                ...definition,
+                pathname: pathForTerminalSession(attachedSession.sessionId),
+                ready: "openclaw-terminal-page .tp-composer input",
+              },
+            },
+          ].map(({ source, attach, target }): EngineScenario =>
+            Object.assign({}, source, {
+              id: attach ? "page-terminal-cold-attach-visit" : "page-terminal-cold-visit",
+              route: target.pathname ?? pathForRoute("terminal"),
+              navigation: "measured",
+              setup: async (page) => {
+                if (attach) {
+                  await page.addInitScript(installTerminalOutputProbe);
+                }
+              },
+              expected: attach
+                ? "A fresh document attaches one existing synthetic shell and renders its replay in a visible canvas."
+                : "A fresh document opens Terminal directly and settles its first-shell Sessions picker for two consecutive frames.",
+              initScript: `${createColdLoadProbeInitScript({
+                ownerProbes: false,
+                sidebarCounters: false,
+                latencyMs: gatewayLatencyMs,
+                frameGapMs: 0,
+                events: [],
+              })}
+;if (window === window.top && location.protocol !== "about:") {
+  (() => { const __name = (fn) => fn;
+    (${installColdPageReadiness.toString()})(${JSON.stringify({ routeId: id, selector: target.ready })});
+  })();
+}`,
+              prepare: async () => {},
+              run: async (page, gateway) => {
+                await page.goto(
+                  new URL(target.pathname ?? pathForRoute("terminal"), baseUrl).href,
+                  {
+                    waitUntil: "domcontentloaded",
+                  },
+                );
+                await page.waitForFunction(
+                  () => Reflect.get(window, "__engineColdPageReadiness")?.readyAtMs > 0,
+                );
+                const timing: { readyAtMs: number } = await page.evaluate(() =>
+                  Reflect.get(window, "__engineColdPageReadiness"),
+                );
+                const output = attach ? await waitForTerminalOutput(page) : null;
+                const readyAtMs = Math.max(timing.readyAtMs, output?.visibleAtMs ?? 0);
+                assert.equal((await gateway.getRequests("terminal.open")).length, attach ? 0 : 1);
+                const attaches = await gateway.getRequests("terminal.attach");
+                assert.equal(attaches.length, attach ? 1 : 0);
+                if (attach) {
+                  assert.deepEqual(attaches[0]!.params, { sessionId: attachedSession.sessionId });
+                }
+                return {
+                  visitStartedAtMs: 0,
+                  routeControlsReadyMs: timing.readyAtMs,
+                  visitReadyMs: readyAtMs,
+                  visitReadyAtMs: readyAtMs,
+                  ...(output
+                    ? {
+                        firstOutputDrawMs: output.drawnAtMs,
+                        firstOutputVisibleMs: output.visibleAtMs,
+                      }
+                    : {}),
+                  openedSessions: attach ? 0 : 1,
+                  attachedSessions: attach ? 1 : 0,
+                  syntheticTerminal: true,
+                };
+              },
+            } satisfies Partial<EngineScenario>),
+          )
+        : [];
       const composerInput: EngineScenario = {
         ...common,
         id: "page-terminal-composer-input",
@@ -2052,7 +2418,17 @@ export function createEnginePageScenarios(
           return { typedCharacters: command.length, inputSent: true };
         },
       };
-      return [visit, revisit, action, leave, composerInput].concat(noChanges);
+      return [
+        visit,
+        revisit,
+        action,
+        leave,
+        composerInput,
+        firstCreate,
+        firstAttach,
+        outputRevisit,
+        ...coldVisits,
+      ].concat(noChanges);
     }
     return [visit, revisit, action, leave].concat(noChanges);
   });

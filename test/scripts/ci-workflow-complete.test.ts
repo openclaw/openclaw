@@ -675,7 +675,7 @@ describe("PR failure reporting", () => {
     };
     for (const runnerBackend of ["", "blacksmith"] as const) {
       expect(evaluateWorkflowExpression(gate["runs-on"], { ...context, runnerBackend })).toBe(
-        "blacksmith-4vcpu-ubuntu-2404",
+        "blacksmith-2vcpu-ubuntu-2404",
       );
     }
     for (const override of [
@@ -699,7 +699,7 @@ describe("PR failure reporting", () => {
           runnerProfile: "hybrid",
           failureReportOutputs: {},
         }),
-      ).toBe(runnerBackend === "hybrid" ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404");
+      ).toBe(runnerBackend === "hybrid" ? "ubuntu-24.04" : "blacksmith-2vcpu-ubuntu-2404");
       const report = readCiWorkflow().jobs["pr-failure-report"];
       expect(
         evaluateWorkflowExpression(report["runs-on"], {
@@ -707,7 +707,7 @@ describe("PR failure reporting", () => {
           runnerBackend,
           runnerProfile: "hybrid",
         }),
-      ).toBe(runnerBackend === "hybrid" ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404");
+      ).toBe(runnerBackend === "hybrid" ? "ubuntu-24.04" : "blacksmith-2vcpu-ubuntu-2404");
       expect(
         evaluateWorkflowExpression(report["runs-on"], {
           ...context,
@@ -736,7 +736,7 @@ describe("PR failure reporting", () => {
         "ubuntu-24.04",
       );
       expect(evaluateWorkflowExpression(workflow.jobs["ci-gate"]["runs-on"], context)).toBe(
-        "blacksmith-4vcpu-ubuntu-2404",
+        "blacksmith-2vcpu-ubuntu-2404",
       );
       for (const jobName of ["preflight", "ci-gate"]) {
         expect(
