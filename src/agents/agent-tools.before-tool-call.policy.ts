@@ -182,6 +182,8 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
       ...(args.ctx?.requester ? { requester: args.ctx.requester } : {}),
       ...(args.ctx?.trigger && { trigger: args.ctx.trigger }),
+      ...(args.ctx?.toolOwnerPluginId && { toolOwnerPluginId: args.ctx.toolOwnerPluginId }),
+      ...(args.ctx?.workspaceDir && { workspaceDir: args.ctx.workspaceDir }),
     });
     const toolContext = buildToolContext(toolIdentity);
     // Policies form a mutation chain. Reconcile each decision against the prior
