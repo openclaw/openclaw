@@ -77,6 +77,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       mode !== "metadata" &&
       mode !== "backup-engine" &&
       mode !== "backup-engine-preserving" &&
+      mode !== "state-sqlite-populated" &&
       mode !== "consolidated" &&
       mode !== "reclaim" &&
       !isSqliteSnapshotStagingMode(mode)) ||
@@ -107,6 +108,19 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     const staged = mode === "staged-sync" || mode === "staged-async";
     if (staged && !stagingRoot) {
       throw new Error("SQLite staged snapshot requires its owner-allocated directory");
+    }
+    if (mode === "state-sqlite-populated") {
+      const [{ inspectPhysicalStoreInProcess }, { inspectStateSqlite }] = await Promise.all([
+        import("./database-engine/physical-store.js"),
+        import("../state/openclaw-state-db-engine.js"),
+      ]);
+      return {
+        ok: true,
+        hasExistingData: await inspectPhysicalStoreInProcess(pathname, true, (db) => {
+          const facts = inspectStateSqlite(db);
+          return !facts.hasEngineAnchor && facts.hasExistingData;
+        }),
+      };
     }
     if (mode === "backup-engine" || mode === "backup-engine-preserving") {
       const { readBackupEngineInProcess } = await import("./database-engine/physical-store.js");
@@ -244,7 +258,9 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       (allocationRefused ? SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX : "");
     // Only engine probes transport native codes; released snapshot responses stay unchanged.
     const errcode =
-      mode === "backup-engine" || mode === "backup-engine-preserving"
+      mode === "backup-engine" ||
+      mode === "backup-engine-preserving" ||
+      mode === "state-sqlite-populated"
         ? sqliteExtendedResultCode(error)
         : undefined;
     return {

@@ -103,6 +103,7 @@ import {
 import { prepareConfigWriteTopology } from "./io.write-topology.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
+import * as legacy from "./legacy-workboard-database.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { resolveStateDir } from "./paths.js";
 import { setConfigResolutionFacts } from "./resolution-facts.js";
@@ -120,7 +121,6 @@ export async function writeConfigFileFromContext(
   readSnapshot: () => Promise<ReadConfigFileSnapshotInternalResult>,
 ): Promise<InternalConfigWriteResult> {
   const { deps, configPath, options: ioOptions } = context;
-  const stateContext = { env: deps.env, homedir: deps.homedir };
   const sourceGuard = captureConfigWriteLockGuard(configPath);
   const doctorAuthority = getUpdateDoctorConfigWriteAuthority(configPath);
   let options = bindConfigWriteLockGuard(writeOptions, sourceGuard);
@@ -140,7 +140,7 @@ export async function writeConfigFileFromContext(
     : undefined;
   const configForWrite = preserveDeferredPluginMigrationConfig({
     sourceConfig: snapshot.sourceConfig,
-    nextConfig: cfg,
+    nextConfig: legacy.normalizeLegacyWorkboardDatabaseConfig(cfg, deps.env),
     pending: pendingMigrations ?? [],
     writeOptions: options,
   });
@@ -194,6 +194,7 @@ export async function writeConfigFileFromContext(
     ...(options.unsetPaths ?? []),
   ]);
   const hasAuthoredIncludes = containsConfigIncludeDirective(snapshot.parsed);
+  const rootAuthoredConfig = legacy.projectLegacyWorkboardWrite(snapshot, configForWrite, deps.env);
   // Preserve roster includes during Doctor repairs; bootstrap rosters use explicitSetPaths.
   if (snapshot.valid || (snapshot.exists && hasAuthoredIncludes)) {
     const webhookMigration = hasAuthoredIncludes
@@ -210,7 +211,7 @@ export async function writeConfigFileFromContext(
       sourceConfigValid: snapshot.valid,
       sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
       nextConfig: webhookMigration?.config ?? authoredConfig,
-      rootAuthoredConfig: snapshot.parsed,
+      rootAuthoredConfig,
       agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
       keyedAgentEntryIncludePaths: keyedAgentEntryIncludes?.includePaths,
       unsetPaths,
@@ -229,7 +230,7 @@ export async function writeConfigFileFromContext(
         persistedCandidate: persistCandidate,
         runtimeConfig: authoredRuntimeConfig,
         sourceConfig: authoredSourceConfig,
-        rootAuthoredConfig: snapshot.parsed,
+        rootAuthoredConfig,
         explicitSetPaths: webhookMigration.paths,
         allowIncludeAncestorExplicitSetPaths: true,
       });
@@ -300,7 +301,7 @@ export async function writeConfigFileFromContext(
     ? await resolveConfigWriteStateSelection(snapshot.sourceConfig, deps.env)
     : undefined;
   const priorSnapshotAuditRecord = await withConfigWriteState(stateSelection, () =>
-    readLatestConfigSnapshotAuditRecordAsync(stateContext, options.assertConfigPathForWrite),
+    readLatestConfigSnapshotAuditRecordAsync(deps, options.assertConfigPathForWrite),
   );
 
   options.assertConfigPathForWrite?.();
@@ -424,7 +425,7 @@ export async function writeConfigFileFromContext(
     options.assertConfigPathForWrite?.();
     await withConfigWriteState(stateSelection, () =>
       appendConfigAuditRecord({
-        ...stateContext,
+        ...deps,
         record: finalizeConfigWriteAuditRecord({
           base: auditRecordBase,
           result,
@@ -471,7 +472,6 @@ export async function writeConfigFileFromContext(
     warn: (message: string) => deps.logger.warn(message),
   };
   try {
-    options.assertConfigPathForWrite?.();
     if (options.baseSnapshot) {
       assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
     }
@@ -580,13 +580,13 @@ export async function writeConfigFileFromContext(
       const offlineChangedPaths = new Set<string>();
       collectChangedPaths(
         priorSnapshotAuditRecord.fingerprintedAuthoredConfig,
-        await fingerprintConfigSnapshotAuthoredConfig(snapshot.parsed, stateContext),
+        await fingerprintConfigSnapshotAuthoredConfig(snapshot.parsed, deps),
         "",
         offlineChangedPaths,
       );
       await withConfigWriteState(acceptedStateSelection, () =>
         appendConfigAuditRecord({
-          ...stateContext,
+          ...deps,
           record: {
             ts: new Date().toISOString(),
             source: "config-io",
@@ -613,7 +613,7 @@ export async function writeConfigFileFromContext(
     const writtenSnapshotAuditRecord = await withConfigWriteState(acceptedStateSelection, () =>
       upsertConfigSnapshotAuditRecordAsync(
         {
-          ...stateContext,
+          ...deps,
           configPath,
           rawHash: nextHash,
           authoredConfig: stampedOutputConfig,
@@ -647,7 +647,7 @@ export async function writeConfigFileFromContext(
           await withConfigWriteState(acceptedStateSelection, () =>
             restoreConfigSnapshotAuditRecordAsync(
               {
-                ...stateContext,
+                ...deps,
                 snapshot: priorSnapshotAuditRecord,
                 expectedSnapshot: writtenSnapshotAuditRecord,
               },
