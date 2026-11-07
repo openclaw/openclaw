@@ -26,7 +26,11 @@ import {
 } from "./session-transcript-projection-append.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
-import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
+import {
+  TRANSCRIPT_INSERT_BATCH_SIZE,
+  transcriptEventJsonSql,
+  transcriptEventNavigationSql,
+} from "./transcript-payload.js";
 import {
   isCanonicalSessionTranscriptEntry,
   scanSessionTranscriptTree,
@@ -451,19 +455,27 @@ function insertPreparedSessionTranscriptProjectionRows(
   },
 ): void {
   const kysely = getProjectionKysely(db);
-  if (params.activeRows && params.activeRows.length > 0) {
-    executeSqliteQuerySync(
-      db,
-      kysely.insertInto("session_transcript_active_events").values(
-        params.activeRows.map((row) => ({
-          active_position: row.activePosition,
-          context_eligible: row.contextEligible,
-          event_seq: row.eventSeq,
-          message_position: row.messagePosition,
-          session_id: params.sessionId,
-        })),
-      ),
-    );
+  if (params.activeRows) {
+    // Bound SQL parameters here without splitting the caller's transaction.
+    for (
+      let offset = 0;
+      offset < params.activeRows.length;
+      offset += TRANSCRIPT_INSERT_BATCH_SIZE
+    ) {
+      const rows = params.activeRows.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE);
+      executeSqliteQuerySync(
+        db,
+        kysely.insertInto("session_transcript_active_events").values(
+          rows.map((row) => ({
+            active_position: row.activePosition,
+            context_eligible: row.contextEligible,
+            event_seq: row.eventSeq,
+            message_position: row.messagePosition,
+            session_id: params.sessionId,
+          })),
+        ),
+      );
+    }
   }
   if (params.ftsRows && params.ftsRows.length > 0) {
     const insertFts = createSessionTranscriptFtsInserter(db, params.sessionId);
