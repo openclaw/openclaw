@@ -102,6 +102,15 @@ export const AgentEntryBaseSchema = z.strictObject({
   reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
   fastModeDefault: z.union([z.boolean(), z.literal("auto"), z.literal("ultrafast")]).optional(),
   newSessionPermissionMode: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
+  picker: z
+    .strictObject({
+      /**
+       * Hide this agent from user-facing agent pickers and switchers. Hidden
+       * agents remain spawnable targets and stay listed by `openclaw agents list`.
+       */
+      hidden: z.boolean().optional(),
+    })
+    .optional(),
   contextInjection: z
     .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
     .optional(),

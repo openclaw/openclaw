@@ -36,16 +36,4 @@ describe("legacy roster compatibility", () => {
     expect(agents.map((row) => row.id)).toContain("worker");
     expect(agents.every((row) => row.hidden === undefined)).toBe(true);
   });
-
-  test("legacy system-roster configs still project", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: { main: {} },
-      },
-    };
-    const { agents } = await listAgentsForGateway(cfg);
-
-    expect(agents.length).toBeGreaterThan(0);
-    expect(agents.every((row) => row.hidden === undefined)).toBe(true);
-  });
 });

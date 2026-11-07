@@ -3,7 +3,7 @@ import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import { findSelectableAgent, listSelectableAgents } from "../../lib/agents/display.ts";
+import { findSelectableAgent, listChatAgents } from "../../lib/agents/display.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
@@ -339,7 +339,7 @@ export class DraftPlaceState {
   }
 
   agents() {
-    return listSelectableAgents(this.read().context?.agents.state.agentsList?.agents ?? []);
+    return listChatAgents(this.read().context?.agents.state.agentsList?.agents ?? []);
   }
 
   selectedAgent() {

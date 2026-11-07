@@ -10,8 +10,10 @@ import {
   buildAgentContext,
   buildModelOptions,
   createPrimaryModelExclusion,
+  findSelectableAgent,
   formatBytes,
   listSelectableAgents,
+  listChatAgents,
   normalizeAgentTargetLabel,
   resolveAgentSkillsFilter,
   resolveEffectiveModelFallbacks,
@@ -109,6 +111,18 @@ it("excludes semantic system rows without depending on identity", () => {
   ];
 
   expect(listSelectableAgents(agents)).toEqual([agents[0], agents[2]]);
+  expect(agents).toHaveLength(3);
+});
+it("keeps picker-hidden rows selectable for administration but not for chat", () => {
+  const agents = [
+    { id: "main", kind: "agent" as const },
+    { id: "worker", kind: "agent" as const, hidden: true },
+    { id: "legacy-gateway-row" },
+  ];
+
+  expect(listSelectableAgents(agents)).toEqual([agents[0], agents[1], agents[2]]);
+  expect(listChatAgents(agents)).toEqual([agents[0], agents[2]]);
+  expect(findSelectableAgent(agents, "worker")).toEqual(agents[1]);
   expect(agents).toHaveLength(3);
 });
 it("preserves the Control UI byte-size display contract", () => {
