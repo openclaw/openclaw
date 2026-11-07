@@ -266,13 +266,9 @@ export function ProjectPickerContent(props: ProjectChipProps) {
             title={t("newSession.projects")}
             label={t("newSession.projectSearchPlaceholder")}
             query={props.params.place.browser.projectQuery}
-            open={
-              (projectSearching() ??
-                props.params.place.browser.projects.length + props.state.recents.length >= 6) ||
-              Boolean(props.params.place.browser.projectQuery)
-            }
+            open={projectSearching() !== false || Boolean(props.params.place.browser.projectQuery)}
             disabled={props.params.submitting || props.params.pendingPlacement}
-            inputProps={{ onCompositionEnd: recordCompositionEnd }}
+            inputProps={{ autofocus: true, onCompositionEnd: recordCompositionEnd }}
             onOpenChange={(open) => {
               // Passive dismissal restores automatic search; an explicit collapse remains a choice.
               setProjectSearching(
