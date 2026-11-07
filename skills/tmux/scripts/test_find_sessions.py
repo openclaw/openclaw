@@ -17,11 +17,13 @@ class FindSessionsTests(unittest.TestCase):
             tmux = root / "tmux"
             tmux.write_text("#!/bin/sh\nprintf '%s\\t0\\tcreated\\n' \"$2\"\n")
             tmux.chmod(0o755)
+            (sockets / ".DS_Store").write_text("not a socket")
             expected = []
-            for name in (".hidden.sock", "visible.sock"):
-                endpoint = stack.enter_context(socket.socket(socket.AF_UNIX))
-                endpoint.bind(str(sockets / name))
-                expected.append(str(sockets / name))
+            for name in (None, ".hidden.sock", "visible.sock"):
+                if name is not None:
+                    endpoint = stack.enter_context(socket.socket(socket.AF_UNIX))
+                    endpoint.bind(str(sockets / name))
+                    expected.append(str(sockets / name))
                 with self.subTest(sockets=expected[:]):
                     result = subprocess.run(
                         ["bash", str(script), "--all"],
@@ -34,8 +36,12 @@ class FindSessionsTests(unittest.TestCase):
                         text=True,
                         timeout=5,
                     )
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(result.stderr, "")
+                    if expected:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stderr, "")
+                    else:
+                        self.assertEqual(result.returncode, 1)
+                        self.assertIn("No sockets found under", result.stderr)
                     found = [
                         line[4:].split(" (", 1)[0]
                         for line in result.stdout.splitlines()
