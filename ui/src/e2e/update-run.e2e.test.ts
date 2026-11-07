@@ -68,6 +68,9 @@ suite.define(() => {
           expect(
             await page.getByRole("button", { name: "Retry update", exact: true }).count(),
           ).toBe(historical ? 0 : 1);
+          expect(
+            await surface.getByRole("button", { name: "Copy agent prompt", exact: true }).count(),
+          ).toBe(historical ? 0 : 1);
           if (historical) {
             expect(await surface.textContent()).not.toContain("Run openclaw update.");
           }
@@ -87,6 +90,90 @@ suite.define(() => {
       );
     },
   );
+
+  it("copies a repair prompt from a failed update dialog at desktop and phone widths", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 980, width: 1200 },
+      },
+      async ({ context, page }) => {
+        let run = createUpdateRunFixture();
+        const config = { update: { auto: { enabled: false }, channel: "stable" } };
+        const gateway = await installMockGateway(page, {
+          communityInvite: false,
+          updateAvailable: {
+            channel: "stable",
+            currentVersion: "2026.9.3",
+            latestVersion: "2026.9.4",
+          },
+          methodResponses: {
+            "config.get": configResponse(config, "update-repair-prompt-config"),
+            "update.run": { ok: true, runId: run.runId, result: { status: "ok" } },
+            "update.runs.get": { run },
+            "update.status": { activeRun: null, lastRun: null },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/updates`);
+        await gateway.waitForRequest("config.get");
+        await page.getByRole("button", { name: "Update Gateway…", exact: true }).click();
+        const dialog = page.locator("openclaw-modal-dialog");
+        await dialog.getByRole("button", { name: "Update and restart", exact: true }).click();
+        await gateway.waitForRequest("update.runs.get");
+
+        run = {
+          ...run,
+          phase: "finished",
+          status: "failed",
+          reason: "database-schema-preflight",
+          updatedAtMs: run.updatedAtMs + 1_000,
+          finishedAtMs: run.updatedAtMs + 1_000,
+          steps: [
+            { step: "requested", status: "completed" },
+            { step: "staging", status: "completed" },
+            { step: "validating", status: "failed" },
+            {
+              step: "database-schema-preflight",
+              status: "failed",
+              detail: "Exit code: 1; verify database schema compatibility before retrying.",
+            },
+          ],
+          verification: { serviceRunning: true, runningVersion: "2026.9.3" },
+        };
+        await gateway.setMethodResponse("update.runs.get", { run });
+        await gateway.emitGatewayEvent("update.run.changed", {
+          runId: run.runId,
+          phase: run.phase,
+          status: run.status,
+          updatedAtMs: run.updatedAtMs,
+        });
+        const copy = dialog.getByRole("button", { name: "Copy agent prompt", exact: true });
+        await copy.waitFor();
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "failed-update-desktop.png"),
+        });
+
+        await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+        await copy.click();
+        await dialog.getByText("Prompt copied", { exact: true }).waitFor();
+        const prompt = await page.evaluate(() => navigator.clipboard.readText());
+        expect(prompt).toContain("database-schema-preflight");
+        expect(prompt).toContain("open a pull request");
+        expect(prompt).toContain("verify database schema compatibility");
+        expect(await gateway.getRequests("update.run")).toHaveLength(1);
+
+        await page.setViewportSize({ height: 844, width: 390 });
+        await copy.scrollIntoViewIfNeeded();
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "failed-update-phone.png"),
+        });
+      },
+    );
+  });
 
   it("requires confirmation and keeps long update output keyboard accessible", async () => {
     await suite.withPage(

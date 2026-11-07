@@ -2,12 +2,16 @@
 
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import type { UpdateRunServingIdentity } from "../../../src/infra/update-run-history-projection.ts";
 import type { UpdateRunRecord as Run } from "../../../src/infra/update-run-record.ts";
 import { projectUpdateRun } from "../app/update-run-projection.ts";
+import { copyToClipboard } from "../lib/clipboard.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture as run } from "../test-helpers/update-run.ts";
 import { UpdateRunView } from "./update-run-view.tsx";
+
+vi.mock("../lib/clipboard.ts", () => ({ copyToClipboard: vi.fn(async () => true) }));
 
 type Step = Run["steps"][number];
 function makeStep(step: string, status: Step["status"] = "completed", detail?: string): Step {
@@ -16,7 +20,7 @@ function makeStep(step: string, status: Step["status"] = "completed", detail?: s
 
 const project = (patch: Partial<Run>) => projectUpdateRun(run(patch));
 
-function mount(initial: Partial<Run>) {
+function mount(initial: Partial<Run>, serving?: UpdateRunServingIdentity) {
   const [current, setRecord] = createSignal(run(initial));
   const [connected, setConnected] = createSignal(true);
   const { container } = mountSolid(() =>
@@ -27,6 +31,7 @@ function mount(initial: Partial<Run>) {
       get connected() {
         return connected();
       },
+      serving,
     }),
   );
   flush();
@@ -43,6 +48,7 @@ function mount(initial: Partial<Run>) {
 }
 
 afterEach(() => {
+  vi.mocked(copyToClipboard).mockReset().mockResolvedValue(true);
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -259,4 +265,113 @@ it("preserves early failure phases and renders diagnostic markup as text", () =>
   expect(element.querySelectorAll('[data-oracle][data-state="warn"]')).toHaveLength(4);
   expect(find("img")).toBeNull();
   expect(find('[data-step="build"]')).toMatchObject({ ariaLabel: "Building OpenClaw: Failed" });
+});
+
+const failedRun = (patch: Partial<Run> = {}): Partial<Run> => ({
+  phase: "finished",
+  status: "failed",
+  reason: "database-schema-preflight",
+  ...patch,
+});
+
+async function copyPrompt(view: ReturnType<typeof mount>) {
+  view.find(".update-run-view__copy-prompt")!.click();
+  await vi.waitFor(() => expect(copyToClipboard).toHaveBeenCalledOnce());
+  return vi.mocked(copyToClipboard).mock.calls[0]?.[0] ?? "";
+}
+
+it("copies a redacted repair prompt with update identities before early-failure diagnostics", async () => {
+  const secret = `gho_${"A".repeat(20)}`;
+  const installedSha = "a1".repeat(20);
+  const requestedSha = "b2".repeat(20);
+  const view = mount(
+    failedRun({
+      before: { version: "2026.9.1", sha: installedSha },
+      target: {
+        kind: "git",
+        version: "2026.9.2",
+        sha: requestedSha,
+        tag: `stable token=${secret}`,
+      },
+      after: {},
+      verification: {},
+      steps: [
+        makeStep("validating", "failed"),
+        makeStep(
+          "database-schema-preflight",
+          "failed",
+          `Target schema is incompatible. token=${secret}`,
+        ),
+      ],
+    }),
+  );
+  const prompt = await copyPrompt(view);
+  expect(prompt).toContain("do not bypass safety checks");
+  expect(prompt).toContain("open a pull request");
+  expect(prompt).toContain(`Installed: version: 2026.9.1; SHA: ${installedSha}`);
+  expect(prompt).toContain(`Requested target: version: 2026.9.2; SHA: ${requestedSha}`);
+  expect(prompt).toContain("tag: stable token=[redacted]");
+  expect(prompt).toContain("Target schema is incompatible");
+  expect(prompt).not.toContain(secret);
+  expect(prompt.indexOf("Requested target:")).toBeLessThan(prompt.indexOf("Failed:"));
+  await vi.waitFor(() =>
+    expect(view.text(".update-run-view__prompt-action [role=status]")).toBe("Prompt copied"),
+  );
+});
+
+it.each(["complete", "truncated"] as const)(
+  "masks a %s PEM key before copying a shortened failure report",
+  async (kind) => {
+    const pem = `-----BEGIN PRIVATE KEY-----\n${"A".repeat(360)}${kind === "complete" ? "\n-----END PRIVATE KEY-----" : ""}`;
+    const prompt = await copyPrompt(
+      mount(failedRun({ steps: [makeStep("database-schema-preflight", "failed", pem)] })),
+    );
+    expect(prompt).toContain("[redacted private key]");
+    expect(prompt).not.toContain("A".repeat(40));
+  },
+);
+
+it("offers the repair prompt only for actionable failed reports", () => {
+  const copyButton = (patch: Partial<Run>, serving?: UpdateRunServingIdentity) =>
+    mount(patch, serving).find(".update-run-view__copy-prompt");
+  expect(copyButton({ phase: "finished", status: "succeeded" })).toBeNull();
+  expect(copyButton(failedRun())).not.toBeNull();
+  expect(
+    copyButton(failedRun({ target: { kind: "package", installationMethod: "ocm" } })),
+  ).toBeNull();
+  expect(
+    copyButton(
+      failedRun({
+        reason: "abandoned",
+        steps: [makeStep("reconcile:acknowledged")],
+      }),
+    ),
+  ).toBeNull();
+  const recorded = failedRun({
+    verification: { serviceRunning: true, runningVersion: "2026.9.1" },
+  });
+  expect(copyButton(recorded, { version: "2026.9.1" })).not.toBeNull();
+  // The Gateway has moved past this failure, so it is history without actions.
+  expect(copyButton(recorded, { version: "2026.10.1" })).toBeNull();
+});
+
+it("keeps copy feedback through an identical-revision refresh and clears it for a newer revision", async () => {
+  let finishCopy: ((copied: boolean) => void) | undefined;
+  vi.mocked(copyToClipboard).mockImplementationOnce(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finishCopy = resolve;
+      }),
+  );
+  const view = mount(failedRun());
+  await copyPrompt(view);
+  view.setRecord((record) => ({ ...record }));
+  flush();
+  finishCopy?.(true);
+  await vi.waitFor(() =>
+    expect(view.text(".update-run-view__prompt-action [role=status]")).toBe("Prompt copied"),
+  );
+  view.setRecord((record) => ({ ...record, updatedAtMs: record.updatedAtMs + 1 }));
+  flush();
+  expect(view.text(".update-run-view__prompt-action [role=status]")).toBe("");
 });

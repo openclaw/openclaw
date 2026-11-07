@@ -38,6 +38,13 @@ If the Gateway or agent is
 unavailable, use `openclaw triage` on the Gateway host. Automatic diagnosis keeps
 your unsent composer draft, including when its conversation session must restart.
 
+A failed Gateway-managed update report also offers **Copy agent prompt**. It
+copies a bounded, redacted report and asks a coding agent to check whether the
+updater is defective, preserve the live installation, and open a source pull
+request for a verified fix. Copying never retries the update. Reports the
+Gateway has moved past, acknowledged abandoned attempts, and OCM-managed
+installations do not offer it.
+
 **Control UI → Settings → Updates** keeps the latest recorded attempt visible,
 including its time, before/after identities, reason code, failing step, and
 bounded diagnostic detail. A version or revision verification failure stays

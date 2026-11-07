@@ -114,6 +114,7 @@ export function projectUpdateRun(
     report,
     terminal,
     reconciled: isAcknowledgedAbandonedUpdateRun(run),
+    historical: historical !== null,
     headline:
       !connected &&
       !terminal &&
