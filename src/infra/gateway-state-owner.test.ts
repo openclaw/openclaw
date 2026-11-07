@@ -635,12 +635,18 @@ describe("Gateway state ownership", () => {
             expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
               StateDatabaseOfflineMaintenanceError,
             );
+            expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
+              "ownerKind=process",
+            );
             fs.writeFileSync(
               pathname,
               JSON.stringify({ ...record, role, stateOwnerKind: "schema" }),
             );
             expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
               StateDatabaseAdmissionPendingError,
+            );
+            expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
+              "ownerKind=schema",
             );
             fs.writeFileSync(pathname, raw);
           } else {

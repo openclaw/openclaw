@@ -1294,6 +1294,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       logs: [`flush-start-${"x".repeat(128 * 1024)}-flush-end`],
     },
   ];
+  it("records the actual command process identity in its diagnostic log", async () => {
+    const result = await captureCommand("process.stdout.write(String(process.pid));", 64);
+    expect(result.log).toContain(`start pid=${result.stdout} command=`);
+  });
+
   it.each(commandOutputCases)("captures command output: $name", async (testCase) => {
     const result = await captureCommand(testCase.script, testCase.budget);
     for (const stream of ["stdout", "stderr"] as const) {

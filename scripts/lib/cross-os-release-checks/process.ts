@@ -429,7 +429,9 @@ export async function runCommandInvocation(
         : null;
     heartbeatTimer?.unref?.();
 
-    logStream.write(`${new Date().toISOString()} start command=${commandLabel}\n`);
+    logStream.write(
+      `${new Date().toISOString()} start pid=${child.pid ?? "unavailable"} command=${commandLabel}\n`,
+    );
 
     child.stdout?.on("data", (chunk) => {
       stdout = appendBoundedCommandOutput(
