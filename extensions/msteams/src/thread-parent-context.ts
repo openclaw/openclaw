@@ -34,7 +34,7 @@ export async function fetchParentMessageCached(
 ): Promise<GraphThreadMessage | undefined> {
   const key = JSON.stringify([sha256Hex(token), groupId, channelId, parentId]);
   const cached = parentCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
+  if (cached && cached.expiresAt > performance.now()) {
     parentCache.delete(key);
     parentCache.set(key, cached);
     return cached.message;
@@ -43,7 +43,8 @@ export async function fetchParentMessageCached(
   touchLru(
     parentCache,
     key,
-    { message, expiresAt: Date.now() + PARENT_CACHE_TTL_MS },
+    // A wall-clock step must not extend or cut short the cached parent message.
+    { message, expiresAt: performance.now() + PARENT_CACHE_TTL_MS },
     PARENT_CACHE_MAX,
   );
   return message;

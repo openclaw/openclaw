@@ -125,6 +125,19 @@ describe("fetchParentMessageCached", () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
+  it("expires cached parents on elapsed time when the wall clock steps backwards", async () => {
+    vi.useFakeTimers();
+    const fetcher = fetchChannelMessage.mockResolvedValue(message("hi"));
+
+    await parentContext.fetchParentMessageCached("tok", "g1", "c1", "p1");
+    // A backwards wall-clock step must not keep the parent past its TTL.
+    vi.setSystemTime(Date.now() - 60 * 60 * 1000);
+    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+    await parentContext.fetchParentMessageCached("tok", "g1", "c1", "p1");
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("evicts oldest entries when exceeding the 100-entry cap", async () => {
     const fetcher = fetchChannelMessage.mockImplementation(async (_tok, _g, _c, parentId) => ({
       id: parentId,
