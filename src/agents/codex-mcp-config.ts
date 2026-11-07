@@ -9,7 +9,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
-import { loadMcpToolGrants, type McpToolGrant } from "../infra/exec-approvals-mcp.js";
+import type { McpToolGrant } from "../infra/exec-approvals-mcp.js";
 import { loadEnabledBundleMcpConfig } from "../plugins/bundle-mcp.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import { isRecord } from "../utils.js";
@@ -290,23 +290,22 @@ export async function loadCodexBundleMcpThreadConfigCore(
       "Native fork preparation cannot provision plugin data directories. Complete plugin setup before retrying.",
     );
   }
+  // Enabled configured servers reach Codex through the user-server projection
+  // and win a name collision there, as in the merged surface above. Sending the
+  // bundled copy too makes Codex merge both into one invalid entry (#194825).
+  const bundleOnlyConfig = {
+    mcpServers: Object.fromEntries(
+      Object.entries(effectiveConfig.mcpServers).filter(
+        ([name]) => !Object.hasOwn(enabledConfiguredMcp, name),
+      ),
+    ),
+  };
   const preparedDataDirs = await prepareOwnedBundleMcpDataDirs({
-    config: effectiveConfig,
+    config: bundleOnlyConfig,
     prepareDataDirsByServer: bundleMcp.prepareDataDirsByServer ?? {},
   });
   const diagnostics = [...bundleMcp.diagnostics, ...preparedDataDirs.diagnostics];
-  const grants = params.agentId ? await loadMcpToolGrants(params.agentId) : [];
-  const configuredGrants = grants.filter((grant) => {
-    const server = Object.hasOwn(configuredMcp, grant.server)
-      ? configuredMcp[grant.server]
-      : undefined;
-    if (!server) {
-      return false;
-    }
-    const mode = resolveProjectedMcpCodexToolApprovalMode(grant.server, server);
-    return mode === undefined || mode === "auto";
-  });
-  const mcpServers = buildCodexMcpServersConfig(preparedDataDirs.config, configuredGrants);
+  const mcpServers = buildCodexMcpServersConfig(preparedDataDirs.config);
   const hasServers = Object.keys(mcpServers).length > 0;
   return {
     ...(hasServers ? { configPatch: { mcp_servers: mcpServers } } : {}),
