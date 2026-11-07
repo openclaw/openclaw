@@ -7,6 +7,7 @@ import {
   findUnindexedActiveTranscriptEntry,
   iterateUnindexedActiveTranscriptNavigation,
 } from "../../config/sessions/session-accessor.sqlite-history-navigation.js";
+import { readSessionTranscriptModelContext } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { CurrentTranscriptProjection } from "../../config/sessions/session-accessor.sqlite-projection-read.js";
 import { canRebasePreparedAssistantInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-parent.js";
 import {
@@ -329,6 +330,38 @@ for (const engine of ["sqlite", "postgres"] as const) {
               .run(fixture.scope.sessionId);
           });
           expect(find("missing")).toBeUndefined();
+        }));
+
+      it("reads model context containing unmatched surrogate escapes", () =>
+        withEngineStoreAdmission(() => {
+          const lone = "a\ud800b";
+          const fixture = transcriptFixture("lone-surrogate", [
+            message("root", null, { role: "user", content: lone }),
+            message("tool", "root", {
+              role: "toolResult",
+              toolName: "read",
+              toolCallId: "call",
+              content: [{ type: "text", text: lone + "x".repeat(2000) }],
+              details: { private: true },
+            }),
+            message("tail", "tool", { role: "user", content: "later" }),
+          ]);
+          const context = readSessionTranscriptModelContext(fixture.scope);
+          expect(context.events.map((event) => event.id)).toEqual(["root", "tool", "tail"]);
+          const [root, tool] = context.events;
+          expect(root).toMatchObject({ message: { content: lone } });
+          expect(tool).toMatchObject({ message: { content: [{ text: lone + "x".repeat(2000) }] } });
+          expect(tool).not.toHaveProperty("message.details");
+          // Bounded reads size each row, then replace the oversized result body.
+          const bounded = readSessionTranscriptModelContext(fixture.scope, undefined, {
+            maxBytes: 1500,
+            maxEvents: 10,
+            toolResultOverflow: "omit",
+          });
+          expect(bounded.events.map((event) => event.id)).toEqual(["root", "tool", "tail"]);
+          expect(bounded.events[1]).toMatchObject({
+            message: { content: [{ text: expect.stringContaining("Tool result body omitted") }] },
+          });
         }));
 
       it("advances mutation time beyond both prior mutation and observation with nullable fields", () =>
