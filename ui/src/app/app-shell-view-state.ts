@@ -60,6 +60,7 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly desktopNavigationExpanded: boolean;
   readonly nativeHistoryState: () => NativeHistoryState;
   readonly navDrawerOpen: boolean;
+  readonly initialConnectionPending: boolean;
   readonly shellLayout: ShellLayoutOwner;
   readonly navigationSidebar: HTMLElement;
   readonly onboardingMode: boolean;
@@ -142,12 +143,7 @@ export function readShellView(host: ShellViewHost) {
   // Onboarding renders without any navigation chrome, so the settings takeover
   // must not reserve its sidebar column (the grid would stay off-center).
   const nativeEmbed = isNativeEmbedHost();
-  const initialGatewayConnection =
-    !nativeEmbed &&
-    !runtime.warmBoot &&
-    !presentationScope.readyOnce &&
-    !gatewayConnected &&
-    host.routeState.routeId === undefined;
+  const initialGatewayConnection = host.initialConnectionPending;
   const embedSettingsRoot = nativeEmbed && activeRoute === "settings";
   const embedSettings =
     nativeEmbed &&

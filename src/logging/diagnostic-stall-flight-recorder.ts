@@ -18,18 +18,19 @@ const WINDOW_MS = 5_000;
 
 /** Two short native profiles retain recent stacks without a listener or on-demand heap scan. */
 export function createStallFlightRecorder(warn: (message: string) => void) {
-  let kernel: ReturnType<typeof createStallKernelRecorder>;
+  const packageRoot = isMainThread
+    ? resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url })
+    : null;
+  const kernel = createStallKernelRecorder(warn, packageRoot);
   let active: v8.SyncCPUProfileHandle | undefined;
   let previous: StallProfileWindow | undefined;
   let startedAt = 0;
   let disabled = !isMainThread || Boolean(versions.bun) || Number(versions.node.split(".")[0]) < 26;
-  let packageRoot: string | null = null;
   const captureSymbol = Symbol.for("openclaw.stallFlightRecorder.capture");
-  const stop = () => {
+  const stopProfile = () => {
     if (Object.getOwnPropertyDescriptor(globalThis, captureSymbol)?.value === capture) {
       Reflect.deleteProperty(globalThis, captureSymbol);
     }
-    kernel?.stop();
     disabled = true;
     previous = undefined;
     const handle = active;
@@ -66,13 +67,11 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
         Boolean(process.getBuiltinModule("trace_events")?.getEnabledCategories());
     }
     if (!disabled) {
-      packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
       active = start();
       startedAt = performance.now();
       // Inspector interrupts can obtain the bounded native snapshot while ordinary JS is stuck.
       // Parsing and output stay in the observer; no inspector listener is opened.
       Object.defineProperty(globalThis, captureSymbol, { configurable: true, value: capture });
-      kernel = createStallKernelRecorder(warn, packageRoot);
     }
   } catch {
     disabled = true;
@@ -91,11 +90,14 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
         }
         return formatStallProfile(snapshot.windows, stall, packageRoot, kernelSummary);
       } catch {
-        stop();
+        stopProfile();
         warn("stall flight recorder unavailable: profiler-capture-failed");
         return undefined;
       }
     },
-    stop,
+    stop() {
+      kernel?.stop();
+      stopProfile();
+    },
   };
 }
