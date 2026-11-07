@@ -3228,6 +3228,8 @@ does not narrow that engine's backup scope.
 
 After readiness and restart recovery, the Gateway's idle maintenance scheduler
 backfills historical SQLite facts in its existing agent database worker. It
+waits for the existing startup-methods barrier to admit recovered inputs, then
+for the RestartRecovery lane to empty before each batch. It
 prioritizes sessions updated within seven days, largest active path first, then
 older sessions by size, and finishes each session before advancing. Background
 writer admission waits for the foreground FIFO to drain; active runs and other

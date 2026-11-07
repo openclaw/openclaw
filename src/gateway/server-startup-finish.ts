@@ -638,6 +638,7 @@ export async function finishGatewayStartup(params: {
       isClosing: () => lifecycle.closePreludeStarted,
       waitForPostReadyWork: params.waitForPostReadyWork,
       startupMaintenance: runtime,
+      startupMethodsReady: kernel.startupMethodsReady,
       startMaintenance: () =>
         earlyRuntime.startMaintenance(activeWorkInspectors, resolvePluginGatewayContext),
       applyMaintenance: async (maintenance) => {

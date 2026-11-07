@@ -30,6 +30,7 @@ export function scheduleGatewaySessionFactsBackfill(params: {
   databases: readonly PreparedStartupSessionDatabase[];
   scheduler: GatewayScheduler;
   signal: AbortSignal;
+  waitForReady?: () => Promise<void>;
   log: SessionStartupMigrationLogger;
 }): void {
   for (const { database, assertCurrent } of params.databases) {
@@ -42,6 +43,7 @@ export function scheduleGatewaySessionFactsBackfill(params: {
       delayMs: 250,
       repeatDelayMs: () => delayMs,
       retryDelayMs: 1_000,
+      waitForReady: params.waitForReady,
       isClosing: () => complete || params.signal.aborted,
       isBusy: () => getQueueSize(CommandLane.RestartRecovery) > 0,
       log: params.log,
