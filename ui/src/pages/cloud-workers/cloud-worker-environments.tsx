@@ -78,9 +78,11 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   const [view, setView] = createStore<{
     result: SnapshotsResult | null;
     inventory: EnvironmentsListResult | null;
+    initialInventorySettled: boolean;
   }>({
     result: null,
     inventory: null,
+    initialInventorySettled: false,
   });
   const [loadRequest, setLoadRequest] = createSignal<{ promise: Promise<void> }>();
   const readPending = createMemo<boolean>(() => loadRequest()?.promise.then(() => false) ?? false, {
@@ -233,6 +235,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
           return;
         }
         setView((draft) => {
+          draft.initialInventorySettled = true;
           draft.inventory = {
             ...inventory,
             environments: inventory.environments.filter(
@@ -264,6 +267,9 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
         }
       } catch (error) {
         if (gateway.isCurrent(scope)) {
+          setView((draft) => {
+            draft.initialInventorySettled = true;
+          });
           throw error;
         }
       } finally {
@@ -324,11 +330,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       });
       if (gateway.isCurrent(scope)) {
         setNotice(
-          i18n.t(
-            result.reused
-              ? "cloudWorkersPage.snapshots.buildReused"
-              : "cloudWorkersPage.snapshots.buildStarted",
-          ),
+          i18n.t(`cloudWorkersPage.snapshots.${result.reused ? "buildReused" : "buildStarted"}`),
         );
         await load();
       }
@@ -568,12 +570,10 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   const current = createMemo(
     () => environments().find((environment) => environment.key === selected()) ?? environments()[0],
   );
-  // Reveal both sections together so loading copy cannot move the Advanced controls.
-  const initialPending = () =>
-    canCall("environments.list") && !view.inventory && (!loadRequest() || loading());
+  // First-load readiness survives credential changes; scoped inventory still clears.
   return (
     <Show
-      when={!initialPending()}
+      when={!canCall("environments.list") || view.initialInventorySettled}
       fallback={<SettingsPage children={<SettingsEmpty message={t("common.loading")} />} />}
     >
       <SettingsPage>

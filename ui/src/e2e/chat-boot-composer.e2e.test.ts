@@ -230,13 +230,16 @@ suite.define(() => {
       await missing.waitFor({ state: "visible" });
       const retained = page.locator("#openclaw-boot-composer");
       await retained.waitFor({ state: "visible" });
-      expect(
-        await retained.evaluate((element) => {
-          const frame = element.closest(".lazy-view-state--route")!.getBoundingClientRect();
-          const outlet = element.closest("openclaw-router-outlet")!.getBoundingClientRect();
-          return Math.abs(frame.width - outlet.width) < 1;
-        }),
-      ).toBe(true);
+      const [frameWidth, contentWidth] = await retained.evaluate((element) => {
+        const frame = element.closest(".lazy-view-state--route")!.getBoundingClientRect();
+        const content = element.closest<HTMLElement>(".content--chat")!;
+        const style = getComputedStyle(content);
+        return [
+          frame.width,
+          content.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+        ];
+      });
+      expect(frameWidth).toBeCloseTo(contentWidth, 0);
       expect(await original?.evaluate((element) => element.isConnected)).toBe(true);
       expect(await retained.inputValue()).toBe("Send this only if the session opens");
       // A resolved route must not leave a loading animation intercepting the editor.

@@ -1,2 +1,2 @@
-# Preserve catalog-only palette identity and initial Cloud Workers inventory/error readiness.
-68
+# Preserve settings readiness, credential-switch controls, and reliable restart proof.
+93

@@ -216,7 +216,14 @@ describe("Cloud environments", () => {
   });
 
   it("retains loaded environments and pool/policy drafts through a blip, but retires them for another client", async () => {
-    const { page, request, harness, client } = mountTestPage(methods);
+    const replacement = createDeferred<unknown>();
+    let replacing = false;
+    const { page, request, harness, client } = mountTestPage(methods, {
+      response: (method, params) =>
+        replacing && method === "environments.list" && params?.includePreparedDetails
+          ? replacement.promise
+          : undefined,
+    });
     await waitForSolid(() => expect(input(page, "Refresh after").disabled).toBe(false));
     await waitText(() => page, "github.com/acme/app");
     change(input(page, "Pool limit"), "7");
@@ -233,7 +240,17 @@ describe("Cloud environments", () => {
     await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
     expect(input(page, "Pool limit").value).toBe("7");
     expect(input(page, "Refresh after").value).toBe("6h");
+    const advanced = expectDefined(page.querySelector("details"), "Advanced disclosure");
+    advanced.open = true;
+    replacing = true;
     harness.publish(true, { request } as unknown as GatewayBrowserClient, hello);
+    try {
+      await waitForSolid(() => expect(page.textContent).not.toContain("github.com/acme/app"));
+      expect(advanced.isConnected).toBe(true);
+      expect(advanced.open).toBe(true);
+    } finally {
+      replacement.resolve({ environments: [], profiles: [] });
+    }
     await waitForSolid(() => expect(input(page, "Pool limit").value).not.toBe("7"));
     expect(input(page, "Refresh after").value).toBe("24h");
   });
