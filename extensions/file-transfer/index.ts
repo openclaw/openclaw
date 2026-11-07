@@ -41,6 +41,11 @@ const loadWorkspaceCommandModule = createSharedImport(
   () => import("./src/node-host/workspace-memory.js"),
 );
 
+async function prepareWorkspaceCommands(): Promise<void> {
+  // Source compilation must finish before a live request starts its progress deadline.
+  await loadWorkspaceCommandModule();
+}
+
 const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "file.stat",
@@ -121,6 +126,7 @@ export default definePluginEntry({
     for (const kind of ["memory", "skills"] as const) {
       api.registerNodeHostCommand({
         command: `workspace.${kind}`,
+        prepare: prepareWorkspaceCommands,
         hasActiveWork: () => false,
         cap: "file",
         dangerous: true,

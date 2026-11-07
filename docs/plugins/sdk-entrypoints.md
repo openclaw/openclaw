@@ -287,6 +287,10 @@ Each attempt opens a new channel to the same configured node and rechecks curren
 authorization. Permission denials and cancellation remain failures; subscriptions
 and mutations are not replayed by this read retry.
 
+The node prepares both workspace command handlers before advertising availability.
+In source checkouts, this keeps initial module compilation outside the live request's
+progress deadline.
+
 The Skills worker also runs install and ClawHub operations. Install/remove use
 an authenticated adapter's duplex channel so Gateway policy and mutation checks
 run before the native filesystem operation. The adapter admits source roots and
