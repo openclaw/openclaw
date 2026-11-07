@@ -183,21 +183,17 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     if (!runtime.isConnected) {
       runtime.start();
     }
-    const initiallyHidden = document.visibilityState === "hidden";
-    const [mounted, setMounted] = createSignal(initiallyHidden);
-    mountScheduled = !initiallyHidden;
+    mountScheduled = !document.hidden;
+    const [mounted, setMounted] = createSignal(!mountScheduled);
     if (mountScheduled) {
       void waitForCommit();
+      onSettled(() => {
+        // Hydrate before constructing the complete pane, keeping cached rows and
+        // Details together in the next frame of the existing loading surface.
+        scheduleLayout(setMounted, () => () => setMounted(true));
+        return () => cancelLayout(setMounted);
+      });
     }
-    onSettled(() => {
-      if (initiallyHidden) {
-        return undefined;
-      }
-      // Hydrate before constructing the complete pane, keeping cached rows and
-      // Details together in the next frame of the existing loading surface.
-      scheduleLayout(setMounted, () => () => setMounted(true));
-      return () => cancelLayout(setMounted);
-    });
     return (
       <Show when={mounted()} fallback={<LoadingState route composer={runtime.ownsRouteComposer} />}>
         <MountedPane />

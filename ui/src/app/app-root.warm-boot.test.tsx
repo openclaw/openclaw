@@ -13,7 +13,6 @@ import type { TerminalInputs } from "../components/terminal/terminal-panel-sessi
 import { i18n } from "../i18n/index.ts";
 import { storeDeviceAuthToken } from "../lib/nodes/index.ts";
 import { loadChatRoute, type ChatRouteData } from "../pages/chat/route-loader.ts";
-import { createFrameClock } from "../test-helpers/animation-frame-clock.ts";
 import { requestApplicationContext } from "../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
@@ -69,12 +68,8 @@ let runtime: ApplicationRuntime | undefined;
 let dispose: (() => void) | undefined;
 let host: HTMLElement | undefined;
 let previousUrl: string;
-let frames: ReturnType<typeof createFrameClock>;
 
 beforeEach(async () => {
-  frames = createFrameClock();
-  vi.stubGlobal("requestAnimationFrame", frames.request);
-  vi.stubGlobal("cancelAnimationFrame", frames.cancel);
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
   persistSessionToken(loadSettings().gatewayUrl, "test-token");
@@ -106,7 +101,6 @@ async function settleRootContent(): Promise<void> {
 
 async function settleImports() {
   await vi.dynamicImportSettled();
-  frames.flush(performance.now());
   await settleRootContent();
 }
 
