@@ -1,4 +1,5 @@
 import { format } from "node:util";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -51,6 +52,7 @@ import { resolveMatrixMonitorConfig } from "./config.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
+import { createMatrixInboundDebouncer } from "./inbound-debounce.js";
 import { createMatrixIngressMonitor } from "./ingress.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
@@ -225,6 +227,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let disposeMonitorEvents = () => {};
   let disposeSyncIngress = () => {};
   let ingress: ReturnType<typeof createMatrixIngressMonitor> | undefined;
+  let inboundDebouncer: ReturnType<typeof createMatrixInboundDebouncer> | undefined;
   let fatalError: Error | null = null;
   let resolveFatalWait: (() => void) | null = null;
   let rejectFatalWait: ((error: Error) => void) | null = null;
@@ -352,6 +355,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     closeTaskAdmission: () => {
       monitorSetupClosed = true;
       monitorTaskRunner.close();
+      inboundDebouncer?.close();
     },
     detachListeners: () => {
       disposeAutoJoin();
@@ -365,7 +369,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       client?.off("sync.unexpected_error", onUnexpectedSyncError);
     },
     waitForTasks: async () => {
-      await ingress?.stop();
+      await Promise.all([ingress?.stop(), inboundDebouncer?.stop()]);
       await monitorTaskRunner.waitForIdle();
     },
     cleanup: () => threadBindingManager?.stop(),
@@ -525,12 +529,37 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       runDetachedTask: monitorTaskRunner.runDetachedTask,
     });
 
+    const debouncer = createMatrixInboundDebouncer({
+      // Not the monitor's resolved cfg copy: that one is pinned to startup values.
+      // SAFETY: same runtime config the monitor narrows to CoreConfig at startup.
+      readConfig: () => core.config.current() as CoreConfig,
+      selfUserId: auth.userId,
+      dispatch: (roomId, event, lifecycle) =>
+        monitorTaskRunner.runTask(() => handleRoomMessage(roomId, event, lifecycle)),
+      logVerboseMessage,
+      // The route (and so the agent) is resolved later in the handler; every agent's
+      // patterns are a superset, and over-detection only dispatches a message alone.
+      resolveCommandPrefixInputs: async (roomId, event) => ({
+        displayName: event.content.formatted_body
+          ? await getMemberDisplayName(roomId, auth.userId).catch(() => undefined)
+          : undefined,
+        mentionRegexes: listAgentIds(core.config.current()).flatMap((agentId) =>
+          // Same cfg the handler passes when it strips the prefix.
+          core.channel.mentions.buildMentionRegexes(cfg, agentId, {
+            provider: "matrix",
+            conversationId: roomId,
+            providerPolicy: accountConfig?.mentionPatterns,
+          }),
+        ),
+      }),
+      onError: (error) => logger.warn("matrix inbound debounce failed", { error: String(error) }),
+    });
+    inboundDebouncer = debouncer;
     ingress = createMatrixIngressMonitor({
       accountId: effectiveAccountId,
       client,
       startupMs,
-      dispatch: (roomId, event, lifecycle) =>
-        monitorTaskRunner.runTask(() => handleRoomMessage(roomId, event, lifecycle)),
+      dispatch: (roomId, event, lifecycle) => debouncer.enqueue(roomId, event, lifecycle),
       onError: (error) => logger.warn("matrix ingress failed", { error: String(error) }),
     });
     disposeSyncIngress = await client.bindSyncIngress(ingress.admitSync);
