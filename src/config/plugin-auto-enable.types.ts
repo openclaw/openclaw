@@ -1,4 +1,4 @@
-import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.types.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.types.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -58,3 +58,11 @@ export type PluginAutoEnableDiscoveryCache = WeakMap<object, PluginAutoEnableCac
 type PluginAutoEnableRegistryCache = WeakMap<object, PluginAutoEnableDiscoveryCache>;
 type PluginAutoEnableEnvCache = WeakMap<object, PluginAutoEnableRegistryCache>;
 export type PluginAutoEnableConfigCache = WeakMap<object, PluginAutoEnableEnvCache>;
+
+/** The plugin runtime owner supplies generation identities; config policy never discovers them. */
+export type PluginAutoEnableRuntimePreparation = {
+  capturedConfig: OpenClawConfig;
+  cache: PluginAutoEnableConfigCache;
+  metadataKey: object;
+  envKey: object;
+};

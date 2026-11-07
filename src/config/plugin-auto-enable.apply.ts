@@ -1,13 +1,7 @@
-import {
-  getCurrentPluginMetadataSnapshot,
-  isCurrentPluginMetadataSnapshotRuntimeGeneration,
-} from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginSetupPreparation } from "../plugins/plugin-setup-module.js";
-import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
-import { getPublishedConfigRuntimeEnvState } from "./config-env-vars.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";
 import { materializePluginAutoEnableCandidatesInternal } from "./plugin-auto-enable.materialize.js";
 import {
@@ -19,8 +13,8 @@ import type {
   PluginAutoEnableConfigCache,
   PluginAutoEnableDiscoveryCache,
   PluginAutoEnableResult,
+  PluginAutoEnableRuntimePreparation,
 } from "./plugin-auto-enable.types.js";
-import { getRuntimeConfigSnapshot } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 let sameTurnApplyCache: PluginAutoEnableConfigCache | undefined;
@@ -88,37 +82,23 @@ export function materializePluginAutoEnableCandidates(params: {
 }
 
 export function applyPluginAutoEnable(
-  params: Parameters<typeof detectPluginAutoEnableCandidates>[0],
+  params: Parameters<typeof detectPluginAutoEnableCandidates>[0] & {
+    runtimePreparation?: PluginAutoEnableRuntimePreparation;
+  },
 ): PluginAutoEnableResult {
   const config = params.config;
   const ambientEnvTriggers = params.ambientEnvTriggers ?? "allow";
   const env = params.env ?? process.env;
-  const capturedConfig =
-    config && config === getRuntimeConfigSnapshot()
-      ? getRuntimeConfigSnapshot({ capture: true })!
-      : config && isDeeplyFrozenPlainData(config)
-        ? config
-        : undefined;
-  const snapshot = capturedConfig
-    ? getCurrentPluginMetadataSnapshot({ config, env, allowWorkspaceScopedSnapshot: true })
-    : undefined;
-  const runtimeCache =
-    snapshot &&
-    isCurrentPluginMetadataSnapshotRuntimeGeneration(snapshot) &&
-    params.manifestRegistry === snapshot.manifestRegistry &&
-    (!params.discovery || params.discovery === snapshot.discovery) &&
-    (env === process.env || isDeeplyFrozenPlainData(env))
-      ? getPluginMetadataSnapshotCache(snapshot).metadata.autoEnable
-      : undefined;
-  const discoveryKey = runtimeCache ? snapshot : params.discovery;
+  const runtime = params.runtimePreparation;
+  const capturedConfig = runtime?.capturedConfig;
+  const discoveryKey = runtime?.metadataKey ?? params.discovery;
   let discoveryCache: PluginAutoEnableDiscoveryCache | undefined;
   if (config && params.manifestRegistry && discoveryKey) {
     const envCache = getOrCreateWeakMap(
-      runtimeCache ?? (sameTurnApplyCache ??= new WeakMap()),
+      runtime?.cache ?? (sameTurnApplyCache ??= new WeakMap()),
       config,
     );
-    const envKey = runtimeCache && env === process.env ? getPublishedConfigRuntimeEnvState() : env;
-    const registryCache = getOrCreateWeakMap(envCache, envKey);
+    const registryCache = getOrCreateWeakMap(envCache, runtime?.envKey ?? env);
     discoveryCache = getOrCreateWeakMap(registryCache, params.manifestRegistry);
     const cached = discoveryCache.get(discoveryKey);
     if (
@@ -132,7 +112,7 @@ export function applyPluginAutoEnable(
     }
   }
 
-  const preparationConfig = runtimeCache ? capturedConfig : config;
+  const preparationConfig = capturedConfig ?? config;
   const candidates = detectPluginAutoEnableCandidates({ ...params, config: preparationConfig });
   const result = materializePluginAutoEnableCandidates({
     config: preparationConfig,
@@ -140,7 +120,7 @@ export function applyPluginAutoEnable(
     env: params.env,
     manifestRegistry: params.manifestRegistry,
   });
-  if (runtimeCache) {
+  if (runtime) {
     // Preserve the no-rewrite identity without freezing the mutable publication.
     // Rewritten captures reuse config-state's existing immutable policy projection.
     if (result.config === capturedConfig) {
@@ -157,7 +137,7 @@ export function applyPluginAutoEnable(
       ambientEnvTriggers,
       result,
     });
-    if (!runtimeCache) {
+    if (!runtime) {
       scheduleSameTurnApplyCacheClear();
     }
   }
