@@ -283,84 +283,100 @@ export async function restoreColdLoadWarmState(
   page: Page,
   storage: Awaited<ReturnType<typeof persistColdLoadWarmState>>["storage"],
   leavingStorage?: typeof storage,
+  preserveSurface = false,
 ) {
-  const url = page.url();
-  const resetUrl = new URL("/__control-ui-bench-warm-reset__", url).href;
-  await page.route(resetUrl, (route) => route.fulfill({ body: "", contentType: "text/html" }));
-  // Unload pagehide writers first; Playwright setStorageState would also clear the HTTP cache.
-  await page.mainFrame().goto(resetUrl);
-  await page.unroute(resetUrl);
-  if (leavingStorage) {
-    // Priming captures the leaving variant's native exit writes; repeats keep frozen inputs.
-    const exit = await page.evaluate(() => ({
-      local: Object.entries(localStorage),
-      session: Object.entries(sessionStorage),
-    }));
-    leavingStorage.local = exit.local;
-    leavingStorage.session = exit.session;
+  const cdp = preserveSurface ? await page.context().newCDPSession(page) : undefined;
+  if (cdp) {
+    // Drain exit writers before replacing frozen inputs, retaining the real old-page DOM.
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
+    await cdp.send("Page.setWebLifecycleState", { state: "frozen" });
   }
-  await page.evaluate(
-    async ({ storage: saved, url: deepLink }) => {
-      const savedRecords: typeof storage.records = JSON.parse(saved.records);
-      for (const thumbnail of saved.thumbnails) {
-        const record = savedRecords.snapshots.find(
-          (row) => row.sessionKey === thumbnail.sessionKey,
-        );
-        const image =
-          record?.snapshot.rowDisplay?.[thumbnail.messageId]?.images?.[thumbnail.imageKey];
-        if (!image) {
-          throw new Error("Warm thumbnail lost its owning snapshot row");
-        }
-        const bytes = Uint8Array.from(atob(thumbnail.base64), (character) =>
-          character.charCodeAt(0),
-        );
-        image.thumbnail = new Blob([bytes], { type: thumbnail.mime });
-      }
-      const databases: Record<string, Record<string, unknown[]>> = {
-        "openclaw-chat-snapshots": savedRecords,
-      };
-      if ((await indexedDB.databases()).some(({ name }) => name === "openclaw-control-ui")) {
-        databases["openclaw-control-ui"] = { composerDrafts: [] };
-      }
-      for (const [name, records] of Object.entries(databases)) {
-        const database = await new Promise<IDBDatabase>((resolve, reject) => {
-          const request = indexedDB.open(name);
-          request.addEventListener("success", () => resolve(request.result));
-          request.addEventListener("error", () =>
-            reject(request.error ?? new Error("Snapshot request failed")),
+  try {
+    const url = page.url();
+    const resetUrl = new URL("/__control-ui-bench-warm-reset__", url).href;
+    if (!cdp) {
+      await page.route(resetUrl, (route) => route.fulfill({ body: "", contentType: "text/html" }));
+      // Unload pagehide writers first; Playwright setStorageState would also clear the HTTP cache.
+      await page.mainFrame().goto(resetUrl);
+      await page.unroute(resetUrl);
+    }
+    if (leavingStorage) {
+      // Priming captures the leaving variant's native exit writes; repeats keep frozen inputs.
+      const exit = await page.evaluate(() => ({
+        local: Object.entries(localStorage),
+        session: Object.entries(sessionStorage),
+      }));
+      leavingStorage.local = exit.local;
+      leavingStorage.session = exit.session;
+    }
+    await page.evaluate(
+      async ({ storage: saved, url: deepLink }) => {
+        const savedRecords: typeof storage.records = JSON.parse(saved.records);
+        for (const thumbnail of saved.thumbnails) {
+          const record = savedRecords.snapshots.find(
+            (row) => row.sessionKey === thumbnail.sessionKey,
           );
-        });
-        try {
-          const transaction = database.transaction(Object.keys(records), "readwrite");
-          const complete = new Promise<void>((resolve, reject) => {
-            transaction.addEventListener("complete", () => resolve());
-            transaction.addEventListener("abort", () =>
-              reject(transaction.error ?? new Error("Snapshot write aborted")),
+          const image =
+            record?.snapshot.rowDisplay?.[thumbnail.messageId]?.images?.[thumbnail.imageKey];
+          if (!image) {
+            throw new Error("Warm thumbnail lost its owning snapshot row");
+          }
+          const bytes = Uint8Array.from(atob(thumbnail.base64), (character) =>
+            character.charCodeAt(0),
+          );
+          image.thumbnail = new Blob([bytes], { type: thumbnail.mime });
+        }
+        const databases: Record<string, Record<string, unknown[]>> = {
+          "openclaw-chat-snapshots": savedRecords,
+        };
+        if ((await indexedDB.databases()).some(({ name }) => name === "openclaw-control-ui")) {
+          databases["openclaw-control-ui"] = { composerDrafts: [] };
+        }
+        for (const [name, records] of Object.entries(databases)) {
+          const database = await new Promise<IDBDatabase>((resolve, reject) => {
+            const request = indexedDB.open(name);
+            request.addEventListener("success", () => resolve(request.result));
+            request.addEventListener("error", () =>
+              reject(request.error ?? new Error("Snapshot request failed")),
             );
           });
-          for (const [storeName, rows] of Object.entries(records)) {
-            const store = transaction.objectStore(storeName);
-            store.clear();
-            for (const row of rows) {
-              store.put(row);
+          try {
+            const transaction = database.transaction(Object.keys(records), "readwrite");
+            const complete = new Promise<void>((resolve, reject) => {
+              transaction.addEventListener("complete", () => resolve());
+              transaction.addEventListener("abort", () =>
+                reject(transaction.error ?? new Error("Snapshot write aborted")),
+              );
+            });
+            for (const [storeName, rows] of Object.entries(records)) {
+              const store = transaction.objectStore(storeName);
+              store.clear();
+              for (const row of rows) {
+                store.put(row);
+              }
             }
+            await complete;
+          } finally {
+            database.close();
           }
-          await complete;
-        } finally {
-          database.close();
         }
-      }
-      for (const [target, entries] of [
-        [localStorage, saved.local],
-        [sessionStorage, saved.session],
-      ] as const) {
-        target.clear();
-        for (const [key, value] of entries) {
-          target.setItem(key, value);
+        for (const [target, entries] of [
+          [localStorage, saved.local],
+          [sessionStorage, saved.session],
+        ] as const) {
+          target.clear();
+          for (const [key, value] of entries) {
+            target.setItem(key, value);
+          }
         }
-      }
-      history.replaceState(null, "", deepLink);
-    },
-    { storage: { ...storage, records: JSON.stringify(storage.records) }, url },
-  );
+        history.replaceState(null, "", deepLink);
+      },
+      { storage: { ...storage, records: JSON.stringify(storage.records) }, url },
+    );
+  } finally {
+    if (cdp) {
+      await cdp.send("Page.setWebLifecycleState", { state: "active" });
+      await cdp.detach();
+    }
+  }
 }

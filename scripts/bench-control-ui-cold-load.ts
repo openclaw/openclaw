@@ -133,10 +133,18 @@ import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,
   readGatewayHeapProfile,
 } from "./lib/gateway-bench-profile.ts";
+import { freeProofPort } from "./perf/warm-reload-admission.ts";
 import {
   installWarmReloadBrowserProbe,
+  proofRegions,
   summarizeDetailsGeometry,
 } from "./perf/warm-reload-browser-probe.ts";
+import {
+  launchWarmReloadBrowser,
+  calibrateWarmReloadPaintHolding,
+  startWarmReloadSurfaceCapture,
+} from "./perf/warm-reload-browser.ts";
+import { analyzeReloadFrames } from "./perf/warm-reload-frames.ts";
 import { installWarmReloadTranscriptProbe } from "./perf/warm-reload-transcript-probe.ts";
 type SidebarPresentationSnapshot = ReturnType<ReturnType<typeof sidebarPresentationProbe>["read"]>;
 
@@ -322,6 +330,7 @@ const { values } = parseArgs({
     "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
     "filmstrip-only": { type: "boolean", default: false },
+    "paint-holding": { type: "boolean", default: false },
     "layout-matrix": { type: "boolean", default: false },
     "layout-route": { type: "string", multiple: true, default: [] },
     "layout-cell": { type: "string", multiple: true, default: [] },
@@ -478,6 +487,19 @@ if (
   );
 }
 const captureTrace = traced || values["filmstrip-only"];
+if (
+  values["paint-holding"] &&
+  (!values["warm-reload-perf-probe"] ||
+    !values.untraced ||
+    cpuProfile ||
+    captureTrace ||
+    values.coverage ||
+    values["compare-bundle-dir"].length > 0)
+) {
+  throw new Error(
+    "paint-holding requires one untraced warm-reload-perf-probe bundle without profiling",
+  );
+}
 if (
   values["long-session-trace"] &&
   (!values["long-session"] || !values.untraced || cpuProfile || values["filmstrip-only"])
@@ -1029,6 +1051,12 @@ const chromiumArgs = [
     ? ["--enable-low-end-device-mode", "--js-flags=--max-old-space-size=128"]
     : []),
 ];
+let paintHoldingConfiguration:
+  | Awaited<ReturnType<typeof launchWarmReloadBrowser>>["configuration"]
+  | undefined;
+let paintHoldingCalibration:
+  | Awaited<ReturnType<typeof calibrateWarmReloadPaintHolding>>
+  | undefined;
 let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
@@ -1110,11 +1138,20 @@ try {
     serverBuildId: buildId,
     serverVersion: JSON.parse(await readFile("package.json", "utf8")).version,
   });
-  browser = await chromium.launch({
-    executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
-    headless: true,
-    args: chromiumArgs,
-  });
+  if (values["paint-holding"]) {
+    const launched = await launchWarmReloadBrowser(chromiumArgs);
+    browser = launched.browser;
+    paintHoldingConfiguration = launched.configuration;
+    paintHoldingCalibration = await calibrateWarmReloadPaintHolding(browser, {
+      port: await freeProofPort(),
+      directory: path.join(artifactDir, "paint-holding-calibration"),
+    });
+  } else
+    browser = await chromium.launch({
+      executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+      headless: true,
+      args: chromiumArgs,
+    });
   const context = await browser.newContext({
     viewport,
     isMobile: viewportName === "mobile",
@@ -2302,6 +2339,10 @@ try {
       }
     }
     await restoreColdLoadWarmState(page, warmStorage, warmStates.at(-1));
+    if (values["paint-holding"]) {
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      await settle(bootRoute);
+    }
     if (values["sidebar-presentation-probe"]) {
       for (const [index, storage] of warmStates.entries()) {
         await writeFile(
@@ -2469,7 +2510,12 @@ try {
           ],
         };
       }
-      await restoreColdLoadWarmState(page, reloadStorage!, layoutCell && reloadStorage);
+      await restoreColdLoadWarmState(
+        page,
+        reloadStorage!,
+        layoutCell && reloadStorage,
+        values["paint-holding"],
+      );
       await selectComparisonBundle(bundleIndex, page);
     }
     runTransfer =
@@ -2477,6 +2523,15 @@ try {
         ? "delta"
         : "full";
     const requests: CriticalPathHttpRequest[] = [];
+    if (values["paint-holding"] && !(await page.locator(".chat-virtual-row").first().isVisible())) {
+      throw new Error(
+        "Paint-holding capture requires the complete old application, not the reset document",
+      );
+    }
+    const surfaceDirectory = path.join(artifactDir, `run-${run + 1}.surfaces`);
+    const finishSurfaces = values["paint-holding"]
+      ? await startWarmReloadSurfaceCapture(cdp, surfaceDirectory)
+      : undefined;
     if (firstLoad || values["cold-http-cache"] || values["critical-path"]) {
       await cdp.send("Network.enable");
     }
@@ -3048,6 +3103,32 @@ try {
           };
         })
       : undefined;
+    if (finishSurfaces && warmReloadPerformance) {
+      const probe = await page.evaluate((selectors) => {
+        const probe: NonNullable<ReturnType<typeof installWarmReloadBrowserProbe>> = Reflect.get(
+          window,
+          "__warmReloadProof",
+        );
+        return {
+          regions: Object.entries(selectors).flatMap(([name, selector]) => {
+            const rect = document.querySelector(selector)?.getBoundingClientRect();
+            return rect && rect.width && rect.height
+              ? [{ name, x: rect.x, y: rect.y, width: rect.width, height: rect.height }]
+              : [];
+          }),
+          masks: probe.masks,
+          animationSamples: probe.animationSamples,
+          paints: performance.getEntriesByType("paint").map((entry) => entry.toJSON()),
+          firstDetailsPaintMs: probe.firstDetailsPaintMs,
+        };
+      }, proofRegions);
+      const frames = await finishSurfaces(warmReloadPerformance.timeOrigin);
+      const visual = await analyzeReloadFrames({ frames, ...probe, outputDir: surfaceDirectory });
+      await writeFile(
+        path.join(surfaceDirectory, "capture.json"),
+        JSON.stringify({ ...probe, ...warmReloadPerformance, visual }, null, 2),
+      );
+    }
     const detailsGeometry =
       (values["details-processes"] || values["details-subagent-activity"]) && paneChrome
         ? summarizeDetailsGeometry(paneChrome.detailsFrames)
@@ -3792,6 +3873,8 @@ try {
           ),
         ),
         head,
+        paintHoldingConfiguration,
+        paintHoldingCalibration,
         sidebarRowTransfer: values["sidebar-list-churn"] ? runTransfer : undefined,
         sidebarLists: sidebarReads,
         sidebarWindows:
