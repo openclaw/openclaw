@@ -1,11 +1,16 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelCatalogResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
-import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
-import { catalogDiscoveryError, loadModelProvidersData, type ModelProvidersData } from "./load.ts";
+import { loadModelCatalog, peekModelCatalog } from "../../lib/model-catalog-store.ts";
+import {
+  catalogDiscoveryError,
+  loadModelProvidersData,
+  type ModelProvidersCatalogData,
+  type ModelProvidersData,
+} from "./load.ts";
+import type { ModelProvidersRouteData } from "./route.ts";
 
 export type ModelProviderRefreshReason = "publication" | "replacement" | "forced";
 
@@ -71,7 +76,7 @@ export class ModelProviderCoreLoader {
     private readonly options: {
       onStart: (reason: ModelProviderRefreshReason) => void;
       onComplete: (result: { client: GatewayBrowserClient; data: ModelProvidersData }) => void;
-      onCatalogComplete: (result: ModelCatalogResult) => void;
+      onCatalogComplete: (result: ModelProvidersCatalogData) => void;
     },
   ) {}
 
@@ -95,15 +100,64 @@ export class ModelProviderCoreLoader {
     this.notify();
   }
 
-  async discoverCatalog(
+  discoverCatalog(
     client: GatewayBrowserClient,
     agentId: string,
     isCurrent: () => boolean,
   ): Promise<void> {
+    return this.adoptCatalog(
+      async (signal) => {
+        const result = await loadModelCatalog(client, { agentId, refresh: true, signal });
+        return {
+          providerOutcomes: result.providerOutcomes ?? [],
+          pendingProviders: result.pendingProviders ?? [],
+          catalogRequestFailed: false,
+          catalogError: catalogDiscoveryError(result),
+        };
+      },
+      client,
+      agentId,
+      isCurrent,
+    );
+  }
+
+  async adoptPreloadedCatalog(
+    data: ModelProvidersRouteData,
+    isCurrent: () => boolean,
+  ): Promise<void> {
+    const { client, agentId, catalog } = data;
+    if (!client || !agentId) {
+      return;
+    }
+    // The catalog can change after preload completes but before this page subscribes.
+    const scope = { agentId };
+    const stale =
+      peekModelCatalog(client, scope, { allowStale: true }) !== undefined &&
+      peekModelCatalog(client, scope) === undefined;
+    if (catalog) {
+      await this.adoptCatalog(
+        () => catalog.promise,
+        client,
+        agentId,
+        isCurrent,
+        catalog.controller,
+      );
+    }
+    if (stale && isCurrent()) {
+      await this.discoverCatalog(client, agentId, isCurrent);
+    }
+  }
+
+  private async adoptCatalog(
+    load: (signal: AbortSignal) => Promise<ModelProvidersCatalogData>,
+    client: GatewayBrowserClient,
+    agentId: string,
+    isCurrent: () => boolean,
+    request = new AbortController(),
+  ): Promise<void> {
     if (this.catalogRequest) {
       return;
     }
-    const request = new AbortController();
     const ownsResult = () => this.catalogRequest === request && isCurrent();
     this.catalogRequest = request;
     this.catalogCompletion = Promise.withResolvers<string | null>();
@@ -111,14 +165,10 @@ export class ModelProviderCoreLoader {
     this.catalogError = null;
     this.notify();
     try {
-      const result = await loadModelCatalog(client, {
-        agentId,
-        refresh: true,
-        signal: request.signal,
-      });
+      const data = await load(request.signal);
       if (ownsResult()) {
-        this.catalogError = catalogDiscoveryError(result);
-        this.options.onCatalogComplete(result);
+        this.catalogError = data.catalogError;
+        this.options.onCatalogComplete(data);
       }
     } catch (failure) {
       if (ownsResult()) {

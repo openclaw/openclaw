@@ -92,6 +92,7 @@ import {
   type EngineRouteTransition,
 } from "./lib/control-ui-engine-page-scenarios.ts";
 import { createEnginePluginMemoryScenarios } from "./lib/control-ui-engine-plugin-memory-scenarios.ts";
+import { createEngineRapidNavigationScenarios } from "./lib/control-ui-engine-rapid-navigation-scenarios.ts";
 import { createEngineSettingsSearchScenarios } from "./lib/control-ui-engine-settings-search.ts";
 import { createEngineStreamingScenarios } from "./lib/control-ui-engine-streaming-scenarios.ts";
 import { createEngineStyleScenarios } from "./lib/control-ui-engine-style-scenarios.ts";
@@ -422,6 +423,7 @@ type Observation = {
   configurationEvidence?: Awaited<ReturnType<typeof readEngineConfigurationObservation>>;
   engine: ControlUiEngine;
   networkProfile: NetworkProfile["name"];
+  appliedNetworkProfile: Pick<NetworkProfile, "httpLatencyMs" | "gatewayLatencyMs">;
   viewport: string;
   step: string;
   bundle: number;
@@ -547,6 +549,7 @@ try {
     ...createEngineGestureScenarios(),
     ...createEngineMemoryScenarios(memorySoakRounds),
     ...createEnginePluginMemoryScenarios(),
+    ...createEngineRapidNavigationScenarios(),
     ...createEngineStreamingScenarios(),
     ...createEnginePageScenarios(0, pageOrigin, servers[0]!.server.baseUrl),
     ...createEngineSettingsSearchScenarios(servers[0]!.server.baseUrl),
@@ -564,22 +567,26 @@ try {
     ),
   ];
   const ids = requestedIds?.flatMap((id) =>
-    id === "gestures"
+    id === "rapid-navigation"
       ? catalog
-          .filter((scenario) => scenario.id.startsWith("gesture-"))
+          .filter((scenario) => scenario.id.startsWith("rapid-"))
           .map((scenario) => scenario.id)
-      : id === "remount-interactions"
+      : id === "gestures"
         ? catalog
-            .filter(
-              (scenario) =>
-                scenario.id.startsWith("remount-") && !scenario.id.startsWith("remount-from-"),
-            )
+            .filter((scenario) => scenario.id.startsWith("gesture-"))
             .map((scenario) => scenario.id)
-        : id === "chat-actions"
+        : id === "remount-interactions"
           ? catalog
-              .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+              .filter(
+                (scenario) =>
+                  scenario.id.startsWith("remount-") && !scenario.id.startsWith("remount-from-"),
+              )
               .map((scenario) => scenario.id)
-          : [id],
+          : id === "chat-actions"
+            ? catalog
+                .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+                .map((scenario) => scenario.id)
+            : [id],
   );
   const scenarios = catalog.filter(({ id, explicitOnly, memory }) =>
     ids
@@ -611,11 +618,14 @@ try {
     networkProfiles.some(({ name }) => name !== "localhost") &&
     scenarios.some(
       ({ id }) =>
-        id !== "cold-boot" && id !== "warm-boot" && !/^page-.+-(?:visit|revisit)$/u.test(id),
+        id !== "cold-boot" &&
+        id !== "warm-boot" &&
+        !id.startsWith("rapid-") &&
+        !/^page-.+-(?:visit|revisit)$/u.test(id),
     )
   ) {
     throw new Error(
-      "Nonlocal --network-profiles require cold-boot, warm-boot or page-<route>-visit/revisit steps",
+      "Nonlocal --network-profiles require cold-boot, warm-boot, rapid-* or page-<route>-visit/revisit steps",
     );
   }
   planned =
@@ -663,6 +673,7 @@ try {
           "./lib/control-ui-engine-memory.ts",
           "./lib/control-ui-engine-memory-scenarios.ts",
           "./lib/control-ui-engine-plugin-memory-scenarios.ts",
+          "./lib/control-ui-engine-rapid-navigation-scenarios.ts",
           "./lib/control-ui-engine-page-scenarios.ts",
           "./lib/control-ui-data-board-scenarios.ts",
           "./lib/control-ui-data-log-scenarios.ts",
@@ -751,10 +762,12 @@ try {
       "Serial network profiles alternate each pair; engine/configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
       "Census screens >1.3x engine/Chromium; confirm with ten rotated pairs plus A/A. Fix proof: twenty rotated pairs plus A/A; median regression <=5% and p95 no worse. Missing CPU clocks cannot certify CPU wins on a noisy host; >20% attributable regression blocks.",
+    rapidNavigationContract:
+      "Rapid scenarios pace input against browser-local deadlines without waiting for intermediate destinations. Their network profiles delay HTTP requests only; synthetic Gateway replies remain immediate. Actual event delivery and lateness remain visible; delivery includes driver overhead and application work, not just input queue delay. Final input to two correct frames measures settled application state, not paint. Route/history automation is marked non-native. Total interval CPU is not attributable to abandoned destinations. ResourceTiming counts completed chunks only; in-flight chunks and unsupported long tasks are unavailable.",
     frameCadence:
       "Prepare and settle frame intervals are consecutive requestAnimationFrame timestamp differences, not the full wait duration. scenarioMs includes driver input and scenario assertions; settleWaitMs measures the final two-frame wait. Their sum is wallMs. These are automation-to-assertion timings, not input-to-paint latency. Browser-local actionTiming splits the driver prefix, application elapsed to the last observed DOM commit (or native value edit), and the assertion/settle tail. These three sum to browserSpanMs, not Node wallMs. Focus work can occur in the prefix; compound input spans retain intermediate driver delays. Trace-only marks expose the same boundaries. Missing native input or an explicit Gateway-response mark, or a missing commit, makes action timing unavailable.",
     boundary:
-      "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request and every incoming mock Gateway frame (including the connect challenge); RPC replies thus include a simulated round trip, with no added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
+      "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request. Boot/page scenarios also delay incoming mock Gateway frames (including the connect challenge); rapid scenarios retain immediate synthetic Gateway replies. No added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
     memoryContract:
       "Opt-in memory-* scenes retain one document, drain 4.1 s retirement timers, clear synthetic request history, then force two collections at each named checkpoint. Compare warm and late checkpoints; heap/native categories/RSS and DOM wrapper/native counts have different engine-specific meanings. Memory-scene elapsed times include forced GC and snapshots and are not latency evidence.",
     idleContract: `Idle CPU spans a Node-side ${idleDurationMs} ms wait. Hidden idle defaults to 60000 ms of warmup after native visibility settles; visible idle defaults to 0 ms. An explicit idle-warmup-ms overrides either default; 0 measures the initial transition, which can include background memory reclamation. Each idle scenario records its resolved warmup. Counter/request endpoints also include measurement instrumentation setup/draining; reveal and clock recovery occur afterward. Blank/static controls retain shared observation instrumentation without loading the app or Gateway.`,
@@ -818,6 +831,12 @@ try {
               configuration: configuration.name,
               engine,
               networkProfile: networkProfile.name,
+              appliedNetworkProfile: {
+                httpLatencyMs: networkProfile.httpLatencyMs,
+                gatewayLatencyMs: scenario.id.startsWith("rapid-")
+                  ? 0
+                  : networkProfile.gatewayLatencyMs,
+              },
               viewport: viewport.name,
               step: scenario.id,
               bundle,
@@ -2011,6 +2030,24 @@ await writeFile(
       : []),
     "Firefox uses the pinned Playwright build. Its mobile cells emulate viewport and touch only (isMobile is unsupported). CPU/native traces/heap snapshots are unavailable; application elapsed time keeps the same browser-local boundaries. Layout Instability and Long Tasks support are detected per observation; missing entries remain null.",
     "",
+    ...(summary.some((row) => row.step.startsWith("rapid-"))
+      ? [
+          "## Interrupted navigation",
+          "",
+          "Input pacing does not wait for intermediate content. Delivery lateness includes driver overhead; it is not isolated input queue delay. Settlement is the final input to two consecutive correct animation-frame observations, not paint. Programmatic route/history actions are marked non-native in observations. CPU covers the whole interval, not individual abandoned owners. Completed chunk counts exclude in-flight requests. Compare rapid scenes with their direct controls and retain A/A noise before claiming a win.",
+          "",
+          "| Engine | Viewport | Scenario | Network | Bundle | Passed/failed | Final input → settled median/p95 ms | Total task CPU median ms | Longest task p95 ms | RPCs median | Retained panes median |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+          ...summary
+            .filter((row) => row.step.startsWith("rapid-"))
+            .map((row) => {
+              const number = (value: number | undefined) => value?.toFixed(2) ?? "unavailable";
+              const ready = row.evidence.finalInputToSettledMs;
+              return `| ${row.engine} | ${row.viewport} | ${row.step} | ${row.networkProfile} | ${row.bundle} | ${row.passed}/${row.failed} | ${number(ready?.median)}/${number(ready?.p95)} | ${number(row.metrics.taskMs?.median)} | ${number(row.evidence.longestTaskMs?.p95)} | ${number(row.evidence.rpcRequests?.median)} | ${number(row.evidence.retainedPanes?.median)} |`;
+            }),
+          "",
+        ]
+      : []),
     "ResizeObserver loop errors are counted in every run, including without tracing or observer-origin diagnostics. Any browser error fails its observation and the command; completed timing intervals do not waive the zero-error requirement.",
     "",
     ...(observations.some((row) => row.gesture)
@@ -2040,7 +2077,7 @@ await writeFile(
         `| ${row.configuration} | ${row.viewport} | ${row.step} | ${row.networkProfile} | ${row.bundle} | ${row.engine} | ${row.resizeErrorCount} | ${row.resizeErrorObservations} / ${row.passed + row.failed} |`,
     ),
     "",
-    `Network profiles: ${networkProfiles.map(({ name, httpLatencyMs, gatewayLatencyMs }) => `${name} (${httpLatencyMs} ms per HTTP request; ${gatewayLatencyMs} ms per incoming Gateway frame)`).join("; ")}. The Gateway probe retains event ordering and uses no extra frame gap or throughput cap.`,
+    `Network profiles: ${networkProfiles.map(({ name, httpLatencyMs, gatewayLatencyMs }) => `${name} (${httpLatencyMs} ms per HTTP request; ${gatewayLatencyMs} ms per incoming Gateway frame for boot/page scenarios, immediate replies for rapid scenarios)`).join("; ")}. The Gateway probe retains event ordering and uses no extra frame gap or throughput cap.`,
     "",
     "Application elapsed is first trusted native input (or an explicitly marked Gateway response delivery) to last observed DOM commit/native value edit before scenario return. Gateway marks run inside the page immediately before releasing the deferred response. It excludes the initial driver prefix and later assertion/settle tail, but includes intermediate driver gaps in compound actions; it is not CPU or paint latency. Navigation/memory and actions without both boundaries are unranked. The driver prefix may include application focus work. Browser-local phases do not include boundary RPC transport and do not sum to Node wall time.",
     "",
