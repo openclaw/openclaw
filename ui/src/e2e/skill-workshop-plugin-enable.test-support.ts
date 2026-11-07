@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isGatewayProtocolResponseError, type GatewayClient } from "../../../src/gateway/client.ts";
+import { isGatewayProtocolResponseError } from "../../../packages/gateway-client/src/protocol-request.js";
+import type { GatewayClient } from "../../../src/gateway/client.ts";
 
 export async function disableWorkshopWhenIdle(
   client: Pick<GatewayClient, "request">,
