@@ -2952,11 +2952,12 @@ function retainedRepairLock() {
 function retainedRepairInput(request, building = false) {
   suspensionObject(
     request,
-    ["version", "operation", "source", "target", "process"],
+    ["version", "operation", "source", "target", "process", ...(Object.hasOwn(request, "configSha256") ? ["configSha256"] : [])],
     "retained preparation request",
   );
   if (
     request.version !== 1 ||
+    (Object.hasOwn(request, "configSha256") && !/^[a-f0-9]{64}$/.test(request.configSha256)) ||
     !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(request.operation)
   )
     reject("retained preparation request version or operation is invalid");
@@ -3141,16 +3142,20 @@ function retainedRepairSnapshot(root, rawRequest, expected, building = false, ar
   const retainedSource = archivedSource
     ? { file: archivedSource, record, identity: (({ sha256, ...value }) => value)(request.source) }
     : undefined;
+  const current = selectedConfigProcess(root, record, request.process);
+  const proc = process.env.OPENCLAW_TEAM_PROC_ROOT ?? "/proc";
   const evidence = recoveryEvidence(
     namespace.pathname,
     root,
     undefined,
     "selected",
-    undefined,
+    request.configSha256 === undefined ? undefined : {
+      config: { path: record.protectedPaths[0].path, sha256: request.configSha256 },
+      journalSha256: request.source.sha256, databasePath: record.protectedPaths[1].path,
+      runtimeUid: statSync(join(proc, String(current.pid))).uid, process: current,
+    },
     retainedSource,
   );
-  const current = selectedConfigProcess(root, record, request.process);
-  const proc = process.env.OPENCLAW_TEAM_PROC_ROOT ?? "/proc";
   const boot = readFileSync(join(proc, "sys/kernel/random/boot_id"), "utf8").trim();
   if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(boot))
     reject("retained preparation boot identity is invalid");
@@ -3555,7 +3560,7 @@ function retainedRepairBuild(action, root, input) {
   if (action === "request") {
     suspensionObject(
       input,
-      ["operation", "target", "current", "pid", "generation", "journalSha256"],
+      ["operation", "target", "current", "pid", "generation", "journalSha256", ...(Object.hasOwn(input, "configSha256") ? ["configSha256"] : [])],
       "retained build binding",
     );
     const paths = retainedRepairPaths(root, input.operation);
@@ -3575,6 +3580,7 @@ function retainedRepairBuild(action, root, input) {
         source: source.descriptor,
         target: { sha: input.target },
         process: { pid: input.pid, generation: input.generation },
+        ...(Object.hasOwn(input, "configSha256") ? { configSha256: input.configSha256 } : {}),
       },
       true,
     );
@@ -3780,7 +3786,8 @@ function retainedRepairStatic(root, snapshot, build, record) {
   const legacy = snapshot.evidence.record;
   const owner = migrationOwner();
   if (!isDeepStrictEqual(retainedRepairLock(), snapshot.lock)) reject("repair lock identity changed");
-  for (const descriptor of legacy.protectedPaths)
+  // The prepared config descriptor below owns its bytes and replacement inode.
+  for (const descriptor of legacy.protectedPaths.slice(1))
     if (!isDeepStrictEqual(identity(descriptor.path), descriptor)) reject("repair protected inode changed");
   const configEntry = lstatSync(snapshot.config.path);
   if (!isDeepStrictEqual(migrationFile(snapshot.config.path, configEntry.uid,
@@ -4327,7 +4334,7 @@ function recoveryEvidence(pathname, root, expected, position = "observed", confi
         !isDeepStrictEqual(record.predecessor.schemaVersions, record.candidate.schemaVersions)))
       reject("prepared config reconciliation requires a live same-schema predecessor without a runtime change");
     const owner = integer(process.env.OPENCLAW_TEAM_ROOT_UID ?? "0", "journal owner");
-    const journal = migrationFile(pathname, owner, { mode: 0o600 });
+    const journal = migrationFile(retainedSource?.file.path ?? pathname, owner, { mode: 0o600 });
     if (journal.descriptor.sha256 !== reconciliation.journalSha256 ||
         !isDeepStrictEqual(migrationJson(journal.bytes), record))
       reject("config reconciliation journal bytes changed");
@@ -4462,9 +4469,9 @@ function recoveryEvidence(pathname, root, expected, position = "observed", confi
     const config = migrationFile(descriptor.path, uid, { mode: 0o600, group: gid });
     if (!isDeepStrictEqual(config.descriptor, descriptor))
       reject("reconciled config changed during recovery validation; evidence retained");
-    const journal = migrationFile(pathname, owner, { mode: 0o600 });
-    const { sha256, ...journalIdentity } = journal.descriptor;
-    if (sha256 !== snapshot.configReconciliation.journalSha256 || !isDeepStrictEqual(journalIdentity, snapshot.identity))
+    const journal = migrationFile(retainedSource?.file.path ?? pathname, owner, { mode: 0o600 });
+    if (!isDeepStrictEqual(journal.descriptor, retainedSource?.file ??
+        { ...snapshot.identity, sha256: snapshot.configReconciliation.journalSha256 }))
       reject("reconciliation journal changed during recovery validation; evidence retained");
     if (selected) selectedConfigProcess(root, record, snapshot.configReconciliation.process);
   }
