@@ -322,6 +322,7 @@ export function createRuntimeConfigCapability(
   };
   const loadEditorSchema = (loaded: RuntimeConfigEditor, refresh: boolean) => {
     if (refresh) {
+      pendingSchema = null;
       return loaded.refreshSchema();
     }
     const loading = loaded.ensureSchemaLoaded();
