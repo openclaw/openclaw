@@ -152,7 +152,7 @@ it("permits parent cold resume once every child is terminal, while preserving un
   await client.notify(
     nativeCompletionNotification({ agentPath: "child-b", result: "second result" }),
   );
-  expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce();
+  expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(2);
   await expect(releaseForResume()).resolves.toBe(true);
   expect(client.request).toHaveBeenCalledWith(
     "thread/unsubscribe",
@@ -173,5 +173,5 @@ it("permits parent cold resume once every child is terminal, while preserving un
   await settled.unregister();
   expect(
     runtime.deliverAgentHarnessCompletion.mock.calls.map(([request]) => request.result),
-  ).toEqual(["second result", "first result", "second result"]);
+  ).toEqual(["second result", "first result", "second result", "first result"]);
 });
