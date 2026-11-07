@@ -1061,6 +1061,12 @@ describe("Telegram durable ingress coalescing", () => {
         releasedAt: Date.now() - 60 * 60 * 1_000,
       });
     }
+    const [before] = await queue.listPending({ limit: "all" });
+    expect(before).toMatchObject({
+      id: poisonId,
+      attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
+      lastError: sessionError.message,
+    });
     const runtimeError = vi.fn();
     const { monitor, telegramTransport } = await createMonitor({ onRuntimeError: runtimeError });
 
@@ -1070,15 +1076,19 @@ describe("Telegram durable ingress coalescing", () => {
       expect.objectContaining({
         id: poisonId,
         reason: "retry-limit-exceeded",
-        attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+        // The terminal dispatch is the eighth attempt, but fail() preserves the
+        // seven recorded releases rather than recording another retry.
+        attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
+        lastAttemptAt: before?.lastAttemptAt,
+        message: sessionError.message,
       }),
     ]);
     expect(await queue.listPending({ limit: "all" })).toEqual([]);
+    // Exactly one final poison dispatch completes the retry budget before its
+    // follower is admitted; a skipped or additional retry must not pass.
     expect(
-      downstreamTurns.mock.calls.some(([turn]) =>
-        (turn.BodyForAgent ?? turn.Body ?? "").includes("after"),
-      ),
-    ).toBe(true);
+      downstreamTurns.mock.calls.map(([turn]) => turn.BodyForAgent ?? turn.Body ?? ""),
+    ).toEqual([expect.stringContaining("poison"), expect.stringContaining("after")]);
 
     await monitor.stop();
     await telegramTransport.close();

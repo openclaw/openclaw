@@ -215,7 +215,8 @@ describe("CallManager notify and mapping", () => {
   });
 
   it("logs fire-and-forget initial-message failures instead of leaking unhandled rejections", async () => {
-    const provider = new FailStartListeningProvider("twilio");
+    // Twilio owns its post-Say Gather; use a provider that starts listening separately.
+    const provider = new FailStartListeningProvider("plivo");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const { manager } = await createManagerHarness({ streaming: { enabled: false } }, provider);
@@ -223,12 +224,12 @@ describe("CallManager notify and mapping", () => {
       const callId = await initiateCallWithMessage(
         manager,
         "+15550000013",
-        "Twilio hello",
+        "Plivo hello",
         "conversation",
       );
       await answerCall(manager, callId, "evt-initial-message-start-listening-fails");
 
-      expectFirstPlayTtsText(provider, "Twilio hello");
+      expectFirstPlayTtsText(provider, "Plivo hello");
       const startListeningCall = requireSingleStartListeningCall(provider);
       expect(startListeningCall.callId).toBe(callId);
       expect(startListeningCall.providerCallId).toBe("call-uuid");
@@ -240,6 +241,48 @@ describe("CallManager notify and mapping", () => {
       warn.mockRestore();
     }
   });
+
+  it.each(["plivo", "twilio"] as const)(
+    "%s answers without awaiting playback and starts listening only through its provider contract",
+    async (providerName) => {
+      const provider = new DelayedPlayTtsProvider(providerName);
+      const { manager } = await createManagerHarness({ streaming: { enabled: false } }, provider);
+      const callId = await initiateCallWithMessage(
+        manager,
+        "+15550000015",
+        "Delayed hello",
+        "conversation",
+      );
+      const initialMessage = vi.spyOn(manager, "speakInitialMessage");
+      try {
+        // This must complete while playback is still blocked: webhook dispatch is detached.
+        await manager.processEvent({
+          id: "evt-delayed-initial-message",
+          type: "call.answered",
+          callId,
+          providerCallId: "call-uuid",
+          timestamp: Date.now(),
+        });
+        await provider.playTtsStartedPromise;
+        expect(initialMessage).toHaveBeenCalledExactlyOnceWith("call-uuid");
+        expect(provider.startListeningCalls).toEqual([]);
+        expect(requireCall(manager, callId).metadata?.initialMessage).toBe("Delayed hello");
+        expect(requireFirstPlayTtsCall(provider).listenAfterPlayback).toBe(
+          providerName === "twilio" ? true : undefined,
+        );
+      } finally {
+        provider.releaseCurrentPlayback();
+        // Join the actual detached operation, not a sleep or a guessed microtask count.
+        await Promise.allSettled(initialMessage.mock.results.map((result) => result.value));
+        initialMessage.mockRestore();
+      }
+      expect(requireCall(manager, callId).metadata).not.toHaveProperty("initialMessage");
+      expect(requireCall(manager, callId).state).toBe("listening");
+      expect(provider.startListeningCalls).toEqual(
+        providerName === "twilio" ? [] : [{ callId, providerCallId: "call-uuid" }],
+      );
+    },
+  );
 
   it("preserves initialMessage after a failed first playback and retries on next trigger", async () => {
     useNotifyClock();

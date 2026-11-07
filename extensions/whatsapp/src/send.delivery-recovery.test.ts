@@ -48,6 +48,7 @@ const cfg = { channels: { whatsapp: {} } } as OpenClawConfig;
 const accountId = "default";
 
 async function drainDefaultWhatsAppDeliveries(stateDir: string) {
+  const queuedAccountIds: Array<string | undefined> = [];
   const log = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -59,15 +60,19 @@ async function drainDefaultWhatsAppDeliveries(stateDir: string) {
     cfg,
     log,
     stateDir,
-    selectEntry: (entry) => ({
-      match:
-        entry.channel === "whatsapp" && ((entry.accountId ?? "").trim() || accountId) === accountId,
-      bypassBackoff:
-        typeof entry.lastError === "string" &&
-        entry.lastError.includes("No active WhatsApp Web listener"),
-    }),
+    selectEntry: (entry) => {
+      queuedAccountIds.push(entry.accountId);
+      return {
+        match:
+          entry.channel === "whatsapp" &&
+          ((entry.accountId ?? "").trim() || accountId) === accountId,
+        bypassBackoff:
+          typeof entry.lastError === "string" &&
+          entry.lastError.includes("No active WhatsApp Web listener"),
+      };
+    },
   });
-  return log;
+  return { ...log, queuedAccountIds };
 }
 
 describe("WhatsApp delivery recovery", () => {
@@ -442,6 +447,10 @@ describe("WhatsApp delivery recovery", () => {
 
   it("keeps pre-connect recovery replayable, then sends exactly once after connect", async () => {
     await withStateDirEnv("openclaw-whatsapp-delivery-recovery-", async ({ stateDir }) => {
+      const wrongAccountSend = vi.fn<ActiveWebListener["sendMessage"]>();
+      runtimeContextMocks.controllers.set("other-account", {
+        getActiveListener: () => ({ sendMessage: wrongAccountSend, sendComposingTo: vi.fn() }),
+      });
       const initialResult = await sendDurableMessageBatch({
         cfg,
         channel: "whatsapp",
@@ -457,6 +466,9 @@ describe("WhatsApp delivery recovery", () => {
       });
 
       const preConnectLog = await drainDefaultWhatsAppDeliveries(stateDir);
+      // Durable admission pins the sender even when the caller omitted accountId.
+      expect(new Set(preConnectLog.queuedAccountIds)).toEqual(new Set([accountId]));
+      expect(wrongAccountSend).not.toHaveBeenCalled();
       expect(preConnectLog.warn).toHaveBeenCalledWith(
         expect.stringContaining("No active WhatsApp Web listener"),
       );
@@ -486,7 +498,9 @@ describe("WhatsApp delivery recovery", () => {
         "queued before listener startup",
         undefined,
         undefined,
+        { accountId },
       );
+      expect(wrongAccountSend).not.toHaveBeenCalled();
     });
   });
 });

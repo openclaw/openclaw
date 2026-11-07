@@ -47,6 +47,7 @@ import {
   renderBitmapTextPngBase64,
   renderSolidColorPngBase64,
 } from "../../test/helpers/live-image-probe.js";
+import { buildCanonicalTextReplyProbePrompt } from "../../test/helpers/live-tool-contract-prompts.js";
 import {
   buildLongOutputPrompt,
   validateLongOutput,
@@ -2256,7 +2257,7 @@ describeLive("gateway live (Codex harness)", () => {
         await requestAgentText({
           client,
           sessionKey: source.sessionKey,
-          message: "Reply exactly CODEX-CANONICAL-SOURCE.",
+          message: buildCanonicalTextReplyProbePrompt("CODEX-CANONICAL-SOURCE"),
           expectedReply: "CODEX-CANONICAL-SOURCE",
           preserveNativeTurnSettings: true,
         });
@@ -2295,7 +2296,7 @@ describeLive("gateway live (Codex harness)", () => {
           await requestAgentText({
             client,
             sessionKey: child.sessionKey,
-            message: `Reply exactly CODEX-CANONICAL-${phase.toUpperCase()}.`,
+            message: buildCanonicalTextReplyProbePrompt(`CODEX-CANONICAL-${phase.toUpperCase()}`),
             expectedReply: `CODEX-CANONICAL-${phase.toUpperCase()}`,
             preserveNativeTurnSettings: true,
           });

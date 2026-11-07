@@ -489,20 +489,26 @@ describe("runCodexSettledTurnFinalization", () => {
     },
   );
 
-  it("rejects forged context before host auth or an isolated client can be used", async () => {
-    const settledAttempt = createSettledAttempt();
-    settledAttempt.settledTurnFinalizationContext = { source: "harness", data: [] };
-    const before = structuredClone(settledAttempt);
-    const clientFactory = vi.fn();
-    await expect(finalize(createAttempt(), settledAttempt, { clientFactory })).rejects.toThrow(
-      "finalization context is unavailable",
-    );
-    expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).not.toHaveBeenCalled();
-    expect(mocks.runBounded).not.toHaveBeenCalled();
-    expect(clientFactory).not.toHaveBeenCalled();
-    expect(mocks.mirror).not.toHaveBeenCalled();
-    expect(structuredClone(settledAttempt)).toEqual(before);
-  });
+  it.each(["forged", "unavailable"] as const)(
+    "rejects %s context before host auth or an isolated client can be used",
+    async (kind) => {
+      const settledAttempt = createSettledAttempt();
+      settledAttempt.settledTurnFinalizationContext =
+        kind === "forged"
+          ? { source: "harness", data: [] }
+          : Object.freeze({ source: "unavailable" });
+      const before = structuredClone(settledAttempt);
+      const clientFactory = vi.fn();
+      await expect(finalize(createAttempt(), settledAttempt, { clientFactory })).rejects.toThrow(
+        "finalization context is unavailable",
+      );
+      expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).not.toHaveBeenCalled();
+      expect(mocks.runBounded).not.toHaveBeenCalled();
+      expect(clientFactory).not.toHaveBeenCalled();
+      expect(mocks.mirror).not.toHaveBeenCalled();
+      expect(structuredClone(settledAttempt)).toEqual(before);
+    },
+  );
 
   it.each([
     "before auth",
