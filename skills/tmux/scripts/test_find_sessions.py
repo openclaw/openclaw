@@ -8,7 +8,10 @@ from unittest import TestCase, main
 class TestFindSessions(TestCase):
     def test_query_matches_literal_session_names_only(self):
         script = Path(__file__).with_name("find-sessions.sh")
-        rows = "build[1]\t0\t2026-11-07\nbuild1\t0\t2026-11-07\nback\\slash\t0\t2026-11-07\n"
+        rows = (
+            "build[1]\t0\t2026-11-07\nbuild1\t0\t2026-11-07\n"
+            "back\\slash\t0\t2026-11-07\nÄpfel\t0\t2026-11-07\n"
+        )
         with tempfile.TemporaryDirectory() as directory:
             tmux = Path(directory) / "tmux"
             tmux.write_text("#!/bin/sh\ncat <<'SESSIONS'\n" + rows + "SESSIONS\n")
@@ -18,10 +21,11 @@ class TestFindSessions(TestCase):
                 ("BUILD[1]", ["build[1]"]),
                 ("[", ["build[1]"]),
                 (r"back\slash", [r"back\slash"]),
+                ("äPFEL", ["Äpfel"]),
                 ("2026", []),
                 ("0", []),
                 ("uil", ["build[1]", "build1"]),
-                ("", ["build[1]", "build1", r"back\slash"]),
+                ("", ["build[1]", "build1", r"back\slash", "Äpfel"]),
             ]
             for query, expected in cases:
                 with self.subTest(query=query):
