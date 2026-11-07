@@ -15,7 +15,8 @@ import {
 import { installPluginFromNpmSpec } from "./install.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
 import {
-  formatBetaChannelFallbackOutcomeSuffix,
+  createStablePluginUpdateVersionPolicy,
+  formatChannelFallbackOutcomeSuffix,
   resolveExactNpmSpecVersion,
   resolveNewerExactPinnedClawHubDefaultLine,
   resolveNewerExactPinnedNpmDefaultLine,
@@ -133,6 +134,7 @@ type PluginUpdateSpecPlan = {
   recordSpec?: string;
   fallbackSpec?: string;
   fallbackLabel?: string;
+  minimumStableVersion?: string;
 };
 
 type PluginUpdateInstallResult =
@@ -185,8 +187,13 @@ export async function buildDryRunPluginUpdateOutcome(
   params: Omit<PluginUpdateVersionOutcomeParams, "nextVersion"> & {
     effectiveSpec?: string;
     hasSpecOverride: boolean;
+    stableVersion?: ReturnType<typeof createStablePluginUpdateVersionPolicy>;
   },
 ): Promise<PluginUpdateOutcome> {
+  const stableError = params.stableVersion?.warnIfInvalid(params.result.version);
+  if (stableError) {
+    return { pluginId: params.pluginId, status: "skipped", message: stableError };
+  }
   const npmProbeVersion =
     params.record.source === "npm" ? params.result.npmResolution?.version : undefined;
   const resolvedProbeVersion =
@@ -308,6 +315,8 @@ export async function runPluginUpdateAttempt(params: {
     logger: params.logger,
   });
   let result: PluginUpdateInstallResult;
+  let activeClawHubInstallSpec = params.effectiveSpec;
+  let channelFallbackSuffix = "";
   try {
     if (params.record.source === "npm" && !params.dryRun) {
       params.onNpmInstall();
@@ -356,37 +365,36 @@ export async function runPluginUpdateAttempt(params: {
                 plugin: params.record.marketplacePlugin!,
                 ...commonInstallOptions,
               });
+
+    if (
+      !result.ok &&
+      params.record.source === "clawhub" &&
+      params.clawhubSpecs?.fallbackSpec &&
+      isUnavailableClawHubTarget(result)
+    ) {
+      const channel = params.clawhubSpecs.minimumStableVersion ? "stable" : "beta";
+      channelFallbackSuffix = formatChannelFallbackOutcomeSuffix({
+        fallbackLabel: params.clawhubSpecs.fallbackLabel ?? params.effectiveSpec,
+        fallbackSpec: params.clawhubSpecs.fallbackSpec,
+        verb: params.dryRun ? "would use" : "used",
+        channel,
+      });
+      params.logger.info?.(
+        `Plugin "${params.pluginId}" has no ${channel} ClawHub release for ${params.clawhubSpecs.fallbackLabel ?? params.effectiveSpec}; using ${params.clawhubSpecs.fallbackSpec} instead. Core update can still complete.`,
+      );
+      result = await installPluginFromClawHub({
+        spec: params.clawhubSpecs.fallbackSpec,
+        baseUrl: params.record.clawhubUrl,
+        ...commonInstallOptions,
+      });
+      activeClawHubInstallSpec = params.clawhubSpecs.fallbackSpec;
+    }
   } catch (error) {
     return {
       kind: "exception",
       message: `Failed to ${phase} ${params.pluginId}: ${String(error)}`,
       error,
     };
-  }
-
-  let activeClawHubInstallSpec = params.effectiveSpec;
-  let channelFallbackSuffix = "";
-
-  if (
-    !result.ok &&
-    params.record.source === "clawhub" &&
-    params.clawhubSpecs?.fallbackSpec &&
-    isUnavailableClawHubTarget(result)
-  ) {
-    channelFallbackSuffix = formatBetaChannelFallbackOutcomeSuffix({
-      fallbackLabel: params.clawhubSpecs.fallbackLabel ?? params.effectiveSpec,
-      fallbackSpec: params.clawhubSpecs.fallbackSpec,
-      verb: params.dryRun ? "would use" : "used",
-    });
-    params.logger.info?.(
-      `Plugin "${params.pluginId}" has no beta ClawHub release for ${params.clawhubSpecs.fallbackLabel ?? params.effectiveSpec}; using ${params.clawhubSpecs.fallbackSpec} instead. Core update can still complete.`,
-    );
-    result = await installPluginFromClawHub({
-      spec: params.clawhubSpecs.fallbackSpec,
-      baseUrl: params.record.clawhubUrl,
-      ...commonInstallOptions,
-    });
-    activeClawHubInstallSpec = params.clawhubSpecs.fallbackSpec;
   }
 
   const attempt: PluginUpdateAttemptResult = {

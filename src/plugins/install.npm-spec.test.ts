@@ -368,6 +368,7 @@ function mockNpmViewAndInstall(
 
 function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
   const packagesByName = new Map(packages.map((pkg) => [pkg.packageName, pkg]));
+  const packagesBySpec = new Map(packages.map((pkg) => [pkg.spec, pkg]));
   const packPackagesByArgv = new Map(
     packages
       .filter((pkg) => pkg.packArchivePath)
@@ -468,11 +469,13 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
             });
             continue;
           }
-          const pkg = packagesByName.get(packageName);
+          const dependencySpec = manifest.dependencies?.[packageName];
+          const pkg =
+            packagesBySpec.get(`${packageName}@${dependencySpec}`) ??
+            packagesByName.get(packageName);
           if (!pkg) {
             throw new Error(`unexpected managed npm dependency: ${packageName}`);
           }
-          const dependencySpec = manifest.dependencies?.[packageName];
           if (pkg.expectedDependencySpec && dependencySpec !== pkg.expectedDependencySpec) {
             throw new Error(
               `expected managed npm dependency ${packageName}@${pkg.expectedDependencySpec}, got ${dependencySpec ?? ""}`,

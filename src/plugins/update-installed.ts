@@ -71,6 +71,7 @@ import {
 } from "./update-duplicate-aliases.js";
 import { prepareNpmPluginUpdateMetadata } from "./update-npm-metadata.js";
 import {
+  createStablePluginUpdateVersionPolicy,
   expectedIntegrityForNpmUpdate,
   isNpmMetadataCompatibleWithCurrentHost,
   isPluginInstallRecordUpdateSource,
@@ -280,6 +281,7 @@ async function runInstalledPluginUpdate(
         : record.source === "clawhub"
           ? clawhubSpecs?.recordSpec
           : record.spec;
+    const stableFloor = npmSpecs?.minimumStableVersion ?? clawhubSpecs?.minimumStableVersion;
     const trustedSourceLinkedOfficialInstall = isTrustedSourceLinkedOfficialNpmUpdate({
       pluginId,
       spec: effectiveSpec,
@@ -354,6 +356,14 @@ async function runInstalledPluginUpdate(
       );
       continue;
     }
+    const stableVersion = createStablePluginUpdateVersionPolicy({
+      pluginId,
+      currentVersion: currentVersion ?? record.version,
+      previousSpec: record.spec,
+      recordSpec,
+      minimumStableVersion: stableFloor,
+      logger,
+    });
     if (!params.dryRun && record.source === "npm" && currentVersion) {
       changed =
         (await repairRegisteredOpenClawHostLink({
@@ -368,6 +378,7 @@ async function runInstalledPluginUpdate(
       code?: string,
       source: "npm" | "clawhub" = "npm",
     ): Promise<void> => {
+      stableVersion.warnRetained(message);
       let installedPayloadRunnable = false;
       if (
         (code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE ||
@@ -441,6 +452,7 @@ async function runInstalledPluginUpdate(
         if (
           currentVersion &&
           prepared.unchangedEligible &&
+          !stableVersion.error(metadataResult.metadata.version) &&
           !(await auditDeclaredOpenClawHostDependency({
             packageDir: installPath,
             packageName: pluginId,
@@ -509,7 +521,9 @@ async function runInstalledPluginUpdate(
           timeoutMs: params.timeoutMs,
           workTimeoutMs: params.workTimeoutMs,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
-          onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
+          onBeforePluginArtifactCommit: stableVersion.beforeCommit(
+            capabilityConsent.onBeforePluginArtifactCommit,
+          ),
           expectedIntegrity,
           clawhubSpecs,
           officialNpmFallback,
@@ -599,22 +613,24 @@ async function runInstalledPluginUpdate(
       continue;
     }
     if (params.dryRun) {
-      outcomes.push(
-        await buildDryRunPluginUpdateOutcome({
-          pluginId,
-          record,
-          result,
-          currentVersion,
-          effectiveSpec,
-          hasSpecOverride: Boolean(npmSpecOverride),
-          updateChannel,
-          timeoutMs: params.timeoutMs,
-          channelFallbackSuffix,
-          checkNewerExactPinnedClawHubDefaultLine:
-            Boolean(trustedOfficialClawHubInstall) && recordSpec === record.spec,
-        }),
-      );
-      completedCanonicalUpdates.add(pluginId);
+      const outcome = await buildDryRunPluginUpdateOutcome({
+        stableVersion,
+        pluginId,
+        record,
+        result,
+        currentVersion,
+        effectiveSpec,
+        hasSpecOverride: Boolean(npmSpecOverride),
+        updateChannel,
+        timeoutMs: params.timeoutMs,
+        channelFallbackSuffix,
+        checkNewerExactPinnedClawHubDefaultLine:
+          Boolean(trustedOfficialClawHubInstall) && recordSpec === record.spec,
+      });
+      outcomes.push(outcome);
+      if (outcome.status !== "skipped") {
+        completedCanonicalUpdates.add(pluginId);
+      }
       continue;
     }
 

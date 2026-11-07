@@ -5,6 +5,7 @@ import {
   installWithSourceFallback,
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
+  resolveStableOfficialPluginSpec,
 } from "./install-channel-specs.js";
 
 vi.mock("../infra/install-source-utils.js", () => ({ resolveNpmSpecMetadata: vi.fn() }));
@@ -45,6 +46,34 @@ describe("installWithSourceFallback", () => {
       expect(attempted).toEqual(["npm"]);
     },
   );
+});
+
+describe("resolveStableOfficialPluginSpec", () => {
+  it.each(["alpha", "beta", "next", "rc", "canary", "nightly", "dev", "latest"])(
+    "keeps the stable policy for the declared official @%s tag",
+    (tag) => {
+      expect(
+        resolveStableOfficialPluginSpec({
+          spec: `@openclaw/codex@${tag}`,
+          officialPackageName: "@openclaw/codex",
+          updateChannel: "stable",
+        }),
+      ).toBe("@openclaw/codex@latest");
+    },
+  );
+  it.each([
+    ["@openclaw/codex@custom", "@openclaw/codex", "stable"],
+    ["@openclaw/codex@2026.11.4", "@openclaw/codex", "stable"],
+    ["@openclaw/codex@^2026.11.0", "@openclaw/codex", "stable"],
+    ["@openclaw/codex@beta", undefined, "stable"],
+    ["@acme/codex@beta", "@acme/codex", "stable"],
+    ["@openclaw/codex@beta", "@openclaw/codex", "beta"],
+    ["@openclaw/codex@beta", "@openclaw/codex", "extended-stable"],
+  ] as const)("preserves %s declared as %s on %s", (spec, officialPackageName, updateChannel) => {
+    expect(
+      resolveStableOfficialPluginSpec({ spec, officialPackageName, updateChannel }),
+    ).toBeUndefined();
+  });
 });
 
 describe("resolveNpmInstallSpecsForUpdateChannel", () => {

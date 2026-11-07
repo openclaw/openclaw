@@ -2,10 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { assert, expect, it, vi, type Mock } from "vitest";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { runCommandWithTimeout } from "../process/exec.js";
 import { npmCommandArgs } from "../test-utils/npm-command.js";
 import { expectIntegrityDriftRejected } from "../test-utils/npm-spec-install-test-helpers.js";
+import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
+import { readTextFileTree } from "./install.npm-dependencies.test-support.js";
 
 type NpmFixturePackage = {
   spec: string;
@@ -15,6 +18,7 @@ type NpmFixturePackage = {
   pluginId?: string;
   expectedDependencySpec?: string;
   versions?: string[];
+  openclaw?: { extensions: string[]; compat?: { pluginApi: string } };
 };
 
 export function registerNpmUpdateMetadataTests({
@@ -33,6 +37,217 @@ export function registerNpmUpdateMetadataTests({
   writeInstalledNpmPlugin: (params: Omit<NpmFixturePackage, "spec">) => string;
 }) {
   const silentLogger = { info: () => {}, warn: () => {} };
+  const consent: PluginCapabilityConsentHandler = async (review) => ({
+    reviewToken: review.reviewToken,
+  });
+  function installedConfig(pluginId: string, record: PluginInstallRecord) {
+    return {
+      plugins: { entries: { [pluginId]: { enabled: true } }, installs: { [pluginId]: record } },
+    };
+  }
+  function expectInstalled(
+    record: PluginInstallRecord | undefined,
+    packageName: string,
+    version: string,
+  ) {
+    expect(record).toMatchObject({
+      resolvedName: packageName,
+      resolvedVersion: version,
+      integrity: "sha512-plugin-test",
+    });
+    assert(record?.installPath);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(record.installPath, "package.json"), "utf8")),
+    ).toMatchObject({ name: packageName, version });
+  }
+  async function updateInstalled(
+    params: Parameters<typeof import("./update-installed.js").updateNpmInstalledPlugins>[0],
+  ) {
+    const { updateNpmInstalledPlugins } = await import("./update-installed.js");
+    return withPluginInstallRoots({ ...resolvePluginInstallRoots(), npmDir: getNpmRoot() }, () =>
+      updateNpmInstalledPlugins({ logger: silentLogger, onCapabilityConsent: consent, ...params }),
+    );
+  }
+  function npmPackage(
+    spec: string,
+    version: string,
+    overrides: Partial<NpmFixturePackage> = {},
+  ): NpmFixturePackage {
+    return { spec, version, npmRoot: getNpmRoot(), packageName: spec, ...overrides };
+  }
+  function mockMissingNpmVersion(spec: string) {
+    const run = expectDefined(runCommandWithTimeoutMock.getMockImplementation(), "npm fixture");
+    runCommandWithTimeoutMock.mockImplementation((argv, options) =>
+      npmCommandArgs(argv)?.[1] === spec
+        ? Promise.resolve({
+            code: 1,
+            stdout: "",
+            stderr: "npm error code E404",
+            signal: null,
+            killed: false,
+            termination: "exit",
+          })
+        : run(argv, options),
+    );
+  }
+  it.each([
+    ["beta", "stable", true, true, "2026.11.1", "latest"],
+    ["next", "stable", true, true, "2026.11.1", "latest"],
+    ["beta", "stable", true, false, "2026.11.2", "latest"],
+    ["2026.11.8", "stable", true, true, "2026.11.8", "2026.11.8"],
+    ["^2026.11.0", "stable", true, true, "2026.10.10-beta.5", "^2026.11.0"],
+    ["beta", "stable", false, true, "2026.10.10-beta.5", "beta"],
+    ["beta", "stable", "external", true, "2.0.4-beta.1", "beta"],
+    ["beta", "beta", true, true, "2026.11.5-beta.1", "beta"],
+  ] as const)(
+    "updates stored @%s on %s (official=%s, core published=%s)",
+    async (selector, updateChannel, official, corePublished, expectedVersion, savedSelector) => {
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+      const packageName =
+        official === "external"
+          ? "@tencent-connect/openclaw-qqbot"
+          : official
+            ? "@openclaw/voice-call"
+            : "channel-fixture";
+      const pluginId =
+        official === "external" ? "openclaw-qqbot" : official ? "voice-call" : "channel-fixture";
+      const available = { npmRoot: getNpmRoot(), packageName, pluginId };
+      const initialVersion = official === "external" ? "2.0.3-beta.1" : "2026.10.10-beta.5";
+      const installPath = writeInstalledNpmPlugin({
+        ...available,
+        npmRoot: path.join(getNpmRoot(), "previous"),
+        version: initialVersion,
+      });
+      mockNpmViewAndInstallMany([
+        ...(!corePublished ? [] : [npmPackage(`${packageName}@2026.11.1`, "2026.11.1", available)]),
+        npmPackage(`${packageName}@latest`, "2026.11.2", available),
+        npmPackage(
+          `${packageName}@beta`,
+          official === "external"
+            ? expectedVersion
+            : official
+              ? "2026.11.5-beta.1"
+              : initialVersion,
+          available,
+        ),
+        npmPackage(`${packageName}@next`, "2026.11.5-beta.1", available),
+        npmPackage(`${packageName}@^2026.11.0`, initialVersion, available),
+        npmPackage(`${packageName}@${expectedVersion}`, expectedVersion, {
+          ...available,
+          expectedDependencySpec: expectedVersion,
+        }),
+      ]);
+      if (!corePublished) {
+        mockMissingNpmVersion(`${packageName}@2026.11.1`);
+      }
+      const warn = vi.fn();
+      const result = await updateInstalled({
+        config: installedConfig(pluginId, {
+          source: "npm",
+          spec: `${packageName}@${selector}`,
+          installPath,
+          version: initialVersion,
+          resolvedName: packageName,
+          resolvedSpec: `${packageName}@${initialVersion}`,
+          resolvedVersion: initialVersion,
+          integrity: "sha512-plugin-test",
+        }),
+        updateChannel,
+        coreVersion: "2026.11.1",
+        logger: { warn },
+      });
+      expectInstalled(result.config.plugins?.installs?.[pluginId], packageName, expectedVersion);
+      expect(result.config.plugins?.installs?.[pluginId]?.spec).toBe(
+        `${packageName}@${savedSelector}`,
+      );
+      if (selector !== savedSelector) {
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("stable"));
+        const repeated = await updateInstalled({
+          config: result.config,
+          updateChannel,
+          coreVersion: "2026.11.1",
+        });
+        expectInstalled(
+          repeated.config.plugins?.installs?.[pluginId],
+          packageName,
+          expectedVersion,
+        );
+        expect(repeated.config.plugins?.installs?.[pluginId]?.spec).toBe(`${packageName}@latest`);
+        expect(repeated.changed).toBe(false);
+      }
+    },
+  );
+  it.each(["older stable", "prerelease only"])(
+    "retains the installed plugin when stable recovery offers %s",
+    async (scenario) => {
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+      const packageName = "@openclaw/voice-call";
+      const pluginId = "voice-call";
+      const currentVersion = "2026.11.1";
+      const oldStable = "2026.10.10";
+      const oldBeta = "2026.10.10-beta.5";
+      const available = {
+        npmRoot: getNpmRoot(),
+        packageName,
+        pluginId,
+        openclaw: { extensions: ["./dist/index.js"] },
+      };
+      const installPath = writeInstalledNpmPlugin({
+        ...available,
+        npmRoot: path.join(getNpmRoot(), "previous"),
+        version: currentVersion,
+      });
+      const incompatible = {
+        extensions: ["./dist/index.js"],
+        compat: { pluginApi: ">=2026.11.5" },
+      };
+      mockNpmViewAndInstallMany([
+        npmPackage(`${packageName}@beta`, "2026.11.5-beta.1", {
+          ...available,
+          openclaw: incompatible,
+          versions:
+            scenario === "older stable"
+              ? [oldBeta, oldStable, "2026.11.5"]
+              : [oldBeta, "2026.11.5-beta.1"],
+        }),
+        npmPackage(`${packageName}@latest`, scenario === "older stable" ? "2026.11.5" : oldBeta, {
+          ...available,
+          ...(scenario === "older stable" ? { openclaw: incompatible } : {}),
+        }),
+        npmPackage(`${packageName}@${oldBeta}`, oldBeta, available),
+        npmPackage(`${packageName}@2026.11.5-beta.1`, "2026.11.5-beta.1", {
+          ...available,
+          ...(scenario === "older stable" ? { openclaw: incompatible } : {}),
+        }),
+        npmPackage(`${packageName}@${oldStable}`, oldStable, available),
+      ]);
+      mockMissingNpmVersion(`${packageName}@${currentVersion}`);
+      const record = {
+        source: "npm" as const,
+        spec: `${packageName}@beta`,
+        installPath,
+        version: currentVersion,
+        resolvedName: packageName,
+        resolvedSpec: `${packageName}@${currentVersion}`,
+        resolvedVersion: currentVersion,
+      };
+      const before = readTextFileTree(installPath);
+      const warn = vi.fn();
+      const result = await updateInstalled({
+        config: installedConfig(pluginId, record),
+        updateChannel: "stable",
+        coreVersion: currentVersion,
+        logger: { warn },
+      });
+      expect(result.config.plugins?.installs?.[pluginId]).toEqual(record);
+      expect(readTextFileTree(installPath)).toEqual(before);
+      expect(result.outcomes[0]?.message).toContain("stable channel requires");
+      expect(
+        JSON.parse(fs.readFileSync(path.join(installPath, "package.json"), "utf8")).version,
+      ).toBe(currentVersion);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Keeping "voice-call"'));
+    },
+  );
   it.each(["spec", "trust"])(
     "rejects prepared fallback facts after %s changes",
     async (changed) => {
