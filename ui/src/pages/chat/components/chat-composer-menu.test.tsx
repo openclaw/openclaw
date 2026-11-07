@@ -44,6 +44,43 @@ function mountSlashMenu(paneId: string) {
   return { menu, host, view };
 }
 
+it("navigates the full slash menu in visual order and runs the highlighted command", async () => {
+  const { menu, host, view } = mountSlashMenu("menu-keyboard-order");
+  await waitForSolid(() => expect(view.container.querySelector('[aria-busy="true"]')).toBeNull());
+  const options = view.getAllByRole("option");
+  const names = options.map((option) => option.querySelector(".slash-menu-name")!.textContent);
+  expect(names[0]).toBe("/stop");
+  const compactIndex = names.findIndex((name) => name?.startsWith("/compact"));
+  expect(compactIndex).toBeGreaterThanOrEqual(0);
+  expect(names[compactIndex + 1]).toMatch(/^\/fork\b/);
+  expect(view.getByRole("option", { selected: true })).toBe(options[0]);
+
+  const press = (key: string) => {
+    expect(menu.handleKeydown(new KeyboardEvent("keydown", { key, cancelable: true }), host)).toBe(
+      true,
+    );
+    flush();
+  };
+  for (const key of ["ArrowDown", "ArrowUp"]) {
+    for (let step = 1; step <= options.length; step += 1) {
+      press(key);
+      const index =
+        key === "ArrowDown" ? step % options.length : (options.length - step) % options.length;
+      expect(view.getByRole("option", { selected: true })).toBe(options[index]);
+    }
+  }
+
+  const clearIndex = names.indexOf("/clear");
+  expect(clearIndex).toBeGreaterThan(0);
+  for (let step = 0; step < clearIndex; step += 1) {
+    press("ArrowDown");
+  }
+  expect(view.getByRole("option", { selected: true })).toBe(options[clearIndex]);
+  press("Enter");
+  expect(host.commitDraft).toHaveBeenCalledExactlyOnceWith("/clear");
+  expect(host.runCommand).toHaveBeenCalledOnce();
+});
+
 it("keeps loading suggestions named, selected and actionable", () => {
   const select = vi.fn();
   const [activeId, setActiveId] = createSignal("pending-status");
