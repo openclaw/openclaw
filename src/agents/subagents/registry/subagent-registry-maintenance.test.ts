@@ -72,6 +72,26 @@ afterEach(async () => {
 });
 
 describe("subagent maintenance protection", () => {
+  it.each(["pending", "dispatching"] as const)(
+    "protects a %s requester wake after child cleanup, including restored rows",
+    async (status) => {
+      const run = createRun({
+        cleanupCompletedAt: 3,
+        requesterSettleWake: { status, attemptCount: 1 },
+      });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      expect(await protectedKeys()).toEqual([run.childSessionKey]);
+      subagentRuns.set(run.runId, run);
+      expect(await protectedKeys()).toEqual([run.childSessionKey]);
+      subagentRuns.set(run.runId, {
+        ...run,
+        requesterSettleWake: undefined,
+        delivery: { status: "delivered" },
+      });
+      expect(await protectedKeys()).toEqual([]);
+    },
+  );
+
   it("does not revisit settled live facts while capturing current protection", async () => {
     const pending = createRun();
     const rows = new Map([[pending.runId, pending]]);
