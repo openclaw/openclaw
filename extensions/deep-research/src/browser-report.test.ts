@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { reportBlocks, safeSourceUrl } from "../browser/report.js";
+import { reportBlocks, safeSourceUrl } from "./browser/report.js";
 
 it("renders text-only headings without changing UTF-8 citation attribution", () => {
   const report = "# Café [S1]\n\n## Findings\nA ☕ source [S1]\n<script>unsafe()</script>";
