@@ -117,6 +117,8 @@ on the same branch within 24 hours and the complete input diff is unchanged.
 Skipped jobs cannot advance the comparison base. Missing proof, incomplete
 diffs, or API errors request fresh validation. Each decision reports its reason.
 Both workflows retain their PR scopes and refresh proof daily for dependency drift.
+Plugin Init Scaffold Validation uses GitHub-hosted Ubuntu 24.04 independently of
+restricted Boat admission.
 
 Sandbox Common Smoke runs daily at 05:23 UTC and retains PR and manual runs.
 Plugin NPM Release runs its nonpublishing metadata and unpublished-package pack
@@ -487,6 +489,10 @@ Scheduled, manual, and release Matrix checks use the fixed-response mock provide
 `OpenClaw Release Checks` also runs the release-critical QA Lab lanes before release approval; its QA parity gate runs the candidate and baseline packs as parallel lane jobs, then downloads both artifacts into a small report job for the final parity comparison.
 
 For normal PRs, follow scoped CI/check evidence instead of treating parity as a required status.
+
+## OpenGrep
+
+OpenGrep PR-diff and manual full scans run on GitHub-hosted Ubuntu 24.04.
 
 ## CodeQL
 

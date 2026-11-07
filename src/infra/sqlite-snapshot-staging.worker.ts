@@ -6,8 +6,8 @@ import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-e
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
+  SqliteSnapshotCleanupError,
 } from "./sqlite-lifecycle-errors.js";
-import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
 import { createSqliteReadOnlyNativeResourceClient } from "./sqlite-readonly-native-resource.client.js";
 import { SQLITE_NATIVE_RESOURCE_PORT } from "./sqlite-readonly-native-resource.types.js";
 import { createSqliteSnapshotStagingRuntime } from "./sqlite-snapshot-staging-runtime.js";

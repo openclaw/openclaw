@@ -36,6 +36,7 @@ import {
   type LocalWorkspaceManifestRecord,
 } from "./local-workspace-manifest-tree.js";
 import type {
+  LocalWorkspaceCheckpointReceipt,
   LocalWorkspaceManifestMutation,
   LocalWorkspaceManifestScan,
   LocalWorkspaceManifestValue,
@@ -230,9 +231,15 @@ export async function executeLocalWorkspaceManifestRead(
     const retained = buildCacheInputPaths(parseLocalWorkspaceSourcePaths(row.source_paths_json));
     // A pending receipt can name an intact result after both live sides have
     // moved beyond the baseline. Its saved delta can reconstruct the merge base.
-    const checkpoint = row.checkpoint_json
-      ? (JSON.parse(row.checkpoint_json) as LocalWorkspaceManifestCheckpoint) // SAFETY: Owner-written checkpoint.
+    const receipt = row.checkpoint_json
+      ? (JSON.parse(row.checkpoint_json) as LocalWorkspaceCheckpointReceipt) // SAFETY: Owner-written checkpoint.
       : undefined;
+    const checkpoint =
+      receipt?.kind === "rejected"
+        ? receipt.checkpoint
+          ? (JSON.parse(receipt.checkpoint) as LocalWorkspaceManifestCheckpoint) // SAFETY: Preserved owner-written checkpoint.
+          : undefined
+        : receipt;
     const documents = checkpoint
       ? [
           parseWorkerWorkspaceManifest(
@@ -297,7 +304,7 @@ export async function executeLocalWorkspaceManifestRead(
           if (candidate !== "projection") {
             canonicalPaths ??= await selectLocalWorkspaceCanonicalPaths({
               root,
-              admittedPaths: row.source_paths_json,
+              admittedPaths: parseLocalWorkspaceSourcePaths(row.source_paths_json),
               baselinePaths,
               assertCurrent: () => undefined,
             });
@@ -537,7 +544,7 @@ export async function executeLocalWorkspaceManifestRead(
   const target = action.kind === "archive" ? "canonical" : action.target;
   const canonicalPaths = await selectLocalWorkspaceCanonicalPaths({
     root: action.canonicalRoot,
-    admittedPaths: row.source_paths_json,
+    admittedPaths: parseLocalWorkspaceSourcePaths(row.source_paths_json),
     // This read has no effects; the lease owner revalidates before using its result.
     assertCurrent: () => undefined,
   });

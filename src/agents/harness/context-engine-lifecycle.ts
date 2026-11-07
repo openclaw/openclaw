@@ -495,6 +495,9 @@ export async function finalizeHarnessContextEngineTurn(
                 provider: params.providerId,
                 modelId: params.modelId,
               }) ?? params.tokenBudget,
+            ...(params.runtimeContext?.promptCache
+              ? { promptCache: params.runtimeContext.promptCache }
+              : {}),
           },
         });
       }

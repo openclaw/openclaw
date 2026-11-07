@@ -38,6 +38,7 @@ import { page as channelsPage } from "./pages/channels/route.ts";
 import { pages as chatPages } from "./pages/chat/route.ts";
 import type { ChatRouteData } from "./pages/chat/session-route-data.ts";
 import { page as cloudWorkersPage } from "./pages/cloud-workers/route.tsx";
+import { canonicalGeneralSettingsLocation } from "./pages/config/route-data.ts";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
 import { page as cronPage } from "./pages/cron/route.tsx";
@@ -169,13 +170,15 @@ function canonicalRouteLocation(
   location: RouteLocation,
   basePath: string,
 ): RouteLocation {
-  return routeId === "workboard"
-    ? (resolveWorkboardRouteLocation(location, basePath).canonicalLocation ?? location)
-    : routeId === "plugin"
-      ? canonicalPluginTabLocation(location, basePath)
-      : routeId === "plugins" || routeId === "plugin-settings"
-        ? (canonicalPluginsRouteLocation(location, basePath) ?? location)
-        : location;
+  return routeId === "config"
+    ? canonicalGeneralSettingsLocation(location, basePath)
+    : routeId === "workboard"
+      ? (resolveWorkboardRouteLocation(location, basePath).canonicalLocation ?? location)
+      : routeId === "plugin"
+        ? canonicalPluginTabLocation(location, basePath)
+        : routeId === "plugins" || routeId === "plugin-settings"
+          ? (canonicalPluginsRouteLocation(location, basePath) ?? location)
+          : location;
 }
 
 export function createApplicationRouter(): ApplicationRouter {
@@ -186,17 +189,27 @@ export function createApplicationRouter(): ApplicationRouter {
   // ids, hub tabs, and session refs are runtime data, so the app owns those paths.
   return {
     ...router,
-    navigate: (routeId, context, options, location) =>
-      context.nativeConversation?.interceptNavigation(
-        location ?? locationForRoute(routeId, context.basePath),
-      )
-        ? Promise.resolve()
-        : router.navigate(
-            routeId,
-            context,
-            options,
-            location ? canonicalRouteLocation(routeId, location, context.basePath) : undefined,
-          ),
+    navigate: (routeId, context, options, location) => {
+      const requested = location ?? locationForRoute(routeId, context.basePath);
+      if (context.nativeConversation?.interceptNavigation(requested)) {
+        return Promise.resolve();
+      }
+      const canonical =
+        location || routeId === "config"
+          ? canonicalRouteLocation(routeId, requested, context.basePath)
+          : undefined;
+      // General is a retired URL, not a page to mount between two live destinations.
+      return router.navigate(
+        routeId === "config"
+          ? (routeIdFromPath(canonical!.pathname, context.basePath) ?? routeId)
+          : routeId,
+        context,
+        routeId === "config"
+          ? { ...options, history: options?.history === "push" ? "push" : "replace" }
+          : options,
+        canonical,
+      );
+    },
     routeIdFromPath,
   };
 }

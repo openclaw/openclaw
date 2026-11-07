@@ -212,6 +212,9 @@ With publication/tag-push authority, pass `--workflow-sha <tooling-sha>` to
 `pnpm release:candidate --` or `pnpm release:publish-preflight --` to reuse or
 mint the protected lightweight `release-publish/<tooling-sha12>-<epoch>` tag
 through the git refs API, verify it, and print the dispatch with `--ref <tag>`.
+The checklist requires `--workflow-sha` or `--publish-workflow-ref`. Without
+either, it fails right after any FRV dispatch, before waiting, and names every
+missing flag (including a required SDK acknowledgement) in one exact rerun command.
 Manual tag creation remains the fallback. The push may print a
 `Cannot create ref due to creations being restricted` ruleset warning while the
 tag still exists: verify with `gh api repos/openclaw/openclaw/git/ref/tags/<tag>`

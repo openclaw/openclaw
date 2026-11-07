@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
-import { assert, expect, it, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawPluginApi } from "./api.js";
 import plugin from "./index.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
@@ -48,6 +48,7 @@ function registerGeneration(
   const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
   const { registerGatewayMethod, invoke: rpc } = createGatewayMethodCapture();
   let gatewayStart: Parameters<typeof captured.api.on<"gateway_start">>[1] = () => {};
+  let agentEnd: Parameters<typeof captured.api.on<"agent_end">>[1] = () => {};
   let gatewayStop: Parameters<typeof captured.api.on<"gateway_stop">>[1] = () => {};
   register({
     ...captured.api,
@@ -58,6 +59,8 @@ function registerGeneration(
     on: (name, handler) => {
       if (name === "gateway_start") {
         gatewayStart = handler as typeof gatewayStart;
+      } else if (name === "agent_end") {
+        agentEnd = handler as typeof agentEnd;
       } else if (name === "gateway_stop") {
         gatewayStop = handler as typeof gatewayStop;
       }
@@ -72,7 +75,10 @@ function registerGeneration(
   };
   const start = async () => {
     for (const [service] of registerService.mock.calls) {
-      assert(service.apiVersion !== 2, "Workboard uses v1 services without a host scheduler");
+      assert(
+        service.apiVersion !== 2 && service.apiVersion !== 3,
+        "Workboard uses v1 services without a host scheduler",
+      );
       await service.start(serviceContext);
     }
     void gatewayStart({ port: 0 }, {});
@@ -100,7 +106,15 @@ function registerGeneration(
     });
   };
   return Object.assign(
-    { cleanup: retire, start, ...mocks, expectCall, expectCards },
+    {
+      cleanup: retire,
+      start,
+      ...mocks,
+      expectCall,
+      expectCards,
+      agentEnd,
+      subscriptions: captured.agentEventSubscriptions,
+    },
     {
       tools: () =>
         registerTool.mock.calls.flatMap(
@@ -192,5 +206,61 @@ it.each(["internal", "injected"] as const)(
       await generation.expectCall("cards.list", { ok: ownership === "injected" });
       await using reopened = openStore();
       expect((await reopened.listBoards()).boards).toContainEqual(expect.objectContaining(board));
+    }),
+);
+
+it.each([
+  { phase: "end", extra: {}, expected: "review" },
+  { phase: "error", extra: {}, expected: "blocked" },
+  {
+    phase: "end",
+    extra: { aborted: true, yielded: true, livenessState: "paused", stopReason: "end_turn" },
+    expected: "blocked",
+  },
+  { phase: "end", extra: { timeoutPhase: "provider" }, expected: "blocked" },
+])(
+  "settles the linked card from the owner's $phase outcome ($expected)",
+  ({ phase, extra, expected }) =>
+    withStateDirEnv("workboard-settled-run-", async () => {
+      vi.useFakeTimers();
+      onTestFinished(() => void vi.useRealTimers());
+      await using store = openStore();
+      const sessionKey = "agent:worker:subagent:workboard-settled";
+      const card = await store.create({
+        title: "Worker",
+        status: "running",
+        sessionKey,
+        runId: "current",
+      });
+      await using generation = registerGeneration();
+      await generation.start();
+      const emit = async (data: Record<string, unknown>, runId = "current") => {
+        for (const subscription of generation.subscriptions) {
+          await subscription.handle(
+            { stream: "lifecycle", runId, sessionKey, seq: 1, ts: card.updatedAt + 1, data },
+            {
+              getRunContext: () => undefined,
+              setRunContext: () => {},
+              clearRunContext: () => {},
+            },
+          );
+        }
+      };
+      // Attempt hooks and retryable failures cannot settle the logical run.
+      await generation.agentEnd({ messages: [], success: false }, { sessionKey, runId: "current" });
+      await emit({ phase: "error" });
+      await emit({
+        phase: "end",
+        executionSettled: true,
+        yielded: true,
+        livenessState: "paused",
+        stopReason: "end_turn",
+      });
+      await emit({ phase: "end", executionSettled: true }, "old");
+      expect((await store.get(card.id))?.status).toBe("running");
+      // No session read or elapsed-time window: the owner publishes the final fact.
+      await emit({ phase, executionSettled: true, ...extra });
+      expect((await store.get(card.id))?.status).toBe(expected);
+      expect(generation.warn).not.toHaveBeenCalled();
     }),
 );

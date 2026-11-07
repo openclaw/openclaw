@@ -577,12 +577,14 @@ export function recordSessionParticipantInWorker(
         };
         // The committed count-only receipt keeps the actor's exact aggregate current.
         publishSessionCollaborationChanges([change], database);
-        emitSessionLifecycleEvent({
-          agentId: location.agentId,
-          sessionKey: location.sessionKey,
-          reason: "participants",
-          scope: "session-entry",
-        });
+        if (result.projectionChanged) {
+          emitSessionLifecycleEvent({
+            agentId: location.agentId,
+            sessionKey: location.sessionKey,
+            reason: "participants",
+            scope: "session-entry",
+          });
+        }
       }
       return result.value;
     },
