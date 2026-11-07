@@ -18,7 +18,6 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   readAgentDatabaseAdmissionRefusal,
   readAgentDatabaseReadAdmissionRefusal,
@@ -168,7 +167,6 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
           preparationReady.resolve();
         }
         let resuming: Promise<void> | undefined;
-        const scheduler = createTestGatewayScheduler();
         try {
           const activate = admission.activate.bind(admission);
           // Keep native opening and the production migration/recovery adapter. This fixture
@@ -209,7 +207,6 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
             context,
             preparationReady: preparationReady.promise,
             waitForPostReadyWork: async () => {},
-            scheduler,
             getConfig: () => config,
             getPluginRegistry: () => registry,
             getPluginMetadataSnapshot: () => undefined,
@@ -333,7 +330,6 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
           inputRecoveryReady.resolve();
           openingReady.resolve();
           await owner.stop();
-          await scheduler.stop();
           await Promise.allSettled([resuming]);
         }
       });

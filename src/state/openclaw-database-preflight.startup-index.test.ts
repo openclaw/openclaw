@@ -28,7 +28,6 @@ import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.j
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createAgentDatabaseAdmissionErrorShape,
   listAgentDatabaseAdmissionRefusals,
@@ -54,11 +53,8 @@ import {
 // Keep every agent file until the suite ends so a freed inode cannot alias a latched one.
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const repairMessage = "Rebuilt canonical agent SQLite indexes";
-const schedulers = new Set<ReturnType<typeof createTestGatewayScheduler>>();
 
 afterEach(async () => {
-  await Promise.all([...schedulers].map((scheduler) => scheduler.stop()));
-  schedulers.clear();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
@@ -156,14 +152,11 @@ function activateStartup(
   );
   const context = createContext([], () => config);
   context.agentDatabaseStartup = admission.observation;
-  const scheduler = createTestGatewayScheduler();
-  schedulers.add(scheduler);
   activateGatewayAgentDatabaseStartup({
     admission,
     context,
     preparationReady: Promise.resolve(),
     waitForPostReadyWork: async () => {},
-    scheduler,
     getConfig: () => config,
     getPluginRegistry: vi.fn(),
     getPluginMetadataSnapshot: () => undefined,
