@@ -1006,9 +1006,18 @@ export function createEngineEventLoadScenarios(
         });
         evidence.scrollActionWallMs = scrolling.actionWallMs;
         recordPhase("scroll", scrolling);
+        const drainTimeout =
+          count < 0
+            ? undefined
+            : Math.max(
+                1,
+                duration -
+                  (await page.evaluate(() => Reflect.get(window, "__eventLoad").ready().elapsed)),
+              );
         await page.waitForFunction(
           (expected) => Reflect.get(window, "__eventLoad").ready().completedTools === expected,
           count === -1 ? 0 : toolCount,
+          { timeout: drainTimeout },
         );
         // These are user-idle intervals under event load, not no-work CPU claims.
         const engine = page.context().browser()!.browserType().name();
