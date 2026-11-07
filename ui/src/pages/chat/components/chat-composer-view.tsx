@@ -8,6 +8,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../styles/chat/composer-mobile.css";
 import { McpAppContextStrip } from "../../../components/solid/mcp-app-context-strip.tsx";
+import { parseSlashCommand } from "../../../lib/chat/commands.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -106,10 +107,21 @@ export function renderChatComposerView(
   const composerLeadControl = (
     <Show when={props.permissionPicker}>{(picker) => <ChatPermissionPicker {...picker()} />}</Show>
   );
+  const slashArgsHint = createMemo(() => {
+    const draft = context().visibleDraft;
+    const command = parseSlashCommand(draft)?.command;
+    return !context().goalComposer.active &&
+      command?.args &&
+      !command.argOptions?.length &&
+      context().slashMenuHost.resolveArgOptions(command).length === 0 &&
+      draft === `/${command.name} `
+      ? command.args
+      : undefined;
+  });
   const placeholder = createMemo(() =>
     context().goalComposer.active
       ? t("chat.goals.objectivePlaceholder")
-      : t("chat.composer.placeholder", { name: props.assistantName || "agent" }),
+      : (slashArgsHint() ?? t("chat.composer.placeholder", { name: props.assistantName || "agent" })),
   );
   const mirrorCameraPreview = createMemo(
     () =>
@@ -560,6 +572,7 @@ export function renderChatComposerView(
                 <span
                   class="agent-chat__composer-placeholder"
                   aria-hidden="true"
+                  style={{ display: slashArgsHint() ? "block" : undefined }}
                   ref={[
                     elementRef<HTMLSpanElement>((element) => {
                       placeholderElement = element;
@@ -571,7 +584,16 @@ export function renderChatComposerView(
                     }),
                   ]}
                 >
-                  {context().dictation?.active || context().predictionText ? "" : placeholder()}
+                  {context().dictation?.active || context().predictionText ? "" : (
+                    <>
+                      {slashArgsHint() ? (
+                        <span style={{ visibility: "hidden", "white-space": "pre" }}>
+                          {context().visibleDraft}
+                        </span>
+                      ) : undefined}
+                      {placeholder()}
+                    </>
+                  )}
                 </span>
                 <Show when={context().predictionText}>
                   <span class="agent-chat__composer-prediction" aria-hidden="true">
