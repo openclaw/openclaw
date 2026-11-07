@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -13,7 +14,7 @@ const files = {
 };
 const scriptBody = 'console.log("contained alias");\n';
 const documentBody =
-  '<!doctype html><html><head><script src="./assets/app.js"></script></head><body>Ready</body></html>';
+  '<!doctype html><html><head><script type="importmap">{"imports":{"./assets/_app.js":"./assets/app.js","remote":"https://cdn.invalid/module.js"}}</script><script src="./assets/app.js"></script></head><body>Ready</body></html>';
 
 describe.each(["", "/dashboard"])("Control UI artifact names under %j", (basePath) => {
   const tempDirs = createTempDirTracker();
@@ -71,7 +72,7 @@ describe.each(["", "/dashboard"])("Control UI artifact names under %j", (basePat
   });
 
   it("prepares a symlinked index for direct and fallback documents", async () => {
-    for (const route of ["/", "/chat", "/assets/document.js"]) {
+    for (const route of ["/", "/chat", "/settings/appearance", "/assets/document.js"]) {
       const get = await read(route, "GET", "gzip, identity;q=0");
       expect(get.status).toBe(200);
       expect(get.headers["content-type"]).toBe("text/html; charset=utf-8");
@@ -79,6 +80,10 @@ describe.each(["", "/dashboard"])("Control UI artifact names under %j", (basePat
       const html = gunzipSync(get.body).toString();
       expect(html).toContain(`data-openclaw-control-ui-base-path="${basePath}"`);
       expect(html).toContain(`src="${basePath}/assets/app.js"`);
+      const importMap = `{"imports":{"${basePath}/assets/_app.js":"${basePath}/assets/app.js","remote":"https://cdn.invalid/module.js"}}`;
+      expect(html).toContain(`<script type="importmap">${importMap}</script>`);
+      const importMapHash = createHash("sha256").update(importMap).digest("base64");
+      expect(get.headers["content-security-policy"]).toContain(`'sha256-${importMapHash}'`);
       const head = await read(route, "HEAD", "gzip, identity;q=0");
       expect(head.status).toBe(200);
       expect(head.headers["content-type"]).toBe(get.headers["content-type"]);
