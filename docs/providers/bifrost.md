@@ -36,8 +36,10 @@ Without `--custom-model-id`, non-interactive setup selects the first discovered
 model. If no model is found, pass an explicit model ID or check the gateway.
 
 Re-running setup replaces the provider's authentication settings, including
-previous custom authentication headers. Configure advanced request headers after
-setup. Authored models are retained when reconnecting to the same endpoint.
+previous custom authentication headers. Setup for a different gateway URL also
+removes the previous gateway's proxy, TLS, and private-network request settings.
+Configure advanced request headers after setup. Authored models are retained
+when reconnecting to the same endpoint.
 
 ## Endpoint and model IDs
 
