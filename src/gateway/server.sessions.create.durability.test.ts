@@ -287,7 +287,25 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
     }
     return input;
   });
+  let cleanupStarted = false;
+  const cleanedTurns = new Set<StartChatDispatchParams>();
+  const cleanupTurn = (turn: StartChatDispatchParams) => {
+    if (cleanedTurns.has(turn)) {
+      return;
+    }
+    cleanedTurns.add(turn);
+    durabilityTrace?.("cleanup.release.begin");
+    turn.replyAdmissionTicket?.release();
+    turn.admission.cleanupAdmittedRun();
+    clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
+  };
   dispatch.start.mockClear();
+  dispatch.start.mockImplementation((turn) => {
+    // An RPC timeout does not cancel admission; late mock-owned dispatches still need cleanup.
+    if (cleanupStarted) {
+      cleanupTurn(turn);
+    }
+  });
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   try {
     awaited = "rpc";
@@ -320,24 +338,22 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
     expect(intervenedInputs).toEqual(new Set(inputs.map((input) => input.key)));
     expect(dispatch.start).toHaveBeenCalledTimes(inputs.length);
   } finally {
-    awaited = "cleanup.writers";
-    durabilityTrace?.("cleanup.writers.begin");
-    await Promise.all(competingWrites);
-    durabilityTrace?.("cleanup.writers.end");
+    cleanupStarted = true;
     const released = getSessionWorkAdmissionRelease({
       scope: storePath,
       identities: inputs.map((input) => input.key),
     });
     for (const [turn] of dispatch.start.mock.calls) {
-      durabilityTrace?.("cleanup.release.begin");
-      turn.replyAdmissionTicket?.release();
-      turn.admission.cleanupAdmittedRun();
-      clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
+      cleanupTurn(turn);
     }
     awaited = "cleanup.admission";
     durabilityTrace?.("cleanup.admission.begin");
     await released;
     durabilityTrace?.("cleanup.admission.end");
+    awaited = "cleanup.writers";
+    durabilityTrace?.("cleanup.writers.begin");
+    await Promise.all(competingWrites);
+    durabilityTrace?.("cleanup.writers.end");
     ws.close();
     stopTrace();
   }
