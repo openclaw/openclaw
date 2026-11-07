@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
-import { resolveTelegramTransport } from "./fetch.js";
+import { createTelegramTransport } from "./fetch-transport.js";
 import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "./network-errors.js";
 import {
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS,
@@ -20,7 +20,7 @@ import type {
   TelegramIngressWorkerMessage,
   TelegramIngressWorkerOptions,
 } from "./telegram-ingress-worker.js";
-import { TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER } from "./telegram-ingress-worker.js";
+import { TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER } from "./telegram-ingress-worker.protocol.js";
 
 const pollLimit = 100;
 // getUpdates can return up to 100 updates; 4 MiB is a generous bound that no legitimate
@@ -115,9 +115,6 @@ export async function runTelegramIngressWorkerRuntime(params: {
   let activeController: AbortController | undefined;
   let nextSpoolRequestId = 0;
   let pendingSpoolRequest: PendingSpoolRequest | undefined;
-  const proxyFetch = options.proxy ? makeProxyFetch(options.proxy) : undefined;
-  const transport = resolveTelegramTransport(proxyFetch, { network: options.network });
-  const fetchImpl = transport.fetch;
   const getUpdatesUrl = `${apiRoot}/bot${options.token}/getUpdates`;
   const pollTimeoutSeconds = resolveTelegramLongPollTimeoutSeconds(options.timeoutSeconds);
   let lastUpdateId = options.initialUpdateId;
@@ -199,6 +196,14 @@ export async function runTelegramIngressWorkerRuntime(params: {
     pending.reject(new Error(message.result.message));
   });
 
+  const proxyFetch = options.proxy ? makeProxyFetch(options.proxy) : undefined;
+  // Capture loads after the stop listener, and only when the parent enabled it.
+  const transport = options.debugProxyCapture
+    ? (await import("./fetch.js")).resolveTelegramTransport(proxyFetch, {
+        network: options.network,
+      })
+    : createTelegramTransport(proxyFetch, { network: options.network });
+  const fetchImpl = transport.fetch;
   try {
     for (;;) {
       if (stopController.signal.aborted) {
