@@ -286,6 +286,13 @@ describe("native completion delivery ownership", () => {
     second.bindTurn("next-turn");
     await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
     await client.notify(completedChild());
+    await client.notify(
+      nativeCompletionNotification({
+        agentPath: "waiting-child",
+        result: "Other child done",
+        turnId: "next-turn",
+      }),
+    );
     await second.unregister();
     expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce();
     client.close();
