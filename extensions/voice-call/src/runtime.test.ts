@@ -3,6 +3,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
 import type { VoiceCallProvider } from "./providers/base.js";
@@ -604,6 +605,71 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(consultParamsFrom(runEmbeddedAgent).sessionKey).toBe("agent:main:voice:call:call-1");
   });
 
+  it.each([
+    "initial-abort",
+    "initial-replacement",
+    "final-close",
+    "final-lock",
+    "read-failure",
+  ] as const)(
+    "rejects stale realtime consults after an awaited lock read: %s",
+    async (scenario) => {
+      setConsultCall({ state: "active" });
+      const agent = createConsultRuntime(answeringAgent("Must not dispatch."));
+      agent.session.getSessionEntry.mockImplementation(() => {
+        throw new Error("Synchronous session reads are not available");
+      });
+      const entered = createDeferred<void>();
+      const resume = createDeferred<void>();
+      let reads = 0;
+      agent.session.getSessionEntryAsync.mockImplementation(async () => {
+        reads += 1;
+        if (reads === (scenario.startsWith("final-") ? 2 : 1)) {
+          entered.resolve();
+          await resume.promise;
+          if (scenario === "read-failure") {
+            throw new Error("Session worker failed");
+          }
+        }
+        return {
+          sessionId: "consult",
+          modelSelectionLocked: scenario === "final-lock" && reads > 1,
+        };
+      });
+      mocks.resolveRealtimeFastContextConsult.mockResolvedValue({
+        handled: true,
+        result: { text: "Must not disclose." },
+      });
+      const handler = await startConsult(createRealtimeConfig(), agent);
+      const controller = new AbortController();
+      const pending = handler({ question: "Check the deployment." }, "call-1", {
+        abortSignal: controller.signal,
+      });
+      await awaitGateBeforeSettlement(entered.promise, pending, "Consult skipped its worker read");
+      if (scenario === "initial-abort") {
+        controller.abort(new Error("Caller disconnected"));
+      } else if (scenario === "initial-replacement") {
+        setConsultCall({ state: "active" });
+      } else if (scenario === "final-close") {
+        mocks.managerGetCall.mockReturnValue(undefined);
+      }
+      resume.resolve();
+      await expect(pending).rejects.toThrow(
+        scenario === "initial-abort"
+          ? "Caller disconnected"
+          : scenario === "read-failure"
+            ? "Session worker failed"
+            : scenario === "final-lock"
+              ? "Model selection is locked"
+              : "no longer active",
+      );
+      expect(agent.runEmbeddedAgent).not.toHaveBeenCalled();
+      if (!scenario.startsWith("final-")) {
+        expect(mocks.resolveRealtimeFastContextConsult).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each(["live", "consult-aborted", "call-ended"])(
     "keeps selected memory-provider lookup bound to call and consult: %s",
     async (state) => {
@@ -628,6 +694,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
       } else {
         if (state === "call-ended") {
           mocks.managerGetCall.mockReturnValue(undefined);
+          await expect(pending).rejects.toThrow("no longer active");
+          expect(open).not.toHaveBeenCalled();
+          expect(search).not.toHaveBeenCalled();
+          return;
         }
         expect(await pending).toMatchObject({
           text: expect.stringContaining(

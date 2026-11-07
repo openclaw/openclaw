@@ -45,9 +45,10 @@ async function controlDiscordVoiceAgentRun(params: DiscordVoiceAgentControlParam
     sessionKey: params.entry.route.sessionKey,
     text: params.text,
     ...(params.mode !== undefined ? { mode: params.mode } : {}),
-    getToolAuthorityOverlay: () => {
+    assertCurrent,
+    getToolAuthorityOverlayAsync: async () => {
       assertCurrent();
-      const session = getDiscordRuntime().agent.session.getSessionEntry({
+      const session = await getDiscordRuntime().agent.session.getSessionEntryAsync({
         agentId: params.entry.route.agentId,
         sessionKey: params.entry.route.sessionKey,
         readConsistency: "latest",

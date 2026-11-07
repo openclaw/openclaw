@@ -208,7 +208,8 @@ defineDiscordVoiceTests((h) => {
         );
         if (!oversized && dispatch === "control") {
           expect(control).toHaveBeenCalledExactlyOnceWith({
-            getToolAuthorityOverlay: expect.any(Function),
+            assertCurrent: expect.any(Function),
+            getToolAuthorityOverlayAsync: expect.any(Function),
             sessionKey: entry.route.sessionKey,
             text: completeText,
           });

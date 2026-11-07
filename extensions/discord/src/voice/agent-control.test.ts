@@ -1,3 +1,5 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 // Discord tests cover agent control plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
@@ -5,11 +7,19 @@ import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
 const mocks = vi.hoisted(() => ({
   controlRealtimeVoiceAgentRun: vi.fn(),
   shouldAutoControlRealtimeVoiceAgentText: vi.fn(),
+  getSessionEntryAsync: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/realtime-voice", () => ({
   controlRealtimeVoiceAgentRun: mocks.controlRealtimeVoiceAgentRun,
   shouldAutoControlRealtimeVoiceAgentText: mocks.shouldAutoControlRealtimeVoiceAgentText,
+}));
+
+// mock-isolation: Isolate the plugin's speaker lifetime from storage and the shared control owner.
+vi.mock("../runtime.js", () => ({
+  getDiscordRuntime: () => ({
+    agent: { session: { getSessionEntryAsync: mocks.getSessionEntryAsync } },
+  }),
 }));
 
 function createEntry() {
@@ -89,4 +99,46 @@ describe("maybeControlDiscordVoiceAgentRun", () => {
     ).resolves.toEqual({ handled: false });
     expect(mocks.controlRealtimeVoiceAgentRun).not.toHaveBeenCalled();
   });
+
+  it.each(["speaker-revoked", "session-closed", "worker-failed"] as const)(
+    "refuses control when %s while caller policy is being read",
+    async (scenario) => {
+      const entered = createDeferred<void>();
+      const resume = createDeferred<void>();
+      const effect = vi.fn();
+      let current = true;
+      const entry = createEntry();
+      mocks.getSessionEntryAsync.mockImplementationOnce(async () => {
+        entered.resolve();
+        await resume.promise;
+        if (scenario === "worker-failed") {
+          throw new Error("Session worker failed");
+        }
+        return undefined;
+      });
+      mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(async (params) => {
+        await params.getToolAuthorityOverlayAsync();
+        params.assertCurrent();
+        effect();
+      });
+      const pending = maybeControlDiscordVoiceAgentRun({
+        ...authority,
+        entry,
+        text: "cancel that",
+        isCurrent: () => current,
+      });
+      await awaitGateBeforeSettlement(entered.promise, pending, "Control skipped its worker read");
+      if (scenario === "speaker-revoked") {
+        current = false;
+      }
+      if (scenario === "session-closed") {
+        entry.sessionLifecycle.status = "stopped";
+      }
+      resume.resolve();
+      await expect(pending).rejects.toThrow(
+        scenario === "worker-failed" ? "Session worker failed" : "authorization changed",
+      );
+      expect(effect).not.toHaveBeenCalled();
+    },
+  );
 });

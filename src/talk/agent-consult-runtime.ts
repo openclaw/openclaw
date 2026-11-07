@@ -82,8 +82,8 @@ export function assertRealtimeVoiceAgentConsultModelSelectionUnlocked(
   }
 }
 
-/** Gateway consults read lock state through the worker-backed session reader. */
-async function assertConsultModelSelectionUnlocked(
+/** Read current model locks through the existing session worker. */
+export async function assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(
   params: RealtimeVoiceAgentConsultModelLockParams,
 ): Promise<void> {
   for (const candidate of collectModelSelectionLockCandidates(params)) {
@@ -344,7 +344,7 @@ export async function consultRealtimeVoiceAgent(params: {
     spawnedBy: params.spawnedBy,
     storePath,
   };
-  await assertConsultModelSelectionUnlocked(modelLockParams);
+  await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
   const lifecycleAbortController = new AbortController();
   const lifecycleInterruption = new Error(
     "Realtime voice agent consult interrupted by a session lifecycle change.",
@@ -371,7 +371,7 @@ export async function consultRealtimeVoiceAgent(params: {
       if (archivedSessionError) {
         throw new Error(archivedSessionError);
       }
-      await assertConsultModelSelectionUnlocked(modelLockParams);
+      await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
     },
   });
   const abortFromCaller = () => lifecycleAbortController.abort(params.abortSignal?.reason);
@@ -512,7 +512,7 @@ export async function consultRealtimeVoiceAgent(params: {
         deliveryContext: consultDeliveryContext,
       });
       const sessionId = sessionEntry.sessionId;
-      await assertConsultModelSelectionUnlocked(modelLockParams);
+      await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
 
       const runId = `${params.runIdPrefix}-${randomUUID()}`;
       const timeoutMs =
@@ -524,7 +524,7 @@ export async function consultRealtimeVoiceAgent(params: {
       let runPromise: ReturnType<RealtimeVoiceAgentConsultRuntime["runEmbeddedAgent"]>;
       try {
         abortSignal.throwIfAborted();
-        await assertConsultModelSelectionUnlocked(modelLockParams);
+        await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
         abortSignal.throwIfAborted();
         // Voice consults suppress verbose/reasoning output because the bridge needs a short,
         // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.

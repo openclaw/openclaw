@@ -108,7 +108,7 @@ defineDiscordVoiceTests((h) => {
             throw new DOMException("Control was cancelled", "AbortError");
           }
           if (result === "guarded") {
-            params.getToolAuthorityOverlay?.();
+            await params.getToolAuthorityOverlayAsync?.();
             controlEffect();
           }
           return {

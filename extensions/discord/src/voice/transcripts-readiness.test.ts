@@ -336,7 +336,8 @@ defineDiscordVoiceTests(
           );
           if (origin === "native" && mode === "stt-tts") {
             expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledExactlyOnceWith({
-              getToolAuthorityOverlay: expect.any(Function),
+              assertCurrent: expect.any(Function),
+              getToolAuthorityOverlayAsync: expect.any(Function),
               sessionKey: expectDefined(entry.route?.sessionKey, "voice session route"),
               text: "Do not\nsend the update",
             });
