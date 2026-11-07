@@ -69,7 +69,6 @@ function titleParams(entry: SessionEntry | undefined = baseEntry) {
   mocks.load.mockReturnValue(entry);
   return { ...titleDefaults, entry };
 }
-
 function mockSessionUpdate(current: SessionEntry): void {
   mocks.patch.mockImplementation(async (_scope, update) => {
     const patch = await update({ ...current });
@@ -78,7 +77,6 @@ function mockSessionUpdate(current: SessionEntry): void {
     return result;
   });
 }
-
 function pendingLabel(once = false) {
   const started = createDeferredCore();
   const label = createDeferredCore<string>();
@@ -93,7 +91,6 @@ function pendingLabel(once = false) {
   }
   return { ...label, started: started.promise };
 }
-
 function expectCalls(count: number, ...fns: Array<{ mock: { calls: unknown[][] } }>) {
   for (const fn of fns) {
     expect(fn.mock.calls).toHaveLength(count);
@@ -130,7 +127,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   afterEach(() => vi.useRealTimers());
 
   it.each([
-    ["Plan the release", 0],
+    ["/tmp/notes.md summarise this file", 1],
     ["[Wed 2026-10-28 12:00 PDT] Plan the release", 0],
     ["/topic Plan the release", 1],
     ["[Wed 2026-10-28 12:00 PDT] /skill topic Plan the release", 1],
@@ -145,7 +142,10 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       ).resolves.toBe("Release Planning");
       expect(mocks.prepareSkills).toHaveBeenCalledTimes(preparations);
       expect(mocks.generate).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ userMessage: "Plan the release", utilityOnly: true }),
+        expect.objectContaining({
+          userMessage: userMessage.startsWith("/tmp/") ? userMessage : "Plan the release",
+          utilityOnly: true,
+        }),
       );
     },
   );

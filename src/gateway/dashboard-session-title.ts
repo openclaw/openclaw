@@ -10,6 +10,7 @@ import { createCrustaceanSlug } from "../agents/session-slug.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { withWorktreeSourceWait } from "../agents/worktrees/allocation.js";
 import type { WorktreeSourceStage, WorktreeWaitBudget } from "../agents/worktrees/types.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -86,6 +87,9 @@ export function buildDashboardSessionTitleSource(params: {
   attachments?: readonly ChatAttachment[];
 }): string {
   const visibleMessage = params.message.trim();
+  // Any leading slash prefers attachment text (PR #121467). Path-only slash
+  // messages with no usable attachment still fall through to visibleMessage so
+  // resolveSessionTitleSource can title pasted absolute paths.
   const slashCommand = visibleMessage.startsWith("/");
   let source = slashCommand ? "" : visibleMessage;
   for (const attachment of params.attachments ?? []) {
@@ -376,16 +380,18 @@ export async function prepareDashboardSessionTitle(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   try {
-    const sourceText =
-      resolveSessionTitleSource(params.userMessage) ??
-      resolveSessionTitleSource(
-        params.userMessage,
-        await prepareTitleSkillCommands({
+    // Slash drafts need prepared skill metadata so registered commands stay
+    // skill-aware; ordinary text keeps the empty-command fast path. Strip the
+    // inbound envelope first so timestamp-prefixed /skill drafts still prepare.
+    const trimmed = stripInboundMetadata(params.userMessage).trim();
+    const skillCommands = trimmed.startsWith("/")
+      ? await prepareTitleSkillCommands({
           cfg: params.cfg,
           agentId: params.agentId,
           assertCurrent: params.assertCurrent,
-        }),
-      );
+        })
+      : [];
+    const sourceText = resolveSessionTitleSource(params.userMessage, skillCommands);
     return sourceText
       ? await generateDashboardSessionTitle({ ...params, sourceText, utilityOnly: true })
       : null;
