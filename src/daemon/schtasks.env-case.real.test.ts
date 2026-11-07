@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
@@ -25,15 +26,46 @@ type ChildEnvironment = { pid: number; value?: string; control?: string };
 type LaunchedChild = {
   child: ChildProcess;
   closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  closeState?: { code: number | null; signal: NodeJS.Signals | null };
+};
+
+type ArgvInspection = {
+  provider: "powershell" | "wmic";
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  errorCode?: string;
+  elapsedMs: number;
+  stdoutEmpty: boolean;
 };
 
 const launchCapture = vi.hoisted(() => ({
   observe: undefined as ((child: ChildProcess, options?: SpawnOptions) => void) | undefined,
+  observeArgv: undefined as ((inspection: ArgvInspection) => void) | undefined,
 }));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
+    spawnSync: (...args: Parameters<typeof actual.spawnSync>) => {
+      const observe = launchCapture.observeArgv;
+      if (!observe) {
+        return actual.spawnSync(...args);
+      }
+      const startedAt = performance.now();
+      const result = actual.spawnSync(...args);
+      const executable = path.win32.basename(args[0]).toLowerCase();
+      if (executable === "powershell.exe" || executable === "wmic.exe") {
+        observe({
+          provider: executable === "powershell.exe" ? "powershell" : "wmic",
+          status: result.status,
+          signal: result.signal,
+          errorCode: extractErrorCode(result.error),
+          elapsedMs: Math.round(performance.now() - startedAt),
+          stdoutEmpty: !result.stdout?.toString().trim(),
+        });
+      }
+      return result;
+    },
     spawn: (...args: Parameters<typeof actual.spawn>) => {
       const child = actual.spawn(...args);
       launchCapture.observe?.(child, args[2]);
@@ -141,14 +173,18 @@ server.listen(port, "127.0.0.1", () => {
         const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
           (resolve, reject) => {
             child.once("error", reject);
-            child.once("close", (code, signal) => resolve({ code, signal }));
+            child.once("close", (code, signal) => {
+              launched.closeState = { code, signal };
+              resolve(launched.closeState);
+            });
           },
         );
-        const launched = { child, closed };
+        const launched: LaunchedChild = { child, closed };
         children.push(launched);
         return launched;
       };
-      const { child, closed } = launch();
+      const launched = launch();
+      const { child, closed } = launched;
       await Promise.race([
         expect.poll(() => fs.readFile(reportPath, "utf8"), { timeout: 10_000 }).toBeTruthy(),
         closed.then(() => {
@@ -164,7 +200,33 @@ server.listen(port, "127.0.0.1", () => {
         port,
       });
       expect(observed.pid).not.toBe(child.pid);
-      expect(readWindowsProcessArgsSync(observed.pid)).toEqual(observed.argv);
+      const inspections: ArgvInspection[] = [];
+      // Observe this exact call without retrying it or retaining native output/arguments.
+      launchCapture.observeArgv = (inspection) => inspections.push(inspection);
+      try {
+        expect(readWindowsProcessArgsSync(observed.pid)).toEqual(observed.argv);
+      } catch (error) {
+        const output = await fs.readFile(outputPath, "utf8").catch(() => null);
+        console.error("[windows-launcher-argv]", {
+          inspections,
+          launcher: {
+            exitCode: child.exitCode,
+            signalCode: child.signalCode,
+            closeState: launched.closeState ?? null,
+          },
+          // Only these fixture-generated markers are safe to publish, never native stderr.
+          fixtureOutput:
+            output === null
+              ? null
+              : output
+                  .split(/\r?\n/)
+                  .filter((line) => line === "launcher-stdout" || line === "launcher-stderr")
+                  .slice(0, 8),
+        });
+        throw error;
+      } finally {
+        launchCapture.observeArgv = undefined;
+      }
       if (!normalized) {
         await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
           "Effective Scheduled Task service command could not be inspected.",
