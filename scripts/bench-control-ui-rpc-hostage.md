@@ -32,10 +32,18 @@ the existing native fixture owner validates its committed Workboard sources and
 compiles one cached plugin generation. `results.json.builds[].workboardSource`
 records the source revision, browser tree, catalog, asset sizes and hashes.
 
-`results.json.flowCoverage` records the owning engine scenario, excluded or
-unavailable routes and their reason, and observed redirect destinations. Engine
-coverage exclusions remain exclusions here; the cold/warm/session-switch flows
-cover Chat separately. A baseline page error or rendered lazy-panel failure is a setup gap and
+`results.json.flowCoverage` records each route's fixture, any unavailable route
+and its reason, and observed redirect destinations. The engine benchmark's
+lane-ownership exclusions do not exclude read-only RPC measurement: Chat and
+New conversation use the interaction fixture, Dashboard uses
+`data-board-first-render`, Usage uses `data-usage-first-render`, and Logs uses
+`data-logs-first-render`. Chat's first visit switches to the second fixture
+session; cold/warm/session-switch remain separate flows. The Dashboard fixture
+contains 1,000 saved report widgets across four tabs, Usage has 12,000 source
+sessions with at most 50 response rows, and Logs starts with a 500-line tail.
+Dashboard starts from New conversation so its session surface opens fresh,
+instead of reusing an already-mounted Chat pane for the same session.
+A baseline page error or rendered lazy-panel failure is a setup gap and
 prevents that flow's delayed-method sweep. `--methods` limits the census;
 otherwise it exercises every discovered method. `--rpc-rtt-ms 100` adds mock
 response delay to each known method, without HTTP bandwidth or asset latency.

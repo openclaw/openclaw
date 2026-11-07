@@ -33,6 +33,7 @@ import {
 import {
   createInteractionFixture,
   createScenarioFixture,
+  interactionScenarios,
 } from "./lib/control-ui-interaction-scenarios.ts";
 import {
   createWorkboardResourceFixture,
@@ -104,10 +105,22 @@ const bootPath = controlUiSessionPath(sessionKeys[0]!);
 const pageScenarios = createEnginePageScenarios(0, "chat");
 const workboardPageScenarios = createEnginePageScenarios(0, "new-session");
 const bootFlows = new Set(["cold", "warm", "session-switch"]);
-const pageScenario = (flow: string) =>
-  (flow === "workboard" || flow === "plugin" ? workboardPageScenarios : pageScenarios).find(
+const supplementalFixtures = new Map([
+  ["dashboard", "data-board-first-render"],
+  ["usage", "data-usage-first-render"],
+  ["logs", "data-logs-first-render"],
+]);
+const pageScenario = (flow: string) => {
+  const supplementalId = supplementalFixtures.get(flow);
+  if (supplementalId) {
+    const scenario = interactionScenarios.find((entry) => entry.id === supplementalId);
+    assert(scenario, `Missing route fixture: ${supplementalId}`);
+    return scenario;
+  }
+  return (flow === "workboard" || flow === "plugin" ? workboardPageScenarios : pageScenarios).find(
     (entry) => entry.id === `page-${flow}-visit`,
   );
+};
 const needsWorkboard = flows.some((flow) => pageScenario(flow)?.fixture?.workboardResources);
 const flowCoverage = flows.map((flow) => {
   const coverage = enginePageCoverage.find((entry) => entry.id === flow);
@@ -115,6 +128,16 @@ const flowCoverage = flows.map((flow) => {
     return { flow, status: "measured", fixture: "interaction" };
   }
   assert(coverage, `Missing route coverage: ${flow}`);
+  // Engine ownership boundaries do not exclude read-only RPC measurement.
+  if (coverage.status === "excluded") {
+    return {
+      flow,
+      ...coverage,
+      status: "measured",
+      reason: undefined,
+      fixture: pageScenario(flow)?.id ?? "interaction",
+    };
+  }
   return { flow, ...coverage, fixture: pageScenario(flow)?.id };
 });
 
@@ -269,7 +292,7 @@ function installProbe() {
         .map((node) => node.textContent?.trim() ?? ""),
       visibleRows: [
         ...document.querySelectorAll(
-          ".data-table tbody tr:not(.session-skeleton-row), .cron-job, .device-entry, .activity-entry, .systems-machine",
+          ".data-table tbody tr:not(.session-skeleton-row), .cron-job, .device-entry, .activity-entry, .systems-machine, .log-row, .session-bar-row, .board-widget",
         ),
       ].filter(visible).length,
       visibleEmptyStates: [
@@ -581,7 +604,9 @@ async function sample(
         if (flow === "cold") {
           await page.goto(new URL(bootPath, slot.server.baseUrl).href);
         } else {
-          await settledBoot(page, slot, workboard);
+          // Dashboard needs a fresh session surface; reusing the active Chat pane
+          // would measure the already-mounted transcript instead of opening its board.
+          await settledBoot(page, slot, workboard || flow === "dashboard");
           if (flow === "warm") {
             // Replace init script behavior for this reload without installing a second mock socket.
             await page.evaluate(() => sessionStorage.setItem("rpc-hostage-warm", "1"));
