@@ -2459,6 +2459,105 @@ export function createEnginePageScenarios(
         ...coldVisits,
       ].concat(noChanges);
     }
+    if (id === "debug") {
+      const diagnosticsFixture: NonNullable<EngineScenario["fixtureOverrides"]> = (
+        sandbox,
+        base,
+      ) => {
+        const fixture = common.fixtureOverrides?.(sandbox, base) ?? {};
+        return {
+          ...fixture,
+          featureMethods: [...new Set([...(fixture.featureMethods ?? []), "diagnostics.lanes"])],
+          methodResponses: {
+            ...fixture.methodResponses,
+            status: { securityAudit: { summary: { critical: 0, warn: 0, info: 0 } } },
+            health: { ok: true },
+            "last-heartbeat": { ts: time, status: "ok" },
+            "diagnostics.lanes": {
+              lanes: Array.from({ length: 30 }, (_, index) => ({
+                lane: `rpc-lane-initial-${index}`,
+                activeCount: 0,
+                queuedCount: 0,
+                maxConcurrent: 4,
+              })),
+              dynamic: null,
+            },
+          },
+        };
+      };
+      const sourceDefinition = {
+        ...definition,
+        ready: "openclaw-debug-page .debug-security-status .settings-status--ok",
+      };
+      const sourceVisit: EngineScenario = {
+        ...visit,
+        id: "page-debug-status-visit",
+        fixtureOverrides: diagnosticsFixture,
+        expected:
+          "First Debug visit presents the accepted status/security snapshot independently of its other diagnostic reads.",
+        run: async (page) => {
+          const timing = await measureVisit(page, id, sourceDefinition);
+          return {
+            visitStartedAtMs: timing.startedAtMs,
+            visitReadyMs: timing.readyMs,
+            visitReadyAtMs: timing.readyAtMs,
+            contentReadyMs: timing.contentReadyMs,
+          };
+        },
+      };
+      const lanePoll: EngineScenario = {
+        ...sourceVisit,
+        id: "page-debug-lanes-poll",
+        expected:
+          "The next real three-second lane poll presents its accepted sample independently of the heartbeat read.",
+        prepare: async (page) => {
+          await boot(page);
+          await navigate(page, id);
+          await ready(page, id, sourceDefinition);
+          await page.waitForFunction(
+            () =>
+              document.querySelector("openclaw-debug-page .debug-refresh")?.textContent?.trim() ===
+              "Refresh",
+          );
+        },
+        run: async (page) =>
+          page.evaluate(
+            () =>
+              new Promise<{ pollReadyMs: number }>((resolve, reject) => {
+                const started = performance.now();
+                (window as MockGatewayWindow).openclawControlUiE2eGateway!.setMethodResponse(
+                  "diagnostics.lanes",
+                  {
+                    lanes: Array.from({ length: 30 }, (_, index) => ({
+                      lane: `rpc-lane-current-${index}`,
+                      activeCount: 1,
+                      queuedCount: 0,
+                      maxConcurrent: 4,
+                    })),
+                    dynamic: null,
+                  },
+                );
+                let readyFrames = 0;
+                const observe = () => {
+                  const row = document.querySelector("openclaw-debug-page .command-lane-row");
+                  readyFrames =
+                    row?.checkVisibility() && row.textContent?.includes("rpc-lane-current-0")
+                      ? readyFrames + 1
+                      : 0;
+                  if (readyFrames >= 2) {
+                    resolve({ pollReadyMs: performance.now() - started });
+                  } else if (performance.now() - started > 15_000) {
+                    reject(new Error("Debug lane poll did not present its fresh sample"));
+                  } else {
+                    requestAnimationFrame(observe);
+                  }
+                };
+                requestAnimationFrame(observe);
+              }),
+          ),
+      };
+      return [visit, revisit, action, leave, sourceVisit, lanePoll].concat(noChanges);
+    }
     return [visit, revisit, action, leave].concat(noChanges);
   });
 }

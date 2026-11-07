@@ -9,7 +9,10 @@ import {
   Loading,
   onSettled,
   Show,
+  type Accessor,
 } from "solid-js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { HealthSnapshot, ModelCatalogResult, StatusSummary } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
@@ -27,10 +30,7 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import {
-  loadCommandLaneDiagnostics,
-  loadGatewayDiagnostics,
-} from "../../lib/gateway-diagnostics.ts";
+import { loadCommandLaneDiagnostics } from "../../lib/gateway-diagnostics.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
 import { formatEventPayload } from "../../lib/presenter.ts";
@@ -61,7 +61,7 @@ function CodeBlock(props: { title: string; value: unknown; format?: (value: unkn
   );
 }
 
-function SecurityRow(props: { status: DebugData["status"]; pending: boolean }) {
+function SecurityRow(props: { status: StatusSummary | null; pending: boolean }) {
   const summary = () =>
     // SAFETY: status.get publishes numeric security-audit counters in this field.
     (props.status as { securityAudit?: { summary?: Record<string, number> } } | null)?.securityAudit
@@ -102,20 +102,88 @@ function SecurityRow(props: { status: DebugData["status"]; pending: boolean }) {
   );
 }
 
-const emptyDiagnostics = (): DebugData => ({
-  status: null,
-  health: null,
-  models: [],
-  heartbeat: null,
-  lanes: [],
-  dynamic: null,
-});
+type DiagnosticArgs = [GatewayBrowserClient, string | null];
 
-type Diagnostics = Awaited<ReturnType<typeof loadGatewayDiagnostics>>;
-type DebugData = Omit<Diagnostics, "status" | "health"> & {
-  status: Diagnostics["status"] | null;
-  health: Diagnostics["health"] | null;
-};
+function createDiagnosticSource<T>(
+  revision: Accessor<number>,
+  publish: () => void,
+  load: (args: DiagnosticArgs, options: { signal: AbortSignal }) => Promise<T>,
+) {
+  let snapshot: { value: T } | null = null;
+  let error: string | null = null;
+  const request = createPageRequest(publish, {
+    task: load,
+    onComplete: (value) => {
+      snapshot = { value };
+      error = null;
+    },
+    onError: (failure) => {
+      error = formatUiError(failure);
+    },
+  });
+  const receipt = createMemo(
+    () => {
+      revision();
+      return { completion: request.read };
+    },
+    { equals: (previous, next) => previous.completion === next.completion },
+  );
+  const ready = createDeferred(() => receipt().completion);
+  return {
+    request,
+    receipt,
+    ready,
+    snapshot: () => {
+      revision();
+      return snapshot;
+    },
+    pending: () => {
+      revision();
+      return request.pending;
+    },
+    feedback: () => {
+      latest(ready);
+      if (error) {
+        throw new Error(error);
+      }
+      return null;
+    },
+    reset() {
+      request.cancel();
+      snapshot = null;
+      error = null;
+    },
+  };
+}
+
+type DiagnosticSource<T> = ReturnType<typeof createDiagnosticSource<T>>;
+
+function DiagnosticFeedback<T>(props: { source: DiagnosticSource<T>; onRetry: () => void }) {
+  const pending = () => (
+    <Status
+      kind="muted"
+      label={t(props.source.snapshot() ? "common.refreshing" : "common.loading")}
+    />
+  );
+  return (
+    <Loading on={props.source.receipt()} fallback={pending()}>
+      <Errored
+        fallback={(error) => (
+          <span role="alert">
+            <Status kind="danger" label={t("common.failed")} /> {formatUiError(error())}{" "}
+            {props.source.snapshot() ? t("common.staleData") : undefined}{" "}
+            <button class="btn" onClick={() => props.onRetry()}>
+              {t("common.retry")}
+            </button>
+          </span>
+        )}
+      >
+        {props.source.feedback()}
+        <Show when={isPending(props.source.ready)}>{pending()}</Show>
+      </Errored>
+    </Loading>
+  );
+}
 
 export function DebugPage() {
   const context: ApplicationContext = useApplication();
@@ -125,17 +193,11 @@ export function DebugPage() {
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const publish = () => setRevision((value) => value + 1);
   const state: {
-    data: DebugData;
-    diagnosticsError: string | null;
-    liveError: string | null;
     callMethod: string;
     callParams: string;
     callResult: string | null;
     callError: string | null;
   } = {
-    data: emptyDiagnostics(),
-    diagnosticsError: null,
-    liveError: null,
     callMethod: "",
     callParams: "{}",
     callResult: null,
@@ -146,87 +208,74 @@ export function DebugPage() {
   let client = context.gateway.snapshot.client;
   let needsRefresh = true;
   let disposed = false;
-  const polling = useVisiblePoll(3000, () => void loadLiveDiagnostics());
-  const diagnostics = createPageRequest(publish, {
-    task: ([source, selectedAgent]: Parameters<typeof loadGatewayDiagnostics>, { signal }) =>
-      loadGatewayDiagnostics(source, selectedAgent, signal),
-    onComplete: (data) => {
-      state.data = data;
-      state.diagnosticsError = state.liveError = null;
-    },
-    onError: (error) => {
-      state.diagnosticsError = formatUiError(error);
-    },
-  });
-  // Poll admission stays quiet; only a completed live read publishes.
-  const live = createPageRequest(() => {}, {
-    task: async (source: Parameters<typeof loadCommandLaneDiagnostics>[0], { signal }) => {
-      const [heartbeat, lanes] = await Promise.all([
-        source.request("last-heartbeat", {}, { signal }),
-        loadCommandLaneDiagnostics(source, signal),
-      ]);
-      return { heartbeat, ...lanes };
-    },
-    onComplete: (data) => {
-      state.data = { ...state.data, ...data };
-      state.liveError = null;
-      publish();
-    },
-    onError: (error) => {
-      state.liveError = formatUiError(error);
-      publish();
-    },
-  });
-
-  function observeRequest(request: { readonly read: Promise<unknown> | null }) {
-    // Keep promise identity synchronous; only the ready memo consumes it.
-    const receipt = createMemo(
-      () => {
-        revision();
-        return { completion: request.read };
-      },
-      { equals: (previous, next) => previous.completion === next.completion },
-    );
-    // The page deliberately retains snapshots while owner updates stay immediate.
-    return { receipt, ready: createDeferred(() => receipt().completion) };
-  }
-  const diagnosticsRead = observeRequest(diagnostics);
-  const liveRead = observeRequest(live);
-
-  // Accepted errors survive retries; a full success clears both read owners.
-  const readFeedback = () => {
-    latest(diagnosticsRead.ready);
-    latest(liveRead.ready);
-    const error = read("diagnosticsError") ?? read("liveError");
-    if (error) {
-      throw new Error(error);
-    }
-    return null;
-  };
+  const status = createDiagnosticSource(revision, publish, ([source], { signal }) =>
+    source.request<StatusSummary>("status", {}, { signal }),
+  );
+  const health = createDiagnosticSource(revision, publish, ([source], { signal }) =>
+    source.request<HealthSnapshot>("health", {}, { signal }),
+  );
+  const models = createDiagnosticSource(
+    revision,
+    publish,
+    async ([source, selectedAgent], { signal }) =>
+      selectedAgent
+        ? (
+            await source.request<ModelCatalogResult>(
+              "models.list",
+              { agentId: selectedAgent.trim(), view: "default" },
+              { signal },
+            )
+          ).models
+        : [],
+  );
+  const heartbeat = createDiagnosticSource(revision, publish, ([source], { signal }) =>
+    source.request("last-heartbeat", {}, { signal }),
+  );
+  const lanes = createDiagnosticSource(revision, publish, ([source], { signal }) =>
+    loadCommandLaneDiagnostics(source, signal),
+  );
+  const sources = [status, health, models, heartbeat, lanes];
+  const snapshots = [
+    { title: () => t("debug.status"), source: status },
+    { title: () => t("debug.health"), source: health },
+    { title: () => t("debug.lastHeartbeat"), source: heartbeat },
+  ];
+  const polling = useVisiblePoll(3000, loadLiveDiagnostics);
 
   function invalidate() {
-    diagnostics.cancel();
-    live.cancel();
+    for (const source of sources) {
+      source.request.cancel();
+    }
     needsRefresh = true;
     callEpoch += 1;
   }
 
-  async function loadDiagnostics() {
+  function reloadSource(source: DiagnosticSource<unknown>) {
     const scope = lifecycle.capture();
-    if (!scope || diagnostics.pending) {
-      return;
+    if (scope) {
+      void source.request.run([scope.client, context.settingsAgentSelection.state.selectedId]);
     }
-    live.cancel();
-    needsRefresh = false;
-    await diagnostics.run([scope.client, context.settingsAgentSelection.state.selectedId]);
   }
 
-  async function loadLiveDiagnostics() {
-    const scope = lifecycle.capture();
-    if (!scope || diagnostics.pending || live.pending || document.visibilityState === "hidden") {
+  function loadDiagnostics() {
+    if (!lifecycle.capture()) {
       return;
     }
-    await live.run(scope.client);
+    needsRefresh = false;
+    for (const source of sources) {
+      reloadSource(source);
+    }
+  }
+
+  function loadLiveDiagnostics() {
+    if (document.visibilityState === "hidden") {
+      return;
+    }
+    for (const source of [heartbeat, lanes]) {
+      if (!source.request.pending) {
+        reloadSource(source);
+      }
+    }
   }
 
   function syncPolling() {
@@ -245,8 +294,10 @@ export function DebugPage() {
       }
       if (client !== snapshot.client) {
         client = snapshot.client;
-        state.data = emptyDiagnostics();
-        state.callResult = state.callError = state.diagnosticsError = state.liveError = null;
+        for (const source of sources) {
+          source.reset();
+        }
+        state.callResult = state.callError = null;
       }
       if (needsRefresh) {
         void loadDiagnostics();
@@ -260,7 +311,7 @@ export function DebugPage() {
         return;
       }
       agent = next;
-      state.data = { ...state.data, models: [] };
+      models.reset();
       invalidate();
       void loadDiagnostics();
       publish();
@@ -311,7 +362,7 @@ export function DebugPage() {
         class="btn debug-refresh"
         data-refresh-label={t("common.refresh")}
         data-refreshing-label={t("common.refreshing")}
-        disabled={gateway.read().snapshot.phase !== "connected" || props.pending}
+        disabled={gateway.read().snapshot.phase !== "connected"}
         onClick={() => void loadDiagnostics()}
       >
         <Show
@@ -329,27 +380,8 @@ export function DebugPage() {
       <SettingsPage wide>
         <Section
           title={t("debug.snapshotsTitle")}
-          description={
-            <span class="debug-read-feedback">
-              <Errored
-                fallback={(error) => (
-                  <span role="alert">
-                    <Status kind="danger" label={t("common.failed")} /> {formatUiError(error())}
-                  </span>
-                )}
-              >
-                <Loading fallback={t("debug.snapshotsSubtitle")}>
-                  {readFeedback()}
-                  {t("debug.snapshotsSubtitle")}
-                </Loading>
-              </Errored>
-            </span>
-          }
-          actions={
-            <Loading on={diagnosticsRead.receipt()} fallback={<RefreshButton pending />}>
-              <RefreshButton pending={isPending(diagnosticsRead.ready)} />
-            </Loading>
-          }
+          description={<span class="debug-read-feedback">{t("debug.snapshotsSubtitle")}</span>}
+          actions={<RefreshButton pending={sources.some((source) => source.pending())} />}
         >
           <Show
             when={
@@ -362,32 +394,54 @@ export function DebugPage() {
             />
           </Show>
           <SecurityRow
-            status={read("data").status}
-            pending={
-              read("data").status === null &&
-              !read("diagnosticsError") &&
-              gateway.read().snapshot.phase === "connected"
-            }
+            status={status.snapshot()?.value ?? null}
+            pending={!status.snapshot() && status.pending()}
           />
-          <For each={["status", "health", "heartbeat"] as const}>
-            {(key) => {
-              const title = () => t(key === "heartbeat" ? "debug.lastHeartbeat" : `debug.${key}`);
-              return (
-                <Row
-                  title={title()}
-                  stacked
-                  control={
-                    <>
-                      <CodeBlock title={title()} value={read("data")[key]} />
-                    </>
-                  }
-                />
-              );
-            }}
+          <For each={snapshots}>
+            {(snapshot) => (
+              <Row
+                title={
+                  <>
+                    {snapshot.title()}{" "}
+                    <DiagnosticFeedback
+                      source={snapshot.source}
+                      onRetry={() => reloadSource(snapshot.source)}
+                    />
+                  </>
+                }
+                stacked
+                control={
+                  <Show
+                    when={snapshot.source.snapshot()}
+                    fallback={
+                      <pre
+                        class="code-block"
+                        role="group"
+                        aria-label={snapshot.title()}
+                        aria-busy={snapshot.source.pending() ? "true" : "false"}
+                      >
+                        {t(
+                          snapshot.source.pending()
+                            ? "common.loading"
+                            : "debug.overlay.unavailable",
+                        )}
+                      </pre>
+                    }
+                  >
+                    {(value) => <CodeBlock title={snapshot.title()} value={value().value} />}
+                  </Show>
+                }
+              />
+            )}
           </For>
         </Section>
         <Section
-          title={t("debug.lanes.title")}
+          title={
+            <>
+              {t("debug.lanes.title")}{" "}
+              <DiagnosticFeedback source={lanes} onRetry={() => reloadSource(lanes)} />
+            </>
+          }
           description={t("debug.lanes.subtitle")}
           actions={
             <button class="btn" onClick={() => requestDebugOverlayToggle()}>
@@ -413,7 +467,14 @@ export function DebugPage() {
                 </tr>
               </thead>
               <tbody>
-                <CommandLaneRows lanes={read("data").lanes} dynamic={read("data").dynamic} />
+                <Show when={lanes.snapshot()}>
+                  {(snapshot) => (
+                    <CommandLaneRows
+                      lanes={snapshot().value.lanes}
+                      dynamic={snapshot().value.dynamic}
+                    />
+                  )}
+                </Show>
               </tbody>
             </table>
           </div>
@@ -491,9 +552,31 @@ export function DebugPage() {
             </div>
           </Show>
         </Section>
-        <Section title={t("debug.modelsTitle")} description={t("debug.modelsSubtitle")}>
+        <Section
+          title={
+            <>
+              {t("debug.modelsTitle")}{" "}
+              <DiagnosticFeedback source={models} onRetry={() => reloadSource(models)} />
+            </>
+          }
+          description={t("debug.modelsSubtitle")}
+        >
           <div class="settings-row settings-row--stacked">
-            <CodeBlock title={t("debug.modelsTitle")} value={read("data").models} />
+            <Show
+              when={models.snapshot()}
+              fallback={
+                <pre
+                  class="code-block"
+                  role="group"
+                  aria-label={t("debug.modelsTitle")}
+                  aria-busy={models.pending() ? "true" : "false"}
+                >
+                  {t(models.pending() ? "common.loading" : "debug.overlay.unavailable")}
+                </pre>
+              }
+            >
+              {(snapshot) => <CodeBlock title={t("debug.modelsTitle")} value={snapshot().value} />}
+            </Show>
           </div>
         </Section>
         <Section title={t("debug.eventLogTitle")} description={t("debug.eventLogSubtitle")}>

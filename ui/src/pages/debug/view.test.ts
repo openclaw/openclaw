@@ -69,10 +69,15 @@ function mountPage(
   const refreshButton = () => page.querySelector<HTMLButtonElement>(".settings-section button")!;
   const snapshot = (title: string) => {
     const block = query(`pre[aria-label="${title}"]`);
-    assert(block);
-    return JSON.parse(block.textContent ?? "null");
+    return block && !block.hasAttribute("aria-busy")
+      ? JSON.parse(block.textContent ?? "null")
+      : null;
   };
-  const ready = () => waitForSolid(() => expect(refreshButton().disabled).toBe(false));
+  const ready = () =>
+    waitForSolid(() => {
+      expect(refreshButton().disabled).toBe(false);
+      expect(normalizedText(refreshButton())).toBe("Refresh");
+    });
   flush();
   return {
     ...mounted,
@@ -87,7 +92,10 @@ function mountPage(
     ready,
     setContext: provider.setContext,
     refreshButton,
-    alert: () => query('.settings-section:first-child [role="alert"]'),
+    alert: () =>
+      [...page.querySelectorAll<HTMLElement>('[role="alert"]')].find(
+        (alert) => !query("textarea")?.closest(".settings-section")?.contains(alert),
+      ) ?? null,
     mark: (value: string) => {
       marker = value;
     },
@@ -146,11 +154,79 @@ it("keeps the security row present while snapshots load and Manual RPC remains a
   );
   const row = h.query(".debug-security-status")?.closest(".settings-row");
   expect(row?.textContent).toContain("openclaw security audit --deep");
+  await waitForSolid(() => {
+    expect(h.snapshot("Health")).toEqual({ marker: "initial", ok: true });
+    expect(h.snapshot("Models")).toEqual([{ id: "initial" }]);
+  });
   expect(h.page.querySelector('select[aria-label="Method"]')).not.toBeNull();
   status.resolve({ securityAudit: { summary: { critical: 0, warn: 0, info: 0 } } });
   await h.ready();
   expect(h.query(".debug-security-status")?.closest(".settings-row")).toBe(row);
   expect(row?.textContent).toContain("No critical issues");
+});
+
+it.each(["health", "models.list", "last-heartbeat", "diagnostics.lanes"])(
+  "publishes the other diagnostic sources while %s is pending",
+  async (method) => {
+    const pending = hold<unknown>(diagnosticResponse(method));
+    const h = mountPage({ [method]: () => pending.promise });
+    await waitForSolid(() => expect(h.snapshot("Status")).toEqual({ version: "initial" }));
+    if (method !== "health") {
+      expect(h.snapshot("Health")).toEqual({ marker: "initial", ok: true });
+    }
+    if (method !== "models.list") {
+      expect(h.snapshot("Models")).toEqual([{ id: "initial" }]);
+    }
+    if (method !== "last-heartbeat") {
+      expect(h.snapshot("Last heartbeat")).toEqual({ source: "initial" });
+    }
+    if (method !== "diagnostics.lanes") {
+      expect(normalizedText(h.query(".command-lane-row"))).toContain("initial");
+    }
+    expect(h.request).toHaveBeenCalledWith(
+      "models.list",
+      { agentId: "main", view: "default" },
+      { signal: expect.anything() },
+    );
+    expect(h.refreshButton().disabled).toBe(false);
+    pending.resolve(diagnosticResponse(method));
+    await h.ready();
+    h.snapshots("initial");
+  },
+);
+
+it("does not read an agent's models without a selected agent", async () => {
+  const h = mountPage();
+  await h.ready();
+  const modelCalls = h.request.mock.calls.filter(([method]) => method === "models.list").length;
+  h.selection.set(null);
+  await h.ready();
+  expect(h.snapshot("Models")).toEqual([]);
+  expect(h.request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(
+    modelCalls,
+  );
+});
+
+it.each([
+  ["status", "Status"],
+  ["models.list", "Models"],
+])("marks an initial %s failure unavailable until retry succeeds", async (method, title) => {
+  const pending = hold<unknown>(diagnosticResponse(method));
+  const h = mountPage({ [method]: () => pending.promise });
+  const block = () => h.query(`pre[aria-label="${title}"]`);
+  expect(block()?.getAttribute("aria-busy")).toBe("true");
+  pending.reject(new Error("diagnostic source unavailable"));
+  await h.ready();
+  expect(block()?.getAttribute("aria-busy")).toBe("false");
+  expect(block()?.textContent).toBe("Unavailable");
+  expect(h.alert()?.textContent).toContain("diagnostic source unavailable");
+  expect(h.snapshot("Health")).toEqual({ marker: "initial", ok: true });
+  delete h.responses[method];
+  h.alert()?.querySelector<HTMLButtonElement>("button")!.click();
+  await h.ready();
+  expect(block()?.hasAttribute("aria-busy")).toBe(false);
+  expect(h.alert()).toBeNull();
+  h.snapshots("initial");
 });
 
 it("updates security audit labels with the locale and keeps the command monospace", async () => {
@@ -254,7 +330,7 @@ it.each(["reconnect", "source", "agent", "agent with failed models"] as const)(
     }
     flush();
     if (failed) {
-      expect(h.snapshot("Models")).toEqual([]);
+      expect(h.snapshot("Models")).toBeNull();
       pendingModels.reject(new Error("worker models unavailable"));
     }
     const expectCurrent = () => {
@@ -262,7 +338,8 @@ it.each(["reconnect", "source", "agent", "agent with failed models"] as const)(
         h.snapshots("current");
         return;
       }
-      expect(h.snapshot("Models")).toEqual([]);
+      expect(h.snapshot("Models")).toBeNull();
+      expect(h.snapshot("Status")).toEqual({ version: "current" });
       expect(h.page.textContent).toContain("worker models unavailable");
       expect(h.page.textContent).not.toContain("stale");
     };
@@ -301,48 +378,58 @@ it("discards pending diagnostics when a replacement provider reuses its client",
   flush();
   expect(h.request).toHaveBeenCalledTimes(5);
   expect(["Status", "Health", "Models", "Last heartbeat"].map(h.snapshot)).toEqual([
-    {},
-    {},
-    [],
-    {},
+    null,
+    null,
+    null,
+    null,
   ]);
   expect(h.query(".command-lane-row")).toBeNull();
   expect(h.page.textContent).not.toContain("stale");
 });
 
-it("keeps a held live poll quiet and recovers without replacing snapshots or drafts", async () => {
-  vi.useFakeTimers();
-  const pending = hold<void>(undefined);
-  const h = mountPage();
-  await tick();
-  const params = h.params('{"draft":true}');
-  params.focus();
-  const status = h.query('pre[aria-label="Status"]');
-  for (const method of ["last-heartbeat", "diagnostics.lanes"]) {
+it.each(["last-heartbeat", "diagnostics.lanes"])(
+  "keeps polling the other live source while %s is pending and retains failed samples",
+  async (method) => {
+    vi.useFakeTimers();
+    const pending = hold<void>(undefined);
+    const h = mountPage();
+    await tick();
+    const params = h.params('{"draft":true}');
+    params.focus();
+    const status = h.query('pre[aria-label="Status"]');
     h.responses[method] = async () => {
       await pending.promise;
       throw new Error("live diagnostics unavailable");
     };
-  }
-  await tick(3_000);
-  expect(h.refreshButton().disabled).toBe(false);
-  expect(normalizedText(h.refreshButton())).toBe("Refresh");
-  h.snapshots("initial");
-  pending.resolve();
-  await tick();
-  expect(h.alert()?.textContent).toContain("live diagnostics unavailable");
-  h.snapshots("initial");
-  delete h.responses["last-heartbeat"];
-  delete h.responses["diagnostics.lanes"];
-  h.mark("recovered");
-  await tick(3_000);
-  expect(h.alert()).toBeNull();
-  h.snapshots("initial", "recovered");
-  expect(h.query('pre[aria-label="Status"]')).toBe(status);
-  expect(h.query("textarea")).toBe(params);
-  expect(params.value).toBe('{"draft":true}');
-  expect(document.activeElement).toBe(params);
-});
+    h.mark("current");
+    await tick(3_000);
+    const heldCount = h.request.mock.calls.filter(([name]) => name === method).length;
+    expect(h.refreshButton().disabled).toBe(false);
+    expect(h.snapshot("Status")).toEqual({ version: "initial" });
+    if (method === "last-heartbeat") {
+      expect(h.snapshot("Last heartbeat")).toEqual({ source: "initial" });
+      expect(normalizedText(h.query(".command-lane-row"))).toContain("current");
+    } else {
+      expect(h.snapshot("Last heartbeat")).toEqual({ source: "current" });
+      expect(normalizedText(h.query(".command-lane-row"))).toContain("initial");
+    }
+    await tick(3_000);
+    expect(h.request.mock.calls.filter(([name]) => name === method)).toHaveLength(heldCount);
+    pending.resolve();
+    await tick();
+    expect(h.alert()?.textContent).toContain("live diagnostics unavailable");
+    expect(h.alert()?.textContent).toContain("Showing last known data.");
+    delete h.responses[method];
+    h.mark("recovered");
+    await tick(3_000);
+    expect(h.alert()).toBeNull();
+    h.snapshots("initial", "recovered");
+    expect(h.query('pre[aria-label="Status"]')).toBe(status);
+    expect(h.query("textarea")).toBe(params);
+    expect(params.value).toBe('{"draft":true}');
+    expect(document.activeElement).toBe(params);
+  },
+);
 
 it.each(["reconnecting", "offline"] as const)("disables refresh while %s", async (phase) => {
   const h = mountPage({}, phase);
@@ -427,10 +514,13 @@ it("preserves snapshots and independent RPC errors through model failure and rec
   await h.refresh();
   expect(h.alert()?.textContent).toContain("models.list unavailable");
   expect(h.page.textContent).toContain("manual request failed");
-  h.snapshots("initial");
-  expect(h.alert()?.closest(".settings-section")?.querySelector("h2")?.textContent.trim()).toBe(
-    "Snapshots",
-  );
+  expect(h.snapshot("Status")).toEqual({ version: "uncommitted" });
+  expect(h.snapshot("Health")).toEqual({ marker: "uncommitted", ok: true });
+  expect(h.snapshot("Models")).toEqual([{ id: "initial" }]);
+  expect(h.snapshot("Last heartbeat")).toEqual({ source: "uncommitted" });
+  expect(
+    h.alert()?.closest(".settings-section")?.querySelector("h2")?.textContent.trim(),
+  ).toContain("Models");
   delete h.responses["models.list"];
   h.mark("recovered");
   await h.refresh();

@@ -98,3 +98,13 @@ scenario (Devices, for example, uses its 30-node inventory). A 45-second host
 watchdog records renderer stalls separately from product readiness. Use
 `OPENCLAW_CAPTURE_UI_PROOF=1 --diagnose` for a diagnostic run with the existing
 stall collector; exclude diagnostic runs from timing comparisons.
+
+Debug's ordinary `page-debug-visit` measures the manual RPC textarea, which is
+already independent of snapshot reads. Use `page-debug-status-visit` with a
+delayed `models.list` to measure when the accepted status/security snapshot
+appears. Use `page-debug-lanes-poll` with a delayed `last-heartbeat` to measure
+the next accepted sample from the real three-second lane poll. These two steps
+use successful deterministic diagnostics, retaining 30 lane rows and the normal
+model fixture. Their document-clock metrics are `evidence.visitReadyMs` and
+`evidence.pollReadyMs`, respectively. Keep the ordinary visit as an input-readiness
+control; it cannot establish a diagnostic-data improvement.
