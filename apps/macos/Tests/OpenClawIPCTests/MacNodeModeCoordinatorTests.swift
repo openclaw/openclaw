@@ -374,14 +374,18 @@ struct MacNodeModeCoordinatorTests {
 
         try coordinator.prepareNodeHostWorkerRetryForTesting(
             command: ["/usr/local/bin/openclaw", "node", "worker"])
-        let initialFailure = try await coordinator.resolveWorkerManifestForConnection(provider: .peekaboo)
+        let initialFailure = try await coordinator.resolveWorkerManifestForConnection(
+            provider: .peekaboo,
+            connectionMode: .remote)
         #expect(initialFailure.unavailable?.reason == CoordinatorFailingStartWorkerProbe.failureReason)
         #expect(initialFailure.unavailable?.diagnostic == CoordinatorFailingStartWorkerProbe.failureDiagnostic)
 
         coordinator.handleNodeHostWorkerFailureForTesting()
         await coordinator.awaitStableRouteInvalidationDrain()
 
-        let resolved = try await coordinator.resolveWorkerManifestForConnection(provider: .peekaboo)
+        let resolved = try await coordinator.resolveWorkerManifestForConnection(
+            provider: .peekaboo,
+            connectionMode: .remote)
         #expect(resolved.manifest == nil)
         #expect(resolved.unavailable?.reason.contains("unexpected exits") == true)
         #expect(resolved.unavailable?.reason.contains(CoordinatorFailingStartWorkerProbe.failureReason) == true)
