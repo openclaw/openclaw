@@ -90,7 +90,7 @@ export async function startDisposableGatewayIngress(port: number) {
       lastUpstreamStatus = response.statusCode;
       if (documentRequest(req) && [502, 504].includes(response.statusCode ?? 0)) {
         response.resume();
-        void respondUnavailable(req, res).catch((error) => res.destroy(error));
+        void respondUnavailable(req, res).catch(() => res.destroy());
         return;
       }
       res.writeHead(response.statusCode ?? 502, response.headers);
@@ -98,7 +98,7 @@ export async function startDisposableGatewayIngress(port: number) {
     });
     upstream.on("error", () => {
       upstreamErrors++;
-      void respondUnavailable(req, res).catch((error) => res.destroy(error));
+      void respondUnavailable(req, res).catch(() => res.destroy());
     });
     req.once("aborted", () => upstream.destroy());
     req.pipe(upstream);
