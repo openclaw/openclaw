@@ -134,7 +134,7 @@ export async function warmGatewayDatabasePageCache(params: {
           remaining -= Math.max(progress.readBytes, progress.diskBytes);
           report("complete", progress);
           params.log.info(
-            `database page-cache residency: database=${target.kind} scope=file-sample resident=${((progress.residency?.residentRatio ?? 0) * 100).toFixed(1)}% readBytes=${progress.readBytes} diskBytes=${progress.diskBytes} payloadBytes=${progress.payloadBytes} payloadMessages=${progress.payloadMessages} elapsedMs=${progress.elapsedMs.toFixed(1)} projectionQueryMs=${progress.queryBeforeMs?.toFixed(2) ?? "n/a"}->${progress.queryAfterMs?.toFixed(2) ?? "n/a"} limited=${progress.limited}`,
+            `database page-cache residency: database=${target.kind} scope=file-sample resident=${((progress.residency?.residentRatio ?? 0) * 100).toFixed(1)}% readBytes=${progress.readBytes} diskBytes=${progress.diskBytes} ioCountersUnavailable=${progress.ioCountersUnavailable} payloadBytes=${progress.payloadBytes} payloadMessages=${progress.payloadMessages} elapsedMs=${progress.elapsedMs.toFixed(1)} projectionQueryMs=${progress.queryBeforeMs?.toFixed(2) ?? "n/a"}->${progress.queryAfterMs?.toFixed(2) ?? "n/a"} limited=${progress.limited}`,
           );
         },
         { signal, deadlineOwnedByCaller: true },
