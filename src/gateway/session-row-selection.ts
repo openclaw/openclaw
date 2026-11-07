@@ -49,11 +49,14 @@ export function createSessionRowSelection(
     | Array<{ archived: boolean; revision: object; entries: Map<string, SessionEntryPair> }>
     | undefined;
   const partitionFor = (key: string, target: IndexedTarget) => {
+    if (!partitions) {
+      return undefined;
+    }
     let hash = 0;
     for (let i = 0; i < key.length; i++) {
       hash = (Math.imul(hash, 31) + key.charCodeAt(i)) | 0;
     }
-    return partitions?.[(hash & 63) + (target.row.entry.archivedAt !== undefined ? 64 : 0)];
+    return partitions[(hash & 63) + (target.row.entry.archivedAt !== undefined ? 64 : 0)];
   };
   const personalInvolvements = new Map<string, Set<string>>();
   const relatedInvolvements = new Map<string, Set<string>>();
