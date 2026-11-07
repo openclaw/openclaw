@@ -1,2 +1,2 @@
 # Skills pending-inventory scope and truthful first-load rendering regression.
-43
+37

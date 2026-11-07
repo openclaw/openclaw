@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import type { SkillStatusEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type {
   ClawHubSkillDetail,
@@ -16,7 +16,6 @@ export type SkillsRouteData = {
   agents: ApplicationContext["agents"];
   selectedAgentId: string | null;
   selectionIntentRevision: number;
-  report: SkillStatusReport | null;
   error: string | null;
   clawhubRef?: string;
 };

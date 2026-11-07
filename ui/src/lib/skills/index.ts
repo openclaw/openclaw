@@ -292,7 +292,7 @@ export async function loadSkills(
   }
 }
 
-export function acceptSkillsReport(state: SkillsState, report: SkillStatusReport) {
+function acceptSkillsReport(state: SkillsState, report: SkillStatusReport) {
   state.skillsReport = report;
   const result = state.clawhubInstallMessage;
   if (

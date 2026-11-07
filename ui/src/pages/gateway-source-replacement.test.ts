@@ -218,15 +218,11 @@ async function mountUsagePage(
 function skillReport(
   name: string,
   overrides: Parameters<typeof createSkill>[0] = {},
-): NonNullable<SkillsRouteData["report"]> {
+): ReturnType<typeof createReport> {
   return createReport([createSkill({ name, skillKey: name, ...overrides })]);
 }
 
-function mountSkillsPage(
-  context: ApplicationContext,
-  report: SkillsRouteData["report"],
-  gatewaySnapshot = context.gateway.snapshot,
-) {
+function mountSkillsPage(context: ApplicationContext, gatewaySnapshot = context.gateway.snapshot) {
   const provider = createSolidApplicationContextProvider(context);
   const routeData: SkillsRouteData = {
     gateway: context.gateway,
@@ -234,7 +230,6 @@ function mountSkillsPage(
     agents: context.agents,
     selectedAgentId: context.settingsAgentSelection.state.selectedId,
     selectionIntentRevision: context.settingsAgentSelection.intentRevision,
-    report,
     error: null,
   };
   const mounted = mountSolid(
@@ -377,7 +372,7 @@ it("discards Model Providers work from a replaced source that reuses its client"
   expect(providerNames()).not.toContain("Retired provider");
 });
 
-it("hydrates cloned skill route data and retires verdicts across disconnect and replacement", async () => {
+it("loads skills from cloned route scope and retires verdicts across disconnect and replacement", async () => {
   const pending = deferred<{ schema: string; items: unknown[] }>();
   const verdicts = securityVerdicts();
   let verdictRequests = 0;
@@ -391,7 +386,7 @@ it("hydrates cloned skill route data and retires verdicts across disconnect and 
     agentsList: mainAgents,
     selectedAgentId: "main",
   });
-  const mounted = mountSkillsPage(harness, linkedSkillReport(), {
+  const mounted = mountSkillsPage(harness, {
     ...harness.gateway.snapshot,
   });
   await waitForSolid(() =>
@@ -456,7 +451,7 @@ it.each([
     async () => {
       const { client } = skillsClient({ "skills.status": () => skillReport("fresh") });
       const context = agentContext(client);
-      const mounted = mountSkillsPage(context, skillReport("stale"), staleSnapshot(context));
+      const mounted = mountSkillsPage(context, staleSnapshot(context));
       return mounted.text;
     },
   ],
@@ -476,7 +471,7 @@ it("discards an agent list from a replaced skills source that reuses its client"
     "skills.status": () => skillReport("Replacement agent skill"),
   });
   const context = contextWithClient(client, { connected: true, ensureList });
-  const mounted = mountSkillsPage(context, null, staleSnapshot(context));
+  const mounted = mountSkillsPage(context, staleSnapshot(context));
   await waitForSolid(() => expect(ensureList).toHaveBeenCalled());
   mounted.replaceContext(
     contextWithClient(client, {

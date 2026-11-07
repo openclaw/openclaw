@@ -42,8 +42,6 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
         agents,
         selectedAgentId,
         selectionIntentRevision,
-        // The page owns inventory loading after the roster admits its agent scope.
-        report: null,
         error,
         clawhubRef,
       };
