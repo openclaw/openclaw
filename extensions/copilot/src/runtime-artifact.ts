@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { StdioRuntimeConnection } from "@github/copilot-sdk";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fingerprintCopilotPackage, loadCopilotSdkWithIdentity } from "./sdk-loader.js";
 
 function runtimePlatform(): string {
@@ -13,9 +12,11 @@ function runtimePlatform(): string {
     throw new Error(`Copilot runtime artifacts do not support architecture ${process.arch}.`);
   }
   if (process.platform === "linux") {
-    const report = process.report?.getReport();
-    const header = isRecord(report) && isRecord(report.header) ? report.header : undefined;
-    return `${header?.glibcVersionRuntime ? "linux" : "linuxmusl"}-${process.arch}`;
+    // A diagnostic report reverse-resolves every open socket and can stall the
+    // Gateway for seconds per socket on a slow resolver. Read the loaded libc instead.
+    const maps = readFileSync("/proc/self/maps", "utf8");
+    const glibc = /\/libc(?:\.so\.6|-\d[\d.]*\.so)(?:\s|$)/mu.test(maps);
+    return `${glibc ? "linux" : "linuxmusl"}-${process.arch}`;
   }
   if (process.platform === "darwin" || process.platform === "win32") {
     return `${process.platform}-${process.arch}`;
