@@ -703,6 +703,7 @@ export function createEngineRapidNavigationScenarios(): EngineScenario[] {
         await page.keyboard.press("ControlOrMeta+k");
         await page.locator(".cmd-palette__input").fill("Interaction");
         await page.locator('.cmd-palette__item[aria-selected="true"]').waitFor();
+        // The selected row can render before the input receives its keyboard target.
         await page.waitForFunction(() =>
           document.querySelector(".cmd-palette__input")?.getAttribute("aria-activedescendant"),
         );
