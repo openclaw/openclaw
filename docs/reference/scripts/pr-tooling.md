@@ -61,6 +61,9 @@ Before an operation child starts, authenticated creator cleanup may retire the
 anchor. After dispatch, the supervisor retires it only after the process group
 has exited and the notification pipe has closed. A creator crash, uncertain drain,
 or changed creation evidence never authorizes releasing dependency holds.
+A closed output reader, as in `scripts/pr --help | head`, is an ordinary exit: the
+creator still retires its anchor and releases its holds, then exits 141. A selected
+revision older than the lifetime owner cannot release the hold its parent took.
 There is no startup stale-anchor sweep: PID death, age, and path disappearance do
 not prove that inherited consumers finished. A retained PR operation lock requires
 its separate `lock-recover` procedure after verifying that no child tools remain.
