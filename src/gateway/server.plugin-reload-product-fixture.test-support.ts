@@ -1,5 +1,18 @@
+import assert from "node:assert/strict";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
+import { afterAll, it } from "vitest";
+import type { JsonTestResults } from "vitest/node";
+import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
+import { writePrivateUpdateHandoffChildGuard } from "../../test/helpers/private-update-handoff-child-guard.js";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
+import { runVitestShutdownCommand } from "../../test/helpers/vitest-shutdown-command.js";
+import { assertTestHomeSelection } from "../../test/test-home-policy.mts";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 // Shared external-plugin fixture for the reload continuation product entries.
 export const PLUGIN = "send-continuation-proof";
@@ -64,5 +77,133 @@ export async function writePlugin(
         ", generation }) }] }; } });",
       "} };",
     ].join("\n"),
+  );
+}
+
+/** Keep both product entries on the same prebound child and shutdown owner. */
+export async function definePluginReloadProductTest(
+  options: {
+    name: string;
+    prefix: string;
+    testFile: string;
+    loadScenarios: () => Promise<unknown>;
+    relayOutput?: boolean;
+  },
+  assertResult: (result: {
+    code: number;
+    output: string;
+    report: JsonTestResults;
+    binding: ReturnType<typeof createManagedHandoffTestBinding>;
+    handoff: string;
+    childPid: number | undefined;
+  }) => void,
+) {
+  const databasePath = process.env.OPENCLAW_TEST_PRIVATE_HANDOFF_PATH;
+  if (databasePath) {
+    assert.equal(
+      Reflect.get(globalThis, Symbol.for("openclaw.test.privateHandoffGuard")),
+      databasePath,
+    );
+    assert.equal(path.resolve(databasePath), databasePath);
+    assert.equal(fsSync.realpathSync(path.dirname(databasePath)), path.dirname(databasePath));
+    const { resolveSecureTempRoot } = createRequire(import.meta.url)(
+      "@openclaw/fs-safe/secure-temp-root",
+    ) as typeof import("@openclaw/fs-safe/secure-temp-root");
+    assert.equal(
+      resolveSecureTempRoot({
+        preferredDir: "/tmp/openclaw",
+        fallbackPrefix: "openclaw",
+        skipPreferredOnWindows: true,
+      }),
+      path.dirname(databasePath),
+    );
+    // No Gateway/handoff consumer is imported before this qualification.
+    await options.loadScenarios();
+    return;
+  }
+  const lifetime = createFixtureLifetime();
+  // Compilation is module preparation; the prebound child owns product effects.
+  const nodeExecPath = resolveTestNodeExecPath();
+  const fixtureWorkers = createVitestWorkerRun(process.env, undefined, "full", nodeExecPath);
+  // A failed fixture drain retains worker claims; dispose only after successful cleanup.
+  afterAll(async () => {
+    await lifetime.cleanup();
+    await fixtureWorkers.dispose();
+  });
+  try {
+    await fixtureWorkers.prepare();
+  } catch (error) {
+    await fixtureWorkers.dispose();
+    throw error;
+  }
+  it(options.name, async ({ signal }) =>
+    lifetime.run(async () => {
+      const root = lifetime.createTempDir(options.prefix);
+      const handoff = path.join(root, "handoff");
+      fsSync.mkdirSync(handoff, { mode: 0o700 });
+      const binding = createManagedHandoffTestBinding(handoff);
+      const reportPath = path.join(root, "results.json");
+      const guard = writePrivateUpdateHandoffChildGuard(binding.databasePath, handoff);
+      const home = path.join(root, "home");
+      fsSync.mkdirSync(home, { mode: 0o700 });
+      const env = withRuntimePreload(
+        guard({
+          ...process.env,
+          HOME: home,
+          USERPROFILE: home,
+          TMPDIR: root,
+          TMP: root,
+          TEMP: root,
+        }),
+        binding.preloadPath,
+      );
+      assertTestHomeSelection(env, "hermetic");
+      // POSIX strict mode and the existing Windows Job owner join descendants,
+      // pipes and resource claims. The portable fallback is not an extinction receipt.
+      if (process.platform === "win32") {
+        const [{ isSupported }, { resolveManagedWindowsJobEntrypointUrl }] = await Promise.all([
+          import("@openclaw/proc-safe/windows-job"),
+          import("../../scripts/lib/managed-windows-job-entrypoint.mts"),
+        ]);
+        assert(
+          isSupported() && fsSync.existsSync(resolveManagedWindowsJobEntrypointUrl()),
+          "Product proof requires the existing native Windows Job owner",
+        );
+      }
+      let output = "";
+      let childPid: number | undefined;
+      const { code } = await lifetime.track(
+        runVitestShutdownCommand({
+          bin: nodeExecPath,
+          workerRun: fixtureWorkers,
+          args: [
+            "scripts/run-vitest.mjs",
+            options.testFile,
+            "--reporter=json",
+            "--outputFile=" + reportPath,
+          ],
+          signal,
+          cwd: process.cwd(),
+          env,
+          onReady(child) {
+            childPid = child.pid;
+            child.stdout?.on("data", (chunk) => {
+              output += String(chunk);
+              if (options.relayOutput) {
+                process.stdout.write(chunk);
+              }
+            });
+            child.stderr?.on("data", (chunk) => {
+              output += String(chunk);
+              if (options.relayOutput) {
+                process.stderr.write(chunk);
+              }
+            });
+          },
+        }),
+      );
+      const report = JSON.parse(fsSync.readFileSync(reportPath, "utf8")) as JsonTestResults;
+      assertResult({ code, output, report, binding, handoff, childPid });
+    }),
   );
 }
