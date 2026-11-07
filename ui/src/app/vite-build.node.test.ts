@@ -16,7 +16,7 @@ import {
 } from "../../../src/infra/directory-walk.js";
 import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
 import { controlUiPluginDistributionsPlugin } from "../../config/control-ui-plugin-distributions.ts";
-import controlUiViteConfig from "../../vite.config.ts";
+import controlUiViteConfig, { compactControlUiDocument } from "../../vite.config.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 
 function readBuiltIdentity(html: string): { buildId: string } {
@@ -138,6 +138,30 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await fs.rm(root, { recursive: true, force: true });
+});
+
+it("keeps inline recovery executable and its DOM intact after document compaction", () => {
+  const source = `<style>/* fallback */ h1 { color: rgb(255, 0, 0); }</style>
+    <h1>Still loading</h1><button>Retry</button>
+    <script data-cfasync="false">/* recovery */
+      document.querySelector("button").addEventListener("click", function () {
+        document.querySelector("h1").textContent = "Retrying";
+      });
+    </script>
+    <script nomodule>window.unsupported = function () { return "Update your browser"; };</script>`;
+  const compact = compactControlUiDocument(source);
+  const dom = new JSDOM(compact, { runScripts: "dangerously" });
+  const { document } = dom.window;
+  expect(document.querySelector("h1")?.outerHTML).toBe("<h1>Still loading</h1>");
+  expect(dom.window.getComputedStyle(document.querySelector("h1")!).color).toBe("rgb(255, 0, 0)");
+  document.querySelector("button")!.click();
+  expect(document.querySelector("h1")?.textContent).toBe("Retrying");
+  expect(document.querySelector("script[nomodule]")?.textContent).not.toMatch(
+    /=>|\b(?:let|const)\b/u,
+  );
+  expect(compact).not.toContain("/* recovery */");
+  expect(compact).toContain("<style>/* fallback */ h1 { color: rgb(255, 0, 0); }</style>");
+  dom.window.close();
 });
 
 it("omits already imported JavaScript from lazy preload tables, retaining lazy JS and CSS", async () => {

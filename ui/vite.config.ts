@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { brotliCompress, constants as zlibConstants } from "node:zlib";
+import { transformSync } from "esbuild";
 import { gzip } from "libdeflate";
 import {
   runnerImport,
@@ -663,6 +664,28 @@ function controlUiPrecompressedAssetsPlugin(): Plugin {
   };
 }
 
+export function compactControlUiDocument(html: string): string {
+  // Keep recovery self-contained when every external request fails. Compact only
+  // inline scripts: Vite already minifies CSS; DOM and fallback copy stay intact.
+  return html.replace(
+    /<script\b([^>]*)>([\s\S]*?)<\/script>/gu,
+    (element, attributes: string, source: string) => {
+      if (!source.trim() || /\bsrc\s*=/u.test(attributes)) {
+        return element;
+      }
+      const { code } = transformSync(source, {
+        loader: "js",
+        minify: true,
+        legalComments: "none",
+        charset: "utf8",
+        // The no-module explanation must still run in older browsers.
+        target: /\bnomodule\b/u.test(attributes) ? "es5" : "es2020",
+      });
+      return `<script${attributes}>${code.trim()}</script>`;
+    },
+  );
+}
+
 function controlUiBuildOutputPlugin(
   buildInfo: ControlUiBuildInfo,
   copiedInputs: Set<string>,
@@ -694,7 +717,7 @@ function controlUiBuildOutputPlugin(
             link.replace('rel="stylesheet"', 'rel="preload" as="style"') +
             link.replace(/>$/u, ' id="openclaw-boot-styles" media="print">'),
         );
-        return controlUiBuildIdentityHtml(nonblocking, buildInfo);
+        return compactControlUiDocument(controlUiBuildIdentityHtml(nonblocking, buildInfo));
       },
     },
     writeBundle: {
