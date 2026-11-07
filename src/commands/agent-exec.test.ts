@@ -561,6 +561,7 @@ describe("agent exec base config resolution", () => {
     ["[]", "must be a JSON object"],
     ['"text"', "must be a JSON object"],
     ['{"tools":{"profile":"invalid"}}', "Invalid --config-override"],
+    ['{"sessions":{"allowThreadTargets":true}}', '<root>: Unrecognized key: "sessions"'],
   ])("rejects invalid override %s", async (value, message) => {
     await expect(applyExecConfigOverrides({}, [value])).rejects.toThrow(message);
   });
