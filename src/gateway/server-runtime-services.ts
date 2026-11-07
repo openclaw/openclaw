@@ -100,6 +100,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   delayMs: number;
   isClosing: () => boolean;
   waitForPostReadyWork: () => Promise<void>;
+  startupMethodsReady: Promise<void>;
   startupMaintenance: GatewayStartupMaintenance;
   startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
   applyMaintenance: (maintenance: GatewayMaintenanceHandles) => Promise<void> | void;
@@ -198,6 +199,8 @@ export function scheduleGatewayPostReadyMaintenance(params: {
               databases: params.startupMaintenance.startupSessionDatabases,
               scheduler: params.scheduler,
               signal: params.signal,
+              // Recovery discovery must admit its inputs before an empty lane is meaningful.
+              waitForReady: () => params.startupMethodsReady,
               log: params.log,
             });
             if (!params.isClosing()) {

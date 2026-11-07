@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as factsBackfill from "../config/sessions/session-transcript-facts-backfill.js";
@@ -66,7 +67,8 @@ it.each(["complete", "shutdown"] as const)(
   "paces facts backfill during foreground work after recovery and stops on %s",
   async (outcome) => {
     vi.spyOn(agentRuns, "getActiveAgentRunContextCount").mockReturnValue(1);
-    let recovering = true;
+    const recoveryReady = createDeferred();
+    let recovering = false;
     vi.spyOn(commandQueue, "getQueueSize").mockImplementation((lane) =>
       lane === CommandLane.RestartRecovery ? Number(recovering) : 1,
     );
@@ -97,9 +99,15 @@ it.each(["complete", "shutdown"] as const)(
       ],
       scheduler,
       signal: scheduler.signal,
+      waitForReady: () => recoveryReady.promise,
       log: { info: vi.fn(), warn: vi.fn() },
     });
-    await clock.advanceBy(250);
+    const initialTick = clock.advanceBy(250);
+    await nextTurn();
+    expect(runBatch).not.toHaveBeenCalled();
+    recovering = true;
+    recoveryReady.resolve();
+    await initialTick;
     expect(runBatch).not.toHaveBeenCalled();
     recovering = false;
     await clock.advanceBy(1_000);
