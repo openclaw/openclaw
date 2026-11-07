@@ -80,15 +80,20 @@ it("keeps updated imports cache-stable without reusing changed immutable assets"
         },
       },
     });
-    if (Array.isArray(result) || !("output" in result))
+    if (Array.isArray(result) || !("output" in result)) {
       throw new Error("Expected one fixture build");
+    }
     const chunks = result.output.filter((item) => item.type === "chunk");
     const html = result.output.find((item) => item.fileName === "index.html");
-    if (html?.type !== "asset") throw new Error("Expected fixture HTML");
+    if (html?.type !== "asset") {
+      throw new Error("Expected fixture HTML");
+    }
     const encoded = /<script\b[^>]*type="importmap"[^>]*>(.*?)<\/script>/su.exec(
       String(html.source),
     )?.[1];
-    if (!encoded) throw new Error("Expected production import map");
+    if (!encoded) {
+      throw new Error("Expected production import map");
+    }
     const imports: Record<string, string> = JSON.parse(encoded).imports;
     expect(String(html.source).indexOf('type="importmap"')).toBeLessThan(
       String(html.source).indexOf("globalThis.preloadLocale"),
@@ -96,7 +101,9 @@ it("keeps updated imports cache-stable without reusing changed immutable assets"
     const entry = chunks.find((chunk) => chunk.isEntry);
     const connection = chunks.find((chunk) => chunk.name === "control-ui-connection");
     const locale = chunks.find((chunk) => chunk.moduleIds.includes(path.join(root, "locale.js")));
-    if (!entry || !connection || !locale) throw new Error("Expected fixture chunks");
+    if (!entry || !connection || !locale) {
+      throw new Error("Expected fixture chunks");
+    }
     return { chunks, imports, entry, connection, locale };
   }
 
@@ -130,7 +137,9 @@ it("keeps updated imports cache-stable without reusing changed immutable assets"
     for (const after of builds) {
       const byName = new Map(before.chunks.map((chunk) => [chunk.fileName, chunk.code]));
       for (const chunk of after.chunks) {
-        if (byName.has(chunk.fileName)) expect(chunk.code).toBe(byName.get(chunk.fileName));
+        if (byName.has(chunk.fileName)) {
+          expect(chunk.code).toBe(byName.get(chunk.fileName));
+        }
       }
     }
   }

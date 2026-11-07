@@ -45,7 +45,9 @@ function staticClosure(chunks: ChunkGraph): Chunk[] {
       visit(chunk);
     }
   }
-  return [...found.values()].sort((left, right) => chunkKey(left).localeCompare(chunkKey(right)));
+  return [...found.values()].toSorted((left, right) =>
+    chunkKey(left).localeCompare(chunkKey(right)),
+  );
 }
 
 function stableName(file: string, index: number): string {
@@ -101,7 +103,7 @@ export function controlUiUpdateCachePlugins(): Plugin[] {
             moduleKey(file),
             createHash("sha256").update(fs.readFileSync(file)).digest("hex"),
           ])
-          .sort(([left], [right]) => left!.localeCompare(right!));
+          .toSorted(([left], [right]) => left!.localeCompare(right!));
         // Vite fills preload arrays after hashing. Include their configuration and
         // source-owned closure inputs, not just the resolver function's text.
         const preload = config.build.modulePreload;
@@ -157,7 +159,7 @@ export function controlUiUpdateCachePlugins(): Plugin[] {
                       chunks[file] ? chunkKey(chunks[file]) : file,
                     ),
                   }))
-                  .sort((left, right) => left.id.localeCompare(right.id)),
+                  .toSorted((left, right) => left.id.localeCompare(right.id)),
               ),
             )
             .digest("hex");
@@ -212,8 +214,12 @@ export function controlUiUpdateCachePlugins(): Plugin[] {
           );
           for (const runtime of runtimes) {
             const reachesRuntime = (chunk: Chunk, seen = new Set<string>()): boolean => {
-              if (chunk.fileName === runtime.fileName) return true;
-              if (seen.has(chunk.fileName)) return false;
+              if (chunk.fileName === runtime.fileName) {
+                return true;
+              }
+              if (seen.has(chunk.fileName)) {
+                return false;
+              }
               seen.add(chunk.fileName);
               return chunk.imports.some((file) => {
                 const imported = bundle[file];
@@ -237,9 +243,9 @@ export function controlUiUpdateCachePlugins(): Plugin[] {
           }
           const cssFiles = [
             ...new Set(
-              staticClosure(bundle).flatMap((chunk) => [
-                ...(chunk.viteMetadata?.importedCss ?? []),
-              ]),
+              staticClosure(bundle).flatMap((chunk) =>
+                Array.from(chunk.viteMetadata?.importedCss ?? []),
+              ),
             ),
           ];
           const cssKey = (file: string) =>
@@ -247,10 +253,13 @@ export function controlUiUpdateCachePlugins(): Plugin[] {
           if (new Set(cssFiles.map(cssKey)).size !== cssFiles.length) {
             this.error("Ambiguous Control UI import-map CSS names");
           }
-          cssFiles.sort((left, right) => cssKey(left).localeCompare(cssKey(right)));
-          cssFiles.forEach((file, index) => mapped.set(file, stableName(file, index)));
+          cssFiles
+            .toSorted((left, right) => cssKey(left).localeCompare(cssKey(right)))
+            .forEach((file, index) => mapped.set(file, stableName(file, index)));
           for (const chunk of Object.values(bundle)) {
-            if (chunk.type !== "chunk") continue;
+            if (chunk.type !== "chunk") {
+              continue;
+            }
             const rewritten = replaceReferences(
               chunk.code,
               [...mapped].flatMap(([real, stable]) => [
@@ -265,7 +274,9 @@ export function controlUiUpdateCachePlugins(): Plugin[] {
             chunk.code = rewritten;
           }
           const html = bundle["index.html"];
-          if (!mapped.size || html?.type !== "asset") return;
+          if (!mapped.size || html?.type !== "asset") {
+            return;
+          }
           const imports = Object.fromEntries(
             [...mapped].map(([real, stable]) => [`./${stable}`, `./${real}`]),
           );
