@@ -413,10 +413,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     );
   }
 
-  // A superseded snapshot must not start a hidden pane. Once admitted, retain its draft and runtime.
-  const admitted = createMemo<boolean>((previous) => previous || (ready() && runtime.presented));
   return (
-    <Show when={admitted()} fallback={<LoadingState route composer={runtime.ownsRouteComposer} />}>
+    <Show when={ready()} fallback={<LoadingState route composer={runtime.ownsRouteComposer} />}>
       <MountedPane />
     </Show>
   );

@@ -164,65 +164,6 @@ it("opens provider findings through the mounted pane's first rendered frame", as
   await waitForSolid(() => expect(dialog()?.textContent).toContain(review.explanation));
 });
 
-it("keeps a pane hidden before snapshot admission cold until it is selected again", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const fixture = mountedFixture("superseded-snapshot-admission");
-  const gateway = fixture.context.gateway;
-  const client = expectDefined(gateway.snapshot.client, "connected client");
-  const request = vi.spyOn(client, "request");
-  const key = resolveChatSnapshotKey(
-    {
-      settings: gateway.connection,
-      client,
-      hello: gateway.snapshot.hello,
-      agentsList: fixture.context.agents.state.agentsList,
-    },
-    { sessionKey: fixture.sessionKey },
-  );
-  const read = createDeferred<unknown>();
-  const disk = vi
-    .spyOn(snapshotDatabase, "readStoredChatSnapshotRecord")
-    .mockReturnValue(read.promise);
-  onTestFinished(() => {
-    read.resolve(undefined);
-    discardPrewarmedChatSnapshot();
-    disk.mockRestore();
-    request.mockRestore();
-    vi.useRealTimers();
-  });
-  const prepared = prewarmChatSnapshot(key);
-  const { pane } = fixture.render({
-    active: true,
-    presented: true,
-    draft: "Keep this session's unsent draft",
-    sessionSnapshotStore: new SessionSnapshotStore(),
-  });
-  flush();
-  expect(pane.querySelector(".chat-pane__header")).toBeNull();
-
-  Object.assign(pane, { active: false, presented: false, visuallyPresented: false });
-  flush();
-  read.resolve(undefined);
-  await prepared;
-  await vi.advanceTimersByTimeAsync(100);
-  flush();
-  const startupReads = () =>
-    request.mock.calls.filter(([method]) =>
-      ["chat.startup", "chat.history", "models.authStatus", "agent.identity.get"].includes(method),
-    );
-  expect(startupReads()).toEqual([]);
-
-  Object.assign(pane, { active: true, presented: true, visuallyPresented: true });
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
-  await vi.dynamicImportSettled();
-  await pane.updateComplete;
-  expect(startupReads().some(([method]) => method === "chat.startup")).toBe(true);
-  expect(pane.querySelector<HTMLTextAreaElement>(composerSelector)?.value).toBe(
-    "Keep this session's unsent draft",
-  );
-});
-
 it.each(["ready", "unavailable"] as const)(
   "admits the first pane from a pending snapshot, bounded at 100ms (%s)",
   async (outcome) => {

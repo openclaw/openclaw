@@ -27,13 +27,6 @@ search arrows, cold/warm Devices-to-Automations navigation, back/forward, early
 menu/drawer closure, typing during session arrival, earliest available typing on
 reload, and draft/scroll restoration after a burst.
 
-Two additional diagnostics are selected only by their explicit IDs:
-`rapid-cached-admission-direct` and `rapid-cached-admission-leave`. They persist
-a real session snapshot, hold its first IndexedDB open, then release it while
-the original pane is current or after navigating away. The production 100 ms
-admission deadline is unchanged; missing that pending window fails setup. The
-leave case records hidden-pane admission as work so the baseline can expose it.
-
 Session clicks use native pointer input at current hit-tested coordinates. Bringing
 a row into view and reopening the mobile drawer are included in the workload.
 Input deadlines never wait for content readiness, but actual delivery can miss

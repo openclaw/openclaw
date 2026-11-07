@@ -106,11 +106,8 @@ it("does not start Devices reads after navigation leaves during the module load"
       phase: "connected",
     }),
   );
-  const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
-  onTestFinished(() => runtimeConfig.dispose());
-  const refresh = vi.spyOn(runtimeConfig, "refresh").mockResolvedValue(undefined);
-  // SAFETY: The Devices loader only reads the Gateway and runtime config capabilities.
-  const context = { gateway: harness.gateway, runtimeConfig } as ApplicationContext;
+  // SAFETY: The Devices loader only reads the Gateway capability.
+  const context = { gateway: harness.gateway } as ApplicationContext;
   const controller = new AbortController();
   const options = {
     ...createRouteLoaderOptions({ pathname: "/devices", search: "", hash: "" }),
@@ -125,5 +122,4 @@ it("does not start Devices reads after navigation leaves during the module load"
   await Promise.resolve(pending).catch(() => undefined);
 
   expect(request).not.toHaveBeenCalled();
-  expect(refresh).not.toHaveBeenCalled();
 });

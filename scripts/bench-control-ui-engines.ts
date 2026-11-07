@@ -567,11 +567,7 @@ try {
   const ids = requestedIds?.flatMap((id) =>
     id === "rapid-navigation"
       ? catalog
-          .filter(
-            (scenario) =>
-              scenario.id.startsWith("rapid-") &&
-              !scenario.id.startsWith("rapid-cached-admission-"),
-          )
+          .filter((scenario) => scenario.id.startsWith("rapid-"))
           .map((scenario) => scenario.id)
       : id === "gestures"
         ? catalog
