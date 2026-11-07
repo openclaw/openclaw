@@ -399,7 +399,14 @@ export async function mutateChatPendingInput(
       );
     }
   } catch (error) {
-    if (current()) {
+    if (!current()) {
+      return;
+    }
+    if (action.kind === "steer") {
+      // A refused Send now is not a user-facing error: the steer stays queued and
+      // still reaches the next model turn. Refresh so its row shows current state.
+      void requestPendingInputPage(state, view.before, "refresh");
+    } else {
       view.error = formatUiError(error);
     }
   } finally {
@@ -412,12 +419,34 @@ export async function mutateChatPendingInput(
   }
 }
 
+type PendingInput = ChatPendingInputsPage["items"][number];
+/** Steers waiting together share one label, carried by the newest. */
+export type PendingSteer = PendingInput & { latest?: true };
+// Stable copies keep transcript memo dependencies unchanged until the newest steer changes.
+const latestSteers = new WeakMap<PendingInput, PendingSteer>();
+
+function markNewest(input: PendingInput): PendingSteer {
+  let steer = latestSteers.get(input);
+  if (!steer) {
+    steer = { ...input, latest: true };
+    latestSteers.set(input, steer);
+  }
+  return steer;
+}
+
 export function createPendingSteerLookup(inputs: ChatPendingInputsPage["items"] | undefined) {
-  const pendingSteers = new Map<string, ChatPendingInputsPage["items"][number]>();
+  const pendingSteers = new Map<string, PendingSteer>();
+  let newest: PendingInput | undefined;
+  for (const input of inputs ?? []) {
+    if (input.steerNow && input.runId && (!newest || input.acceptedAt >= newest.acceptedAt)) {
+      newest = input;
+    }
+  }
   for (const input of inputs ?? []) {
     if (input.steerNow && input.runId) {
-      pendingSteers.set(input.runId, input);
-      pendingSteers.set(`${CHAT_PENDING_INPUT_MESSAGE_PREFIX}${input.id}`, input);
+      const steer = input === newest ? markNewest(input) : input;
+      pendingSteers.set(input.runId, steer);
+      pendingSteers.set(`${CHAT_PENDING_INPUT_MESSAGE_PREFIX}${input.id}`, steer);
     }
   }
   if (!pendingSteers.size) {

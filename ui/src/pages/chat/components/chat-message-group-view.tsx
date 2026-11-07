@@ -387,6 +387,7 @@ function FramedMessage(props: { frame: MessageGroupFrame; item: GroupMessage; in
         : undefined,
   }));
   const showActions = () =>
+    !frame().options.pendingSteer?.(props.item.message) &&
     prepared().ownsActions &&
     (hasMessageActionButtons(prepared().actions, frame().options) ||
       Boolean(prepared().actions?.reactionMessageId && frame().options.onReact)) &&
@@ -554,7 +555,7 @@ function FramedMessageGroup(props: {
           />
         </Show>
       </div>
-      <Show when={!frame().isTurnBlock && options().frameFooter !== false}>
+      <Show when={!frame().hidesFooter && options().frameFooter !== false}>
         <Show
           when={!props.group.isStreaming}
           fallback={<div class="chat-group-footer" aria-hidden="true" />}

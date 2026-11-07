@@ -705,6 +705,10 @@
   margin-block-start: 4px;
 }
 
+.chat-steer-now__waiting {
+  color: var(--muted);
+}
+
 /* Chat divider (e.g., compaction marker) */
 .chat-divider {
   display: grid;
