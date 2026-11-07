@@ -239,6 +239,10 @@ export const executePreparedWorkerInference = async (
       agentDir,
       undefined,
       {
+        auth: {
+          mode: prepared.auth.mode,
+          authFlow: prepared.auth.authFlow,
+        },
         nativeWebSearchPolicyContext: {
           sessionKey: target.sessionKey,
           webSearchEnabled:
