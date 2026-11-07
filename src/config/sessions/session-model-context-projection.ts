@@ -314,8 +314,7 @@ export function projectCanonicalModelContextEvent(
   eventJson: string,
   { omitCheckpoint, toolResultOmission }: { omitCheckpoint: boolean; toolResultOmission?: string },
 ): string {
-  // SAFETY: This is the same canonical entry decoded by the native context reader.
-  const entry = JSON.parse(eventJson) as SessionTreeEntry;
+  const entry = parseCanonicalEntry(eventJson);
   return JSON.stringify(
     projectSessionModelContextEntry(entry, { entry, omitCheckpoint, toolResultOmission }),
   );
@@ -323,10 +322,12 @@ export function projectCanonicalModelContextEvent(
 
 /** Navigation counterpart of {@link projectCanonicalModelContextEvent}. */
 export function projectCanonicalModelContextNavigation(eventJson: string): string {
+  return JSON.stringify(projectSessionModelContextNavigation(parseCanonicalEntry(eventJson)));
+}
+
+function parseCanonicalEntry(eventJson: string): SessionTreeEntry {
   // SAFETY: This is the same canonical entry decoded by the native context reader.
-  return JSON.stringify(
-    projectSessionModelContextNavigation(JSON.parse(eventJson) as SessionTreeEntry),
-  );
+  return JSON.parse(eventJson) as SessionTreeEntry;
 }
 
 /** Project only the caller's bounded page; no write path uses this relation. */

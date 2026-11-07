@@ -307,18 +307,22 @@ function withTranscriptContextSnapshot<T>(
           const nativeJsonValid = jsonValid(database.db, sql`coalesce(event_json, '{}')`);
           // PostgreSQL JSONB cannot decode unmatched surrogate escapes; JavaScript projects those rows.
           const postgresUndecodable = isPostgresSqlConnection(database.db)
-            ? sql<boolean>`NOT ${jsonNativeFieldsValid(database.db, transcriptEventJsonSql(database.db))}`
+            ? /* kysely-allow-raw: Negates the shared JSONB decodability check. */ sql<boolean>`NOT ${jsonNativeFieldsValid(database.db, transcriptEventJsonSql(database.db))}`
             : undefined;
           const guardedModelContextEventSql = (projected: RawBuilder<string>) =>
             postgresUndecodable
-              ? sql<string | null>`CASE WHEN ${postgresUndecodable} THEN NULL ELSE ${projected} END`
+              ? /* kysely-allow-raw: CASE keeps native projection off undecodable rows. */ sql<
+                  string | null
+                >`CASE WHEN ${postgresUndecodable} THEN NULL ELSE ${projected} END`
               : projected;
           const undecodableEventSql = () =>
             postgresUndecodable
-              ? sql<
+              ? /* kysely-allow-raw: CASE returns canonical text only for undecodable rows. */ sql<
                   string | null
                 >`CASE WHEN ${postgresUndecodable} THEN ${transcriptEventJsonSql(database.db)} END`
-              : sql<string | null>`NULL`;
+              : /* kysely-allow-raw: SQLite rows are always natively decodable. */ sql<
+                  string | null
+                >`NULL`;
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
           const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
           if (through) {
@@ -387,10 +391,9 @@ function withTranscriptContextSnapshot<T>(
                     Buffer.byteLength(
                       projectCanonicalModelContextEvent(undecodable, { omitCheckpoint }),
                     );
+                  const navigationJson = projectCanonicalModelContextNavigation(undecodable);
                   // SAFETY: This fresh object has no other owner.
-                  const entry = JSON.parse(
-                    projectCanonicalModelContextNavigation(undecodable),
-                  ) as ContextEntry;
+                  const entry = JSON.parse(navigationJson) as ContextEntry;
                   entry.seq = row.seq;
                   yield {
                     entry,
