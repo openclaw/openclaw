@@ -85,6 +85,7 @@ it.each([
   [npmName + "@2026.6.33", "beta", npmName, "2026.8.1-beta.3"],
   [npmName + "@next", "beta", npmName, "2026.8.1-beta.3"],
   [npmName + "@^2026.6.0", "beta", npmName, "2026.8.1-beta.3"],
+  [npmName + "@^2026.6.0", "stable", npmName, "2026.8.1"],
   ["@acme/discord", "extended-stable", clawHubName, "2026.7.33"],
 ] as const)(
   "preserves explicit or third-party %s on %s",

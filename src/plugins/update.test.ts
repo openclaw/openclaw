@@ -1182,6 +1182,44 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it.each([true, false])(
+    "moves an official ClawHub beta selector to stable (core published=%s)",
+    async (published) => {
+      const packageName = "@openclaw/discord";
+      const installPath = createInstalledPackageDir(packageName, "2026.10.10-beta.5");
+      const config = createClawHubInstallConfig({
+        pluginId: "discord",
+        clawhubPackage: packageName,
+        spec: `clawhub:${packageName}@beta`,
+        installPath,
+      });
+      installPluginFromClawHubMock.mockImplementation(async ({ spec }) =>
+        !published && spec.endsWith("@2026.11.1")
+          ? { ok: false, code: "version_not_found", error: "not published" }
+          : createSuccessfulClawHubUpdateResult({
+              pluginId: "discord",
+              clawhubPackage: packageName,
+              targetDir: installPath,
+              version: "2026.11.1",
+            }),
+      );
+      const warn = vi.fn();
+      const result = await updatePlugin(config, "discord", {
+        updateChannel: "stable",
+        coreVersion: "2026.11.1",
+        logger: { warn },
+      });
+      expect(clawHubInstallCall()?.spec).toBe(`clawhub:${packageName}@2026.11.1`);
+      expect(result.config.plugins?.installs?.discord?.spec).toBe(`clawhub:${packageName}@latest`);
+      expect(result.outcomes[0]?.status).toBe("updated");
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("stable"));
+      if (!published) {
+        expect(clawHubInstallCall(1)?.spec).toBe(`clawhub:${packageName}@latest`);
+        expect(result.outcomes[0]?.message).toContain("stable channel fallback");
+      }
+    },
+  );
+
   it.each(["updated", "unchanged", "failed"] as const)(
     "recovers an official npm release pin only after a successful %s replacement",
     async (outcome) => {
