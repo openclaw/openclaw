@@ -233,6 +233,8 @@ async function createLocalGatewayRequestContext(
   return context;
 }
 
+export { createLocalGatewayRequestContext };
+
 /** Runs code inside a local gateway request scope unless an outer scope already exists. */
 export async function withLocalGatewayRequestScope<T>(
   params: LocalGatewayRequestContextParams,
