@@ -1,6 +1,6 @@
 name: Android Emulator Diagnostic
 
-run-name: Android ${{ inputs.operation == 'screenshots' && 'screenshots' || 'emulator' }} diagnostic (${{ inputs.target_sha }})
+run-name: Android ${{ inputs.operation == 'jvm-profile' && 'release JVM profile' || inputs.operation == 'screenshots' && 'screenshots' || 'emulator' }} diagnostic (${{ inputs.target_sha }})
 
 on:
   workflow_dispatch:
@@ -13,6 +13,7 @@ on:
         options:
           - boot
           - screenshots
+          - jvm-profile
       target_sha:
         description: Exact lowercase 40-character commit SHA to diagnose
         required: true
@@ -23,6 +24,7 @@ permissions:
 
 jobs:
   validate-target:
+    if: inputs.operation != 'jvm-profile'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -705,4 +707,73 @@ jobs:
         with:
           name: android-emulator-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/android-emulator-diagnostic
+          retention-days: 7
+
+  jvm-profile:
+    if: inputs.operation == 'jvm-profile'
+    permissions:
+      contents: read
+    name: Profile Android release JVMs without publishing
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 25
+    concurrency:
+      group: android-release-jvm-profile
+      cancel-in-progress: false
+    steps:
+      - name: Verify frozen source selection
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: test "$TARGET_SHA" = d1be6e243ccd850329d93567cb3ffd71e0ff837d
+
+      - name: Checkout committed profiling tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "true"
+          install-deps: "false"
+          node-version: "24.22.1"
+
+      - name: Setup production Android toolchain and dependency cache
+        id: android-toolchain
+        uses: ./.github/actions/setup-android-toolchain
+        with:
+          cache-mode: off
+          gradle-cache-mode: restore
+          install-screenshot-emulators: "false"
+
+      - name: Checkout frozen release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: d1be6e243ccd850329d93567cb3ffd71e0ff837d
+          path: candidate
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install mobile release dependencies
+        working-directory: candidate
+        run: node scripts/install-mobile-release-dependencies.mjs
+
+      - name: Record one signed release build without publishing
+        env:
+          JAVA_HOME: ${{ steps.android-toolchain.outputs.gradle-java-home }}
+        run: >-
+          node scripts/bench-android-bundle-order.mjs
+          --source candidate --first wear --jfr
+          --output .build/android-jvm-profile
+
+      - name: Retain audited recordings and diagnostic proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-release-jvm-profile-${{ github.run_id }}
+          path: .build/android-jvm-profile/**
+          if-no-files-found: error
           retention-days: 7
