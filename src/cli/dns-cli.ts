@@ -1,7 +1,10 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
+import {
+  replaceFileAtomicSync,
+  type ReplaceFileAtomicSyncFileSystem,
+} from "@openclaw/fs-safe/atomic";
 import type { Command } from "commander";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
@@ -146,6 +149,31 @@ function applyMacOsAclEntries(filePath: string, entries: string[], privileged: b
  * A plain write truncates the destination first, so an interrupted or failed
  * write leaves the operator's Corefile empty or partial with no recovery copy.
  */
+/**
+ * A filesystem view whose freshly created files carry no inherited access
+ * policy. macOS directories can grant principals read access to new files
+ * through file_inherit entries; those grants land on the staged inode at
+ * creation and a later 0600 mode does not remove them, so the configuration
+ * bytes would be readable to an account outside the operator's readership
+ * for as long as they sit in the staging file. Clearing the policy at
+ * creation - before any byte is written - closes that window; the operator's
+ * own entries are restored in beforeRename.
+ */
+function stagingFilesystem(): ReplaceFileAtomicSyncFileSystem {
+  const fileSystem: ReplaceFileAtomicSyncFileSystem = {
+    ...fs,
+    openSync(pathname, flags, mode?) {
+      const fd =
+        mode === undefined ? fs.openSync(pathname, flags) : fs.openSync(pathname, flags, mode);
+      if (process.platform === "darwin") {
+        spawnSync("chmod", ["-N", String(pathname)], { encoding: "utf-8" });
+      }
+      return fd;
+    },
+  };
+  return fileSystem;
+}
+
 function publishConfigFile(filePath: string, content: string): void {
   const target = resolvePublicationTarget(filePath);
   const existing = fs.statSync(target, { throwIfNoEntry: false });
@@ -153,6 +181,7 @@ function publishConfigFile(filePath: string, content: string): void {
   replaceFileAtomicSync({
     filePath: target,
     content,
+    fileSystem: stagingFilesystem(),
     // The atomic writer applies dirMode to the parent directory, so pass the
     // operator's own mode instead of tightening the CoreDNS directory.
     dirMode: fs.statSync(path.dirname(target)).mode & 0o7777,
@@ -284,6 +313,12 @@ function publishConfigFileWithSudo(filePath: string, content: string): void {
     // leaves restricted configuration readable by other local accounts.
     run("sudo", ["rm", "-f", tempPath]);
     run("sudo", ["install", "-m", "600", "/dev/null", tempPath]);
+    // Inherited directory grants land on the staged inode at creation and a
+    // 0600 mode does not remove them; strip them before any configuration
+    // byte exists, and restore the operator's own entries below.
+    if (process.platform === "darwin") {
+      run("sudo", ["chmod", "-N", tempPath]);
+    }
     const staged = spawnSync("sudo", ["tee", tempPath], {
       input: content,
       encoding: "utf-8",

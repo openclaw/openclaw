@@ -217,6 +217,10 @@ describe("dns-cli probe bounds", () => {
         if (mode === "+a") {
           return actualSpawnSync("chmod", args.slice(1), { encoding: "utf-8" });
         }
+        // The inherited-grant strip is a no-op off macOS (nothing inherited).
+        if (mode === "-N" && realPlatform !== "darwin") {
+          return spawnOk();
+        }
         if (typeof mode === "string" && typeof target === "string") {
           fs.chmodSync(target, Number.parseInt(mode, 8));
         }
@@ -365,12 +369,17 @@ describe("dns-cli probe bounds", () => {
       if (grant.status !== 0) {
         return;
       }
-      fs.chmodSync(etcDir, 0o755);
-      fs.chmodSync(path.join(etcDir, "conf.d"), 0o700);
+      // The modes were set above, while the runner still owned the tree; a
+      // runner-side chmod after the chown would EPERM even for a matching mode.
 
       // The widen call names the staged file; it is inspected synchronously
       // before being forwarded, while the staged bytes still exist.
-      const observations: { mode: number; deniedPolicy: boolean; readerRefused: boolean }[] = [];
+      const observations: {
+        mode: number;
+        deniedPolicy: boolean;
+        readerRefused: boolean;
+        bytes: string;
+      }[] = [];
       spawnSyncMock.mockImplementation((cmd: string, args: string[], opts?: { input?: string }) => {
         if (
           cmd === "sudo" &&
@@ -388,10 +397,14 @@ describe("dns-cli probe bounds", () => {
           const asReader = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", staged], {
             encoding: "utf-8",
           });
+          const asRoot = actualSpawnSync("sudo", ["-n", "cat", staged], {
+            encoding: "utf-8",
+          });
           observations.push({
             mode: Number.parseInt(mode.stdout ?? "", 8),
             deniedPolicy: (policy.stdout ?? "").includes("deny read"),
             readerRefused: asReader.status !== 0,
+            bytes: asRoot.stdout ?? "",
           });
         }
         if (cmd === "sudo" && args[0] !== "brew") {
@@ -422,6 +435,8 @@ describe("dns-cli probe bounds", () => {
         expect(observed.mode).toBe(0o600);
         expect(observed.deniedPolicy).toBe(true);
         expect(observed.readerRefused).toBe(true);
+        // The staged inode genuinely holds the configuration bytes.
+        expect(observed.bytes).toContain(`import ${importGlob}`);
       }
     },
   );
