@@ -331,6 +331,29 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
   --bundle-dir dist/control-ui --pairs 10 --viewport both
 ```
 
+Continuous gestures are opt-in with `--steps gestures`: pointer sweeps and wheel
+scrolling over Sidebar, Chat, Advanced Settings and Sessions; transcript selection
+across the virtual window and within a message; sidebar/split dividers; window
+resizing; and mobile portrait/landscape viewport changes. Fixtures use 100/2,000
+messages and 100/1,000 sessions (Sessions still renders its 100-row page, and
+Advanced Settings has 303 fields in both variants). Pointer and wheel input target
+60 Hz; viewport commands serialize to preserve driver correctness. Each result
+records actual delivery cadence, rAF interval median/p95 and counts above 16.7/33 ms,
+and ResizeObserver deliveries/entries per frame. These are application callback
+intervals, not presented frames or CPU time. Mobile viewport changes do not prove
+native device orientation events. Desktop-only gestures are explicitly skipped
+on mobile. Use Chromium alone with `--cpu-throttle 4` for the throttled matrix.
+
+Use `--compare-bundle-dir` plus an identical `--control-bundle-dir` for rotated
+base/head/A/A gesture measurements. Native attribution is separate: `--trace`
+records style/layout passes (WebKit exposes native layout stacks), while
+Chromium `--native-audit` also captures forced-layout stacks. These counts include
+the gesture's bounds/assertion and settle work; dividing by native input count is
+an amortized cost, not causal per-event attribution. Missing engine fields remain
+null. `--gesture-geometry` additionally captures bounded geometry-read stacks;
+read attempts are not proof of forced layout, and this diagnostic instrumentation
+must not be used for timing acceptance.
+
 Idle scenarios default to a 30-second Node-side measurement window. Use
 `--idle-duration-ms` for a bounded diagnostic or rotated comparison; the manifest
 records the chosen duration. `--idle-warmup-ms` independently controls settlement
