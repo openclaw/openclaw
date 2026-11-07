@@ -23,6 +23,14 @@ export function buildRuntimeConfigSchemaFromRegistry(
   return buildConfigSchemaCore(collectRuntimeSchemaMetadata(registry, config));
 }
 
+/** Builds redaction hints from an exact manifest registry without the form schema. */
+export function buildRuntimeConfigRedactionHintsFromRegistry(
+  registry: PluginManifestRegistry,
+  config: OpenClawConfig,
+): ConfigSchemaResponse["uiHints"] {
+  return buildConfigRedactionHints(collectRuntimeSchemaMetadata(registry, config));
+}
+
 function collectRuntimeSchemaMetadata(registry: PluginManifestRegistry, config: OpenClawConfig) {
   return {
     plugins: collectPluginSchemaMetadataCore(registry),
