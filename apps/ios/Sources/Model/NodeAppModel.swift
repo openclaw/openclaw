@@ -4228,7 +4228,11 @@ extension NodeAppModel {
             sessionKey: self.mainSessionKey,
             deliveryChannel: self.shareDeliveryChannel,
             deliveryTo: self.shareDeliveryTo,
-            requiresForegroundSignIn: requiresForegroundSignIn))
+            requiresForegroundSignIn: requiresForegroundSignIn,
+            tlsFingerprintSHA256: requiresForegroundSignIn
+                ? nil : self.activeGatewayConnectConfig?.tls?.expectedFingerprint,
+            customHeaders: requiresForegroundSignIn ? nil : GatewaySettingsStore.loadGatewayCustomHeaders(
+                gatewayStableID: stableID)))
         GatewayDiagnostics.log(
             "gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
 
@@ -5089,7 +5093,9 @@ extension NodeAppModel {
             sessionKey: self.mainSessionKey,
             deliveryChannel: self.shareDeliveryChannel,
             deliveryTo: self.shareDeliveryTo,
-            requiresForegroundSignIn: relay.requiresForegroundSignIn))
+            requiresForegroundSignIn: relay.requiresForegroundSignIn,
+            tlsFingerprintSHA256: relay.tlsFingerprintSHA256,
+            customHeaders: relay.customHeaders))
     }
 
     func recordShareEvent(_ text: String) {

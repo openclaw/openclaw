@@ -168,7 +168,8 @@ final class ShareViewController: UIViewController {
                 includeDeviceIdentity: true,
                 allowStoredDeviceAuth: config.gatewayStableID != nil,
                 deviceAuthGatewayID: config.gatewayStableID),
-            sessionBox: nil,
+            sessionBox: config.webSocketSessionBox(),
+            extraHeadersProvider: { try ShareGatewayRelaySettings.currentCustomHeaders(for: config) },
             onConnected: {},
             onDisconnected: { _ in },
             onInvoke: { req in
