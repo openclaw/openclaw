@@ -464,6 +464,34 @@ describe("backupRestoreCommand", () => {
     });
   });
 
+  it("refuses --postgres-connection-env without a usable variable or PostgreSQL stores", async () => {
+    await withState(async (state) => {
+      const archivePath = state.path("backup.tar.gz");
+      const target = state.path("restored");
+      await writeArchive({ archivePath });
+      const run = (postgresConnectionEnv: string) =>
+        backupRestoreCommand(createTestRuntime(), {
+          archive: archivePath,
+          target,
+          postgresConnectionEnv,
+        });
+      await expect(run("not a name")).rejects.toThrow(/requires an environment variable name/u);
+      delete process.env.OPENCLAW_RESTORE_TEST_UNSET_PG;
+      await expect(run("OPENCLAW_RESTORE_TEST_UNSET_PG")).rejects.toThrow(
+        /OPENCLAW_RESTORE_TEST_UNSET_PG is not set; nothing was restored/u,
+      );
+      process.env.OPENCLAW_RESTORE_TEST_SET_PG = "postgresql:///unused";
+      try {
+        await expect(run("OPENCLAW_RESTORE_TEST_SET_PG")).rejects.toThrow(
+          /requires an archive with PostgreSQL stores; nothing was restored/u,
+        );
+      } finally {
+        delete process.env.OPENCLAW_RESTORE_TEST_SET_PG;
+      }
+      await expect(fs.access(target)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
   it("refuses insufficient target capacity before extraction and counts hardlink data once", async () => {
     await withState(async (state) => {
       const archivePath = state.path("backup.tar.gz");

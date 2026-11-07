@@ -8,6 +8,7 @@ import {
   isConfigReadFailure,
 } from "../config/io.invalid-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretRef } from "../config/types.secrets.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
 import {
   getScopedDatabaseEngineSelection,
@@ -49,6 +50,8 @@ export async function runOfflineDatabaseBackup<T>(
         configSourcePath?: string;
         mapIncludePath?: (absolutePath: string) => string;
         env?: NodeJS.ProcessEnv;
+        /** Replaces only the captured `database.postgres.connection` for this run. */
+        postgresConnection?: SecretRef;
       },
   /** Archive capture reads a running owner's stores through per-store snapshots. */
   options?: { online?: true },
@@ -110,6 +113,18 @@ export async function runOfflineDatabaseBackup<T>(
             : createInvalidConfigError(snapshot.path, details);
         }
         config = snapshot.config;
+        if (capturedPaths?.postgresConnection) {
+          config = {
+            ...config,
+            database: {
+              ...config.database,
+              postgres: {
+                ...config.database?.postgres,
+                connection: capturedPaths.postgresConnection,
+              },
+            },
+          };
+        }
       }
       const selection = captured?.selection ?? (await resolveDatabaseEngineSelection(config));
       assertCurrent();
