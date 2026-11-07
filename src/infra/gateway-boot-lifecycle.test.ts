@@ -4,15 +4,18 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   GATEWAY_CRASH_LOOP_BREAKER_REASON as BREAKER,
   completeGatewayBootLifecycle,
+  completeGatewayAgentRestartRecovery,
   formatGatewayCrashLoopManualChannelStartHint,
   inspectGatewayCrashLoopBreakerAsync,
   readGatewayLastInstallationReplacementAsync,
@@ -115,6 +118,49 @@ const completedBoot = (
   outcome: GatewayBootLifecycleOutcome,
   details: Pick<BootRow, "reason" | "startupReason"> = {},
 ) => bootRow(id, start, { completedAtMs: end, outcome, ...details });
+
+it("retains exact pending crash intervals per physical agent until its recovery completes", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    for (const agentId of ["main", "constructor"]) {
+      openOpenClawAgentDatabase({ agentId });
+    }
+    await beginGatewayBootLifecycle(process.env, 100);
+    const crash = await beginGatewayBootLifecycle(process.env, 200);
+    expect(crash.restartResumeWindows).toEqual({
+      main: [{ startedAt: 100, endedAt: 200 }],
+      constructor: [{ startedAt: 100, endedAt: 200 }],
+    });
+    const consecutive = await beginGatewayBootLifecycle(process.env, 300);
+    expect(consecutive.restartResumeWindows?.main).toEqual([{ startedAt: 100, endedAt: 300 }]);
+    // A late acknowledgement cannot discard the newer crash interval.
+    await completeGatewayAgentRestartRecovery("main", 200);
+    await completeGatewayBootLifecycle(consecutive.id, { outcome: "clean_stop" }, process.env, 350);
+    await beginGatewayBootLifecycle(process.env, 400);
+    const separated = await beginGatewayBootLifecycle(process.env, 500);
+    expect(separated.restartResumeWindows?.main).toEqual([
+      { startedAt: 100, endedAt: 300 },
+      { startedAt: 400, endedAt: 500 },
+    ]);
+    await completeGatewayAgentRestartRecovery("main", 500);
+    await completeGatewayBootLifecycle(separated.id, { outcome: "clean_stop" }, process.env, 550);
+    const afterRetention = await beginGatewayBootLifecycle(process.env, 100_000_000);
+    expect(afterRetention.restartResumeWindows).toEqual({
+      constructor: [
+        { startedAt: 100, endedAt: 300 },
+        { startedAt: 400, endedAt: 500 },
+      ],
+    });
+    await completeGatewayAgentRestartRecovery("constructor", 500);
+    await completeGatewayBootLifecycle(
+      afterRetention.id,
+      { outcome: "clean_stop" },
+      process.env,
+      100_000_001,
+    );
+    expect(
+      (await beginGatewayBootLifecycle(process.env, 100_000_002)).restartResumeWindows,
+    ).toBeUndefined();
+  }));
 
 describe("gateway crash-loop breaker", () => {
   it.each([2, 3])(
