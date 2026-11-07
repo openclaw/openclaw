@@ -70,6 +70,7 @@ import {
 } from "./update-duplicate-aliases.js";
 import { prepareNpmPluginUpdateMetadata } from "./update-npm-metadata.js";
 import {
+  createStablePluginUpdateVersionPolicy,
   expectedIntegrityForNpmUpdate,
   isNpmMetadataCompatibleWithCurrentHost,
   isPluginInstallRecordUpdateSource,
@@ -267,6 +268,13 @@ async function runInstalledPluginUpdate(
         : record.source === "clawhub"
           ? clawhubSpecs?.recordSpec
           : record.spec;
+    const minimumStableVersion =
+      npmSpecs?.minimumStableVersion ?? clawhubSpecs?.minimumStableVersion;
+    if (minimumStableVersion) {
+      logger.warn?.(
+        `Plugin "${pluginId}" follows stable: replacing saved selector ${record.spec} with ${recordSpec} after a successful update.`,
+      );
+    }
     const trustedSourceLinkedOfficialInstall = Boolean(
       npmTarget?.officialPackageName &&
       parseRegistryNpmSpec(effectiveSpec ?? "")?.name === npmTarget.officialPackageName,
@@ -356,6 +364,11 @@ async function runInstalledPluginUpdate(
       code?: string,
       source: "npm" | "clawhub" = "npm",
     ): Promise<void> => {
+      if (minimumStableVersion) {
+        logger.warn?.(
+          `Keeping "${pluginId}" at ${currentVersion ?? record.version ?? "its installed version"}: no compatible stable update was installed. ${message}`,
+        );
+      }
       let installedPayloadRunnable = false;
       // Metadata failures precede target availability; core sync must retain a
       // runnable install during a registry outage when retention is requested.
@@ -403,6 +416,12 @@ async function runInstalledPluginUpdate(
       pluginId,
       installPath,
     });
+    const stableVersion = createStablePluginUpdateVersionPolicy({
+      pluginId,
+      currentVersion: currentVersion ?? record.version,
+      minimumStableVersion,
+      logger,
+    });
 
     if (
       !params.dryRun &&
@@ -429,6 +448,7 @@ async function runInstalledPluginUpdate(
         if (
           currentVersion &&
           prepared.unchangedEligible &&
+          !stableVersion.error(metadataResult.metadata.version) &&
           !(await auditDeclaredOpenClawHostDependency({
             packageDir: installPath,
             packageName: pluginId,
@@ -497,7 +517,9 @@ async function runInstalledPluginUpdate(
           timeoutMs: params.timeoutMs,
           workTimeoutMs: params.workTimeoutMs,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
-          onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
+          onBeforePluginArtifactCommit: stableVersion.beforeCommit(
+            capabilityConsent.onBeforePluginArtifactCommit,
+          ),
           expectedIntegrity,
           clawhubSpecs,
           officialNpmFallback,
@@ -582,6 +604,12 @@ async function runInstalledPluginUpdate(
       continue;
     }
     if (params.dryRun) {
+      const stableError = stableVersion.error(result.version);
+      if (stableError) {
+        logger.warn?.(stableError);
+        recordSkippedOutcome(pluginId, stableError);
+        continue;
+      }
       outcomes.push(
         await buildDryRunPluginUpdateOutcome({
           pluginId,

@@ -81,6 +81,7 @@ type NpmChannelInstallSpecs = {
   npmResolution?: NpmSpecResolution;
   channelTag?: "beta" | "latest";
   channelReason?: "tag-behind-latest";
+  minimumStableVersion?: string;
 };
 
 type ClawHubChannelInstallSpecs = {
@@ -88,6 +89,7 @@ type ClawHubChannelInstallSpecs = {
   recordSpec: string;
   fallbackSpec?: string;
   fallbackLabel?: string;
+  minimumStableVersion?: string;
 };
 
 export class NpmChannelResolutionError extends Error {
@@ -109,6 +111,22 @@ export function resolveDefaultNpmSpec(spec: string): ParsedRegistryNpmSpec | nul
   return null;
 }
 
+/** Stored channel tags have no authored/automatic distinction; stable maintenance follows core. */
+export function resolveStableOfficialPluginSpec(params: {
+  spec: string;
+  officialPackageName?: string;
+  updateChannel?: UpdateChannel;
+}): string | undefined {
+  const parsed = parseRegistryNpmSpec(params.spec);
+  return params.updateChannel === "stable" &&
+    parsed?.name === params.officialPackageName &&
+    parsed?.name.startsWith("@openclaw/") &&
+    parsed?.selectorKind === "tag" &&
+    /^(alpha|beta|next|rc|canary|nightly|dev)$/i.test(parsed.selector ?? "")
+    ? `${parsed.name}@latest`
+    : undefined;
+}
+
 type ChannelInstallParams = {
   spec: string;
   installSpecOverride?: string;
@@ -117,6 +135,7 @@ type ChannelInstallParams = {
   coreVersion?: string;
   versionBoundToCore?: boolean;
   timeoutMs?: number;
+  followStableChannel?: boolean;
 };
 
 function resolveCoreBoundNpmSpec(
@@ -149,6 +168,20 @@ function resolveCoreBoundNpmSpec(
 export async function resolveNpmInstallSpecsForUpdateChannel(
   params: ChannelInstallParams,
 ): Promise<NpmChannelInstallSpecs> {
+  if (params.followStableChannel) {
+    const installSpec = resolveCoreBoundNpmSpec(params, true)!;
+    const { resolveNpmSpecMetadata } = await import("../infra/install-source-utils.js");
+    const result = await resolveNpmSpecMetadata({ spec: installSpec, timeoutMs: params.timeoutMs });
+    if (!result.ok && result.category === "metadata-env") {
+      throw new NpmChannelResolutionError(`Could not resolve ${installSpec}: ${result.error}`);
+    }
+    return {
+      installSpec: result.ok ? installSpec : params.spec,
+      recordSpec: params.spec,
+      minimumStableVersion: resolveOpenClawReleaseCohortVersion(params.coreVersion!),
+      ...(result.ok ? { npmResolution: result.metadata } : {}),
+    };
+  }
   const selectedSpec = params.installSpecOverride ?? resolveCoreBoundNpmSpec(params);
   const target = parseRegistryNpmSpec(params.spec);
   const selector = target?.selector?.toLowerCase();
@@ -211,6 +244,7 @@ export function resolveClawHubInstallSpecsForUpdateChannel(params: {
   versionBoundToCore?: boolean;
   /** Managed installs may prefer the host build; updates retain their registry target. */
   preferCoreVersion?: boolean;
+  followStableChannel?: boolean;
 }): ClawHubChannelInstallSpecs {
   const parsed = parseClawHubPluginSpec(params.spec);
   if (
@@ -218,20 +252,25 @@ export function resolveClawHubInstallSpecsForUpdateChannel(params: {
     params.officialPackageName === parsed.name &&
     (params.updateChannel === "extended-stable" ||
       (params.updateChannel === "stable" &&
-        (params.versionBoundToCore || params.preferCoreVersion)))
+        (params.versionBoundToCore || params.preferCoreVersion || params.followStableChannel)))
   ) {
     const npmSpec = resolveCoreBoundNpmSpec(
       {
         ...params,
         spec: `${parsed.name}${parsed.version ? `@${parsed.version}` : ""}`,
       },
-      params.preferCoreVersion,
+      params.preferCoreVersion || params.followStableChannel,
     );
     const installSpec = npmSpec ? `clawhub:${npmSpec}` : params.spec;
     return {
       installSpec,
       recordSpec: params.spec,
-      ...(npmSpec && params.updateChannel === "stable" && params.preferCoreVersion
+      ...(params.followStableChannel
+        ? { minimumStableVersion: resolveOpenClawReleaseCohortVersion(params.coreVersion!) }
+        : {}),
+      ...(npmSpec &&
+      params.updateChannel === "stable" &&
+      (params.preferCoreVersion || params.followStableChannel)
         ? { fallbackSpec: params.spec, fallbackLabel: installSpec }
         : {}),
     };

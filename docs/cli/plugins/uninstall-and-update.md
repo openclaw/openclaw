@@ -126,7 +126,11 @@ A plugin selected through `plugins.load.paths` is operator-managed. Named update
 
 <AccordionGroup>
   <Accordion title="Resolving plugin id vs npm spec">
-    When you pass a plugin id, OpenClaw starts from its recorded install source. For a multi-entry package, a child id resolves to its package owner and updates every sibling together. If the new package version removes or renames children, OpenClaw removes the retired children's entries, allow/deny policy, exact child load paths, channel config, and memory/context slot selections while preserving retained/new children and unrelated plugins. Stored dist-tags such as `@beta` retain their selected release line.
+    When you pass a plugin id, OpenClaw starts from its recorded install source. For a multi-entry package, a child id resolves to its package owner and updates every sibling together. If the new package version removes or renames children, OpenClaw removes the retired children's entries, allow/deny policy, exact child load paths, channel config, and memory/context slot selections while preserving retained/new children and unrelated plugins.
+
+    On the stable update channel, trusted official plugins with saved prerelease channel tags (`@alpha`, `@beta`, `@next`, `@rc`, `@canary`, `@nightly`, or `@dev`) follow core's stable release. Updates prefer the version matching core, or `latest` when that version is unavailable, and warn before saving `latest` after success. A compatible replacement must be stable and at least core's release cohort; otherwise the installed plugin and selector stay in place with a warning. This applies to named updates, `--all`, and managed core-update convergence. Older records do not distinguish automatically saved channel tags from user-selected tags, so both follow this policy. Use an exact version or an explicit selector in the current command to retain a deliberate selection.
+
+    Third-party plugins, custom dist-tags, and an explicit beta update channel keep their selected release line. This channel-tag recovery does not change exact-version or range selectors; the separate managed release-pin recovery below still applies.
 
     The narrow exception is a trusted official package completing a catalog-declared plugin id replacement. That update starts from the catalog package selector so the renamed manifest can replace the legacy id.
 
