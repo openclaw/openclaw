@@ -7,7 +7,7 @@ const composition = createIdleImport(() => import("./chat-details-session.tsx"))
 export const loadChatDetailsEnvironmentBody = environment.load;
 export const ChatDetailsDesktopComposition = lazy(
   async () => {
-    // Both imports start on cached admission; only the lazy Details boundary waits.
+    // Warm both imports in parallel before admitting the cached desktop pane.
     const [module] = await Promise.all([composition.load(), environment.load()]);
     return module;
   },

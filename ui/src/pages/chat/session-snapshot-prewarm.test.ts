@@ -74,11 +74,11 @@ describe("routed transcript prewarm", () => {
     writeSnapshotFixture(writer, key, snapshot);
     await writer.flush();
     await prewarmChatSnapshot(key);
-    expect(load).toHaveBeenCalledTimes(scenario.loads);
     const admission = snapshots.waitForPrewarmedChatSnapshot(key);
     expect(Boolean(admission)).toBe(scenario.loads > 0);
     module.reject(new Error("Stopped at the module boundary"));
     await admission;
+    expect(load).toHaveBeenCalledTimes(scenario.loads);
     expect(await writer.read(key)).toEqual(snapshot);
   });
 
