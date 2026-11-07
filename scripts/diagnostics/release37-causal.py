@@ -317,6 +317,48 @@ def validate_profiles(arm):
             raise RuntimeError('missing warm-PID SQLite WORKER capture')
     save(arm / 'profile-summary.json', {'qualification': False, 'warmReceipts': records, 'profiles': inventory})
 
+def validate_status_observation(arm):
+    reports = [json.loads(p.read_text()) for p in (arm / 'reports').glob('*.json')]
+    reports = [r for r in reports if r.get('schemaVersion') == 'kova.report.v1']
+    if len(reports) != 1 or len(reports[0]['records']) != 1:
+        raise RuntimeError('status comparison requires one full report and one record')
+    record = reports[0]['records'][0]
+    if (record['scenario'], record['state']['id']) != ('fresh-install', 'fresh'):
+        raise RuntimeError('status comparison record is not fresh-install/fresh')
+    readiness = next(p for p in record['phases'] if p['id'] == 'readiness')['results']
+    if len(readiness) != 1:
+        raise RuntimeError('status comparison requires one readiness command')
+    result = readiness[0]
+    role = result['resourceSamples']['byRole']['status-cli']
+    lower, upper = role['maxCpuPercentLower'], role['maxCpuPercent']
+    if not isinstance(lower, (int, float)) or not isinstance(upper, (int, float)) or lower > upper:
+        raise RuntimeError('missing status role CPU interval')
+    raw = Path(record['collectorArtifactDirs']['resourceSamples']) / 'readiness-1.jsonl'
+    samples = [json.loads(line) for line in raw.read_text().splitlines()]
+    observed = set()
+    valid = 0
+    for sample in samples:
+        if sample.get('collectionStatus') != 'ok':
+            continue
+        for proc in sample['processes']:
+            if 'status-cli' not in proc.get('roles', []):
+                continue
+            required = ('pid', 'startTicks', 'cpuTicks', 'childCpuTicks', 'ownCpuPercentLower',
+                        'ownCpuPercentUpper', 'reapedCpuPercentLower', 'reapedCpuPercentUpper', 'reapedProcesses')
+            if not all(key in proc for key in required):
+                raise RuntimeError('status raw process accounting is incomplete')
+            observed.add((proc['pid'], proc['startTicks']))
+            if isinstance(proc['ownCpuPercentUpper'], (int, float)):
+                valid += 1
+    if not valid:
+        raise RuntimeError('no usable status raw CPU observations')
+    save(arm / 'status-observation.json', {
+        'qualification': False, 'status': record['status'], 'readinessMs': result['durationMs'],
+        'roleCpuLower': lower, 'roleCpuUpper': upper, 'roleCpuWidth': upper - lower,
+        'rawSamples': len(samples), 'observedStatusProcesses': len(observed),
+        'rawFile': str(raw.relative_to(arm)), 'rawSha256': sha(raw),
+        'scope': 'role interval and observed processes; not exact spawn counts or regression proof'})
+
 def scenario_result(arm, plan, code, repeat=3):
     expected = {(e['scenario']['id'], e['state']['id'], iteration)
                 for e in plan['entries'] for iteration in range(1, repeat + 1)}
@@ -390,9 +432,14 @@ def extract(archive, dest):
 def run(options):
     global ACTIVE, BASE_ENV
     snapshot = getattr(options, 'shutdown_snapshot', False)
-    arms = ARMS[:1] if snapshot else ARMS
-    filters = 'scenario:bundled-plugin-startup' if snapshot else FILTERS
-    repeat = 1 if snapshot else 3
+    status_comparison = getattr(options, 'status_comparison', False)
+    if snapshot and status_comparison:
+        raise RuntimeError('diagnostic modes are mutually exclusive')
+    arms = ([(f'{index:02d}-{name}', commit) for index, (name, commit) in enumerate(ARMS * 5, 1)]
+            if status_comparison else ARMS[:1] if snapshot else ARMS)
+    filters = 'scenario:fresh-install' if status_comparison else 'scenario:bundled-plugin-startup' if snapshot else FILTERS
+    exclude_args = ['--exclude', 'state:onboarded-user'] if status_comparison else []
+    repeat = 1 if snapshot or status_comparison else 3
     root = options.root.resolve()
     if root.exists() or re.search(r'[^a-zA-Z0-9_./-]', str(root)):
         raise RuntimeError('root must be fresh, absolute, and contain no shell/Node-option metacharacters')
@@ -450,7 +497,8 @@ def run(options):
     logged([str(nodebin / 'npm'), 'ci', '--ignore-scripts', '--no-audit', '--no-fund'], root / 'toolchain.log', BASE_ENV, kova)
     save(root / 'identity.json', {'qualification': False, 'arms': arms, 'kova': KOVA,
                                 'nodeArchiveSha256': NODE_SHA, 'ocmArchiveSha256': OCM_SHA,
-                                'filter': filters, 'repeat': repeat, 'shutdownSnapshot': snapshot, 'host': os.uname().release,
+                                'filter': filters, 'repeat': repeat, 'shutdownSnapshot': snapshot,
+                                'statusComparison': status_comparison, 'host': os.uname().release,
                                 'availableCpu': len(os.sched_getaffinity(0)),
                                 'meminfo': Path('/proc/meminfo').read_text(),
                                 'loadavg': Path('/proc/loadavg').read_text()})
@@ -470,6 +518,10 @@ def run(options):
         if snapshot:
             env['CAUSAL_SHUTDOWN_SNAPSHOT'] = '1'
         ACTIVE = (arm, env)
+        if status_comparison:
+            save(arm / 'placement.json', {'position': int(name[:2]), 'source': name[3:],
+                 'commit': commit, 'loadavg': Path('/proc/loadavg').read_text(),
+                 'meminfo': Path('/proc/meminfo').read_text()})
         source = arm / 'source'
         logged(['git', 'clone', '--no-hardlinks', '--no-checkout', str(options.openclaw_repo.resolve()), str(source)], arm / 'logs' / 'setup.log', env)
         logged(['git', '-C', str(source), 'checkout', '--detach', commit], arm / 'logs' / 'setup.log', env)
@@ -479,14 +531,18 @@ def run(options):
         logged(['pnpm', 'install', '--frozen-lockfile'], arm / 'logs' / 'setup.log', env, source)
         plan = json.loads(captured([str(node), str(kova / 'bin' / 'kova.mjs'), 'matrix', 'plan',
                                     '--profile', 'release', '--target', 'local-build:' + str(source),
-                                    '--include', filters, '--parallel', '1', '--repeat', str(repeat), '--json'], env, source))
+                                    '--include', filters, *exclude_args, '--parallel', '1', '--repeat', str(repeat), '--json'], env, source))
         if plan.get('controls', {}).get('include') != filters.split(','):
             raise RuntimeError('Kova plan changed requested filters')
         if snapshot and [(e['scenario']['id'], e['state']['id']) for e in plan['entries']] != [('bundled-plugin-startup', 'fresh')]:
             raise RuntimeError('snapshot proof requires exactly one bundled/fresh plan entry')
+        if status_comparison and (plan.get('controls', {}).get('exclude') != ['state:onboarded-user']
+                or [(e['scenario']['id'], e['state']['id'], e.get('status')) for e in plan['entries']]
+                != [('fresh-install', 'fresh', 'SELECTED')]):
+            raise RuntimeError('status comparison requires exactly one selected fresh-install/fresh entry')
         save(arm / 'plan.json', plan)
         args = [str(node), str(kova / 'bin' / 'kova.mjs'), 'matrix', 'run', '--profile', 'release',
-                '--target', 'local-build:' + str(source), '--include', filters, '--auth', 'mock',
+                '--target', 'local-build:' + str(source), '--include', filters, *exclude_args, '--auth', 'mock',
                 '--parallel', '1', '--repeat', str(repeat), '--timeout-ms', '900000',
                 '--report-dir', str(arm / 'reports'), '--execute', '--json']
         code = logged(args, arm / 'logs' / 'kova.log', env, source, allowed=True)
@@ -496,7 +552,9 @@ def run(options):
         try:
             if not (arm / 'runtime-identity.json').exists():
                 raise RuntimeError('missing installed runtime source identity')
-            if snapshot:
+            if status_comparison:
+                validate_status_observation(arm)
+            elif snapshot:
                 capture = json.loads((arm / 'snapshot-capture.json').read_text())
                 if not capture['profiles']:
                     raise RuntimeError('missing confirmed pre-exit capture')
@@ -519,6 +577,8 @@ def main():
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--shutdown-snapshot', action='store_true',
                         help='one b764 bundled warm restart; non-root pre-teardown Inspector snapshots')
+    parser.add_argument('--status-comparison', action='store_true',
+                        help='ten fresh-install/fresh records, ABAB serial, five per source; diagnosis only')
     parser.add_argument('--root', type=Path)
     parser.add_argument('--openclaw-repo', type=Path)
     parser.add_argument('--kova-repo', type=Path)
@@ -526,6 +586,16 @@ def main():
     parser.add_argument('--ocm-archive', type=Path)
     parser.add_argument('--exclusive-account')
     options = parser.parse_args()
+    if options.shutdown_snapshot and options.status_comparison:
+        parser.error('diagnostic modes are mutually exclusive')
+    if options.dry_run and options.status_comparison:
+        print(json.dumps({'qualification': False,
+            'placements': [(f'{index:02d}-{name}', commit) for index, (name, commit) in enumerate(ARMS * 5, 1)],
+            'kova': KOVA, 'nodeArchiveSha256': NODE_SHA, 'ocmArchiveSha256': OCM_SHA,
+            'filters': 'scenario:fresh-install', 'exclude': 'state:onboarded-user',
+            'repeat': 1, 'parallel': 1, 'recordsPerSource': 5,
+            'requiredCapture': 'installed source identity and status-role raw CPU intervals; no warm restart'}, indent=2))
+        return 0
     if options.dry_run:
         print(json.dumps({'qualification': False, 'arms': ARMS[:1] if options.shutdown_snapshot else ARMS, 'kova': KOVA, 'node': '24.22.1',
                           'nodeArchiveSha256': NODE_SHA, 'ocmArchiveSha256': OCM_SHA,

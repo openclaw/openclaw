@@ -11,6 +11,11 @@ on:
         required: false
         type: boolean
         default: false
+      status_comparison:
+        description: Ten serial fresh-install/fresh records ABAB, five per source (diagnosis only)
+        required: false
+        type: boolean
+        default: false
       artifact_recipient_certificate:
         description: Public PEM X.509 encryption certificate; retain matching private key OFF runner
         required: true
@@ -64,7 +69,7 @@ jobs:
           test "$(git -C seed/openclaw rev-parse HEAD)" = e2db37f28cc774d75a54d963817d0f153387a229
           git -C seed/openclaw cat-file -e b764253ddf0edf89887ecc0dcc2a8615ad791bc2^{commit}
           test "$(git -C seed/kova rev-parse HEAD)" = 4b8b1681446b868a44193ed6e97253a6c8bcbbbf
-          echo 'e8cea914508e2620473c60183feb198324f3fcd96b50b74748f602d5f30f216a  control/scripts/diagnostics/release37-causal.py' | sha256sum --check
+          echo 'cf1aa3cca63d5a5ae64766ea4a679b4059f5854de7a8f27161a763de407da33c  control/scripts/diagnostics/release37-causal.py' | sha256sum --check
           sudo install -d -m 0700 /srv/causal-inputs
           sudo cp -a seed/openclaw seed/kova /srv/causal-inputs/
           sudo install -m 0700 control/scripts/diagnostics/release37-causal.py /srv/causal-inputs/causal-diagnostic.py
@@ -81,11 +86,14 @@ jobs:
         shell: bash
         env:
           SHUTDOWN_SNAPSHOT: ${{ inputs.shutdown_snapshot }}
+          STATUS_COMPARISON: ${{ inputs.status_comparison }}
         run: |
           set -euo pipefail
           uid=$(id -u openclaw-causal)
+          if [[ "$SHUTDOWN_SNAPSHOT" == true && "$STATUS_COMPARISON" == true ]]; then exit 2; fi
           diagnostic_args=()
           if test "$SHUTDOWN_SNAPSHOT" = true; then diagnostic_args+=(--shutdown-snapshot); fi
+          if test "$STATUS_COMPARISON" = true; then diagnostic_args+=(--status-comparison); fi
           # No token, provider secret, or ambient NODE_OPTIONS enters this account.
           # Redirect source/build/error output to the encrypted-evidence staging area.
           sudo -u openclaw-causal env -i \
