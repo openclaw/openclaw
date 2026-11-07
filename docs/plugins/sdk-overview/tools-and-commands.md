@@ -26,6 +26,17 @@ plugin or operation has closed. Return or join background work your tool starts
 outside SDK-managed operations. Direct programmatic callers without a managed
 operation continue to own their signal and work lifetime.
 
+Tool factories can use `context.resolveAuthForProvider(providerId)` when transport
+selection depends on the credential type. It returns the selected `apiKey`,
+`mode`, and optional `profileId` from the host's existing provider-auth selection;
+it does not expose the credential store or refresh tokens. Keep the credential
+and mode together instead of inferring mode from token bytes or provider config.
+`resolveApiKeyForProvider` retains its string-only result and delegates to the
+same selection. Neither callback changes provider eligibility or enables
+plugin-owned synthetic auth. Both callbacks check the consuming plugin's current
+authority before lookup and after it resolves; retained callbacks reject after
+that authority closes. V1 contexts retain their existing admission semantics.
+
 | Method                                   | What it registers                                                                                                                        |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `api.registerTool(tool, opts?)`          | Agent tool (required or `{ optional: true }`)                                                                                            |

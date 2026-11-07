@@ -451,6 +451,8 @@ describe("createOpenClawTools browser plugin integration", () => {
       const config = authConfig(envName);
       if (!envOnly) {
         config.auth = { order: { acme: ["acme:profile"] } };
+        // The selected stored key owns its mode, not the provider's OAuth preference.
+        config.models!.providers!.acme!.auth = "oauth";
       }
       const check = async () => {
         const params = resolveTools({
@@ -471,6 +473,16 @@ describe("createOpenClawTools browser plugin integration", () => {
         await expect(params.context.resolveApiKeyForProvider?.("acme")).resolves.toBe(
           source === "plugin" ? undefined : envOnly ? "env-only-key" : "profile-key",
         );
+        const selected = await params.context.resolveAuthForProvider?.("acme");
+        if (source === "plugin") {
+          expect(selected).toBeUndefined();
+        } else {
+          expect(selected).toMatchObject({
+            apiKey: envOnly ? "env-only-key" : "profile-key",
+            mode: "api-key",
+            ...(!envOnly ? { profileId: "acme:profile" } : {}),
+          });
+        }
       };
       if (source !== "plugin") {
         return await check();

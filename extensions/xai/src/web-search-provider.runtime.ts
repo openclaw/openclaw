@@ -24,6 +24,7 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
+import { isXaiGrokProxyBaseUrl } from "../provider-catalog.js";
 import { resolveXaiResponsesEndpoint } from "./responses-tool-shared.js";
 import { resolveNormalizedXaiToolModel } from "./tool-config-shared.js";
 import {
@@ -122,6 +123,8 @@ async function runXaiWebSearch(params: {
   model: string;
   endpoint: string;
   apiKey: string;
+  authMode?: XaiResolvedWebSearchAuth["mode"];
+  profileId?: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
   cacheTtlMs: number;
@@ -129,7 +132,16 @@ async function runXaiWebSearch(params: {
 }): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
   const cacheKey = normalizeCacheKey(
-    `grok:${sha256Hex(params.apiKey)}:${params.endpoint}:${params.model}:${String(params.inlineCitations)}:${params.query}`,
+    JSON.stringify([
+      "grok",
+      sha256Hex(params.apiKey),
+      params.authMode,
+      params.profileId,
+      params.endpoint,
+      params.model,
+      params.inlineCitations,
+      params.query,
+    ]),
   );
   const cached = readCache(XAI_WEB_SEARCH_CACHE, cacheKey, params.cacheTtlMs);
   if (cached) {
@@ -365,14 +377,21 @@ export async function executeXaiWebSearchProviderTool(
     const request = {
       query,
       model: resolveNormalizedXaiToolModel({ config: grok, defaultModel: XAI_DEFAULT_MODEL_ID }),
-      endpoint: resolveXaiResponsesEndpoint(grok.baseUrl),
       timeoutSeconds,
       inlineCitations: grok.inlineCitations === true,
       cacheTtlMs: resolveSearchCacheTtlMs(searchConfig),
       signal,
     };
+    const runWithAuth = (selected: XaiResolvedWebSearchAuth) =>
+      runXaiWebSearch({
+        ...request,
+        apiKey: selected.apiKey,
+        authMode: selected.mode,
+        profileId: selected.profileId,
+        endpoint: resolveXaiResponsesEndpoint(grok.baseUrl, selected.mode),
+      });
     try {
-      return await runXaiWebSearch({ ...request, apiKey: auth.apiKey });
+      return await runWithAuth(auth);
     } catch (error) {
       signal?.throwIfAborted();
       if (!isXaiUnauthorizedError(error) || !auth.profileId) {
@@ -380,7 +399,9 @@ export async function executeXaiWebSearchProviderTool(
       }
       let authError = error;
       if (auth.mode === "oauth") {
-        const refreshed = await resolveXaiWebSearchAuth(authContext, searchConfig, {
+        // Refresh only the selected subscription; initial-selection fallbacks may be paid keys.
+        const refreshed = await resolveXaiProviderAuthCredential({
+          ...authContext,
           forceRefresh: true,
           profileId: auth.profileId,
         }).catch((refreshError: unknown) => {
@@ -388,15 +409,27 @@ export async function executeXaiWebSearchProviderTool(
           authError = refreshError;
           return undefined;
         });
-        if (refreshed?.apiKey && refreshed.apiKey !== auth.apiKey) {
-          return await runXaiWebSearch({ ...request, apiKey: refreshed.apiKey });
+        if (
+          refreshed?.mode === auth.mode &&
+          refreshed.profileId === auth.profileId &&
+          refreshed.apiKey !== auth.apiKey
+        ) {
+          return await runWithAuth(refreshed);
         }
+      }
+      // A subscription failure must not silently switch the request to API billing.
+      if (
+        auth.mode === "oauth" ||
+        (auth.mode === "token" &&
+          isXaiGrokProxyBaseUrl(typeof grok.baseUrl === "string" ? grok.baseUrl : undefined))
+      ) {
+        throw authError;
       }
       const fallback = await resolveXaiWebSearchApiKeyFallback(authContext, searchConfig);
       if (!fallback?.apiKey || fallback.apiKey === auth.apiKey) {
         throw authError;
       }
-      return await runXaiWebSearch({ ...request, apiKey: fallback.apiKey });
+      return await runWithAuth(fallback);
     }
   } catch (error) {
     executionContext?.signal?.throwIfAborted();

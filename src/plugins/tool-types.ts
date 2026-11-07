@@ -107,6 +107,15 @@ type OpenClawPluginToolContextBase = {
   hasAuthForProvider?: (providerId: string) => boolean;
   /** Resolves an API key from the active auth profile store when available. */
   resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
+  /** Selected credential and its mode from the same host auth resolution. */
+  resolveAuthForProvider?: (providerId: string) => Promise<
+    | {
+        apiKey: string;
+        mode?: "api-key" | "oauth" | "token" | "aws-sdk";
+        profileId?: string;
+      }
+    | undefined
+  >;
   /** Trusted ambient delivery route for the active agent/session. */
   deliveryContext?: DeliveryContext;
   /** Host-bound current-route delivery. Retained copies fail after the owning turn closes. */

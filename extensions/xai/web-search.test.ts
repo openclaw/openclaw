@@ -52,7 +52,8 @@ function profileContext(apiKey: string) {
     runtimeConfig: {},
     auth: {
       hasAuthForProvider: (id: string) => id === "xai",
-      resolveApiKeyForProvider: async (id: string) => (id === "xai" ? apiKey : undefined),
+      resolveAuthForProvider: async (id: string) =>
+        id === "xai" ? { apiKey, mode: "api-key" as const } : undefined,
     },
   };
 }
@@ -168,6 +169,41 @@ describe("xAI web search auth lifecycle", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it.each(["missing credential", "auth error", "different mode", "different profile", "unchanged"])(
+    "keeps a rejected subscription on its route after refresh returns %s",
+    async (outcome) => {
+      resolveAuth.mockResolvedValueOnce(profileAuth("expired-oauth-token"));
+      resolveAuth.mockImplementationOnce(async () => {
+        if (outcome === "auth error") {
+          return requireApiKey({ source: "test", mode: "oauth" }, "xai");
+        }
+        if (outcome === "missing credential") {
+          return { source: "test", mode: "oauth" };
+        }
+        return profileAuth(
+          outcome === "unchanged" ? "expired-oauth-token" : "different-token",
+          outcome === "different mode" ? "api-key" : "oauth",
+          outcome === "different profile" ? "xai:other" : "xai:default",
+        );
+      });
+      mockFetch.mockResolvedValue(new Response("unauthorized", { status: 401 }));
+      await expect(
+        authSearch(`subscription failure: ${outcome}`, "paid-fallback-key"),
+      ).rejects.toThrow("xAI API error (401)");
+      expect(resolveAuth).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          profileId: "xai:default",
+          lockedProfile: true,
+          forceRefresh: true,
+        }),
+      );
+      expect(resolveAuth).toHaveBeenCalledTimes(2);
+      expect(providerAuthMocks.listUsableProviderAuthProfileIdsAsync).not.toHaveBeenCalled();
+      expect(authorizationHeaders(mockFetch)).toEqual(["Bearer expired-oauth-token"]);
+      expect(firstFetchUrl(mockFetch)).toBe("https://cli-chat-proxy.grok.com/v1/responses");
+    },
+  );
+
   it.each(["deadline", "caller"] as const)(
     "ends credential preparation on %s cancellation without starting a search",
     async (cancellation) => {
@@ -267,21 +303,6 @@ describe("xai web search config resolution", () => {
       profileIds: [],
     },
     {
-      name: "falls back to an API-key profile when stale OAuth remains first",
-      credentials: [
-        profileAuth("expired-oauth-token"),
-        profileAuth("expired-oauth-token"),
-        profileAuth("expired-oauth-token"),
-        profileAuth("xai-profile-api-key", "api-key", "xai:key"),
-      ],
-      expectedAuth: {
-        agentDir: defaultAgentDir,
-        profileId: "xai:key",
-        lockedProfile: true,
-      },
-      profileIds: ["xai:key"],
-    },
-    {
       name: "falls back to env auth after a stale API-key profile",
       credentials: [
         profileAuth("stale-profile-key", "api-key"),
@@ -320,6 +341,15 @@ describe("xai web search config resolution", () => {
     expect(authorizationHeaders(mockFetch)).toEqual(
       [credentials[0], credentials.at(-1)].map((credential) => `Bearer ${credential?.apiKey}`),
     );
+    if (credentials[0]?.mode === "oauth") {
+      for (const [url, init] of mockFetch.mock.calls) {
+        expect(String(url)).toBe("https://cli-chat-proxy.grok.com/v1/responses");
+        const headers = new Headers((init as RequestInit).headers);
+        expect(headers.get("x-grok-client-version")).toBe("1.0.13");
+        expect(headers.get("x-xai-token-auth")).toBe("xai-grok-cli");
+        expect(headers.get("x-grok-model-override")).toBe(firstFetchBody(mockFetch).model);
+      }
+    }
   });
 
   it("offers plugin-owned xSearch setup after Grok is selected", async () => {

@@ -56,8 +56,22 @@ export function createPluginToolFactoryContext(params: {
     continuation?.assertCurrent();
     assertMemoryAudienceCurrent?.();
   };
+  const bindAuthResolver =
+    <T>(resolve: (providerId: string) => Promise<T>) =>
+    async (providerId: string): Promise<T> => {
+      assertInvocationCurrent();
+      const result = await resolve(providerId);
+      assertInvocationCurrent();
+      return result;
+    };
   return {
     ...context,
+    ...(context.resolveAuthForProvider
+      ? { resolveAuthForProvider: bindAuthResolver(context.resolveAuthForProvider) }
+      : {}),
+    ...(context.resolveApiKeyForProvider
+      ? { resolveApiKeyForProvider: bindAuthResolver(context.resolveApiKeyForProvider) }
+      : {}),
     ...(entry.contextVersion === 2
       ? params.bindExecutionCapabilities?.(
           assertInvocationCurrent,

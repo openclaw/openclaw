@@ -385,64 +385,72 @@ function* resolveOpenClawPluginToolSteps(
           runtimeLookup: availabilityRuntimeLookup,
         })
     : undefined;
-  const resolveApiKeyForProvider = authProfileStore
-    ? async (providerId: string): Promise<string | undefined> => {
-        const cfg = resolveCurrentRuntimeConfig();
-        const workspaceDir = pluginToolInputs.context.workspaceDir;
-        // This preparation excludes plugin auth, including agent-profile substitutes.
-        if (
-          resolveProviderAuthScope({ provider: providerId, config: cfg, workspaceDir }) === "plugin"
-        ) {
-          return undefined;
-        }
-        for (const profileId of resolveAuthProfileOrder({
-          cfg,
-          store: authProfileStore,
-          provider: providerId,
-          includePendingOAuthRefresh: true,
-        })) {
-          const resolved = await resolveApiKeyForProfile({
+  const resolveAuthForProvider: OpenClawPluginToolContext["resolveAuthForProvider"] =
+    authProfileStore
+      ? async (providerId: string) => {
+          const cfg = resolveCurrentRuntimeConfig();
+          const workspaceDir = pluginToolInputs.context.workspaceDir;
+          // This preparation excludes plugin auth, including agent-profile substitutes.
+          if (
+            resolveProviderAuthScope({ provider: providerId, config: cfg, workspaceDir }) ===
+            "plugin"
+          ) {
+            return undefined;
+          }
+          for (const profileId of resolveAuthProfileOrder({
             cfg,
             store: authProfileStore,
-            profileId,
-            agentDir: params.options?.agentDir,
+            provider: providerId,
+            includePendingOAuthRefresh: true,
+          })) {
+            const resolved = await resolveApiKeyForProfile({
+              cfg,
+              store: authProfileStore,
+              profileId,
+              agentDir: params.options?.agentDir,
+            });
+            if (resolved?.apiKey) {
+              return {
+                apiKey: resolved.apiKey,
+                mode: resolved.profileType === "api_key" ? "api-key" : resolved.profileType,
+                profileId: resolved.profileId,
+              };
+            }
+          }
+          const runtimeLookup = createRuntimeProviderAuthLookup({
+            cfg,
+            workspaceDir,
+            includePluginSyntheticAuth: false,
           });
-          if (resolved?.apiKey) {
-            return resolved.apiKey;
+          if (
+            !hasRuntimeAvailableProviderAuth({
+              provider: providerId,
+              cfg,
+              workspaceDir,
+              allowPluginSyntheticAuth: false,
+              runtimeLookup,
+            })
+          ) {
+            return undefined;
+          }
+          try {
+            const resolved = await resolveProviderAuth({
+              provider: providerId,
+              cfg,
+              store: authProfileStore,
+              agentDir: params.options?.agentDir,
+              workspaceDir,
+              credentialPrecedence: "env-first",
+              allowAuthProfileFallback: false,
+            });
+            return resolved.apiKey
+              ? { apiKey: resolved.apiKey, mode: resolved.mode, profileId: resolved.profileId }
+              : undefined;
+          } catch {
+            return undefined;
           }
         }
-        const runtimeLookup = createRuntimeProviderAuthLookup({
-          cfg,
-          workspaceDir,
-          includePluginSyntheticAuth: false,
-        });
-        if (
-          !hasRuntimeAvailableProviderAuth({
-            provider: providerId,
-            cfg,
-            workspaceDir,
-            allowPluginSyntheticAuth: false,
-            runtimeLookup,
-          })
-        ) {
-          return undefined;
-        }
-        try {
-          const resolved = await resolveProviderAuth({
-            provider: providerId,
-            cfg,
-            store: authProfileStore,
-            agentDir: params.options?.agentDir,
-            workspaceDir,
-            credentialPrecedence: "env-first",
-            allowAuthProfileFallback: false,
-          });
-          return resolved.apiKey;
-        } catch {
-          return undefined;
-        }
-      }
-    : undefined;
+      : undefined;
   const existingToolNames = new Set(params.existingToolNames ?? []);
   const preparedModelRuntime = params.options?.preparedModelRuntime;
   const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
@@ -474,7 +482,13 @@ function* resolveOpenClawPluginToolSteps(
       ...pluginToolInputs.context,
       ...(delivery ? { delivery } : {}),
       ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
-      ...(resolveApiKeyForProvider ? { resolveApiKeyForProvider } : {}),
+      ...(resolveAuthForProvider
+        ? {
+            resolveAuthForProvider,
+            resolveApiKeyForProvider: async (providerId: string) =>
+              (await resolveAuthForProvider(providerId))?.apiKey,
+          }
+        : {}),
     },
     existingToolNames,
     assertInvocationCurrent: assertRequestCurrent

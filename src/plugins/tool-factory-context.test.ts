@@ -218,6 +218,75 @@ it.each([false, true])(
   },
 );
 
+it.each([
+  { contextVersion: 1, hostAuthority: false },
+  { contextVersion: 1, hostAuthority: true },
+  { contextVersion: 2, hostAuthority: true },
+] as const)("binds retained auth callbacks for %j", async ({ contextVersion, hostAuthority }) => {
+  for (const callback of ["resolveAuthForProvider", "resolveApiKeyForProvider"] as const) {
+    for (const closeAt of ["never", "before", "during"] as const) {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const result =
+        callback === "resolveAuthForProvider"
+          ? { apiKey: "synthetic-key", mode: "oauth" as const, profileId: "xai:synthetic" }
+          : "synthetic-key";
+      const lookup = vi.fn(async (providerId: string) => {
+        expect(providerId).toBe("xai");
+        entered.resolve();
+        await release.promise;
+        return result;
+      });
+      let current = true;
+      const { context, registry } = register(
+        contextVersion === 2 ? { contextVersion: 2, create: () => null } : () => null,
+        {
+          context: {
+            resolveAuthForProvider: async (providerId) => {
+              const value = await lookup(providerId);
+              assert(typeof value !== "string");
+              return value;
+            },
+            resolveApiKeyForProvider: async (providerId) => {
+              const value = await lookup(providerId);
+              assert(typeof value === "string");
+              return value;
+            },
+          },
+          assertInvocationCurrent: hostAuthority
+            ? () => assert(current, "host invocation retired")
+            : undefined,
+        },
+      );
+      const retire = () => {
+        current = false;
+        if (!hostAuthority) {
+          markPluginRegistryRetired(registry);
+        }
+      };
+      if (closeAt === "before") {
+        retire();
+      }
+      const retained = context[callback]!;
+      const work = retained("xai");
+      if (closeAt !== "before") {
+        await entered.promise;
+        if (closeAt === "during") {
+          retire();
+        }
+      }
+      release.resolve();
+      if (closeAt === "never") {
+        await expect(work).resolves.toBe(result);
+      } else {
+        await expect(work).rejects.toThrow(/retired|no longer active/);
+      }
+      expect(lookup).toHaveBeenCalledTimes(closeAt === "before" ? 0 : 1);
+      expect(context.assertInvocationCurrent === undefined).toBe(!hostAuthority);
+    }
+  }
+});
+
 it("rejects an operational caller that has no live receipt authority", async () => {
   await withGatewayToolCallerIdentity(
     {

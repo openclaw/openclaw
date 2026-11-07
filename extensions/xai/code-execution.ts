@@ -14,9 +14,9 @@ import {
   requestXaiResponsesTool,
   resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextAndCitations,
-  XAI_RESPONSES_ENDPOINT,
+  resolveXaiResponsesEndpoint,
 } from "./src/responses-tool-shared.js";
-import { resolveXaiToolApiKeyWithAuth, type XaiToolAuthContext } from "./src/tool-auth-shared.js";
+import { resolveXaiToolAuth, type XaiToolAuthContext } from "./src/tool-auth-shared.js";
 import {
   resolveNormalizedXaiToolModel,
   resolvePositiveIntegerToolConfig,
@@ -44,12 +44,12 @@ export function createCodeExecutionTool(options?: {
 
   return createCodeExecutionToolDefinition(
     async (_toolCallId: string, args: Record<string, unknown>) => {
-      const apiKey = await resolveXaiToolApiKeyWithAuth({
+      const auth = await resolveXaiToolAuth({
         runtimeConfig: runtimeConfig ?? undefined,
         sourceConfig: options?.config,
         auth: options?.auth,
       });
-      if (!apiKey) {
+      if (!auth) {
         return jsonResult(buildMissingCodeExecutionApiKeyPayload());
       }
 
@@ -67,11 +67,12 @@ export function createCodeExecutionTool(options?: {
       const startedAt = Date.now();
       const result = await requestXaiResponsesTool(
         {
-          apiKey,
+          apiKey: auth.apiKey,
+          authMode: auth.mode,
           model,
           timeoutSeconds,
           maxTurns,
-          endpoint: XAI_RESPONSES_ENDPOINT,
+          endpoint: resolveXaiResponsesEndpoint(undefined, auth.mode),
           inputText: task,
           tools: [{ type: "code_interpreter" }],
           reasoningEffort: resolveXaiToolDefaultReasoningEffort(model, "low"),
