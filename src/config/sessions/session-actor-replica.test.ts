@@ -183,10 +183,12 @@ it("shares identical stored skills across entries without sharing mutable reads"
   const firstState = hydrate(fixture);
   const first = firstState.entry!.skillsSnapshot!;
   const siblingScope = { ...scope, sessionKey: "agent:main:skills-sibling" };
-  replaceSessionEntrySync(siblingScope, {
-    ...entry("sibling", 1, "skills-sibling"),
-    skillsSnapshot,
-  });
+  const replaceSkills = (snapshot: typeof skillsSnapshot, updatedAt: number) =>
+    replaceSessionEntrySync(siblingScope, {
+      ...entry("sibling", updatedAt, "skills-sibling"),
+      skillsSnapshot: snapshot,
+    });
+  replaceSkills(skillsSnapshot, 1);
   const siblingTarget = sessionActorFileTarget(database, siblingScope.sessionKey);
   const sibling = readSessionActorEntryFacts(siblingTarget)!.entry!.skillsSnapshot!;
   expect(sibling).toBe(first);
@@ -197,10 +199,7 @@ it("shares identical stored skills across entries without sharing mutable reads"
   mutable!.skillsSnapshot!.skills[0]!.requiredEnv!.push("CALLER_ONLY");
   expect(first.skills[0]!.requiredEnv).toEqual(["SYNTHETIC_KEY"]);
 
-  replaceSessionEntrySync(siblingScope, {
-    ...entry("sibling", 2, "skills-sibling"),
-    skillsSnapshot: { ...skillsSnapshot, version: 2 },
-  });
+  replaceSkills({ ...skillsSnapshot, version: 2 }, 2);
   const changed = readSessionActorEntryFacts(siblingTarget)!.entry!.skillsSnapshot!;
   expect(changed).not.toBe(first);
   expect(changed.version).toBe(2);
@@ -212,10 +211,7 @@ it("shares identical stored skills across entries without sharing mutable reads"
     { ...skillsSnapshot, prompt: "\ud800" },
     { ...skillsSnapshot, prompt: "\ud801" },
   ]) {
-    replaceSessionEntrySync(siblingScope, {
-      ...entry("sibling", 3, "skills-sibling"),
-      skillsSnapshot: snapshot,
-    });
+    replaceSkills(snapshot, 3);
     const next = readSessionActorEntryFacts(siblingTarget)!.entry!.skillsSnapshot!;
     expect(next).not.toBe(previous);
     expect(JSON.stringify(next)).toBe(JSON.stringify(snapshot));
@@ -344,8 +340,8 @@ it("keeps transcript replacement charges within the shared byte and entry budget
 
 it.each(["entry", "plugin keys"] as const)(
   "evicts old replicas for large %s strings and releases replaced bytes",
-  async (payload) => {
-    await withReplica(({ replica, load }) => {
+  (payload) =>
+    withReplica(({ replica, load }) => {
       const first = load();
       assert(first.target.database.kind === "file", "Replica fixture requires a durable target");
       const database = first.target.database;
@@ -378,8 +374,7 @@ it.each(["entry", "plugin keys"] as const)(
       const replaced = install("small");
       installSibling();
       expect(replica.read()).toBe(replaced);
-    });
-  },
+    }),
 );
 
 it("retains the first creation after restart before any replica reader and applies later writes", async () => {
@@ -507,8 +502,8 @@ it("returns a newer committed replica when a receipt arrives during a worker rea
   }
 });
 
-it("shares committed facts across released handles and retires them for writes and worker loss", async () => {
-  await withReplica((fixture) => {
+it("shares committed facts across released handles and retires them for writes and worker loss", () =>
+  withReplica((fixture) => {
     hydrate(fixture);
     const change = { ...fixture.scope, sessionKey: fixture.scope.sessionKey.toLowerCase() };
     sessionChanges.invalidate({ ...change, factsInvalidated: true });
@@ -543,8 +538,7 @@ it("shares committed facts across released handles and retires them for writes a
     expect(sibling.read()).toBeUndefined();
     hydrate({ ...fixture, replica: restarted }, "restarted");
     expect(restarted.read()?.version.epoch).toBe("restarted");
-  }, "agent:main:matrix:group:!Room:server");
-});
+  }, "agent:main:matrix:group:!Room:server"));
 
 it("retains unrelated session postimages but invalidates a shared physical session window", ({
   fixture,

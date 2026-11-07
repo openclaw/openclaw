@@ -24,6 +24,7 @@ export type ReplicaCell = {
   entry?: SessionActorEntryFacts;
   transcript?: SessionActorTranscriptReplica;
   transcriptBytes: number;
+  transcriptIdleDeadline?: number;
   generation?: string;
   handles: number;
   bytes: number;
@@ -34,4 +35,5 @@ export type ReplicaPool = {
   snapshots: number;
   bytes: number;
   unsubscribe?: () => void;
+  transcriptIdleTimer?: ReturnType<typeof setTimeout>;
 };
