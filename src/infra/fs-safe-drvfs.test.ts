@@ -113,7 +113,7 @@ describe("verified DrvFS rename recovery policy", () => {
     expect(message).toMatch(/DrvFS.*inode-reuse risk/);
     expect(message).toMatch(/Docker volume.*WSL ext4/);
     expect(message).not.toContain(directory);
-    expect(options).toEqual({ code: "OPENCLAW_DRVFS_RENAME_RECOVERY" });
+    expect(options).toEqual({ code: "DRVFS_RENAME_RECOVERY" });
   });
 
   it.each(["darwin", "win32"] as const)("does no filesystem work on %s", (platform) => {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isNodeError } from "@openclaw/fs-safe/path";
 
 let warned = false;
 
@@ -20,7 +21,7 @@ export function allowDrvfsRenameRecovery(directory: string): boolean {
         fd = fs.openSync(parent, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY);
         break;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        if (!isNodeError(error) || error.code !== "ENOENT") {
           return false;
         }
         const ancestor = path.dirname(parent);
@@ -65,7 +66,7 @@ export function allowDrvfsRenameRecovery(directory: string): boolean {
       warned = true;
       process.emitWarning(
         "Verified DrvFS mount: atomic-write rename recovery is enabled. Closing the final file descriptor leaves residual inode-reuse risk; prefer a Docker volume or a WSL ext4 path.",
-        { code: "OPENCLAW_DRVFS_RENAME_RECOVERY" },
+        { code: "DRVFS_RENAME_RECOVERY" },
       );
     }
     return true;

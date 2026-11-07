@@ -303,7 +303,7 @@ fail with `ENOENT` even though the file appears in the directory listing.
 
 OpenClaw enables fs-safe's rename-recovery exception only after verifying the
 directory descriptor belongs to a DrvFS mount. It logs
-`OPENCLAW_DRVFS_RENAME_RECOVERY` once per process when this policy becomes active.
+`DRVFS_RENAME_RECOVERY` once per process when this policy becomes active.
 fs-safe independently verifies the mount again before recovery and checks the
 reopened file's identity, ownership, permissions, size, link count, and available
 content. Other mounts keep strict behavior.
