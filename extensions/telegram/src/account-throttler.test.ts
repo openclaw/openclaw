@@ -187,7 +187,7 @@ it.each([
     const queued = callers.run({ name: "current", signal: current.signal }, send);
     const observed = queued.then(
       (value) => ({ value }),
-      (error) => ({ error }),
+      (error: unknown) => ({ error }),
     );
     onTestFinished(async () => {
       try {
