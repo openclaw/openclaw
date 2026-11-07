@@ -4,14 +4,22 @@ import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
 import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
 import { canDeleteAgent, deleteAgent } from "../lib/agents/delete-agent.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import { moveSidebarAgent, orderSidebarAgents } from "../lib/agents/sidebar-order.ts";
+import type { ArrayDropPosition } from "../lib/array-order.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
+import {
+  readSidebarAgentDragData,
+  sidebarAgentDragActive,
+  writeSidebarAgentDragData,
+} from "../lib/sessions/drag.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
+import { showToast } from "../lib/toast.ts";
 import { templateCreatorAction } from "../pages/templates/creator-owner.ts";
 import { canCreateTemplateDraft } from "../pages/templates/draft-navigation.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
@@ -132,8 +140,17 @@ export function SidebarAgentRoster(props: {
     () => new Set(navigation().read().pinnedAgentIds),
     presented,
   );
-  const pinnedCards = createMemo(() => cards().filter((card) => pinnedIds().has(card.id)));
-  const unpinnedCards = createMemo(() => cards().filter((card) => !pinnedIds().has(card.id)));
+  const savedOrder = createParkedProjection(
+    () => navigation().read().sidebarAgentOrder ?? [],
+    presented,
+  );
+  const orderedCards = createMemo(() =>
+    orderSidebarAgents<ReturnType<typeof cards>[number]>(cards(), savedOrder()),
+  );
+  const pinnedCards = createMemo(() => orderedCards().filter((card) => pinnedIds().has(card.id)));
+  const unpinnedCards = createMemo(() =>
+    orderedCards().filter((card) => !pinnedIds().has(card.id)),
+  );
   const rosterWindow = createSidebarRosterWindow(
     unpinnedCards,
     () =>
@@ -146,10 +163,76 @@ export function SidebarAgentRoster(props: {
           ),
       )?.id,
   );
+  const [announcement, setAnnouncement] = createSignal("");
+  const [draggingId, setDraggingId] = createSignal<string | null>(null);
+  const [dropTarget, setDropTarget] = createSignal<{
+    id: string;
+    position: ArrayDropPosition;
+  } | null>(null);
+  const partition = (id: string) => (pinnedIds().has(id) ? pinnedCards() : unpinnedCards());
+  const moveAgent = (source: string, target: string, position: ArrayDropPosition) => {
+    const peers = partition(source);
+    if (
+      source === target ||
+      !peers.some((card) => card.id === source) ||
+      !peers.some((card) => card.id === target)
+    ) {
+      return;
+    }
+    const order = moveSidebarAgent(
+      context.navigation.snapshot.sidebarAgentOrder ?? [],
+      cards().map((card) => card.id),
+      source,
+      target,
+      position,
+    );
+    if (!order) {
+      showToast({ message: t("chat.sidebar.agentOrderTooLarge"), severity: "error" });
+      return;
+    }
+    context.navigation.update({ sidebarAgentOrder: order });
+    const reordered = orderSidebarAgents(peers, order);
+    setAnnouncement(
+      t("chat.sidebar.agentMoved", {
+        agent: peers.find((card) => card.id === source)!.name,
+        position: String(reordered.findIndex((card) => card.id === source) + 1),
+        total: String(peers.length),
+      }),
+    );
+    rosterWindow.focus(source);
+    onSettled(() => agentLinks.get(source)?.focus());
+  };
+  const finishDrag = () => {
+    setDraggingId(null);
+    setDropTarget(null);
+  };
+  const dropPosition = (event: DragEvent, header: HTMLElement): ArrayDropPosition => {
+    const bounds = header.getBoundingClientRect();
+    return event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+  };
+  const acceptsDrag = (event: DragEvent, id: string) =>
+    sidebarAgentDragActive(event.dataTransfer) &&
+    draggingId() !== null &&
+    draggingId() !== id &&
+    unpinnedCards().some((card) => card.id === draggingId());
   // Pinned tiles and roster rows share one action list; only the opening affordance differs.
   const agentMenuItems = (card: AgentMenuCard): MenuEntry[] => {
     const pinned = pinnedIds().has(card.id);
+    const peers = partition(card.id);
+    const index = peers.findIndex((peer) => peer.id === card.id);
     return [
+      {
+        id: "move-up",
+        label: t("chat.sidebar.moveUp"),
+        icon: <Icon name="arrowUp" />,
+        disabled: index <= 0,
+      },
+      {
+        id: "move-down",
+        label: t("chat.sidebar.moveDown"),
+        icon: <Icon name="arrowDown" />,
+        disabled: index < 0 || index === peers.length - 1,
+      },
       {
         id: "pin",
         label: t(pinned ? "nav.unpin" : "nav.pin"),
@@ -190,6 +273,16 @@ export function SidebarAgentRoster(props: {
   };
   const selectAgentMenuItem = (itemId: string, card: AgentMenuCard) => {
     switch (itemId) {
+      case "move-up":
+      case "move-down": {
+        const peers = partition(card.id);
+        const index = peers.findIndex((peer) => peer.id === card.id);
+        const target = peers[index + (itemId === "move-up" ? -1 : 1)];
+        if (target) {
+          moveAgent(card.id, target.id, itemId === "move-up" ? "before" : "after");
+        }
+        break;
+      }
       case "pin":
         // The destination row registers after the pinned/unpinned branch changes.
         focusAfterPin = card.id;
@@ -267,6 +360,9 @@ export function SidebarAgentRoster(props: {
       {renderSessionListFrame(
         host,
         <div class="sidebar-agent-roster">
+          <span class="sr-only" role="status" aria-live="polite">
+            {announcement()}
+          </span>
           <Show when={error()}>
             <button class="sidebar-agent-roster__link" onClick={() => void store.refresh()}>
               {t("agentsHome.loadFailed")}
@@ -396,14 +492,88 @@ export function SidebarAgentRoster(props: {
                     <div
                       class={[
                         "sidebar-agent-roster__header session-row-host",
-                        { "sidebar-agent-roster__header--current": active() },
+                        {
+                          "sidebar-agent-roster__header--current": active(),
+                          "sidebar-zone-entry--dragging": draggingId() === card().id,
+                          "sidebar-zone-entry--drop-before":
+                            dropTarget()?.id === card().id && dropTarget()?.position === "before",
+                          "sidebar-zone-entry--drop-after":
+                            dropTarget()?.id === card().id && dropTarget()?.position === "after",
+                        },
                       ]}
+                      draggable="true"
+                      onMouseDown={(event) =>
+                        event.currentTarget.toggleAttribute(
+                          "data-agent-drag-blocked",
+                          event.target.closest(".sidebar-agent-roster__menu, button, input") !==
+                            null,
+                        )
+                      }
+                      onMouseUp={(event) =>
+                        event.currentTarget.removeAttribute("data-agent-drag-blocked")
+                      }
+                      onDragStart={(event) => {
+                        const blocked =
+                          event.currentTarget.hasAttribute("data-agent-drag-blocked") ||
+                          event.target.closest(".sidebar-agent-roster__menu, button, input") !==
+                            null;
+                        event.currentTarget.removeAttribute("data-agent-drag-blocked");
+                        if (blocked || !event.dataTransfer) {
+                          event.preventDefault();
+                          return;
+                        }
+                        event.stopPropagation();
+                        writeSidebarAgentDragData(event.dataTransfer, card().id);
+                        setDraggingId(card().id);
+                      }}
+                      onDragOver={(event) => {
+                        if (!acceptsDrag(event, card().id)) {
+                          return;
+                        }
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (event.dataTransfer) {
+                          event.dataTransfer.dropEffect = "move";
+                        }
+                        setDropTarget({
+                          id: card().id,
+                          position: dropPosition(event, event.currentTarget),
+                        });
+                      }}
+                      onDragLeave={(event) => {
+                        if (
+                          !(event.relatedTarget instanceof Node) ||
+                          !event.currentTarget.contains(event.relatedTarget)
+                        ) {
+                          setDropTarget(null);
+                        }
+                      }}
+                      onDrop={(event) => {
+                        const source = readSidebarAgentDragData(event.dataTransfer);
+                        if (!acceptsDrag(event, card().id) || source !== draggingId()) {
+                          return;
+                        }
+                        event.preventDefault();
+                        event.stopPropagation();
+                        moveAgent(source!, card().id, dropPosition(event, event.currentTarget));
+                        finishDrag();
+                      }}
+                      onDragEnd={finishDrag}
                       onContextMenu={(event) => openContextMenu(card().id, event)}
                       onKeyDown={(event) => openContextMenu(card().id, event)}
                     >
+                      <span
+                        class="sidebar-agent-roster__grip sidebar-agent-roster__actions sidebar-agent-roster__action"
+                        title={t("chat.sidebar.reorderItem", { item: card().name })}
+                        aria-hidden="true"
+                        draggable="true"
+                      >
+                        <Icon name="gripVertical" />
+                      </span>
                       <a
                         ref={linkRef}
                         class="sidebar-agent-roster__row"
+                        draggable="false"
                         data-agent-id={card().id}
                         href={card().target.href}
                         aria-current={active() ? "page" : undefined}

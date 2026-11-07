@@ -486,22 +486,18 @@ export async function loadProfileAppearancePrefs(
 function loadLocalNavigationPreferences(
   gatewayUrl: string,
   profileId?: string | null,
-): Partial<Pick<UiSettings, "sidebarEntries" | "personalSessionGroups">> | null {
+): Partial<
+  Pick<UiSettings, "sidebarEntries" | "sidebarAgentOrder" | "personalSessionGroups">
+> | null {
   if (!profileId) {
     // The connection owner has adopted profileless identity before reconciliation.
     return loadUiPreferences(gatewayUrl || undefined);
   }
   try {
-    const navigation = profileNavigation(
+    return profileNavigation(
       readSettingsForGateway(getSafeLocalStorage(), gatewayUrl)?.parsed,
       profileId,
     );
-    return navigation
-      ? {
-          sidebarEntries: navigation.railShortcuts,
-          personalSessionGroups: navigation.personalSessionGroups,
-        }
-      : null;
   } catch {
     return null;
   }

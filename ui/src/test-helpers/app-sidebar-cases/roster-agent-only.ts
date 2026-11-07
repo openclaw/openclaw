@@ -66,6 +66,8 @@ describe("AppSidebar agent-only roster", () => {
     );
     const items = [...header.querySelectorAll<HTMLElement>('[role^="menuitem"]')];
     expect(items.map((item) => item.getAttribute("data-value"))).toEqual([
+      "move-up",
+      "move-down",
       "pin",
       "sessions",
       "settings",

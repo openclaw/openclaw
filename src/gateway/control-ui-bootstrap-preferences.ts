@@ -1,4 +1,5 @@
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../packages/gateway-protocol/src/schema/ui-appearance-preferences.js";
+import { UI_SIDEBAR_AGENT_ORDER_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { computeBaseConfigUiHints } from "../config/schema-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,6 +21,7 @@ export async function prepareControlUiBootstrapPreferences(
         ...Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
         "ui.railShortcuts",
         "ui.personalSessionGroups",
+        UI_SIDEBAR_AGENT_ORDER_PREFERENCE_KEY,
       ]).catch(() => undefined)
     : undefined;
   // Config display has the same scope ceiling and redaction as config.get.

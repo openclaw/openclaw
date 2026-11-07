@@ -75,7 +75,12 @@ async function checkAccessiblePins(page: Page, width: number) {
       await page.mouse.move(-1, -1);
       await menu.focus();
     }
-    expect(await style(header.locator(".sidebar-agent-roster__actions"), "opacity")).toBe("1");
+    expect(
+      await style(
+        header.locator(".sidebar-agent-roster__actions:not(.sidebar-agent-roster__grip)"),
+        "opacity",
+      ),
+    ).toBe("1");
     const rowBounds = (await row.boundingBox())!;
     const bounds = (await menu.boundingBox())!;
     const headerBounds = (await header.boundingBox())!;

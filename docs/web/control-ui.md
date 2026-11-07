@@ -179,6 +179,20 @@ Switching Gateway or account, signing out, or losing access clears the affected
 data and drafts. This retention does not add offline persistence or guarantee
 that page-local drafts survive a reload or closing the tab.
 
+## Personal sidebar order
+
+In the all-agents sidebar, drag an unpinned agent's six-dot handle, or open any
+agent's menu and choose **Move up** or **Move down**. Moves stay within the pinned or unpinned
+section; pinning itself is unchanged. Choose **Reset agent order** in the workspace
+menu to restore the default order.
+
+The order belongs to your profile and syncs across your connected browsers.
+Without an authenticated profile, it stays local to that browser and Gateway.
+It does not change anyone else's sidebar, agent configuration, Agents home, or
+the New conversation picker. New agents follow the saved order; temporarily
+unavailable agents retain their saved positions. An order that exceeds the
+preference size limit is rejected with a message and leaves your previous order intact.
+
 ## Browser requirements
 
 Use Safari 26.2 or later on macOS 26.2, iOS 26.2, or iPadOS 26.2 or later,

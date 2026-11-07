@@ -65,6 +65,7 @@ export type ApplicationNavigationPreferencesSnapshot = {
   navCollapsed: boolean;
   navWidth: number;
   sidebarEntries: readonly string[];
+  sidebarAgentOrder?: readonly string[];
   personalSessionGroups?: readonly PersonalSessionGroup[];
   pinnedAgentIds: readonly string[];
 };

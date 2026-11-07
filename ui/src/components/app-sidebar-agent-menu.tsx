@@ -4,9 +4,10 @@ import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForAgentPanel } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
+import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { SidebarDropdown } from "./app-sidebar-dropdown.tsx";
 import { COMMAND_VALUE_PREFIX } from "./sidebar-identity-menu-links.tsx";
@@ -21,6 +22,7 @@ import {
   type MenuItem,
 } from "./solid/menu.tsx";
 
+registerEnglishCatalog(registerAgentsHomeEnglish);
 const AGENT_VALUE_PREFIX = "agent:";
 
 type SidebarAgentMenuSwitcherParams = {
@@ -236,6 +238,8 @@ export function renderSidebarAgentMenu(
     anchor?: HTMLElement;
     basePath: string;
     rosterMode: boolean;
+    agentOrderCustomized?: boolean;
+    onResetAgentOrder?: () => void;
     creationDisabledReason: string | null;
     onShowAllAgents: () => void;
     onCreateAgent: () => void;
@@ -322,6 +326,16 @@ export function renderSidebarAgentMenu(
         ]
       : []),
     createAgentItem,
+    ...(params.agentOrderCustomized
+      ? [
+          {
+            id: `${COMMAND_VALUE_PREFIX}reset-agent-order`,
+            label: t("chat.sidebar.resetAgentOrder"),
+            class: "sidebar-customize-menu__item",
+            icon: <Icon name="rotateCcw" />,
+          },
+        ]
+      : []),
     {
       kind: "group",
       id: "agents",
@@ -345,6 +359,11 @@ export function renderSidebarAgentMenu(
       onAfterShow={params.onAfterShow}
       onClose={params.onClose}
       onSelect={(value) => {
+        if (value === `${COMMAND_VALUE_PREFIX}reset-agent-order`) {
+          params.onResetAgentOrder?.();
+          params.onClose();
+          return;
+        }
         if (value === `${COMMAND_VALUE_PREFIX}new-agent`) {
           params.onCreateAgent();
           return;

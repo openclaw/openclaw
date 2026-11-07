@@ -1,8 +1,11 @@
+import { isValidAgentId } from "@openclaw/normalization-core/agent-id";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import {
   normalizeUiAppearancePreference,
   type TabIconPreference,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import { USER_PREFS_VALUE_BYTES } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.ts";
 import type { BoardSessionViews } from "../lib/board/settings.ts";
 import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type {
@@ -15,6 +18,31 @@ import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { TypefaceId } from "./typography.ts";
 
 // Shared settings shape and primitive normalization never depend on storage or profile ownership.
+/** Keep unavailable agents' positions; the visible roster resolves current membership. */
+export function normalizeSidebarAgentOrder(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const ids = new Set<string>();
+  let bytes = 2;
+  for (const candidate of value) {
+    if (typeof candidate !== "string" || !isValidAgentId(candidate)) {
+      continue;
+    }
+    const id = normalizeLowercaseStringOrEmpty(candidate);
+    if (ids.has(id)) {
+      continue;
+    }
+    // Canonical agent IDs are ASCII; include JSON quotes and separators.
+    bytes += id.length + 2 + (ids.size ? 1 : 0);
+    if (bytes > USER_PREFS_VALUE_BYTES) {
+      break;
+    }
+    ids.add(id);
+  }
+  return [...ids];
+}
+
 export const TEXT_SCALE_STOPS = [90, 100, 110, 125, 140] as const;
 export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
 
@@ -166,6 +194,7 @@ export type UiSettings = {
   sidebarCollapsedAgentIds?: string[];
   sidebarRecentlyCreatedAgentId?: string;
   sidebarEntries: string[]; // Ordered personal navigation references
+  sidebarAgentOrder?: string[]; // Empty uses the current default agent order.
   personalSessionGroups?: PersonalSessionGroup[]; // Personal labels and references, not shared groups
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width

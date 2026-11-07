@@ -237,7 +237,7 @@ it("keeps dirty local navigation through storage failures without replaying unch
   siblingSave("b", ["route:usage"]);
   patchSettings({ navWidth: 340 });
   expect(JSON.parse(localStorage.getItem(key)!).navigationByProfile).toEqual({
-    a: { railShortcuts: ["route:cron"], personalSessionGroups: [] },
+    a: { railShortcuts: ["route:cron"], sidebarAgentOrder: [], personalSessionGroups: [] },
     b: { railShortcuts: ["route:usage"] },
   });
 });

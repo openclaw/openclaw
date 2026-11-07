@@ -119,7 +119,7 @@ suite.define(() =>
           await expectPadding(row, "0px");
         }
         const header = (await headerLocator.boundingBox())!;
-        const actions = (await roster("actions").boundingBox())!;
+        const actions = (await roster("actions:not(.sidebar-agent-roster__grip)").boundingBox())!;
         const icon = (await attention.boundingBox())!;
         expect(right(actions)).toBeLessThanOrEqual(right(header));
         expect(right(icon)).toBeLessThanOrEqual(actions.x);

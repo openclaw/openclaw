@@ -3,6 +3,14 @@ import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
 const enAgentsHome = {
+  chat: {
+    sidebar: {
+      resetAgentOrder: "Reset agent order",
+      agentMoved: "{agent} moved to position {position} of {total}.",
+      agentOrderTooLarge:
+        "This order is too large to save. Your previous order is unchanged. Use Reset agent order in the workspace menu to clear your custom order, then retry.",
+    },
+  },
   agentsHome: {
     pinnedAgents: "Pinned agents",
     noAssistantMessage: "No agent reply yet",

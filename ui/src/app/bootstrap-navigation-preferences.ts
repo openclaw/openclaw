@@ -14,6 +14,7 @@ export function createApplicationNavigationPreferences(
     navCollapsed,
     navWidth: preferences.settings.navWidth,
     sidebarEntries: preferences.settings.sidebarEntries,
+    sidebarAgentOrder: preferences.settings.sidebarAgentOrder ?? [],
     personalSessionGroups: preferences.settings.personalSessionGroups ?? [],
     pinnedAgentIds: preferences.settings.pinnedAgentIds ?? [],
   });
@@ -32,17 +33,17 @@ export function createApplicationNavigationPreferences(
       // Persist only this action's fields; a sibling tab may have saved other
       // preferences before its storage event reaches this document.
       const persisted: Partial<UiSettings> = {};
-      if (patch.navWidth !== undefined) {
-        persisted.navWidth = patch.navWidth;
-      }
-      if (patch.sidebarEntries !== undefined) {
-        persisted.sidebarEntries = [...patch.sidebarEntries];
-      }
-      if (patch.personalSessionGroups !== undefined) {
-        persisted.personalSessionGroups = [...patch.personalSessionGroups];
-      }
-      if (patch.pinnedAgentIds !== undefined) {
-        persisted.pinnedAgentIds = [...patch.pinnedAgentIds];
+      for (const key of [
+        "navWidth",
+        "sidebarEntries",
+        "sidebarAgentOrder",
+        "personalSessionGroups",
+        "pinnedAgentIds",
+      ] as const) {
+        const value = patch[key];
+        if (value !== undefined) {
+          Object.assign(persisted, { [key]: Array.isArray(value) ? [...value] : value });
+        }
       }
       if (Object.keys(persisted).length > 0) {
         patchSettings(persisted);
