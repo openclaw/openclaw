@@ -74,9 +74,9 @@ export function getPreparedMessageToolCatalog(): PreparedMessageToolCatalog | un
   return catalog?.version === snapshot.version ? catalog : undefined;
 }
 
-/** Returns the latest catalog settled for this runtime registry. */
+/** Prepares an exact runtime registry without activating it as the process root. */
 export function getPreparedMessageToolCatalogForRegistry(
   registry: PluginRegistry,
 ): PreparedMessageToolCatalog | undefined {
-  return catalogsByRegistry.get(registry);
+  return catalogsByRegistry.get(registry) ?? settlePreparedMessageToolCatalog(registry, 0);
 }

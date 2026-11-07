@@ -3,9 +3,13 @@ import { availableParallelism } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { resolveMessageToolDiscoveryAsync } from "../agents/tools/message-tool-discovery.js";
 import { createGatewayStartupTrace } from "../gateway/server-startup-trace.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { pluginFixtureConfig } from "./loader-fixture-builders.test-support.js";
+import {
+  channelFixtureSource,
+  pluginFixtureConfig,
+} from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins, loadOpenClawPluginsAsync } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -20,13 +24,63 @@ import { getPluginInstance } from "./plugin-instance-scope.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import * as sourceReferences from "./plugin-source-references.js";
 import { capturePluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
+import { getPreparedMessageToolCatalogForRegistry } from "./prepared-message-tool-catalog.js";
 import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
+import { clearActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   resetPluginLoaderTestStateForTest();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
+
+it("advertises identical channel message schemas before and after registry activation", async () => {
+  useNoBundledPlugins();
+  const plugin = writePlugin({
+    id: "message-catalog-fixture",
+    registration: `api.registerChannel({ plugin: {
+      ...${channelFixtureSource("message-catalog-fixture", { configured: true })},
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["send", "react"],
+          schema: {
+            visibility: "all-configured",
+            properties: { fixtureLabel: { type: "string", description: "Fixture label" } },
+          },
+        }),
+      },
+    } });`,
+  });
+  const config = pluginFixtureConfig(plugin);
+  await using cache = createPluginCache();
+  await withPluginCache(cache, async () => {
+    const registry = await loadOpenClawPluginsAsync({ config, activate: false });
+    try {
+      expect(registry.plugins.find(({ id }) => id === plugin.id)?.status).toBe("loaded");
+      expect(registry.channels.map((entry) => entry.plugin.id)).toEqual([plugin.id]);
+      const discover = () =>
+        resolveMessageToolDiscoveryAsync({
+          cfg: config,
+          sessionKey: "agent:main:catalog-fixture",
+          sessionId: "catalog-fixture",
+          agentId: "main",
+          preparedMessageToolCatalog: getPreparedMessageToolCatalogForRegistry(registry),
+        });
+      const local = await discover();
+      setActivePluginRegistry(registry);
+      const gateway = await discover();
+
+      expect(gateway.actions).toContain("react");
+      expect(gateway.schema.properties).toHaveProperty("fixtureLabel");
+      expect(local.actions).toContain("react");
+      expect(local.schema.properties).toHaveProperty("fixtureLabel");
+      expect(JSON.stringify(local.schema)).toBe(JSON.stringify(gateway.schema));
+    } finally {
+      // Activation transfers instance custody out of the operation cache.
+      await clearActivePluginRegistry(registry);
+    }
+  });
+});
 
 it.each([
   ["async", "relative"],
