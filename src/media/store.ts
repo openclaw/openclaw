@@ -20,6 +20,7 @@ import {
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { allowDrvfsRenameRecovery } from "../infra/fs-safe-drvfs.js";
 import { FsSafeError, isPathInside, type OpenResult } from "../infra/fs-safe.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
@@ -96,6 +97,7 @@ function resolveMediaRelativePath(id: string, subdir: string, caller: string): s
 
 function openMediaStore(maxBytes = MEDIA_MAX_BYTES, rootDir = getMediaDir()) {
   return fileStore({
+    allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(rootDir),
     rootDir,
     dirMode: 0o700,
     maxBytes,

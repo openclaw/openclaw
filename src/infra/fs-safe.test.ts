@@ -466,7 +466,7 @@ describe("fs-safe", () => {
       });
 
       await withRealpathSymlinkRebindRace({
-        realpathApi: operation === "mkdir" && !process.versions.bun ? "async" : "native-sync",
+        realpathApi: operation === "mkdir" ? "async" : "native-sync",
         shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot")),
         symlinkPath: slot,
         symlinkTarget: outside,

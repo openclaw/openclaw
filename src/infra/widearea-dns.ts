@@ -7,6 +7,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { fnv1aUtf16 } from "../shared/fnv1a.js";
 import { CONFIG_DIR } from "../utils.js";
 import { ignoreMissingPath } from "./errno.js";
+import { allowDrvfsRenameRecovery } from "./fs-safe-drvfs.js";
 
 const DNS_LABEL_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 const MAX_DNS_NAME_LENGTH = 253;
@@ -59,6 +60,7 @@ export function getWideAreaZonePath(domain: string): string {
 /** Durably replace the CoreDNS zone only after its complete sibling write succeeds. */
 export async function replaceWideAreaZoneFile(zonePath: string, content: string): Promise<void> {
   await replaceFileAtomic({
+    allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(path.dirname(zonePath)),
     filePath: zonePath,
     content,
     dirMode: 0o700,
