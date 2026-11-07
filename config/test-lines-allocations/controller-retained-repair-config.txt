@@ -1,0 +1,2 @@
+# Reviewed config reconciliation across preparation, activation, and refusal boundaries.
+59
