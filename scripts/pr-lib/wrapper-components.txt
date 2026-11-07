@@ -670,6 +670,7 @@ src/config/io.write-values.ts
 src/config/issue-format.ts
 src/config/json5-comments.ts
 src/config/legacy-codex-provider.ts
+src/config/legacy-workboard-database.ts
 src/config/legacy.default-agent-owner-state.ts
 src/config/legacy.default-agent-owner.ts
 src/config/legacy.default-agent-roles.ts
@@ -1837,6 +1838,7 @@ src/process/child-memory.ts
 src/process/child-process-tree.ts
 src/process/child-process.ts
 src/process/command-error.ts
+src/process/command-reservation-census.ts
 src/process/darwin-process-inspection.ts
 src/process/exec-output.ts
 src/process/exec-result.ts
@@ -2088,6 +2090,7 @@ src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
+src/state/openclaw-agent-active-event-facts-schema.ts
 src/state/openclaw-agent-memory-path-migration.ts
 src/state/openclaw-agent-memory-revision-migration.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts
@@ -2380,6 +2383,7 @@ src/config/sessions/session-accessor.sqlite-transcript-metadata-read.ts
 src/config/sessions/session-cold-storage-read.ts
 src/config/sessions/session-entry-read-errors.ts
 src/config/sessions/session-transcript-append-postimage.ts
+src/config/sessions/session-transcript-active-facts.ts
 src/config/sessions/session-transcript-fts.ts
 src/config/sessions/session-transcript-index-postgres.ts
 src/config/sessions/session-transcript-index.ts

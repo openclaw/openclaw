@@ -131,10 +131,16 @@ export function visibleSessionMatches(
 
 export function filterSessionRows(
   result: SessionsListResult,
-  options: { archivedFilter: SessionArchivedFilter },
+  options: {
+    archivedFilter: SessionArchivedFilter;
+    isHidden?: (row: GatewaySessionRow) => boolean;
+  },
 ): SessionsListResult {
   const sessions = result.sessions.filter(
-    (row) => row.key && sessionMatchesArchivedFilter(row, options.archivedFilter),
+    (row) =>
+      row.key &&
+      sessionMatchesArchivedFilter(row, options.archivedFilter) &&
+      !options.isHidden?.(row),
   );
   return {
     ...result,

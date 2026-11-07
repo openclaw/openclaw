@@ -52,6 +52,17 @@ without recording cache keys or contents.
 independently of a dashboard occupying the main region. These are DOM and I/O
 milestones; filmstrip inspection still owns paint claims.
 
+Details diagnostics record `firstDetailsDomMs`, `firstDetailsPaintMs`, and changed
+`detailsFrames` (population, docking, session height, and section count). Text
+Element Timing supplies the paint marker; compare it with `firstPaintedRowsMs`
+and inspect the corresponding compositor frame and its predecessor. The comparison
+reports `detailsPaintLagMs`; a zero lag alone does not establish complete section
+geometry. Optional rig LoAF/mutation and Details placement probes are retained in
+`probe.rig`; placement wrappers belong only in separate attribution captures.
+`probe.modules` retains JavaScript resource start and response-end times in the same
+navigation time domain as row paints. These are file arrivals, not module evaluation
+or import-promise completion. Details section frames also record cached branch visibility.
+
 For tall dashboard-side transcript anchoring, add `--dashboard-end-anchor` with
 `--transcript-late-paint`. This uses a 1720 × 1515 viewport, a saved 320 px side
 column, 33 short exchanges ending in a roughly 4.5k-character prose reply with
@@ -80,6 +91,14 @@ limit. `contextRingFrames` retains changed composer/ring display samples, and
 `firstComposerDomHasFinalRing` requires the final ring label and dial at opacity one
 in the first visible composer DOM sample. Inspect the correlated compositor frame
 and its predecessor before claiming first-paint presence.
+
+For ordinary-child Details parity, also add `--details-subagent-activity`.
+It seeds three settled ordinary children on the active chat target;
+`--details-child-count 4` covers overflow beyond the saved three-row preview.
+Before warm captures, the tool requires the complete live child answer, checks
+the owner-written receipt in IndexedDB, and records its rows and settled height.
+The baseline may display every live row while a candidate uses a bounded preview;
+the recorded height preserves that difference instead of assuming parity.
 
 Add `--composer-controls` for the bundled Anthropic model's nondefault 200K window
 and High effort. It uses synthetic credentials and the static catalog without
@@ -435,3 +454,26 @@ original frame sequence before judging a subtle transition. The visible-change
 census is a reported animation-collapse heuristic; unmasked pixels and explicit
 animation provenance remain available as controls. An A/A run qualifies noisy
 metrics before using this report to reject a small change.
+
+## Warm visibility join qualification
+
+The Team-scale benchmark's `--paint-holding` mode retains the real old surface,
+stops its measurement samplers before navigation, and reuses the capture session
+for frozen input restoration. Its synthetic pagehide drains exit writers before
+measurement; compare a natural reload before attributing exit cost to the app.
+
+A warm visibility join must qualify on current main before changing presentation:
+calibrate 300 ms old → complete and 900 ms old → blank → complete, then inspect
+four unprofiled reloads each of native archived chat, active chat, dashboard,
+and Team-scale active and archived chat. Stop if the Team complete cached frame
+is not reliably below approximately 480 ms (report median and IQR).
+
+Compare a candidate with twelve alternating-order pairs and an identical-build
+A/A control on one quiet AWS c7a.4xlarge. Inspect the masked visual census:
+Team chat must show old → complete as its first new-document state in at least
+ten of twelve reloads; native routes must never expose blank/background-only
+frames or exceed main's median unique-state count. First painted rows may cost
+at most one frame (17 ms), using each order's median candidate delta minus its
+A/A median, then averaging the two orders. Report raw deltas and both spreads.
+Hello, first post-hello RPC, final rows, LoAF, CLS, Details co-framing, stable
+Details section geometry, and zero transcript backtracking remain required.

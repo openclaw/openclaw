@@ -191,6 +191,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/desktop/desktop-source.ts":
     case "ui/src/components/solid/panel-loading-skeleton.tsx":
     case "ui/src/components/solid/sanitized-html.tsx":
+    case "ui/src/components/solid/checkbox.tsx":
     case "ui/src/lib/session-progress-cards.ts":
     case "ui/src/pages/templates/creator-publication.ts":
     case "src/agents/core-tool-facts.ts":
@@ -257,6 +258,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/menu-trigger.tsx":
     case "ui/src/components/menu-shortcut-activation.ts":
     case "ui/src/components/solid/refresh-button.tsx":
+    case "ui/src/components/solid/radio-navigation.ts":
       // Share small navigation helpers without coupling their callers to page renderers.
       return "navigation-helpers";
     case "ui/src/components/config-form.analyze.ts":
@@ -270,10 +272,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Lightweight shape readers must not acquire analysis, validation, or Settings copy.
       return "config-form-utils-runtime";
     case "ui/src/components/solid/settings-ui.tsx":
+    case "ui/src/components/solid/switch.tsx":
     case "ui/src/pages/config/settings-section-header.tsx":
     case "ui/src/lib/reactive/live-checked.ts":
     case "ui/src/lib/reactive/observe-state.ts":
-      // Shared controls stay independent of route chrome and optional settings editors.
+      // Keep the switch with its settings consumers and live binding: no cyclic request.
       return "settings-controls-runtime";
     case "ui/src/lib/gateway-page-binding.ts":
     case "ui/src/lib/reactive/gateway-page.ts":

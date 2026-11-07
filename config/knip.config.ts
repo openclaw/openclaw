@@ -31,6 +31,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/perf/agent-deletion-cancellation-measure.ts",
   "scripts/perf/template-retirement-measure.mts",
   "scripts/windows-release-promotion.mjs!",
   // Offline composition is documented; Docker executes the staged finalizer by path.
@@ -55,6 +56,7 @@ const repositoryScriptEntries = [
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
+  "scripts/perf/gateway-crash-record-measure.mts!",
   "scripts/perf/native-pr-bootstrap-measure.mjs!",
   "scripts/perf/backup-verify-fixture.mjs!",
   "scripts/perf/backup-verify-measure.mjs!",
@@ -143,6 +145,8 @@ const repositoryScriptEntries = [
   // Its companion guide invokes the same-document aged-tab census by path.
   "scripts/bench-control-ui-aged-tab.ts!",
   "scripts/bench-control-ui-aged-tab-compare.ts!",
+  "scripts/bench-control-ui-tab-return.ts!",
+  "scripts/bench-control-ui-tab-return-native.ts!",
   // The opt-in projection benchmark builds its browser fixture through this CLI.
   "scripts/build-control-ui-projection-fixture.mts!",
   // The reactive graph guide invokes this isolated diagnostic build by path.
@@ -154,6 +158,9 @@ const repositoryScriptEntries = [
   "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-cold-load.ts!",
+  "scripts/analyze-control-ui-coverage.mts!",
+  // scripts/README.md invokes the adjacent-build cache inventory comparison.
+  "scripts/compare-control-ui-update-cache.ts!",
   // The history-depth benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-history-depth.ts!",
   // The hosted Doctor benchmark guide invokes this opt-in CLI by path.
@@ -203,6 +210,8 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-state-polling.mts!",
   "scripts/bench-codex-validators.mts!",
   "scripts/bench-control-ui-navigation.ts!",
+  // Per-method delay census and cross-engine readiness comparison.
+  "scripts/bench-control-ui-rpc-hostage.ts!",
   "scripts/bench-gateway-validators.mts!",
   "scripts/bench-ingress-polling.mts!",
   "scripts/bench-lobster-validators.mts!",
@@ -219,6 +228,7 @@ const repositoryScriptEntries = [
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/github-publication-snapshot-measure.ts!",
+  "scripts/perf/workspace-reconciliation-measure.ts!",
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",
   // Maintained source headers invoke these standalone analysis commands by exact path.

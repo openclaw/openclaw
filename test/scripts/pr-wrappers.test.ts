@@ -1705,12 +1705,22 @@ if (targeted) {
 if (output) writeFileSync(1, output);
 `,
     );
-    for (const tool of ["git", "tar"]) {
-      writeExecutable(
-        join(fixture.bin, tool),
-        `#!/bin/sh\nexec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" ${tool} "$@"\n`,
-      );
-    }
+    writeExecutable(
+      join(fixture.bin, "git"),
+      `#!/bin/sh
+# Only archive verification needs Node; other prefixes retain its Git parser.
+# Restore the backend PATH for direct calls so policy Git cannot select this stub again.
+case "$1:\${3-}" in
+  -C:|-C:-*|-C:archive|-C:ls-tree|-C:hash-object) ;;
+  --version:|-C:*) PATH="$OPENCLAW_TEST_BACKEND_PATH" exec "$OPENCLAW_TEST_GIT" "$@" ;;
+esac
+exec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" git "$@"
+`,
+    );
+    writeExecutable(
+      join(fixture.bin, "tar"),
+      '#!/bin/sh\nexec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" tar "$@"\n',
+    );
     return {
       readerLog,
       archives,
@@ -2317,6 +2327,17 @@ closeSync(fd);
       }
     },
   );
+
+  itPosix("settles dependency holds when a closed reader signals the creator", () => {
+    const fixture = makeFrozenDependencyFixture();
+    const wrapper = join(fixture.linked, "scripts/pr");
+    const shell = `"$0" unknown-command 2>&1 | true; echo "\${PIPESTATUS[0]}"`;
+    const result = runCommand("/bin/bash", ["-c", shell, wrapper], fixture.env, fixture.linked);
+    expect(result.stdout.trim()).toBe("141");
+    const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
+    const state = readPrCacheState(join(cache, prCacheEntries(cache)[0]!));
+    expect(state).toMatchObject({ anchors: [], settled: true });
+  });
 
   itPosix(
     "materializes and reuses an older anchor without changing the installed tooling root",

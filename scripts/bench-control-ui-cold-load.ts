@@ -6,7 +6,7 @@
 // javaScriptResources includes completed modulepreloads absent from V8 coverage.
 // --cpu-profile-compare <baseline cpu-profile.json>: profile and diff against that report.
 // --selector-stats: ranked boot CSS selectors (instrumentation overhead included).
-// --viewport desktop|mobile: 1719×1179 (default) or 390×844 browser viewport.
+// --viewport desktop|mobile|1720x1180: default desktop, phone, or warm-reload proof size.
 // --allocations --untraced --live-events: collected-object renderer bytes per event.
 // --streaming-allocations: sampled allocation bytes including collected objects during deltas.
 // --streaming-content tool-code grows an expanded tool card and code fence together.
@@ -79,6 +79,7 @@ import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway
 import { resolveColdLoadLatency } from "./lib/control-ui-bench-latency.ts";
 import {
   persistColdLoadWarmState,
+  qualifyDetailsSubagentsWarmState,
   restoreColdLoadWarmState,
 } from "./lib/control-ui-bench-warm-state.ts";
 import {
@@ -132,10 +133,18 @@ import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,
   readGatewayHeapProfile,
 } from "./lib/gateway-bench-profile.ts";
+import { freeProofPort } from "./perf/warm-reload-admission.ts";
 import {
   installWarmReloadBrowserProbe,
+  proofRegions,
   summarizeDetailsGeometry,
 } from "./perf/warm-reload-browser-probe.ts";
+import {
+  launchWarmReloadBrowser,
+  calibrateWarmReloadPaintHolding,
+  startWarmReloadSurfaceCapture,
+} from "./perf/warm-reload-browser.ts";
+import { analyzeReloadFrames } from "./perf/warm-reload-frames.ts";
 import { installWarmReloadTranscriptProbe } from "./perf/warm-reload-transcript-probe.ts";
 type SidebarPresentationSnapshot = ReturnType<ReturnType<typeof sidebarPresentationProbe>["read"]>;
 
@@ -321,6 +330,7 @@ const { values } = parseArgs({
     "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
     "filmstrip-only": { type: "boolean", default: false },
+    "paint-holding": { type: "boolean", default: false },
     "layout-matrix": { type: "boolean", default: false },
     "layout-route": { type: "string", multiple: true, default: [] },
     "layout-cell": { type: "string", multiple: true, default: [] },
@@ -374,6 +384,7 @@ const { values } = parseArgs({
     "boot-route": { type: "string", default: "chat" },
     "cold-http-cache": { type: "boolean", default: false },
     coverage: { type: "boolean", default: false },
+    "coverage-after-ready-ms": { type: "string", default: "0" },
     "network-latency-ms": { type: "string" },
     "download-kbps": { type: "string" },
     "cpu-throttle": { type: "string" },
@@ -477,6 +488,19 @@ if (
 }
 const captureTrace = traced || values["filmstrip-only"];
 if (
+  values["paint-holding"] &&
+  (!values["warm-reload-perf-probe"] ||
+    !values.untraced ||
+    cpuProfile ||
+    captureTrace ||
+    values.coverage ||
+    values["compare-bundle-dir"].length > 0)
+) {
+  throw new Error(
+    "paint-holding requires one untraced warm-reload-perf-probe bundle without profiling",
+  );
+}
+if (
   values["long-session-trace"] &&
   (!values["long-session"] || !values.untraced || cpuProfile || values["filmstrip-only"])
 ) {
@@ -491,11 +515,15 @@ if (colorScheme !== undefined && colorScheme !== "light" && colorScheme !== "dar
   throw new Error("Expected color-scheme light or dark");
 }
 const viewportName = values.viewport;
-if (viewportName !== "desktop" && viewportName !== "mobile") {
-  throw new Error("Expected viewport desktop or mobile");
+if (!["desktop", "mobile", "1720x1180"].includes(viewportName)) {
+  throw new Error("Expected viewport desktop, mobile, or 1720x1180");
 }
 const viewport =
-  viewportName === "mobile" ? { width: 390, height: 844 } : { width: 1719, height: 1179 };
+  viewportName === "mobile"
+    ? { width: 390, height: 844 }
+    : viewportName === "1720x1180"
+      ? { width: 1720, height: 1180 }
+      : { width: 1719, height: 1179 };
 if (values["filmstrip-only"] && cpuProfile) {
   throw new Error("filmstrip-only excludes CPU profiling");
 }
@@ -719,6 +747,14 @@ if (values["chat-dashboard-route"] && face !== "dashboard") {
   throw new Error("chat-dashboard-route requires the dashboard face");
 }
 const captureMs = Number(values["capture-ms"]);
+const coverageAfterReadyMs = Number(values["coverage-after-ready-ms"]);
+if (
+  !Number.isFinite(coverageAfterReadyMs) ||
+  coverageAfterReadyMs < 0 ||
+  (coverageAfterReadyMs > 0 && !values.coverage)
+) {
+  throw new Error("coverage-after-ready-ms requires coverage and a nonnegative duration");
+}
 const transcriptMessages =
   values["transcript-messages"] === undefined
     ? values["long-session"]
@@ -941,7 +977,7 @@ const fixture = createControlUiTeamScaleFixture({
   archivedSession: values["archived-session"],
   paneChromeFacts: values["pane-chrome-facts"],
   detailsSessionFacts: values["details-session-facts"],
-  detailsSubagentActivity: values["details-subagent-activity"] ? 1 : undefined,
+  detailsSubagentActivity: values["details-subagent-activity"] ? 3 : undefined,
   transcriptMessages,
   richTranscript: values["long-session"],
   longSessionScenario: values["long-session"] ? longSessionScenario : undefined,
@@ -1015,6 +1051,12 @@ const chromiumArgs = [
     ? ["--enable-low-end-device-mode", "--js-flags=--max-old-space-size=128"]
     : []),
 ];
+let paintHoldingConfiguration:
+  | Awaited<ReturnType<typeof launchWarmReloadBrowser>>["configuration"]
+  | undefined;
+let paintHoldingCalibration:
+  | Awaited<ReturnType<typeof calibrateWarmReloadPaintHolding>>
+  | undefined;
 let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
@@ -1096,11 +1138,21 @@ try {
     serverBuildId: buildId,
     serverVersion: JSON.parse(await readFile("package.json", "utf8")).version,
   });
-  browser = await chromium.launch({
-    executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
-    headless: true,
-    args: chromiumArgs,
-  });
+  if (values["paint-holding"]) {
+    const launched = await launchWarmReloadBrowser(chromiumArgs);
+    browser = launched.browser;
+    paintHoldingConfiguration = launched.configuration;
+    paintHoldingCalibration = await calibrateWarmReloadPaintHolding(browser, {
+      port: await freeProofPort(),
+      directory: path.join(artifactDir, "paint-holding-calibration"),
+    });
+  } else {
+    browser = await chromium.launch({
+      executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+      headless: true,
+      args: chromiumArgs,
+    });
+  }
   const context = await browser.newContext({
     viewport,
     isMobile: viewportName === "mobile",
@@ -1118,6 +1170,7 @@ try {
       }
       performance.setResourceTimingBufferSize(4096);
       const milestones = {
+        stopped: false,
         firstPaintMs: null as number | null,
         firstContentfulPaintMs: null as number | null,
         firstStaticShellMs: null as number | null,
@@ -1232,6 +1285,9 @@ try {
           }),
         );
       const sample = () => {
+        if (milestones.stopped) {
+          return;
+        }
         const route = location.pathname.split("/")[1] || measuredRoute;
         const readySelector =
           route === "new"
@@ -2050,7 +2106,7 @@ try {
   };
   const qualifyDetails = async () => {
     if (!values["details-processes"] && !values["details-subagent-activity"]) {
-      return;
+      return null;
     }
     const details = page.locator(".chat-details:visible");
     if (!(await details.count())) {
@@ -2059,13 +2115,27 @@ try {
     if (values["details-processes"]) {
       await details.locator('[data-details-group="processes"] [data-process-id]').waitFor();
     }
-    if (values["details-subagent-activity"] && !values["archived-session"]) {
-      await details.locator(".chat-subagent-activity__row").first().waitFor();
-    }
     await details
       .locator('[data-details-group="automations"] .chat-summary__automation')
       .first()
       .waitFor();
+    if (values["details-subagent-activity"] && !values["archived-session"]) {
+      const rows = fixture.scenario.sessions!.flatMap((row) =>
+        row.parentSessionKey === fixture.selectedSessionKey &&
+        typeof row.label === "string" &&
+        row.label.startsWith("Synthetic child review ")
+          ? [{ key: row.key, label: row.label }]
+          : [],
+      );
+      const qualified = await page.waitForFunction(qualifyDetailsSubagentsWarmState, {
+        sessionKey: fixture.selectedSessionKey,
+        rows,
+      });
+      const receipt = await qualified.jsonValue();
+      await qualified.dispose();
+      return receipt;
+    }
+    return null;
   };
   const qualifyLateRowFacts = async () => {
     if (!fixture.lateRowFacts) {
@@ -2203,10 +2273,10 @@ try {
     }
     await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor({ state: "attached" });
     await qualifyLateRowFacts();
-    await qualifyDetails();
+    const detailsSubagentsWarmState = await qualifyDetails();
     const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
       persistColdLoadWarmState,
-      warmInput,
+      { ...warmInput, detailsSubagentsWarmState },
     );
     const passes = values["warm-reload"] ? 2 : 1;
     for (let index = 0; index < bundleSlots.length; index++) {
@@ -2241,11 +2311,11 @@ try {
         );
         await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
         await qualifyLateRowFacts();
-        await qualifyDetails();
-        const { storage: captured, ...saved } = await page.evaluate(
-          persistColdLoadWarmState,
-          warmInput,
-        );
+        const primedDetailsSubagentsWarmState = await qualifyDetails();
+        const { storage: captured, ...saved } = await page.evaluate(persistColdLoadWarmState, {
+          ...warmInput,
+          detailsSubagentsWarmState: primedDetailsSubagentsWarmState,
+        });
         qualifyLateRowSnapshot(saved, index);
         storage = captured;
         primes.push(saved);
@@ -2274,6 +2344,10 @@ try {
       }
     }
     await restoreColdLoadWarmState(page, warmStorage, warmStates.at(-1));
+    if (values["paint-holding"]) {
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      await settle(bootRoute);
+    }
     if (values["sidebar-presentation-probe"]) {
       for (const [index, storage] of warmStates.entries()) {
         await writeFile(
@@ -2441,7 +2515,12 @@ try {
           ],
         };
       }
-      await restoreColdLoadWarmState(page, reloadStorage!, layoutCell && reloadStorage);
+      await restoreColdLoadWarmState(
+        page,
+        reloadStorage!,
+        layoutCell && reloadStorage,
+        values["paint-holding"] ? cdp : undefined,
+      );
       await selectComparisonBundle(bundleIndex, page);
     }
     runTransfer =
@@ -2449,6 +2528,23 @@ try {
         ? "delta"
         : "full";
     const requests: CriticalPathHttpRequest[] = [];
+    if (values["paint-holding"] && !(await page.locator(".chat-virtual-row").first().isVisible())) {
+      throw new Error(
+        "Paint-holding capture requires the complete old application, not the reset document",
+      );
+    }
+    if (values["paint-holding"]) {
+      // Only the new document's probes belong in the measured navigation.
+      await page.evaluate(() => {
+        Reflect.get(window, "__coldLoadPresentation").stopped = true;
+        Reflect.get(window, "__warmReloadProof").stopped = true;
+        Reflect.get(window, "__warmReload").read();
+      });
+    }
+    const surfaceDirectory = path.join(artifactDir, `run-${run + 1}.surfaces`);
+    const finishSurfaces = values["paint-holding"]
+      ? await startWarmReloadSurfaceCapture(cdp, surfaceDirectory)
+      : undefined;
     if (firstLoad || values["cold-http-cache"] || values["critical-path"]) {
       await cdp.send("Network.enable");
     }
@@ -2703,6 +2799,29 @@ try {
       // Seeds are qualified above; best-effort live link prefetch can skip a reload.
       await page.evaluate(() => new Promise(requestAnimationFrame));
     }
+    if (values.coverage && coverageAfterReadyMs > 0) {
+      await page.waitForTimeout(coverageAfterReadyMs);
+    }
+    const coverageResources = values.coverage
+      ? await page.evaluate(() =>
+          performance.getEntriesByType("resource").flatMap((entry) => {
+            if (
+              !(entry instanceof PerformanceResourceTiming) ||
+              !/\.m?js$/u.test(new URL(entry.name).pathname)
+            ) {
+              return [];
+            }
+            return [
+              {
+                url: entry.name,
+                decodedBytes: entry.decodedBodySize,
+                encodedBytes: entry.encodedBodySize,
+                transferBytes: entry.transferSize,
+              },
+            ];
+          }),
+        )
+      : undefined;
     const coverage = values.coverage
       ? (await page.coverage.stopJSCoverage())
           .filter((entry) => controlUiScriptAssetUrl(entry.url, new URL("assets/", baseUrl)))
@@ -2997,6 +3116,32 @@ try {
           };
         })
       : undefined;
+    if (finishSurfaces && warmReloadPerformance) {
+      const probe = await page.evaluate((selectors) => {
+        const state: NonNullable<ReturnType<typeof installWarmReloadBrowserProbe>> = Reflect.get(
+          window,
+          "__warmReloadProof",
+        );
+        return {
+          regions: Object.entries(selectors).flatMap(([name, selector]) => {
+            const rect = document.querySelector(selector)?.getBoundingClientRect();
+            return rect && rect.width && rect.height
+              ? [{ name, x: rect.x, y: rect.y, width: rect.width, height: rect.height }]
+              : [];
+          }),
+          masks: state.masks,
+          animationSamples: state.animationSamples,
+          paints: performance.getEntriesByType("paint").map((entry) => entry.toJSON()),
+          firstDetailsPaintMs: state.firstDetailsPaintMs,
+        };
+      }, proofRegions);
+      const frames = await finishSurfaces(warmReloadPerformance.timeOrigin);
+      const visual = await analyzeReloadFrames({ frames, ...probe, outputDir: surfaceDirectory });
+      await writeFile(
+        path.join(surfaceDirectory, "capture.json"),
+        JSON.stringify({ ...probe, ...warmReloadPerformance, visual }, null, 2),
+      );
+    }
     const detailsGeometry =
       (values["details-processes"] || values["details-subagent-activity"]) && paneChrome
         ? summarizeDetailsGeometry(paneChrome.detailsFrames)
@@ -3741,6 +3886,8 @@ try {
           ),
         ),
         head,
+        paintHoldingConfiguration,
+        paintHoldingCalibration,
         sidebarRowTransfer: values["sidebar-list-churn"] ? runTransfer : undefined,
         sidebarLists: sidebarReads,
         sidebarWindows:
@@ -4073,6 +4220,7 @@ try {
       ...metrics,
       threadCpu,
       coverage,
+      coverageResources,
       javaScriptResources: summarizeJavaScriptResources(metrics.http.waterfall, coverage),
       trace: bootTrace,
       selectorStats,

@@ -136,8 +136,13 @@ function formatRawCatalogLabel(entry: ModelCatalogEntry): string {
 }
 
 function resolveCatalogDisplayName(entry: ModelCatalogEntry): string {
-  const name = entry.name.trim();
-  const alias = entry.alias?.trim();
+  let name = entry.name.trim();
+  let alias = entry.alias?.trim();
+  if (normalizeChatModelProviderId(entry.provider) === "clawrouter") {
+    // The provider group already identifies the route; keep model labels model-only.
+    name = name.replace(/\s+via\s+clawrouter$/iu, "");
+    alias = alias?.replace(/\s+via\s+clawrouter$/iu, "");
+  }
   if (!name || !alias) {
     return name || alias || "";
   }

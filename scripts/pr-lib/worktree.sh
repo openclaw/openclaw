@@ -289,9 +289,9 @@ recover_review_transition() {
       pr_git update-ref --no-deref "refs/heads/$branch" "$target" "$source" || return 1
     fi
   elif [ "$mode" = "branch" ]; then
-    pr_git checkout -B "$branch" "$target" || return 1
+    GIT_NO_LAZY_FETCH=1 pr_git checkout -B "$branch" "$target" || return 1
   else
-    pr_git checkout --detach "$target" || return 1
+    GIT_NO_LAZY_FETCH=1 pr_git checkout --detach "$target" || return 1
   fi
 
   local actual_branch
@@ -332,7 +332,12 @@ checkout_pr_worktree_target() {
 
   local source target mode=detached
   source=$(pr_git rev-parse HEAD) || return 1
-  target=$(pr_git rev-parse "$target_ref^{commit}") || return 1
+  # A lazy commit fetch sends no haves and can download all reachable history.
+  # Acquire missing commits through the filtered, negotiating source owner first.
+  target=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse --verify "$target_ref^{commit}" 2>/dev/null) || {
+    fetch_canonical_ref "$target_ref" --no-write-fetch-head || return 1
+    target=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse --verify "$target_ref^{commit}") || return 1
+  }
   require_no_ignored_transition_paths "$pr" "$source" "$target" || return 1
   [ -z "$branch" ] || mode=branch
   write_review_transition_journal "$pr" "$source" "$target" "$mode" "$branch" || return 1

@@ -46,6 +46,11 @@ visibility, or remote session-link titles. Side Chat is hidden, and session link
 keep their locally available labels. MCP Apps discovery requires general write
 access. The Gateway continues to authorize every request.
 
+**Settings → Devices** displays the current device inventory while refreshing
+configuration separately. Binding controls keep their own loading and error
+state until configuration is available; a slow configuration read does not
+hold the inventory page open.
+
 Connections without general read access also skip CLI session catalogs, plugin
 tool artwork, detailed usage reads, and the separate command catalog. Slash-command
 menus retain permitted chat metadata or built-in commands without requesting a
@@ -685,6 +690,10 @@ Local onboarding generates a Gateway secret in token mode by default, without a 
 
 Use the agent selector to open an agent's chat or its settings gear to configure
 that agent. Per-agent settings remain at `/settings/agents/<id>`.
+
+The agent's **Automations** panel shows an empty state only after its jobs read
+succeeds. Failed reads show an error with **Refresh** available; previously loaded
+jobs remain visible while a refresh is pending or fails.
 
 Open **Templates** in **Pages**, or visit `/templates`, to discover official Templates.
 This page contains Templates discovery only. Enable **Templates** in **Settings → Labs**

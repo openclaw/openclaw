@@ -40,9 +40,9 @@ const canonical = (value) => {
   if (value && typeof value === "object") {
     return (
       "{" +
-      Object.entries(value)
-        .toSorted(([a], [b]) => a.localeCompare(b))
-        .map(([key, child]) => JSON.stringify(key) + ":" + canonical(child))
+      Object.keys(value)
+        .toSorted()
+        .map((key) => JSON.stringify(key) + ":" + canonical(value[key]))
         .join(",") +
       "}"
     );
@@ -62,7 +62,7 @@ const instant = (value, name) => {
 };
 const inputStream = (filename) => {
   const raw = filename === "-" ? process.stdin : createReadStream(filename);
-  return filename.endsWith(".gz") ? raw.pipe(createGunzip()) : raw;
+  return filename.endsWith(".gz") ? raw.compose(createGunzip()) : raw;
 };
 // Yields JSONL lines split on \n only; readline would also split on U+2028 inside JSON strings.
 async function* lines(filename) {
