@@ -290,6 +290,45 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
 
   </Accordion>
 
+  <Accordion title="Flex Processing retries">
+    Direct OpenAI Responses requests can wait longer and retry temporary Flex
+    capacity failures when `params.serviceTier: "flex"` is selected:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.6-luna": {
+              agentRuntime: { id: "openclaw" },
+              params: { serviceTier: "flex" },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    The policy applies at any reasoning level. Official regional OpenAI
+    endpoints are supported.
+    It allows up to 10 minutes before the first event and
+    between events, and up to four retries for temporary capacity, overload,
+    server, or request-timeout failures. Retries use exponential backoff with a
+    one-minute base, a ten-minute cap, and 0.5–1.5x jitter, within a 30-minute
+    retry window. Provider `Retry-After` floors remain authoritative.
+
+    Shorter run or provider timeouts still win. Cloud cron requests keep their
+    60-second stall cap. Saved `retry.provider.maxRetries` and
+    `retry.provider.maxRetryDelayMs` controls, quota exclusions, cancellation,
+    and shared token-rate-limit fallback retain their existing behavior.
+
+    The policy follows the effective request tier: an explicit non-Flex tier or
+    speed override disables it. Proxy endpoints, other APIs/providers, and
+    native Codex turns retain their existing behavior.
+    Retries continue the existing transcript under the normal recovery rules.
+
+  </Accordion>
+
   <Accordion title="Server-side compaction (Responses API)">
     With the built-in `legacy` context engine, the OpenAI plugin's OpenClaw
     stream wrapper auto-enables server-side compaction for store-capable direct

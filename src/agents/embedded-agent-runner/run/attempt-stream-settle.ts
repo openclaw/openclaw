@@ -17,6 +17,7 @@ import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import { isFlexProcessingRequest } from "../../flex-processing.js";
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
 import { configuredModelSupportsNativeVideo } from "../../model-input.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
@@ -485,6 +486,9 @@ export async function prepareEmbeddedAttemptTransport(input: {
       agentDir: input.agentDir,
       auth,
     });
+  // Session speed can change between physical requests in the same turn.
+  const isFlexProcessing = () =>
+    isFlexProcessingRequest({ model: attempt.model, extraParams: resolvedExtraParams });
   const ownsCompaction = input.contextEngineInfo?.ownsCompaction === true;
   const suppressResponsesCompaction =
     attempt.model.api === "openai-responses" &&
@@ -738,5 +742,6 @@ export async function prepareEmbeddedAttemptTransport(input: {
     effectivePromptCacheRetention,
     providerTextTransforms,
     streamStrategy,
+    isFlexProcessing,
   };
 }

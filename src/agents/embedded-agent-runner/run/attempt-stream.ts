@@ -372,39 +372,43 @@ export function installEmbeddedAttemptStreamGuards(
   const resolvedRunTimeoutMs =
     attempt.runTimeoutOverrideMs ??
     (attempt.timeoutMs !== configuredRunTimeoutMs ? attempt.timeoutMs : undefined);
-  const timeoutOptions = {
-    cfg: attempt.config,
-    runTimeoutMs: resolvedRunTimeoutMs,
-    modelRequestTimeoutMs: attempt.model.requestTimeoutMs,
-    model: { baseUrl: attempt.model.baseUrl, id: attempt.modelId, provider: attempt.provider },
-  };
-  const idleTimeoutMs = resolveLlmIdleTimeoutMs({ ...timeoutOptions, trigger: attempt.trigger });
-  const firstEventTimeoutMs = resolveLlmFirstEventTimeoutMs(timeoutOptions);
-  if (idleTimeoutMs > 0 || firstEventTimeoutMs > 0) {
-    // Local providers opt out of gap policing, but stream creation still needs
-    // a deadline when response headers never arrive.
-    installStreamWrapper(
-      streamWithIdleTimeout,
-      idleTimeoutMs > 0 ? idleTimeoutMs : firstEventTimeoutMs,
-      (error) => callbacks.onIdleTimeout(error),
-      {
-        runId: attempt.runId,
-        watchdogAttempt: callbacks.diagnosticOwner.watchdogAttempt,
-        scope: idleTimeoutMs > 0 ? "creation-and-gaps" : "creation-only",
-      },
-    );
-  }
-  if (firstEventTimeoutMs > 0) {
-    const baseStreamFn = session.agent.streamFn;
-    session.agent.streamFn = (model, context, options) => {
-      const optionsWithFirstEvent = options as FirstStreamEventInternalOptions | undefined;
-      return baseStreamFn(model, context, {
-        ...options,
-        firstEventTimeoutMs: optionsWithFirstEvent?.firstEventTimeoutMs ?? firstEventTimeoutMs,
-        onFirstEventTimeout: optionsWithFirstEvent?.onFirstEventTimeout ?? callbacks.onIdleTimeout,
-      } as typeof options);
+  const resolveRequestTimeouts = (model = attempt.model) => {
+    const timeoutOptions = {
+      cfg: attempt.config,
+      runTimeoutMs: resolvedRunTimeoutMs,
+      modelRequestTimeoutMs: model.requestTimeoutMs,
+      model: { baseUrl: model.baseUrl, id: attempt.modelId, provider: attempt.provider },
+      trigger: attempt.trigger,
+      flexProcessing: input.prepared.sessionRuntime.transport.isFlexProcessing?.() ?? false,
     };
-  }
+    return {
+      idleTimeoutMs: resolveLlmIdleTimeoutMs(timeoutOptions),
+      firstEventTimeoutMs: resolveLlmFirstEventTimeoutMs(timeoutOptions),
+    };
+  };
+  const guardedStreamFn = session.agent.streamFn;
+  session.agent.streamFn = (model, context, options) => {
+    const { idleTimeoutMs, firstEventTimeoutMs } = resolveRequestTimeouts(model);
+    const streamFn =
+      idleTimeoutMs > 0 || firstEventTimeoutMs > 0
+        ? streamWithIdleTimeout(
+            guardedStreamFn,
+            idleTimeoutMs > 0 ? idleTimeoutMs : firstEventTimeoutMs,
+            (error) => callbacks.onIdleTimeout(error),
+            {
+              runId: attempt.runId,
+              watchdogAttempt: callbacks.diagnosticOwner.watchdogAttempt,
+              scope: idleTimeoutMs > 0 ? "creation-and-gaps" : "creation-only",
+            },
+          )
+        : guardedStreamFn;
+    const optionsWithFirstEvent = options as FirstStreamEventInternalOptions | undefined;
+    return streamFn(model, context, {
+      ...options,
+      firstEventTimeoutMs: optionsWithFirstEvent?.firstEventTimeoutMs ?? firstEventTimeoutMs,
+      onFirstEventTimeout: optionsWithFirstEvent?.onFirstEventTimeout ?? callbacks.onIdleTimeout,
+    } as typeof options);
+  };
   const modelCallSequence = (attempt.modelCallSequence ??= { value: 0 });
   const firstModelCallNumber = modelCallSequence.value + 1;
   let modelResponseTerminal = false;
@@ -421,8 +425,12 @@ export function installEmbeddedAttemptStreamGuards(
     api: attempt.model.api,
     transport: effectiveAgentTransport,
     // No-gap local inference remains recoverable at its existing transport deadline.
-    requestTimeoutMs:
-      idleTimeoutMs || Math.min(attempt.timeoutMs, DEFAULT_UNDICI_STREAM_TIMEOUT_MS),
+    get requestTimeoutMs() {
+      return (
+        resolveRequestTimeouts().idleTimeoutMs ||
+        Math.min(attempt.timeoutMs, DEFAULT_UNDICI_STREAM_TIMEOUT_MS)
+      );
+    },
     ...(attempt.contextWindowInfo?.tokens
       ? { contextTokenBudget: attempt.contextWindowInfo.tokens }
       : {}),

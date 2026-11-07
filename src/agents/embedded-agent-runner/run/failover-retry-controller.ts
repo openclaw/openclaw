@@ -23,6 +23,7 @@ import {
   renderRateLimitRecoveryStopped,
   renderRateLimitRetryExhaustion,
 } from "../../failover/user-copy.js";
+import { FLEX_PROCESSING_RETRY_POLICY } from "../../flex-processing.js";
 import { isConfigBackedInlineProviderApiKey } from "../../model-auth.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
@@ -45,6 +46,8 @@ function resolveTransientRetryDelayMs(params: {
   retryAfterMs?: number;
   elapsedMs?: number;
   maxElapsedMs?: number;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
   rateLimit: boolean;
 }): number | undefined {
   const remainingMs =
@@ -55,12 +58,13 @@ function resolveTransientRetryDelayMs(params: {
   if (remainingMs <= 0 || params.retryAfterMs === Infinity) {
     return undefined;
   }
-  const maxDelayMs = params.rateLimit
-    ? RATE_LIMIT_RETRY_MAX_DELAY_MS
-    : TRANSIENT_RETRY_MAX_DELAY_MS;
+  const maxDelayMs =
+    params.maxDelayMs ??
+    (params.rateLimit ? RATE_LIMIT_RETRY_MAX_DELAY_MS : TRANSIENT_RETRY_MAX_DELAY_MS);
   const exponentialMs = Math.min(
     maxDelayMs,
-    TRANSIENT_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, params.retryNumber - 1),
+    (params.baseDelayMs ?? TRANSIENT_RETRY_BASE_DELAY_MS) *
+      2 ** Math.max(0, params.retryNumber - 1),
   );
   const jitteredMs = Math.min(maxDelayMs, Math.round(exponentialMs * (0.5 + Math.random())));
   const providerTiming = Number.isFinite(params.retryAfterMs);
@@ -314,6 +318,8 @@ export function createEmbeddedRunFailoverRetryController(input: {
       message?: string;
       code?: string;
       retryAfterMs?: number;
+      /** The admitted request uses the opt-in direct OpenAI Flex policy. */
+      flexProcessing?: boolean;
       /** Saved retry.provider.maxRetryDelayMs; undefined or 0 disables the cap. */
       maxRetryDelayMs?: number;
       /** False when the attempt cannot fail over (replay-unsafe tool activity). */
@@ -378,6 +384,11 @@ export function createEmbeddedRunFailoverRetryController(input: {
         params.isFinalFallbackAttempt !== true &&
         retry.failoverEligible !== false &&
         (sharedTpmFallback || hasOrganizationTpmRateLimitEvidence(retry.message));
+      // Shared-bucket fallback has a shorter owner-held recovery budget; keep
+      // its ordinary backoff instead of scheduling a minute-long Flex wait.
+      const flexProcessing =
+        retry.flexProcessing === true && retry.reason !== "output_limit" && !sharedTpmFallback;
+      const flexPolicy = flexProcessing ? FLEX_PROCESSING_RETRY_POLICY : undefined;
       if (rateLimit && hasLongWindowRateLimitEvidence(retry.message)) {
         recordDecision("rejected", "long_window_rate_limit");
         return false;
@@ -410,7 +421,9 @@ export function createEmbeddedRunFailoverRetryController(input: {
       rateLimitSeen ||= rateLimit;
       const retryCount = transientRetryCount;
       const retryBudget = Math.min(
-        transientRetryBudget ?? (rateLimit ? MAX_RATE_LIMIT_ATTEMPTS - 1 : MAX_TRANSIENT_RETRIES),
+        transientRetryBudget ??
+          flexPolicy?.maxRetries ??
+          (rateLimit ? MAX_RATE_LIMIT_ATTEMPTS - 1 : MAX_TRANSIENT_RETRIES),
         rateLimitSeen ? MAX_RATE_LIMIT_ATTEMPTS - 1 : Infinity,
         sharedTpmFallback ? SHARED_TPM_FALLBACK_MAX_RETRIES : Infinity,
       );
@@ -440,11 +453,15 @@ export function createEmbeddedRunFailoverRetryController(input: {
         retryNumber: retryCount + 1,
         retryAfterMs: retry.retryAfterMs,
         rateLimit,
-        maxElapsedMs: sharedTpmFallback ? SHARED_TPM_FALLBACK_RETRY_TIME_MS : undefined,
+        maxElapsedMs: sharedTpmFallback
+          ? SHARED_TPM_FALLBACK_RETRY_TIME_MS
+          : flexPolicy?.retryWindowMs,
+        baseDelayMs: flexPolicy?.baseDelayMs,
+        maxDelayMs: flexPolicy?.maxDelayMs,
         // Reaching an output ceiling can take minutes of useful generation.
         // Keep its count budget and timeout controls without the outage time window.
         elapsedMs:
-          (rateLimit && !sharedTpmFallback) || retry.reason === "output_limit"
+          (rateLimit && !sharedTpmFallback && !flexProcessing) || retry.reason === "output_limit"
             ? undefined
             : nowMs - retryWindowStartMs,
       });
