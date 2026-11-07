@@ -380,9 +380,7 @@ export function readSessionActorMemoryHistoryFacts(
           projected?.role === "user" &&
           (query.input.includeInterSession === true || !hasInterSessionUserProvenance(message))
         ) {
-          firstUserMessage = resolveSessionTitleSource(projected.text, query.input.skillCommands, {
-            isControlCommand: isControlCommandMessage,
-          });
+          firstUserMessage = resolveSessionTitleSource(projected.text, query.input.skillCommands);
         }
         if (firstUserMessage !== null) {
           break;
