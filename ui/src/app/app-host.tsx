@@ -139,10 +139,15 @@ export class ShellOwner
     return routeSearch === undefined ? this.onboarding : resolveOnboardingMode(routeSearch);
   }
 
+  /** A cold connection has no navigation yet, so the compact drawer stays closed. */
+  get initialConnectionPending(): boolean {
+    return Boolean(this.context && this.runtime && readShellView(this).initialGatewayConnection);
+  }
+
   get workspaceChromeVisible(): boolean {
     const routeId = this.routeState.routeId;
     // Hidden workspace chrome must not preload its sidebar and panel graphs.
-    return routeId !== undefined && !isSettingsNavigationRoute(routeId) && !this.onboardingMode;
+    return (routeId === undefined || !isSettingsNavigationRoute(routeId)) && !this.onboardingMode;
   }
 
   storedOutboxScopeHost(context: ApplicationContext): StoredOutboxScopeHost {

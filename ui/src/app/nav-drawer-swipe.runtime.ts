@@ -36,6 +36,7 @@ export type NavDrawerHost = Pick<HTMLElement, "isConnected"> & {
   readonly element: HTMLElement;
   readonly navDrawerElement?: HTMLElement;
   readonly onboardingMode: boolean;
+  readonly initialConnectionPending?: boolean;
   readonly navDrawerOpen: boolean;
 };
 
@@ -53,6 +54,7 @@ export class NavDrawerSwipeOwner {
       isMobileNavLayout() &&
       !this.host.navDrawerOpen &&
       !this.host.onboardingMode &&
+      !this.host.initialConnectionPending &&
       !document.openClawModalLayers?.size
     );
   }
