@@ -213,7 +213,10 @@ describeLive("cron tool allowlists through live harnesses", () => {
             } else {
               const toolName = cap === "bash" ? "exec" : "read";
               const call = calls.find((entry) => entry.name === toolName);
-              expect(call, `${runtime} cap ${cap}: expected ${toolName} call`).toBeDefined();
+              expect(
+                call,
+                `${runtime} cap ${cap}: expected ${toolName} call; observedCalls=${calls.map((entry) => entry.name).join(",") || "none"}; observedResults=${results.map((entry) => entry.toolName).join(",") || "none"}`,
+              ).toBeDefined();
               const result = results.find((entry) => entry.toolCallId === call?.id);
               expect(result).toMatchObject({ toolName, isError: false });
               expect(JSON.stringify(result?.content)).toContain(marker);
