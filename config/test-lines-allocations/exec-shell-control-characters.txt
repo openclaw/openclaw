@@ -1,2 +1,2 @@
-# Authorization and exec control guard regressions for raw and decoded shell text.
-65
+# Authorization and exec control guard regressions for raw, decoded, and padded shell text.
+79

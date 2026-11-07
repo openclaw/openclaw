@@ -273,10 +273,11 @@ export async function detectUnsafeExecControlShellCommand(
   command: string,
   context: ExecControlShellCommandContext = {},
 ): Promise<UnsafeExecControlShellCommandKind | null> {
-  const rawCommand = command.trim();
+  // Only trim shell whitespace; CR, VT, and FF must reach the parser for rejection.
+  const rawCommand = command.replace(/^[ \t\n]+|[ \t\n]+$/gu, "");
   let explanation: CommandExplanation | null = null;
   try {
-    explanation = await explainShellCommand(command);
+    explanation = await explainShellCommand(rawCommand);
   } catch (error) {
     if (error instanceof CommandExplanationWorkLimitError) {
       return "incomplete-analysis";
