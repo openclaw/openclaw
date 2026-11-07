@@ -2,7 +2,7 @@
 // user turn, and before that turn's replay admission, makes the follow-up fail
 // without a model call. Compare the Workshop notice case, which replays once.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { recordDeliveredCommandExchange } from "../../../config/sessions/command-transcript.js";
 import { loadTranscriptEventsSync } from "../../../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.runtime.js";
@@ -56,7 +56,7 @@ const appendWorkshopNotice = (fixture: Fixture) =>
   });
 
 async function runAcross(
-  makeAppend: (fixture: Fixture) => ReturnType<typeof vi.fn>,
+  makeAppend: (fixture: Fixture) => Mock<() => Promise<unknown>>,
   selectedOwner: boolean,
 ) {
   const outcome: {
