@@ -71,8 +71,24 @@ export async function prepareCronRunInference(params: {
   if (!binding) {
     return undefined;
   }
-  const { acquireCronInferenceAuthorization } = await import("./inference-binding.runtime.js");
+  const { acquireCronInferenceAuthorization, asCronInferenceAuthorizationError } =
+    await import("./inference-binding.runtime.js");
   const authorization = await acquireCronInferenceAuthorization({ ...params, binding });
+  // Every later owner check runs inside the agent, so it reports the automation's loss.
+  const assertCurrent = () => {
+    try {
+      authorization.assertCurrent();
+    } catch (error) {
+      throw asCronInferenceAuthorizationError(binding, error);
+    }
+  };
+  const revalidate = async () => {
+    try {
+      await authorization.revalidate();
+    } catch (error) {
+      throw asCronInferenceAuthorizationError(binding, error);
+    }
+  };
   // The last admitted candidate's runtime, named when its CLI backend refuses the account.
   let candidateRuntime: string | undefined;
   return {
@@ -81,8 +97,8 @@ export async function prepareCronRunInference(params: {
       authProfileBinding: {
         profileId: binding.profileId,
         authRequirement: binding.authRequirement,
-        assertCurrent: authorization.assertCurrent,
-        revalidate: authorization.revalidate,
+        assertCurrent,
+        revalidate,
       },
       allowAuthProfileFallback: false,
       onSuccessfulAuthProfile: (profileId) => {

@@ -11,6 +11,18 @@
   "providerAuthAliases": {
     "bedrock-converse-stream": "amazon-bedrock"
   },
+  "providerAuthChoices": [
+    {
+      "provider": "amazon-bedrock",
+      "method": "aws-sdk",
+      "choiceId": "amazon-bedrock-aws-sdk",
+      "choiceLabel": "Amazon Bedrock (AWS credentials)",
+      "choiceHint": "Env vars, shared config/SSO profile, or instance role",
+      "groupId": "amazon-bedrock",
+      "groupLabel": "Amazon Bedrock",
+      "onboardingScopes": ["text-inference"]
+    }
+  ],
   "modelCatalog": {
     "discovery": {
       "amazon-bedrock": "refreshable"

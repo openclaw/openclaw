@@ -10,6 +10,7 @@ import { captureAuthProfileAuthorization } from "../../../agents/auth-profiles/a
 import {
   isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileOrderWithMetadata,
+  resolveStoredAwsSdkAuthProfileId,
 } from "../../../agents/auth-profiles/order.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../../agents/auth-profiles/store-runtime.js";
 import { resolveProviderModelAuthPolicy } from "../../../agents/model-auth-policy.js";
@@ -255,9 +256,19 @@ export async function maybeRepairCronInferenceBindings(params: {
           continue;
         }
         if (firstSource?.kind === "direct") {
-          throw new Error(
-            "The current route uses an ambient credential, not a durable stored account.",
-          );
+          // An AWS SDK route resolves credentials from the host's chain on every request,
+          // so the planner takes it directly. Adopt its stored account: that record is a
+          // durable account Doctor can retain, not an ambient credential it picked up.
+          const awsSdkProfileId =
+            firstSource.evidence === "aws-sdk"
+              ? resolveStoredAwsSdkAuthProfileId({ cfg, provider: selected.provider, store })
+              : undefined;
+          if (!awsSdkProfileId) {
+            throw new Error(
+              "The current route uses an ambient credential, not a durable stored account.",
+            );
+          }
+          explicitProfileId = awsSdkProfileId;
         }
         if (runtime === "codex" && firstSource?.kind !== "profile") {
           // Native/credentialless auth has no host account for Doctor to adopt.

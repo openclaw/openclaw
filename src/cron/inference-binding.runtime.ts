@@ -4,6 +4,7 @@ import {
   type AuthProfileAuthorization,
 } from "../agents/auth-profiles/authorization-contract.js";
 import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
+import { resolveStoredAwsSdkAuthProfileId } from "../agents/auth-profiles/order.js";
 import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import {
@@ -211,20 +212,31 @@ export async function captureCronInferenceBinding(params: {
       harnessAuthBootstrap: harness.harness?.authBootstrap,
     }).attempts;
     if (attempt?.kind !== "profile") {
-      // A configured key keeps the job unbound, the same rule its runs follow.
       const source = attempt?.plan.credentialSource;
-      if (source?.kind === "direct" && !isConfiguredKeyAuthSource(source)) {
-        throw new Error(
-          "Automation requires a stored inference account or a key in the environment or provider config. Select an account with model@profile.",
-        );
+      // An AWS SDK route keeps its credentials in the host's chain, so the planner
+      // resolves it directly. Its stored account still owns which account a run used,
+      // so record that account rather than the anonymous route.
+      const awsSdkProfileId =
+        source?.kind === "direct" && source.evidence === "aws-sdk"
+          ? resolveStoredAwsSdkAuthProfileId({ cfg, provider: model.provider, store })
+          : undefined;
+      if (!awsSdkProfileId) {
+        // A configured key keeps the job unbound, the same rule its runs follow.
+        if (source?.kind === "direct" && !isConfiguredKeyAuthSource(source)) {
+          throw new Error(
+            "Automation requires a stored inference account or a key in the environment or provider config. Select an account with model@profile.",
+          );
+        }
+        return undefined;
       }
-      return undefined;
+      selection = { profileId: awsSdkProfileId, source: "auto", routeRequirement: undefined };
+    } else {
+      selection = {
+        profileId: attempt.profileId,
+        source: attempt.plan.forwardedAuthProfileSource ?? "auto",
+        routeRequirement: attempt.plan.modelRoute?.authRequirement,
+      };
     }
-    selection = {
-      profileId: attempt.profileId,
-      source: attempt.plan.forwardedAuthProfileSource ?? "auto",
-      routeRequirement: attempt.plan.modelRoute?.authRequirement,
-    };
   }
   const assertSelectionCurrent = await params.authorizeProfile?.(
     selection.profileId,
@@ -281,6 +293,29 @@ export async function captureCronInferenceBinding(params: {
       authority.dispose();
     }
   }
+}
+
+/**
+ * Name what an automation lost when its owner check fails mid-run.
+ *
+ * The shared authorization owner reports retirement for MCP callers, and a
+ * check after capture cannot tell removal from replacement; both mean the
+ * recorded account no longer authorizes this run.
+ */
+export function asCronInferenceAuthorizationError(
+  binding: CronInferenceBinding,
+  error: unknown,
+): unknown {
+  if (
+    error instanceof AuthProfileAuthorizationError &&
+    error.code === "MCP_AUTHORIZATION_RETIRED"
+  ) {
+    return new Error(
+      `Automation inference ${describeCronInferenceBinding(binding)} was removed or replaced during the run. Explicitly select an authorized account again.`,
+      { cause: error },
+    );
+  }
+  return error;
 }
 
 /** Reacquire the same owner, including its live revocation and replacement checks. */

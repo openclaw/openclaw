@@ -509,9 +509,12 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
         authMode: apiKeyInfo.mode,
         profileId: apiKeyInfo.profileId,
       });
-      if (authorization) {
+      // Preparation awaits provider work, so re-observe the owner before this
+      // credential is installed for the request. A scheduled run's binding owns
+      // every auth mode, not just the OAuth authorization captured above.
+      if (authorization || params.authProfileBinding) {
         assertSelectionCurrent();
-        authorization.assertCurrent();
+        authorization?.assertCurrent();
       }
       applyPreparedRuntimeRequestOverrides(runtimeModel, preparedAuth);
       if (preparedAuth?.apiKey) {

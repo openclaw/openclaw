@@ -29,9 +29,10 @@ vi.mock("../../auth-profiles/authorization.js", async (importOriginal) => ({
 
 beforeEach(() => vi.clearAllMocks());
 
-it.each([false, true])(
-  "observes canonical ownership after credential resolution (replaced: %s)",
-  async (replaced) => {
+it.each(["current", "replaced", "revoked while preparing"] as const)(
+  "observes canonical ownership after credential resolution (%s)",
+  async (ownership) => {
+    const replaced = ownership === "replaced";
     const events: string[] = [];
     const model: Model = makeProviderModelFixture({
       id: "gpt-4.1",
@@ -59,8 +60,11 @@ it.each([false, true])(
         source: "profile",
       };
     });
+    let revoked = false;
     mocks.exchangeCredential.mockImplementation(async () => {
       events.push("exchange");
+      // Removal of the owning record lands while provider preparation awaits.
+      revoked = ownership === "revoked while preparing";
       return undefined;
     });
     const install = vi.fn(() => events.push("install"));
@@ -79,7 +83,11 @@ it.each([false, true])(
       authProfileBinding: {
         profileId: "openai:bound",
         authRequirement: "api-key",
-        assertCurrent() {},
+        assertCurrent() {
+          if (revoked) {
+            throw new Error("Synthetic authorization was removed");
+          }
+        },
         revalidate,
       },
       profileCandidates: ["openai:bound"],
@@ -93,13 +101,19 @@ it.each([false, true])(
       state,
       log: { debug() {}, info() {}, warn() {} },
     });
-    if (replaced) {
+    if (ownership !== "current") {
+      // An api-key route has no OAuth authorization, so only the binding owns it.
       await expect(controller.initializeAuthProfile()).rejects.toThrow(
-        /authorization was replaced/,
+        replaced ? /authorization was replaced/ : /authorization was removed/,
       );
-      expect(mocks.exchangeCredential).not.toHaveBeenCalled();
+      expect(mocks.exchangeCredential).toHaveBeenCalledTimes(replaced ? 0 : 1);
+      // The revoked account's credential never reaches the request.
       expect(install).not.toHaveBeenCalled();
-      expect(events).toEqual(["credential", "canonical-owner"]);
+      expect(events).toEqual(
+        replaced
+          ? ["credential", "canonical-owner"]
+          : ["credential", "canonical-owner", "exchange"],
+      );
     } else {
       await controller.initializeAuthProfile();
       expect(events).toEqual(["credential", "canonical-owner", "exchange", "install"]);

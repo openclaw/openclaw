@@ -104,6 +104,8 @@ const bedrockModel: FixtureModel = {
   baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 };
 
+const awsSdkProfileId = "amazon-bedrock:aws-sdk";
+
 // Stored-profile refusal is exercised through provider HTTP in auth-continuity.integration.
 it("refuses legacy adoption from ambient AWS SDK credentials at the auth boundary", async () => {
   await withAuthState(async (state) => {
@@ -118,6 +120,40 @@ it("refuses legacy adoption from ambient AWS SDK credentials at the auth boundar
       ),
     ).rejects.toThrow("Automation has no recorded inference account");
     expect(materialize).not.toHaveBeenCalled();
+  });
+});
+
+it("runs a scheduled job on its recorded AWS SDK account", async () => {
+  await withAuthState(async (state) => {
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        [awsSdkProfileId]: {
+          type: "api_key",
+          provider: "amazon-bedrock",
+          key: "aws-sdk-credentials",
+        },
+      },
+    });
+    const prepared = await prepareAuth(
+      state,
+      mockModel(bedrockModel),
+      {
+        config: configFor(bedrockModel, { auth: "aws-sdk" }),
+        authProfileBinding: {
+          profileId: awsSdkProfileId,
+          authRequirement: "api-key",
+          assertCurrent() {},
+          revalidate: async () => {},
+        },
+      },
+      bedrockModel,
+    );
+    // The binding locks the stored account, so the ambient route no longer applies.
+    expect(prepared.preparedAuthAttempts).toMatchObject([
+      { kind: "profile", profileId: awsSdkProfileId },
+    ]);
+    expect(prepared.lockedProfileId).toBe(awsSdkProfileId);
   });
 });
 

@@ -27,6 +27,8 @@ describe("amazon-bedrock lazy imports", () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
     expect(provider.id).toBe("amazon-bedrock");
+    // Non-interactive setup selects the AWS SDK choice off this registration.
+    expect(provider.auth.map((method) => method.id)).toEqual(["aws-sdk"]);
     expect(provider.resolveConfigApiKey?.({ env: { AWS_PROFILE: "default" } } as never)).toBe(
       "AWS_PROFILE",
     );

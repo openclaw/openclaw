@@ -66,6 +66,13 @@ function storeWith(
   return { version: 1, profiles, ...rest };
 }
 
+const bedrockRoute = { baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com", models: [] };
+const awsSdkMarker = {
+  type: "api_key",
+  provider: "amazon-bedrock",
+  key: "aws-sdk-credentials",
+} as const;
+
 describe("resolveAuthProfileOrder", () => {
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
@@ -127,15 +134,7 @@ describe("resolveAuthProfileOrder", () => {
           "amazon-bedrock:default": { provider: "amazon-bedrock", mode: "aws-sdk" },
         },
       },
-      models: {
-        providers: {
-          "amazon-bedrock": {
-            auth: "aws-sdk",
-            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-            models: [],
-          },
-        },
-      },
+      models: { providers: { "amazon-bedrock": { auth: "aws-sdk", ...bedrockRoute } } },
     } satisfies OpenClawConfig;
     const store = storeWith({});
 
@@ -150,6 +149,15 @@ describe("resolveAuthProfileOrder", () => {
     expect(resolveAuthProfileOrder({ cfg, store, provider: "amazon-bedrock" })).toEqual([
       "amazon-bedrock:default",
     ]);
+    // A route declared before it had an account now names that account's marker record.
+    expect(
+      resolveAuthProfileEligibility({
+        cfg,
+        store: storeWith({ "amazon-bedrock:default": awsSdkMarker }),
+        provider: "amazon-bedrock",
+        profileId: "amazon-bedrock:default",
+      }),
+    ).toEqual({ eligible: true, reasonCode: "ok" });
   });
 
   it("falls back to stored profiles when a stored order only has missing credentials", async () => {

@@ -654,6 +654,12 @@ export async function collectDoctorPreviewNotes(params: {
     }),
   );
 
+  const { maybeCreateAwsSdkAuthProfileAccounts } = await import("./aws-sdk-auth-account.js");
+  warnings.push(
+    ...(await maybeCreateAwsSdkAuthProfileAccounts({ cfg: params.cfg, env, shouldRepair: false }))
+      .warnings,
+  );
+
   const { repairMergedGatewayOwnerProfile } =
     await import("../../../state/user-profiles-owner-migration.js");
   warnings.push(...repairMergedGatewayOwnerProfile({ env, shouldRepair: false }).warnings);
