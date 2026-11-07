@@ -144,11 +144,11 @@ it("projects configured-locator admissions through preparation and queuing witho
     );
     const foreignInput = expectDefined(foreign.entry, "foreign source").input;
     const readActivity = activityReader(context, client, runId);
-    const assertActivity = (active: boolean) =>
-      readActivity(active ? "queued" : "done", active, true);
+    const assertActivity = (status: "queued" | "running" | "done", active: boolean) =>
+      readActivity(status, active, true);
     try {
       // Identical logical identity in another physical store cannot activate this row.
-      await assertActivity(false);
+      await assertActivity("done", false);
       const io = { emitAcceptance: vi.fn(), emitFinal: vi.fn() };
       const preflight = expectDefined(
         await prepareAgentRequestPreflight({
@@ -179,7 +179,7 @@ it("projects configured-locator admissions through preparation and queuing witho
       const row = expectDefined(projection.capture({ key, agentId: "main" }), "physical row");
       expect(entry.input.target?.storeScope).not.toBe(row.storeTarget.storePath);
       // Reads occur outside the admission's ambient scope and must use their declared Gateway.
-      await assertActivity(true);
+      await assertActivity("running", true);
 
       const queued = createQueueTestRun({ prompt: "Continue the task" });
       queued.run = { ...queued.run, ...identity, config: cfg };
@@ -188,14 +188,14 @@ it("projects configured-locator admissions through preparation and queuing witho
       expect(enqueueFollowupRun(key, queued, { mode: "followup" }, "none", undefined, false)).toBe(
         true,
       );
-      await assertActivity(true);
+      await assertActivity("queued", true);
 
       retireSessionControllerInput(entry.input);
       sourceWork.resolve();
       await withinTest(entry.input.settlement.promise, signal);
       // The foreign source remains registered after the visible source settles.
       expect(foreignInput.phase).toBe("preparing");
-      await assertActivity(false);
+      await assertActivity("done", false);
     } finally {
       sourceWork.resolve();
       for (const registration of registrations) {
