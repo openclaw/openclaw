@@ -20,18 +20,16 @@ it("reads observation metadata once per scan while retaining rename, deletion an
         const prepare = db.prepare.bind(db);
         db.prepare = (sql) => {
           const statement = prepare(sql);
-          if (sql.startsWith("SELECT provenance,agent_id,sequence FROM history")) {
-            const get = statement.get.bind(statement);
-            statement.get = (...args) => {
-              ++writerReads;
-              return get(...args);
-            };
-          }
-          if (/^SELECT .* FROM "?observations"?\b/i.test(sql)) {
+          const writer = sql.startsWith("SELECT provenance,agent_id,sequence FROM history");
+          if (writer || /^SELECT .* FROM "?observations"?\b/i.test(sql)) {
             const count = <Method extends (...args: never[]) => unknown>(method: Method): Method =>
               new Proxy(method, {
                 apply(target, receiver, args) {
-                  reads++;
+                  if (writer) {
+                    writerReads++;
+                  } else {
+                    reads++;
+                  }
                   return Reflect.apply(target, receiver, args);
                 },
               });
