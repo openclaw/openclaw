@@ -63,11 +63,7 @@ it.skipIf(process.platform === "win32").each(["previous", "candidate", "current"
       expect(warning).not.toHaveBeenCalled();
     } else {
       await expect(matches()).resolves.toBe(true);
-      expect(warning.mock.calls).toEqual(
-        selected === "previous"
-          ? [[legacyWarning]]
-          : [[expect.stringContaining("Repaired permissions on")]],
-      );
+      expect(warning.mock.calls).toEqual(selected === "previous" ? [[legacyWarning]] : []);
     }
   },
 );

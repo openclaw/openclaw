@@ -65,7 +65,7 @@ export function repairPackageIntegrityPermissions(
   for (const { file, stat } of entries) {
     assertCurrent();
     try {
-      repairPackagePermissions(file, stat, Number(stat.mode & 0o7700n));
+      repairPackagePermissions(file, stat, Number(stat.mode & 0o7755n));
       repaired++;
     } catch (error) {
       if (!["EACCES", "EPERM", "EROFS"].some((code) => hasErrnoCode(error, code))) {
@@ -81,7 +81,7 @@ export function repairPackageIntegrityPermissions(
       .map(({ file }) => JSON.stringify(file))
       .join(", ");
     onWarning(
-      `Repaired permissions on ${repaired} retained package objects: ${paths}. Group/other permissions and POSIX ACL access masks were cleared.${
+      `Repaired permissions on ${repaired} retained package objects: ${paths}. Group/other write permissions and POSIX ACL write masks were cleared; read/execute access was preserved.${
         failures.length
           ? ` Could not tighten ${failures.length} objects (${failures
               .slice(0, 3)
@@ -449,7 +449,9 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         rootIdentity = identity(stat);
       }
       observed.push({ file, stat });
-      if ((stat.isFile() || stat.isDirectory()) && (stat.mode & 0o077n) !== 0n) {
+      // Package contents retain npm's public read/execute modes, unlike private
+      // activation controls. Group bits also bound named POSIX ACL write grants.
+      if ((stat.isFile() || stat.isDirectory()) && (stat.mode & 0o022n) !== 0n) {
         permissive.set(identity(stat), { file, stat });
       }
       // npm's disposable hidden lockfile is a cache, not package content:
