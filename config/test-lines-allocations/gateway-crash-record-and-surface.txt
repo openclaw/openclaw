@@ -1,2 +1,2 @@
-# Crash receipt, clean/handoff, journal attribution and diagnostic regressions: 426 LF; reconciles 10 LF debt on pinned main.
-436
+# Exact net regression coverage for crash receipts, clean/handoff, journal attribution and diagnostic visibility.
+426
