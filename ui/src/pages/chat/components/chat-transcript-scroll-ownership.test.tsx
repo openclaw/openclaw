@@ -315,6 +315,7 @@ it("grows the native range before compensating fractional row growth above a rea
   nativeScroll(container, container.scrollTop - 24);
   expectReader(policy, true);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  container.dispatchEvent(new Event("scroll"));
   vi.advanceTimersByTime(150);
   renderRows(rows);
   await vi.advanceTimersByTimeAsync(0);

@@ -617,6 +617,8 @@ suite.define(() => {
         await gateway.resolveDeferred("sessions.patch", {});
         const archiveToast = page.locator("openclaw-toast-host .app-toast");
         await expectText(archiveToast, "Session archived");
+        await archiveToast.getByRole("button", { name: "Dismiss" }).click();
+        await archiveToast.waitFor({ state: "detached" });
         const archivedSession = await gateway.getSessionRow(selected.key);
         const archivedState = {
           updatedAt: archivedSession.updatedAt,
@@ -650,8 +652,6 @@ suite.define(() => {
         await captureUiProof(suite, page, "archive-attribution-notice-after.png");
         await expectCount(activePane.locator(".chat-bubble", { hasText: "Archived by Mira" }), 0);
 
-        await archiveToast.getByRole("button", { name: "Dismiss" }).click();
-        await archiveToast.waitFor({ state: "detached" });
         await gateway.deferNext("sessions.patch", { key: selected.key, archived: false });
         await activateSelfRemovingControl(
           archivedNotice.getByRole("button", { name: "Unarchive" }),
