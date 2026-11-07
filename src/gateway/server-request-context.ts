@@ -5,6 +5,8 @@ import {
   type GatewayClientId,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { isInsideGatewayShutdownCleanupChain } from "../process/gateway-work-admission.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
 import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
@@ -268,7 +270,13 @@ export function createGatewayRequestContext(
     }
   }
   const context: GatewayRequestContext = {
-    trackExecution: (run) => connectionWork.track(run),
+    // The close sequence drains received connection work (closing the scope)
+    // before plugin-service cleanup runs. Dispatches issued from the close's
+    // own shutdown-cleanup chain are not "received" work: they track into the
+    // caller's scope (the close's cleanup work), never the drained connection
+    // scope, so owner-bound cleanup RPCs stay admissible through the drain.
+    trackExecution: (run) =>
+      isInsideGatewayShutdownCleanupChain() ? trackAsyncWork(run) : connectionWork.track(run),
     deps: runtime.deps,
     configRevisionProjector: params.configRevisionProjector,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding

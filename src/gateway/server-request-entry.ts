@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_RESTART_UNAVAILABLE_REASON } from "../../packages/gateway-protocol/src/restart-unavailable.js";
+import { isInsideGatewayShutdownCleanupChain } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 
@@ -43,7 +44,16 @@ export class GatewayRequestEntryLifetime {
     const assertOpen = () => {
       // Shutdown may still issue node cleanup commands. Only their exact pending
       // invoke can enter until transports close; pairing and settlement still revalidate.
-      if (released || this.sealed || (this.signal.aborted && !isPendingNodeCompletion(options))) {
+      // The close sequence's own cleanup chains (plugin-service stops draining
+      // transports) also stay admissible until entries seal; they arrive through
+      // the shutdown-owned cleanup root, never from external callers.
+      if (
+        released ||
+        this.sealed ||
+        (this.signal.aborted &&
+          !isPendingNodeCompletion(options) &&
+          !isInsideGatewayShutdownCleanupChain())
+      ) {
         // Same retryable refusal the transport sends before dispatch, so in-process
         // waiters keep restart custody instead of recording a terminal failure.
         throw new GatewayClientRequestError({
