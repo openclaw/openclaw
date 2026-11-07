@@ -128,6 +128,7 @@ export async function modelsListCommand(
               },
               agentId,
               params,
+              includeManualSelection: true,
             });
           },
         );
@@ -178,6 +179,9 @@ export async function modelsListCommand(
       contextTokens: model.contextTokens,
       local: model.local ?? null,
       available: model.available ?? null,
+      ...(typeof model.manualSelectionAllowed === "boolean"
+        ? { manualSelectionAllowed: model.manualSelectionAllowed }
+        : {}),
       tags: [...new Set([...(model.tags ?? []), ...(model.alias ? [`alias:${model.alias}`] : [])])],
     }));
   if (rows.length === 0 && !opts.json && !opts.plain) {
