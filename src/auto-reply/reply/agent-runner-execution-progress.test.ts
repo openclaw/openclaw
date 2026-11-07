@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSubscribedSessionHarness } from "../../agents/embedded-agent-subscribe.e2e-harness.js";
+import { createChannelProgressDraftCompositor } from "../../channels/progress-draft-compositor.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunStarted,
@@ -104,6 +106,107 @@ function executeOptions(opts: GetReplyOptions) {
 }
 
 describe("executeAgentTurn: lifecycle progress", () => {
+  it.each(["completed", "failed", "hidden-child"] as const)(
+    "replaces live nested wrapper progress through the producer and reply bridge: %s",
+    async (outcome) => {
+      const progress = createChannelProgressDraftCompositor({
+        active: true,
+        mode: "progress",
+        seed: "nested-progress",
+        preparedItems: true,
+        entry: { streaming: { mode: "progress", progress: { toolProgress: true } } },
+        update: () => true,
+      });
+      let assertionFailure: Error | undefined;
+      const ids = () =>
+        progress.getSnapshot().lines.map((line) => (typeof line === "object" ? line.id : line));
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        const pending: Promise<void>[] = [];
+        const h = createSubscribedSessionHarness({
+          runId: params.runId,
+          onAgentEvent: (event) => {
+            const task = params.onAgentEvent?.(event);
+            if (task) {
+              pending.push(Promise.resolve(task));
+            }
+          },
+        });
+        const emit = async (event: unknown) => {
+          h.emit(event);
+          await h.subscription.waitForPendingEvents();
+          await Promise.all(pending.splice(0));
+        };
+        try {
+          await emit({
+            type: "tool_execution_start",
+            toolName: "dispatch_action",
+            toolCallId: "wrapper",
+            args: { id: "web_search", args: { query: "OpenClaw" } },
+          });
+          expect(ids()).toEqual(["tool:wrapper"]);
+          await emit({
+            type: "tool_execution_start",
+            toolName: "web_search",
+            toolCallId: "child",
+            parentToolCallId: "wrapper",
+            args: { query: "OpenClaw" },
+            hideFromChannelProgress: outcome === "hidden-child",
+          });
+          const visible = outcome === "hidden-child" ? ["tool:wrapper"] : ["tool:child"];
+          expect(ids()).toEqual(visible);
+          await emit({
+            type: "tool_execution_update",
+            toolName: "dispatch_action",
+            toolCallId: "wrapper",
+            partialResult: {},
+          });
+          expect(ids()).toEqual(visible);
+          await emit({
+            type: "tool_execution_end",
+            toolName: "web_search",
+            toolCallId: "child",
+            result: { content: [{ type: "text", text: "Found" }] },
+            isError: false,
+          });
+          expect(ids()).toEqual(visible);
+          await emit({
+            type: "tool_execution_end",
+            toolName: "dispatch_action",
+            toolCallId: "wrapper",
+            result: { content: [{ type: "text", text: "Done" }] },
+            isError: outcome === "failed",
+          });
+          expect(ids()).toEqual(outcome === "failed" ? ["tool:child", "tool:wrapper"] : visible);
+          await emit({
+            type: "tool_execution_start",
+            toolName: "web_search",
+            toolCallId: "independent",
+            args: { query: "OpenClaw" },
+          });
+          expect(ids()).toContain("tool:independent");
+          expect(ids()).toHaveLength(visible.length + (outcome === "failed" ? 2 : 1));
+        } catch (error) {
+          assertionFailure = error instanceof Error ? error : new Error(String(error));
+          throw error;
+        } finally {
+          h.subscription.unsubscribe();
+        }
+        return finalResult();
+      });
+      try {
+        const result = await executeOptions({
+          onItemEvent: (item) => progress.pushItemEvent(item).then(() => {}),
+        });
+        if (assertionFailure) {
+          throw assertionFailure;
+        }
+        expect(result.kind).toBe("success");
+      } finally {
+        progress.cancel();
+      }
+    },
+  );
+
   it("keeps operational agent events from resetting repeated request evidence", async () => {
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       const sessionId = params.sessionId ?? "session";
