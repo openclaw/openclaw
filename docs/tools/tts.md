@@ -9,7 +9,8 @@ read_when:
 ---
 
 OpenClaw converts outbound replies into native voice messages on Feishu, Matrix,
-Telegram, and WhatsApp. Every other channel receives an audio attachment.
+Telegram, and WhatsApp. Signal sends MP3 TTS output as a native voice note
+(native `signal-cli` transports). Every other channel receives an audio attachment.
 Telephony and Talk receive PCM or Ulaw streams.
 
 TTS is the speech-output half of [Talk](/nodes/talk)'s `stt-tts` mode (`talk.speak` calls this

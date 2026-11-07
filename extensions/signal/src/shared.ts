@@ -116,6 +116,13 @@ export function createSignalPluginBase(params: {
       chatTypes: ["direct", "group"],
       media: true,
       reactions: true,
+      tts: {
+        voice: {
+          // signal-cli sends MP3 as a native voice note with `--voice-note`.
+          synthesisTarget: "audio-file",
+          audioFileFormats: ["mp3", "audio/mpeg"],
+        },
+      },
     },
     config: {
       ...signalConfigAdapter,
