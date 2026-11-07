@@ -160,9 +160,13 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
         ),
       },
     });
+    const capabilities: Array<"presentation" | "delivery-pin"> = ["presentation"];
+    if (isEnabled("pins")) {
+      capabilities.push("delivery-pin");
+    }
     return {
       actions: Array.from(actions),
-      capabilities: ["presentation"],
+      capabilities,
       schema,
     };
   },
