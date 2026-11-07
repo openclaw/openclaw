@@ -371,6 +371,12 @@ Resolution order:
   </Step>
 </Steps>
 
+PNG/PDF rendering enables the Chromium sandbox by default. Keep your selected browser
+updated independently of OpenClaw or Playwright, including browsers installed in
+container images. In a trusted environment that cannot support Chromium sandboxing,
+the existing `browser.noSandbox: true` setting explicitly disables it for diff
+rendering too; prefer configuring a non-root, sandbox-capable runtime instead.
+
 Common failure text: `Diff PNG/PDF rendering requires a Chromium-compatible browser...`. Fix by installing Chrome, Chromium, Edge, or Brave, or setting one of the executable path options above.
 
 ## Troubleshooting
