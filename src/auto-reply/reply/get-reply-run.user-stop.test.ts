@@ -1,6 +1,6 @@
 import "./get-reply-run.runtime-mocks.test-support.js";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
@@ -12,6 +12,8 @@ import {
   createSessionBody,
   nonReasoningModelState,
 } from "./get-reply-run.test-support.js";
+import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { writeSessionStore } from "./test/session.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -104,6 +106,23 @@ it.each([
   expect(bodies).toHaveLength(2);
   expect(bodies.filter((body) => body.includes(STOPPED))).toHaveLength(saying);
 });
+
+it.each(["followup", "collect"] as const)(
+  "states a claimed Stop once when the turn waits in the %s queue",
+  async (mode) => {
+    await runPreparedReply(baseParams({ sessionEntry: { updatedAt: 1, ...stopOf("stopped", 5) } }));
+    const { followupRun, queueKey } = vi.mocked(runReplyAgent).mock.calls[0]?.[0] ?? {};
+    assert(followupRun && queueKey, "the admitted turn reached the reply runner");
+    // A busy session queues the admitted turn as it is; the drain runs its stored prompt.
+    expect(enqueueFollowupRun(queueKey, followupRun, { mode, debounceMs: 0 })).toBe(true);
+    const drained: string[] = [];
+    scheduleFollowupDrain(queueKey, async (run) => void drained.push(run.prompt));
+    await vi.waitFor(() => expect(getExistingFollowupQueue(queueKey)).toBeUndefined());
+    clearFollowupQueue(queueKey);
+    expect(drained).toHaveLength(1);
+    expect(drained[0]?.split(STOPPED)).toHaveLength(2);
+  },
+);
 
 it("keeps a recorded Stop for the next turn when one is refused before any model", async () => {
   const storePath = storeOf();

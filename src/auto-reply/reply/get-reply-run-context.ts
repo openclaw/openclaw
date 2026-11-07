@@ -629,6 +629,8 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     systemEventBlocks?: string[];
     /** Facts whose model-facing projection is already present in the supplied body. */
     media?: readonly MediaFact[];
+    /** This turn claimed a user's Stop, so whichever body runs (now or queued) states it. */
+    stoppedByUser?: boolean;
   }) => {
     const base = buildReplyPromptEnvelopeBase();
     const generatedMedia = buildInboundMediaNoteProjection(ctx);
@@ -648,7 +650,17 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       sourceContext.push({ kind: "runtime-instruction", text: CURRENT_MESSAGE_MARKER });
     }
     const annotateBody = (body: string) =>
-      annotateInterSessionPromptText(prependMediaNote(body), sessionCtx.InputProvenance);
+      annotateInterSessionPromptText(
+        prependMediaNote(
+          applySessionHints({
+            baseBody: body,
+            abortedLastRun: false,
+            stoppedByUser: additions.stoppedByUser,
+            abortKey: command.abortKey,
+          }),
+        ),
+        sessionCtx.InputProvenance,
+      );
     return {
       inboundMediaIndexes: generatedMedia.mediaIndexes,
       ...(media.length > 0 ? { media } : {}),

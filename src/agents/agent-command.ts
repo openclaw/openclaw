@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { addAbortListener } from "node:events";
+import { applySessionHints } from "../auto-reply/reply/body.js";
 import { clearCommittedSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -319,8 +320,6 @@ async function agentCommandInternalOwned(
           updatedAt: now,
           status: undefined,
           abortedLastRun: false,
-          userStoppedAt: undefined,
-          userStoppedSessionId: undefined,
           endedAt: undefined,
           lastRunError: undefined,
           sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
@@ -413,6 +412,27 @@ async function agentCommandInternalOwned(
         });
       }
 
+      // A user's Stop is told to the first embedded turn admitted after it, as reply admission
+      // does; raw, internal and ACP turns leave it recorded for a turn that will say it.
+      if (sessionKey && !isRawModelRun && !suppressVisibleSessionEffects) {
+        const { claimUserStopInSessionRuntime } =
+          await import("../auto-reply/reply/abort-cutoff.runtime.js");
+        const stopClaimed = await claimUserStopInSessionRuntime({
+          agentId: sessionAgentId,
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+        });
+        if (stopClaimed) {
+          preparedContext.body = applySessionHints({
+            baseBody: preparedContext.body,
+            abortedLastRun: false,
+            stoppedByUser: true,
+          });
+        }
+      }
+
       const embeddedSessionState = await measureAgentStartup(
         "session-state",
         () =>
@@ -452,7 +472,7 @@ async function agentCommandInternalOwned(
       );
       sessionEntry = modelSelection.sessionEntry;
       const { prepared: attemptPrepared, admission } = await prepareCommandForegroundRun({
-        prepared,
+        prepared: preparedContext,
         opts,
         sessionEntry,
         embeddedSessionState,

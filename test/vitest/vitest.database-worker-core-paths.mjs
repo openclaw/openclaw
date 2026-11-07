@@ -310,6 +310,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/agent-command.embedded-maintenance.test.ts",
   "src/agents/agent-command.operator-direct-root.test.ts",
   "src/agents/agent-command.settled-recovery.test.ts",
+  "src/agents/agent-command.user-stop.test.ts",
   "src/agents/internal-session-effects.test.ts",
   "src/agents/live-model-switch.worker.test.ts",
   "src/agents/tools/sessions-tool.test.ts",

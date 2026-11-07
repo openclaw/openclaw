@@ -40,7 +40,6 @@ import {
   normalizeThinkLevel,
   resolveThinkingSelectionForModel,
 } from "../thinking.js";
-import { applySessionHints } from "./body.js";
 import { removeDirectiveSpan } from "./directive-parsing.js";
 import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
 import {
@@ -232,13 +231,14 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       }
     }
   };
-  const rebuildPromptBodies = () =>
+  const rebuildPromptBodies = (stoppedByUser: boolean) =>
     traceRunPhase("reply.build_prompt_bodies", () =>
       context.buildPromptBodies({
         prefixedBody: prefixedBodyBase,
         threadContextNote,
         systemEventBlocks: drainedSystemEventBlocks,
         media: opts?.media,
+        stoppedByUser,
       }),
     );
   const skillResult = isFastTestRuntimeEnv()
@@ -579,15 +579,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionKey,
     storePath,
   });
-  if (stopClaimed) {
-    prefixedBodyBase = applySessionHints({
-      baseBody: prefixedBodyBase,
-      abortedLastRun: false,
-      stoppedByUser: true,
-      abortKey: params.command.abortKey,
-    });
-  }
-  const promptBodies = await rebuildPromptBodies();
+  const promptBodies = await rebuildPromptBodies(stopClaimed);
 
   return {
     kind: "ready",
