@@ -26,6 +26,9 @@ intervals, long transcripts, direct-destination controls, native model and sessi
 search arrows, cold/warm Devices-to-Automations navigation, back/forward, early
 menu/drawer closure, typing during session arrival, earliest available typing on
 reload, and draft/scroll restoration after a burst.
+Arrow round trips must visit another real selected result, and draft-return must
+leave the origin session. Close cycles must open their overlay between inputs;
+native open state is checked because Escape can precede the first painted frame. The observer records these states without delaying the input sequence.
 
 Session clicks use native pointer input at current hit-tested coordinates. Bringing
 a row into view and reopening the mobile drawer are included in the workload.

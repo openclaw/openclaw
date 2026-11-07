@@ -53,7 +53,7 @@ type Outcome = {
   pathname?: string;
   value?: string;
   activeDescendant?: string;
-  hidden?: boolean;
+  absent?: boolean;
 };
 
 /** Browser timestamps measure delivery and application readiness, never abandoned-work CPU. */
@@ -65,6 +65,10 @@ function observeRapidNavigation(options: {
   recordInput?: boolean;
   tailMs?: number;
   outcome: Outcome;
+  intermediate?:
+    | { kind: "active-descendant"; selector: string; initial: string }
+    | { kind: "session-changed"; selector: string; initial: string }
+    | { kind: "opened"; selector: string };
 }) {
   const started = performance.now();
   // SAFETY: The harness installs the mock Gateway before navigating this document.
@@ -85,11 +89,52 @@ function observeRapidNavigation(options: {
   let stopped = false;
   let longestTask = 0;
   let frame = 0;
+  let intermediateSeen = false;
+  let intermediateObserver: MutationObserver | undefined;
   const outcome = options.outcome;
+  const observeIntermediate = () => {
+    const expected = options.intermediate;
+    if (
+      !expected ||
+      intermediateSeen ||
+      delivered[0] === undefined ||
+      delivered[options.count - 1] !== undefined
+    ) {
+      return;
+    }
+    const element = document.querySelector<HTMLElement>(expected.selector);
+    if (!element) {
+      return;
+    }
+    if (expected.kind === "opened") {
+      if (
+        element.hidden ||
+        element.hasAttribute("inert") ||
+        element.getAttribute("aria-hidden") === "true"
+      ) {
+        return;
+      }
+    } else if (!element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
+      return;
+    }
+    if (expected.kind === "active-descendant") {
+      const active = element.getAttribute("aria-activedescendant");
+      if (!active || active === expected.initial || !document.getElementById(active)) {
+        return;
+      }
+    } else if (expected.kind === "session-changed") {
+      const session = Reflect.get(element, "sessionKey");
+      if (typeof session !== "string" || !session.trim() || session === expected.initial) {
+        return;
+      }
+    }
+    intermediateSeen = true;
+    intermediateObserver?.disconnect();
+  };
   const readCorrect = () => {
     const element = document.querySelector<HTMLElement>(outcome.selector);
-    if (outcome.hidden) {
-      return !element || !element.checkVisibility();
+    if (outcome.absent) {
+      return element === null;
     }
     if (!element?.checkVisibility()) {
       return false;
@@ -148,6 +193,9 @@ function observeRapidNavigation(options: {
     if (stopped) {
       return;
     }
+    if (options.intermediate) {
+      observeIntermediate();
+    }
     if (delivered[options.count - 1] !== undefined) {
       const correct = readCorrect();
       if (correctSeen && !correct) {
@@ -173,6 +221,10 @@ function observeRapidNavigation(options: {
     ) {
       const now = performance.now();
       const delay = now - event.timeStamp;
+      // Capture the state before the final input can return it to the starting value.
+      if (options.intermediate) {
+        observeIntermediate();
+      }
       if (event.type === "input") {
         if (event.target.id === "openclaw-boot-composer") {
           bootInputSamples++;
@@ -188,11 +240,31 @@ function observeRapidNavigation(options: {
       if (event.timeStamp > 0 && delay >= 0 && delay <= 60_000) {
         handlerDelay[armed] = delay;
       }
+      if (delivered[options.count - 1] !== undefined) {
+        intermediateObserver?.disconnect();
+      }
     }
   };
   document.addEventListener(options.event, record, true);
   if (options.recordInput && options.event !== "input") {
     document.addEventListener("input", record, true);
+  }
+  if (options.intermediate) {
+    intermediateObserver = new MutationObserver(observeIntermediate);
+    intermediateObserver.observe(document, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: [
+        "aria-activedescendant",
+        "aria-modal",
+        "aria-hidden",
+        "class",
+        "hidden",
+        "open",
+        "style",
+      ],
+    });
   }
   const longTasksSupported = PerformanceObserver.supportedEntryTypes.includes("longtask");
   const longTasks = longTasksSupported
@@ -221,6 +293,11 @@ function observeRapidNavigation(options: {
       if (last === undefined || !settledAt || !readCorrect()) {
         throw new Error("Rapid navigation did not deliver and settle the final input");
       }
+      if (options.intermediate && !intermediateSeen) {
+        throw new Error(
+          `Rapid navigation did not observe the required ${options.intermediate.kind} intermediate state between inputs`,
+        );
+      }
       const evidence: InteractionEvidence = {
         inputSamples: delivered.filter((value) => value !== undefined).length,
         bootInputSamples,
@@ -234,6 +311,7 @@ function observeRapidNavigation(options: {
         retainedPanes: document.querySelectorAll(".chat-pane-cache__pane").length,
         hiddenRetainedPanes: document.querySelectorAll('.chat-pane-cache__pane[aria-hidden="true"]')
           .length,
+        ...(options.intermediate ? { intermediateStateObserved: intermediateSeen } : {}),
       };
       if (longTasksSupported) {
         for (const entry of longTasks?.takeRecords() ?? []) {
@@ -308,6 +386,7 @@ function observeRapidNavigation(options: {
         document.removeEventListener("input", record, true);
       }
       longTasks?.disconnect();
+      intermediateObserver?.disconnect();
     },
   };
 }
@@ -471,6 +550,11 @@ function modelArrows(count: 5 | 20): EngineScenario {
           event: "keydown",
           inputSelector: "[data-chat-model-search]",
           outcome: { selector: "[data-chat-model-search]", activeDescendant: initial },
+          intermediate: {
+            kind: "active-descendant",
+            selector: "[data-chat-model-search]",
+            initial,
+          },
         },
         (index) => input.press(index < count ? "ArrowDown" : "ArrowUp"),
       );
@@ -677,6 +761,7 @@ export function createEngineRapidNavigationScenarios(): EngineScenario[] {
               marker: "Rapid session 0 message 0.",
               value: "Synthetic origin draft — keep with session zero",
             },
+            intermediate: { kind: "session-changed", selector: pane, initial: sessionKey(0) },
           },
           async (index) => {
             if (index > 0 && page.viewportSize()!.width < 768) {
@@ -720,6 +805,11 @@ export function createEngineRapidNavigationScenarios(): EngineScenario[] {
             event: "keydown",
             inputSelector: ".cmd-palette__input",
             outcome: { selector: ".cmd-palette__input", activeDescendant: initial },
+            intermediate: {
+              kind: "active-descendant",
+              selector: ".cmd-palette__input",
+              initial,
+            },
           },
           (index) => input.press(index < 20 ? "ArrowDown" : "ArrowUp"),
         );
@@ -782,7 +872,17 @@ export function createEngineRapidNavigationScenarios(): EngineScenario[] {
             intervalMs: 50,
             inputSelector: "body",
             event: "keydown",
-            outcome: { selector: "[data-chat-model-search]", hidden: true },
+            outcome: {
+              selector:
+                `${pane} details[data-chat-native-picker][open], ` +
+                `${pane} details[data-chat-native-picker] .chat-picker-overlay:popover-open`,
+              absent: true,
+            },
+            intermediate: {
+              kind: "opened",
+              selector:
+                ".chat-pane-cache__pane--active details[data-chat-native-picker][open] .chat-picker-overlay:popover-open",
+            },
           },
           async (index) => {
             if (index === 0) {
@@ -813,7 +913,15 @@ export function createEngineRapidNavigationScenarios(): EngineScenario[] {
             intervalMs: 50,
             event: "keydown",
             inputSelector: "body",
-            outcome: { selector: ".shell--nav-drawer-open", hidden: true },
+            outcome: {
+              selector: '.shell--nav-drawer-open, .nav-drawer[aria-modal="true"]',
+              absent: true,
+            },
+            intermediate: {
+              // Escape can cancel the committed open before the translating drawer's first paint.
+              kind: "opened",
+              selector: '.shell--nav-drawer-open .nav-drawer[aria-modal="true"]',
+            },
           },
           (index) =>
             index === 0
