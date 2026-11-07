@@ -11,6 +11,7 @@ import {
   requireElement,
   resetTranscriptTestDom,
   transcriptSize,
+  transcriptRows,
 } from "./chat-transcript.test-support.ts";
 
 beforeEach(installTranscriptDomMocks);
@@ -48,15 +49,44 @@ it.each([false, true])(
 
     frame();
     await flushDeferredRowPrune();
-    expect(row.style.getPropertyValue("contain-intrinsic-block-size")).toBe(
-      streaming ? "" : "180px",
-    );
+    expect(row.dataset.rowSize).toBe(streaming ? undefined : "180");
+    expect(row.style.getPropertyValue("contain-intrinsic-block-size")).toBe("");
     if (streaming) {
       expect(row.style.contentVisibility).toBe("visible");
       renderRows(rows.map((item) => Object.assign({}, item, { streaming: false })));
       await flushDeferredRowPrune();
-      expect(row.style.getPropertyValue("contain-intrinsic-block-size")).toBe("180px");
+      expect(row.dataset.rowSize).toBe("180");
     }
     expect(transcriptSize(container)).toBe(180);
   },
 );
+
+it("defers replacement rows when resize delivery reads a pending native jump", async () => {
+  const frame = stubAnimationFrames();
+  const rows = contentRows(80);
+  const { container, renderRows } = await mountTestTranscript("resize-native-jump", rows);
+  frame();
+  await flushDeferredRowPrune();
+  renderRows(rows);
+  container.scrollTop = 800;
+  container.dispatchEvent(new Event("scroll"));
+  frame();
+  await flushDeferredRowPrune();
+  const before = transcriptRows(container);
+  const outgoing = before[0]!;
+  expect(before.length).toBeLessThan(rows.length);
+  expect(container.querySelector('.chat-virtual-row[data-index="40"]')).toBeNull();
+
+  // Native scrolling can advance before its scroll event. The outgoing row's
+  // observer must not replace its own observed subtree during delivery.
+  container.scrollTop = 4000;
+  emitTranscriptResize(outgoing, 800, 120);
+  expect(transcriptRows(container)).toEqual(before);
+  await flushDeferredRowPrune();
+  expect(transcriptRows(container)).toEqual(before);
+
+  frame();
+  await flushDeferredRowPrune();
+  expect(container.scrollTop).toBe(4000);
+  expect(container.querySelector('.chat-virtual-row[data-index="40"]')).not.toBeNull();
+});

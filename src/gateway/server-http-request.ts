@@ -58,6 +58,7 @@ import {
   getRemoteControlUiIngressContext,
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
+  readGatewayIngressTransport,
 } from "./ingress-attribution.js";
 import { isTrustedProxyAddress } from "./net.js";
 import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability.js";
@@ -134,7 +135,8 @@ export function createGatewayHttpRequestHandler(
     res: ServerResponse,
     expectation?: "continue" | "reject",
   ) => {
-    if (!getRemoteControlUiIngressContext(req)) {
+    // Listener-owned pre-handlers (remote Control UI, OpenClaw ID tunnel) assign first.
+    if (!readGatewayIngressTransport(req)) {
       markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
     }
     return runGatewayHttpRequest(req, res, opts.httpRequestLifetime, () =>
@@ -258,6 +260,7 @@ export function createGatewayHttpRequestHandler(
       const ingressAttribution = prepareGatewayIngressAttribution({
         req,
         trustedProxies,
+        trustedProxy: getResolvedAuth().trustedProxy,
         allowRealIpFallback,
         // HTTP authorization must observe Tailnet revocation on the next request.
         // WebSocket upgrades retain the ordinary cache because they authenticate once.

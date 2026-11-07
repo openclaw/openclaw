@@ -5,8 +5,10 @@ const BROWSER_PAIR_CODE_RE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/u;
 
 export const BROWSER_PAIR_CODE_LENGTH = 8;
 export const BROWSER_PAIR_ROUTE_PREFIX = "/__openclaw__/browser-pair";
+export const BROWSER_PAIR_IDENTITY_REQUIRED_MESSAGE =
+  "Browser-code pairing is unavailable when gateway.roles is configured because this sign-in does not verify a user identity. Use your Gateway's identity-aware sign-in instead, or ask an administrator for the supported sign-in method.";
 
-export type BrowserPairAction = "start" | "collect";
+export type BrowserPairAction = "start" | "collect" | "cancel";
 
 /** Pick one code from random alphabet indexes supplied by the caller's secure source. */
 export function buildBrowserPairCode(randomIndex: (exclusiveMax: number) => number): string {
@@ -33,8 +35,8 @@ export function formatBrowserPairDeviceId(deviceId: string): string {
 }
 
 /**
- * Bytes a browser signs to prove it holds its device key. `collect` is fresh by
- * construction because it covers the Gateway-issued request id. A replayed
+ * Bytes a browser signs to prove it holds its device key. `collect` and `cancel` are fresh by
+ * construction because each covers the Gateway-issued request id. A replayed
  * `start` only refreshes a request whose credential remains bound to the key.
  */
 export function buildBrowserPairPayload(params: {

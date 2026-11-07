@@ -1,6 +1,7 @@
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import * as approval from "./device-pairing-approval.kernel.js";
 import {
+  cancelBrowserPairRequestInWorker,
   collectBrowserPairRequestInWorker,
   decideBrowserPairRequestInWorker,
   inspectBrowserPairRequestInWorker,
@@ -28,6 +29,11 @@ export const devicePairingOperations = {
   "devicePairing.startBrowserRequest": devicePairingMutation(
     (input: Parameters<typeof startBrowserPairRequestInWorker>[1], { database }) =>
       startBrowserPairRequestInWorker(database.db, input),
+    { publishPairing: false },
+  ),
+  "devicePairing.cancelBrowserRequest": devicePairingMutation(
+    (input: Parameters<typeof cancelBrowserPairRequestInWorker>[1], { database }) =>
+      cancelBrowserPairRequestInWorker(database.db, input),
     { publishPairing: false },
   ),
   "devicePairing.collectBrowserRequest": devicePairingMutation(

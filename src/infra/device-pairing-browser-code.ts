@@ -50,6 +50,16 @@ export async function startBrowserPairRequest(
   );
 }
 
+export async function cancelBrowserPairRequest(
+  params: BrowserPairAuthority & { requestId: string; deviceId: string; publicKey: string },
+) {
+  const { context, assertCurrent, ...input } = params;
+  return await executeDevicePairingMutation(
+    { type: "devicePairing.cancelBrowserRequest", input },
+    { context, assertCurrent },
+  );
+}
+
 export async function collectBrowserPairRequest(
   params: BrowserPairAuthority & { requestId: string; deviceId: string; publicKey: string },
 ) {

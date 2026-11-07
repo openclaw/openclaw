@@ -89,8 +89,8 @@ describePosix("native PR source provisioning", () => {
 import { registerHooks } from "node:module";
 if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
   registerHooks({ load(url, context, nextLoad) {
-    if (url.endsWith("/src/config/config.ts")) {
-      throw new Error("Native Git provisioning must not load acceleration configuration.");
+    if (url.endsWith("/src/config/config.ts") || url.endsWith("/src/agents/worktrees/checkout.ts")) {
+      throw new Error("Native Git provisioning must not load the acceleration implementation.");
     }
     return nextLoad(url, context);
   } });

@@ -49,4 +49,6 @@ A plain `ssh host openclaw pair ABCD-EFGH` has no terminal to answer the questio
 
 ## Requirements
 
-The Gateway must be running, and the CLI connection needs `operator.admin`. If the command says no browser is waiting, check that it reaches the same Gateway the browser opened, including any `--profile` or `OPENCLAW_STATE_DIR` setting.
+The Gateway must be running, and the CLI connection needs `operator.admin`. Code pairing does not establish a signed-in user identity, so Gateways with `gateway.roles` configured refuse it; use the Gateway's identity-aware sign-in method instead.
+
+If the command says no browser is waiting, check that it reaches the same Gateway the browser opened, including any `--profile` or `OPENCLAW_STATE_DIR` setting. A browser that confirmed **Cancel** has withdrawn its request, so its old code can no longer be approved. Cancellation does not revoke a device whose approval already completed; use Devices or `openclaw devices remove` for that.

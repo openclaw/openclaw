@@ -36,8 +36,14 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status });
 }
 
-function stubReplies(...replies: Response[]) {
-  const fetchMock = vi.fn(async () => replies.shift()!);
+function stubReplies(...replies: (Response | Error)[]) {
+  const fetchMock = vi.fn<typeof fetch>(async () => {
+    const reply = replies.shift();
+    if (!reply || reply instanceof Error) {
+      throw reply ?? new Error("Unexpected browser pairing request");
+    }
+    return reply;
+  });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -120,6 +126,92 @@ describe("browser pairing", () => {
     expect(gate.element.querySelector("#login-gate-url")).not.toBeNull();
   });
 
+  it("hides direct pairing on remote ingress and embedded ID transport", () => {
+    document.documentElement.setAttribute("data-openclaw-remote-ingress", "true");
+    try {
+      expect(canPairBrowserWithGateway(gatewayUrl, "")).toBe(false);
+    } finally {
+      document.documentElement.removeAttribute("data-openclaw-remote-ingress");
+    }
+    document.documentElement.setAttribute("data-openclaw-id-enabled", "true");
+    document.documentElement.setAttribute("data-openclaw-control-ui-base-path", "");
+    vi.stubGlobal("__openclawTransport", {});
+    try {
+      expect(canPairBrowserWithGateway(gatewayUrl, "")).toBe(false);
+    } finally {
+      document.documentElement.removeAttribute("data-openclaw-id-enabled");
+      document.documentElement.removeAttribute("data-openclaw-control-ui-base-path");
+    }
+  });
+
+  it("explains administrator pairing on the Gateway host", async () => {
+    const gate = await mountWaitingGate();
+    expect(gate.element.textContent).toContain("Run on the Gateway host");
+    expect(gate.element.textContent).toContain("administrator access");
+    expect(gate.element.textContent).toContain("not a guest invitation");
+  });
+
+  it("shows reconnecting until a pending reply restores waiting without a new request", async () => {
+    const fetchMock = stubReplies(
+      json(started),
+      new Error("offline"),
+      json({ status: "pending" }),
+      json(approved),
+    );
+    const pair = session();
+    await pair.start(gatewayUrl);
+    await settle();
+    expect(pair.onState).toHaveBeenLastCalledWith({
+      kind: "reconnecting",
+      code: "ABCD-EFGH",
+      browserId: "01234567",
+    });
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(pair.onState).toHaveBeenLastCalledWith({
+      kind: "waiting",
+      code: "ABCD-EFGH",
+      browserId: "01234567",
+    });
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(pair.onApproved).toHaveBeenCalledWith(gatewayUrl);
+    const requests = fetchMock.mock.calls.map(([url, init]) => ({
+      url,
+      body: JSON.parse(String(init?.body)),
+    }));
+    expect(requests.filter(({ url }) => String(url).endsWith("/start"))).toHaveLength(1);
+    expect(requests.slice(1).every(({ body }) => body.requestId === "request-1")).toBe(true);
+    pair.dispose();
+  });
+
+  it("times out a stalled fetch and resumes the same request", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(started))
+      .mockImplementationOnce(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+              once: true,
+            });
+          }),
+      )
+      .mockResolvedValueOnce(json(approved));
+    vi.stubGlobal("fetch", fetchMock);
+    const pair = session();
+    await pair.start(gatewayUrl);
+    await settle();
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(pair.onState).toHaveBeenLastCalledWith({
+      kind: "reconnecting",
+      code: "ABCD-EFGH",
+      browserId: "01234567",
+    });
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(pair.onApproved).toHaveBeenCalledWith(gatewayUrl);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    pair.dispose();
+  });
+
   it("retires a waiting attempt when the Gateway target is replaced from outside", async () => {
     const gate = await mountWaitingGate();
     gate.element.props = { ...gate.element.props, gatewayUrl: `${gatewayUrl}/replaced` };
@@ -185,15 +277,167 @@ describe("browser pairing", () => {
     expect(pair.onState).toHaveBeenLastCalledWith({ kind: "failed", reason });
   });
 
-  it("stops polling once cancelled", async () => {
-    const fetchMock = stubReplies(json(started), json({ status: "pending" }));
+  it("awaits signed withdrawal and ignores a late collect approval", async () => {
+    const collect = Promise.withResolvers<Response>();
+    const withdrawal = Promise.withResolvers<Response>();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(started))
+      .mockReturnValueOnce(collect.promise)
+      .mockReturnValueOnce(withdrawal.promise);
+    vi.stubGlobal("fetch", fetchMock);
     const pair = session();
-    await pair.start("ws://gateway.example");
+    await pair.start(gatewayUrl);
     await settle();
-    pair.cancel();
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(pair.onState).toHaveBeenLastCalledWith({ kind: "idle" });
+    const cancelling = pair.cancel();
+    await settle();
+    expect(pair.onState).toHaveBeenLastCalledWith({
+      kind: "cancelling",
+      code: "ABCD-EFGH",
+      browserId: "01234567",
+    });
+    const cancellationRequest = fetchMock.mock.calls[2];
+    if (!cancellationRequest) {
+      throw new Error("Cancel did not send a withdrawal request");
+    }
+    const [url, init] = cancellationRequest;
+    expect(url).toBe("/__openclaw__/browser-pair/cancel");
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      requestId: "request-1",
+      deviceId: "0123456789abcdef",
+      publicKey: "public",
+      signature: "signature",
+    });
+    collect.resolve(json(approved));
+    await settle();
+    expect(pair.onApproved).not.toHaveBeenCalled();
+    expect(pair.onState).toHaveBeenLastCalledWith({
+      kind: "cancelling",
+      code: "ABCD-EFGH",
+      browserId: "01234567",
+    });
+    withdrawal.resolve(json({ status: "cancelled" }));
+    await cancelling;
+    expect(pair.onState).toHaveBeenLastCalledWith({ kind: "cancelled" });
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps a failed withdrawal visible and retries the same request", async () => {
+    const fetchMock = stubReplies(
+      json(started),
+      json({ status: "pending" }),
+      new Error("offline"),
+      json({ status: "cancelled" }),
+    );
+    const pair = session();
+    await pair.start(gatewayUrl);
+    await settle();
+    await pair.cancel();
+    expect(pair.onState).toHaveBeenLastCalledWith({
+      kind: "cancelFailed",
+      code: "ABCD-EFGH",
+      browserId: "01234567",
+    });
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    await pair.cancel();
+    expect(pair.onState).toHaveBeenLastCalledWith({ kind: "cancelled" });
+    expect(
+      fetchMock.mock.calls
+        .slice(2)
+        .every(
+          ([url, init]) =>
+            String(url).endsWith("/cancel") &&
+            JSON.parse(String(init?.body)).requestId === "request-1",
+        ),
+    ).toBe(true);
+    expect(pair.onApproved).not.toHaveBeenCalled();
+  });
+
+  it("renders cancellation failure with a retry rather than hiding the request", async () => {
+    const gate = await mountWaitingGate();
+    const withdrawal = Promise.withResolvers<Response>();
+    vi.mocked(fetch).mockReturnValueOnce(withdrawal.promise);
+    const cancel = [...gate.element.querySelectorAll("button")].find(
+      (button) => button.textContent === "Cancel",
+    );
+    expect(cancel).toBeDefined();
+    cancel?.click();
+    await settle();
+    expect(gate.element.textContent).toContain("Withdrawing the request");
+    expect(gate.element.querySelector(".login-gate__browser-pair-code")).not.toBeNull();
+    withdrawal.reject(new Error("offline"));
+    await settle();
+    expect(gate.element.textContent).toContain("Could not confirm cancellation");
+    const retry = [...gate.element.querySelectorAll("button")].find(
+      (button) => button.textContent === "Retry cancellation",
+    );
+    expect(retry).toBeDefined();
+    vi.mocked(fetch).mockResolvedValueOnce(json({ status: "cancelled" }));
+    retry?.click();
+    await settle();
+    expect(gate.element.textContent).toContain("Pairing request withdrawn");
+    expect(gate.element.querySelector(".login-gate__browser-pair-code")).toBeNull();
+    gate.approve();
+    await settle();
+    expect(gate.onBrowserPaired).not.toHaveBeenCalled();
+  });
+
+  it("ends an expired cancellation without claiming withdrawal or retrying", async () => {
+    const fetchMock = stubReplies(
+      json(started),
+      json({ status: "pending" }),
+      json({ status: "expired" }),
+    );
+    const pair = session();
+    await pair.start(gatewayUrl);
+    await settle();
+    await pair.cancel();
+    expect(pair.onState).toHaveBeenLastCalledWith({ kind: "failed", reason: "expired" });
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(pair.onApproved).not.toHaveBeenCalled();
+  });
+
+  it("requires explicit Continue when approval wins cancellation", async () => {
+    const gate = await mountWaitingGate();
+    vi.mocked(fetch).mockImplementation(async (url) =>
+      String(url).endsWith("/cancel") ? json({ status: "approved" }) : json(approved),
+    );
+    const cancel = [...gate.element.querySelectorAll("button")].find(
+      (button) => button.textContent === "Cancel",
+    );
+    expect(cancel).toBeDefined();
+    cancel?.click();
+    await settle();
+    gate.approve();
+    await settle();
+    expect(gate.element.textContent).toContain("Cancel did not revoke its access");
+    expect(gate.onBrowserPaired).not.toHaveBeenCalled();
+    const proceed = [...gate.element.querySelectorAll("button")].find(
+      (button) => button.textContent === "Continue",
+    );
+    expect(proceed).toBeDefined();
+    proceed?.click();
+    await settle();
+    expect(gate.onBrowserPaired).toHaveBeenCalledWith(gatewayUrl);
+  });
+
+  it("directs identity-required pairing to normal sign-in without a code", async () => {
+    const fetchMock = stubReplies(json({ error: "identity_required" }, 403));
+    const element = await mountFailure("", null);
+    element.props = { ...element.props, gatewayUrl };
+    await settle();
+    element.querySelector<HTMLButtonElement>(".login-gate__browser-pair-start")!.click();
+    await settle();
+    element.querySelector<HTMLButtonElement>(".login-gate__browser-pair-get")!.click();
+    await settle();
+    expect(element.textContent).toContain("This Gateway requires a verified identity");
+    expect(element.textContent).toContain("normal identity-aware sign-in");
+    expect(element.querySelector(".login-gate__browser-pair-code")).toBeNull();
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("names a full Gateway separately from a broken one", async () => {

@@ -9,7 +9,7 @@ import { Icon } from "./solid/icon.tsx";
 
 /**
  * Card 2: one way in, so the sign-in form and its troubleshooting stay on card 1.
- * The card owns its attempt; leaving it in any way ends the attempt.
+ * Leaving retires local polling; Cancel explicitly asks the Gateway to withdraw it.
  */
 export function LoginGateBrowserPairCard(props: {
   host: LoginGateElement;
@@ -38,7 +38,7 @@ export function LoginGateBrowserPairCard(props: {
   });
   const waiting = () => {
     const current = state();
-    return current.kind === "waiting" ? current : null;
+    return "code" in current ? current : null;
   };
   const failure = () => {
     const current = state();
@@ -51,7 +51,7 @@ export function LoginGateBrowserPairCard(props: {
           type="button"
           class="btn btn--ghost login-gate__browser-pair-back"
           onClick={() => {
-            session.cancel();
+            session.dispose();
             props.onBack();
           }}
         >
@@ -62,10 +62,18 @@ export function LoginGateBrowserPairCard(props: {
         <h1 class="login-gate__heading">{t("login.browserPair.action")}</h1>
         <p class="login-gate__lede">{t("login.browserPair.intro")}</p>
       </div>
+      <Show when={state().kind === "cancelled"}>
+        <p role="status">{t("login.browserPair.cancelled")}</p>
+      </Show>
       <Show
         when={waiting()}
         fallback={
           <>
+            <Show when={state().kind === "starting"}>
+              <p class="login-gate__lede" role="status">
+                {t("login.browserPair.starting")}
+              </p>
+            </Show>
             <Show when={failure()}>
               {(failed) => (
                 <p class="login-gate__failure-summary" role="status">
@@ -87,7 +95,7 @@ export function LoginGateBrowserPairCard(props: {
         {(request) => (
           <>
             <div class="login-gate__hero">
-              <span class="login-gate__hero-label">{t("login.runOnHost")}</span>
+              <span class="login-gate__hero-label">{t("login.browserPair.runOnGatewayHost")}</span>
               <ConnectCommand command={`openclaw pair ${request().code}`} variant="hero" />
             </div>
             <p class="login-gate__lede login-gate__browser-pair-code">
@@ -96,13 +104,49 @@ export function LoginGateBrowserPairCard(props: {
                 id: request().browserId,
               })}
             </p>
-            <p class="login-gate__lede">
-              <span class="session-run-spinner" aria-hidden="true" />
-              {t("login.browserPair.waiting")}
+            <p class="login-gate__lede" role="status">
+              <Show
+                when={request().kind !== "cancelFailed" && request().kind !== "alreadyApproved"}
+              >
+                <span class="session-run-spinner" aria-hidden="true" />
+              </Show>
+              {t(
+                request().kind === "waiting"
+                  ? "login.browserPair.waiting"
+                  : request().kind === "reconnecting"
+                    ? "login.browserPair.reconnecting"
+                    : request().kind === "cancelling"
+                      ? "login.browserPair.cancelling"
+                      : request().kind === "cancelFailed"
+                        ? "login.browserPair.cancelFailed"
+                        : "login.browserPair.alreadyApproved",
+              )}
             </p>
-            <button type="button" class="btn" onClick={() => session.cancel()}>
-              {t("common.cancel")}
-            </button>
+            <Show
+              when={request().kind === "alreadyApproved"}
+              fallback={
+                <button
+                  type="button"
+                  class="btn"
+                  disabled={request().kind === "cancelling"}
+                  onClick={() => void session.cancel()}
+                >
+                  {t(
+                    request().kind === "cancelFailed"
+                      ? "login.browserPair.retryCancel"
+                      : "common.cancel",
+                  )}
+                </button>
+              }
+            >
+              <button
+                type="button"
+                class="btn primary"
+                onClick={() => session.continueAfterApproval()}
+              >
+                {t("login.browserPair.continue")}
+              </button>
+            </Show>
           </>
         )}
       </Show>

@@ -178,7 +178,7 @@ it.each([1280, 390])(
     expect(rows().length).toBeLessThan(25);
     const groupEnd = () => rows().find((row) => row.textContent?.includes("window-49"));
     await expect.poll(() => Boolean(groupEnd())).toBe(true);
-    const groupButton = groupEnd()!.querySelector<HTMLButtonElement>(".icon-btn")!;
+    const groupButton = groupEnd()!.querySelector<HTMLButtonElement>(".session-row-menu-trigger")!;
     groupButton.focus();
     expect(document.activeElement).toBe(groupButton);
     setCurrent((previous) => ({ ...previous, expandedSessionKey: null }));

@@ -1,3 +1,5 @@
+/// <reference lib="es2026.typedarrays" />
+
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import {
   DEVICE_AUTH_STORAGE_KEY_PREFIX,
@@ -10,8 +12,7 @@ import {
   normalizeDeviceAuthScopes,
 } from "../../../../src/shared/device-auth.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { base64ToBytes, bytesToBase64 } from "../bytes-base64.ts";
-import { bytesToHex } from "../bytes-hex.ts";
+import { base64ToBytes } from "../bytes-base64.ts";
 
 export type {
   DeviceTokenSummary,
@@ -215,7 +216,7 @@ export function clearDeviceAuthToken(params: {
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {
-  return bytesToBase64(bytes).replaceAll("+", "-").replaceAll("/", "_").replace(/[=]+$/g, "");
+  return bytes.toBase64({ alphabet: "base64url", omitPadding: true });
 }
 
 function base64UrlDecode(input: string): Uint8Array {
@@ -230,9 +231,9 @@ async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {
   const subtle = globalThis.crypto?.subtle;
   if (subtle) {
     const hash = await subtle.digest("SHA-256", publicKey.slice().buffer);
-    return bytesToHex(new Uint8Array(hash));
+    return new Uint8Array(hash).toHex();
   }
-  return bytesToHex((await loadPureSha2()).sha256(publicKey));
+  return (await loadPureSha2()).sha256(publicKey).toHex();
 }
 
 async function generateIdentity(): Promise<DeviceIdentity> {

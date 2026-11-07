@@ -185,6 +185,24 @@ export function startBrowserPairRequestInWorker(
   };
 }
 
+/** Withdraw only this key's request; an approval that already committed wins. */
+export function cancelBrowserPairRequestInWorker(
+  db: EngineConnection,
+  input: { requestId: string; deviceId: string; publicKey: string },
+) {
+  const row = selectRequest(db, "request_id", input.requestId);
+  // Verify ownership before exposing the outcome or changing even an expired row.
+  if (!row || row.device_id !== input.deviceId || row.public_key !== input.publicKey) {
+    return { status: "expired" as const };
+  }
+  if (row.status === "approved") {
+    return { status: "approved" as const };
+  }
+  deleteRequest(db, input.requestId);
+  // A missing row is deliberately opaque: its approval record may have expired.
+  return { status: "cancelled" as const };
+}
+
 /**
  * Return a request's decision only to the key that filed it. An approved request keeps
  * answering until expiry so a dropped reply can be collected again; the token is read

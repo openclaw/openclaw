@@ -14,16 +14,42 @@ import {
 } from "./nodes/index.ts";
 
 const BROWSER_PAIR_POLL_INTERVAL_MS = 2_000;
+const BROWSER_PAIR_FETCH_TIMEOUT_MS = 10_000;
 
-export type BrowserPairFailure = "declined" | "expired" | "busy" | "unavailable" | "noIdentity";
+export type BrowserPairFailure =
+  | "declined"
+  | "expired"
+  | "busy"
+  | "unavailable"
+  | "noIdentity"
+  | "identityRequired";
 
+type BrowserPairCode = { code: string; browserId: string };
 export type BrowserPairState =
-  | { kind: "idle" }
+  | { kind: "idle" | "cancelled" }
   | { kind: "starting" }
-  | { kind: "waiting"; code: string; browserId: string }
+  | ({
+      kind: "waiting" | "reconnecting" | "cancelling" | "cancelFailed" | "alreadyApproved";
+    } & BrowserPairCode)
   | { kind: "failed"; reason: BrowserPairFailure };
 
 type Identity = Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>>;
+type Attempt = BrowserPairCode & {
+  gatewayUrl: string;
+  basePath: string;
+  identity: Identity;
+  requestId: string;
+};
+type BrowserPairReply = {
+  error?: string;
+  status?: string;
+  requestId?: string;
+  code?: string;
+  deviceId?: string;
+  deviceToken?: string;
+  role?: string;
+  scopes?: string[];
+};
 
 async function postBrowserPair(params: {
   basePath: string;
@@ -31,146 +57,184 @@ async function postBrowserPair(params: {
   identity: Identity;
   requestId?: string;
 }) {
-  const { identity, action, requestId } = params;
-  const payload = buildBrowserPairPayload({ action, deviceId: identity.deviceId, requestId });
-  return await fetch(`${params.basePath}${BROWSER_PAIR_ROUTE_PREFIX}/${action}`, {
-    method: "POST",
-    // Same-origin cookies reach the route, so an auth proxy in front of the Gateway admits it.
-    credentials: "same-origin",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      deviceId: identity.deviceId,
-      publicKey: identity.publicKey,
-      signature: await signDevicePayload(identity.privateKey, payload),
-      ...(requestId ? { requestId } : {}),
-    }),
-  });
+  const { identity, requestId, action } = params;
+  const signature = await signDevicePayload(
+    identity.privateKey,
+    buildBrowserPairPayload({ action, deviceId: identity.deviceId, requestId }),
+  );
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), BROWSER_PAIR_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${params.basePath}${BROWSER_PAIR_ROUTE_PREFIX}/${action}`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        deviceId: identity.deviceId,
+        publicKey: identity.publicKey,
+        signature,
+        requestId,
+      }),
+    });
+    // Keep the timeout through body consumption as well as receipt of the headers.
+    const body = (await response.json()) as BrowserPairReply;
+    return { response, body };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export function createBrowserPairSession(params: {
   basePath: string;
   onState: (state: BrowserPairState) => void;
-  /** The paired device token is stored for the Gateway that issued it; connect there. */
   onApproved: (gatewayUrl: string) => void;
 }) {
-  let attempt = 0;
+  let generation = 0;
+  let attempt: Attempt | undefined;
   let attemptGatewayUrl: string | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-
-  const stop = () => {
-    attempt += 1;
-    attemptGatewayUrl = undefined;
+  let cancellationInFlight = false;
+  let approvalNeedsContinuation = false;
+  const invalidate = () => {
+    generation += 1;
     clearTimeout(timer);
   };
-
-  const cancel = () => {
+  const stop = () => {
+    invalidate();
+    attempt = undefined;
+    attemptGatewayUrl = undefined;
+    cancellationInFlight = false;
+    approvalNeedsContinuation = false;
+  };
+  const showCode = (
+    kind: "waiting" | "reconnecting" | "cancelling" | "cancelFailed" | "alreadyApproved",
+    active: Attempt,
+  ) => {
+    params.onState({ kind, code: active.code, browserId: active.browserId });
+  };
+  const fail = (reason: BrowserPairFailure) => {
     stop();
-    params.onState({ kind: "idle" });
+    params.onState({ kind: "failed", reason });
   };
 
-  const poll = async (
-    current: number,
-    gatewayUrl: string,
-    identity: Identity,
-    requestId: string,
-  ): Promise<void> => {
-    const fail = (reason: BrowserPairFailure) => {
-      if (current === attempt) {
-        params.onState({ kind: "failed", reason });
-      }
-    };
-    // A network drop, a rate limit, or a suspended tab does not end the attempt. Only the
-    // Gateway decides expiry: approval extends the request past the deadline it started with.
-    const result = await postBrowserPair({
-      basePath: params.basePath,
-      action: "collect",
-      identity,
-      requestId,
-    })
-      .then(async (response) =>
-        response.ok || response.status === 404 ? { response, body: await response.json() } : null,
-      )
-      .catch(() => null);
-    if (current !== attempt) {
+  const poll = async (current: number, active: Attempt): Promise<void> => {
+    // Only the Gateway decides expiry. Approval can extend the original request deadline.
+    const result = await postBrowserPair({ ...active, action: "collect" }).catch(() => null);
+    if (current !== generation) {
       return;
     }
     if (result?.response.status === 404) {
       fail("expired");
       return;
     }
-    // SAFETY: Same-origin reply from the Gateway that ships with this UI; unknown statuses keep polling.
-    const body = result?.body as
-      | { status?: string; deviceToken?: string; role?: string; scopes?: string[] }
-      | undefined;
+    const body = result?.response.ok ? result.body : undefined;
     if (body?.status === "approved" && body.deviceToken && body.role) {
       storeDeviceAuthToken({
-        deviceId: identity.deviceId,
-        gatewayUrl,
+        deviceId: active.identity.deviceId,
         role: body.role,
         token: body.deviceToken,
         scopes: body.scopes ?? [],
+        gatewayUrl: active.gatewayUrl,
       });
+      stop();
       // The login gate owns connection progress and errors from here.
       params.onState({ kind: "idle" });
-      params.onApproved(gatewayUrl);
+      params.onApproved(active.gatewayUrl);
       return;
     }
-    if (body?.status === "rejected") {
-      fail("declined");
+    if (body?.status === "rejected" || body?.status === "expired") {
+      fail(body.status === "rejected" ? "declined" : "expired");
       return;
     }
-    if (body?.status === "expired") {
+    showCode(body?.status === "pending" ? "waiting" : "reconnecting", active);
+    timer = setTimeout(() => void poll(current, active), BROWSER_PAIR_POLL_INTERVAL_MS);
+  };
+
+  const cancel = async () => {
+    const active = attempt;
+    if (!active || cancellationInFlight) {
+      return;
+    }
+    // Retire in-flight collect before the first await: a late approval must not connect
+    // after Cancel. The server decides whether withdrawal or approval won.
+    invalidate();
+    const current = generation;
+    cancellationInFlight = true;
+    showCode("cancelling", active);
+    const result = await postBrowserPair({ ...active, action: "cancel" }).catch(() => null);
+    if (current !== generation) {
+      return;
+    }
+    cancellationInFlight = false;
+    if (result?.response.ok && result.body.status === "cancelled") {
+      stop();
+      params.onState({ kind: "cancelled" });
+    } else if (result?.response.ok && result.body.status === "expired") {
       fail("expired");
-      return;
+    } else if (result?.response.ok && result.body.status === "approved") {
+      approvalNeedsContinuation = true;
+      showCode("alreadyApproved", active);
+    } else {
+      showCode("cancelFailed", active);
     }
-    timer = setTimeout(
-      () => void poll(current, gatewayUrl, identity, requestId),
-      BROWSER_PAIR_POLL_INTERVAL_MS,
-    );
   };
 
   return {
-    start: async (gatewayUrl: string): Promise<void> => {
+    start: async (gatewayUrl: string) => {
       stop();
-      const current = attempt;
+      const current = generation;
       attemptGatewayUrl = gatewayUrl;
+      const basePath = params.basePath;
       params.onState({ kind: "starting" });
       const identity = await loadOrCreateDeviceIdentity().catch(() => null);
-      if (current !== attempt) {
+      if (current !== generation) {
         return;
       }
       if (!identity) {
-        params.onState({ kind: "failed", reason: "noIdentity" });
+        fail("noIdentity");
         return;
       }
-      const response = await postBrowserPair({
-        basePath: params.basePath,
-        action: "start",
+      const result = await postBrowserPair({ basePath, action: "start", identity }).catch(
+        () => null,
+      );
+      if (current !== generation) {
+        return;
+      }
+      if (result?.body.error === "identity_required") {
+        fail("identityRequired");
+        return;
+      }
+      const body = result?.response.ok ? result.body : undefined;
+      if (!body?.requestId || !body.code) {
+        fail(result?.response.status === 429 ? "busy" : "unavailable");
+        return;
+      }
+      attempt = {
+        gatewayUrl,
+        basePath,
         identity,
-      }).catch(() => null);
-      const started: unknown = response?.ok ? await response.json().catch(() => null) : null;
-      // SAFETY: A 2xx from this route is the shape the Gateway shipped with this UI returns.
-      const body = started as { requestId: string; code: string } | null;
-      if (current !== attempt) {
-        return;
-      }
-      if (!body) {
-        const reason = response?.status === 429 ? "busy" : "unavailable";
-        params.onState({ kind: "failed", reason });
-        return;
-      }
-      params.onState({
-        kind: "waiting",
+        requestId: body.requestId,
         code: formatBrowserPairCode(body.code),
-        browserId: formatBrowserPairDeviceId(identity.deviceId),
-      });
-      void poll(current, gatewayUrl, identity, body.requestId);
+        browserId: formatBrowserPairDeviceId(body.deviceId ?? identity.deviceId),
+      };
+      showCode("waiting", attempt);
+      void poll(current, attempt);
     },
     cancel,
-    /** An approval is only valid for its issuer, so a new target ends the attempt. */
+    continueAfterApproval: () => {
+      if (attempt && approvalNeedsContinuation) {
+        approvalNeedsContinuation = false;
+        invalidate();
+        showCode("waiting", attempt);
+        void poll(generation, attempt);
+      }
+    },
+    /** Target changes retire this view locally; unlike Cancel, they do not claim withdrawal. */
     retireUnlessTarget: (gatewayUrl: string | undefined) => {
       if (attemptGatewayUrl !== undefined && attemptGatewayUrl !== gatewayUrl) {
-        cancel();
+        stop();
+        params.onState({ kind: "idle" });
       }
     },
     dispose: stop,

@@ -7,7 +7,10 @@ import {
   decideBrowserPairRequest,
   inspectBrowserPairRequest,
 } from "../../infra/device-pairing-browser-code.js";
-import { normalizeBrowserPairCode } from "../../shared/browser-pair.js";
+import {
+  BROWSER_PAIR_IDENTITY_REQUIRED_MESSAGE,
+  normalizeBrowserPairCode,
+} from "../../shared/browser-pair.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { broadcastRejectedDevicePairing } from "../pairing-events.js";
 import { resolveDeviceSessionAuthz } from "./device-management-authz.js";
@@ -58,6 +61,15 @@ export const devicePairCodeHandlers: GatewayRequestHandlers = {
           respond(true, inspected, undefined);
           return;
         }
+        // A code verifies a device key, not a human profile. Recheck at worker admission
+        // too, so enabling roles while approval is queued cannot mint an unusable grant.
+        const assertPairingSupported = () => {
+          authority.assertCurrent();
+          if (decision === "approve" && context.getRuntimeConfig().gateway?.roles) {
+            throw new Error(BROWSER_PAIR_IDENTITY_REQUIRED_MESSAGE);
+          }
+        };
+        assertPairingSupported();
         const decided = await decideBrowserPairRequest({
           code,
           requestId,
@@ -67,6 +79,7 @@ export const devicePairCodeHandlers: GatewayRequestHandlers = {
           readSharedGatewaySessionGeneration: () =>
             context.sharedGatewaySessionGenerationState?.requiredGeneration,
           ...authority,
+          assertCurrent: assertPairingSupported,
         });
         if (decided.status === "reduced") {
           refuse(formatReducedRefusal(decided.deviceId));

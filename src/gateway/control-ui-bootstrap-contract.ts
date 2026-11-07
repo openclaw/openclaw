@@ -36,6 +36,9 @@ export const CONTROL_UI_BASE_PATH_ATTRIBUTE = "data-openclaw-control-ui-base-pat
 /** Marks whether the served document CSP permits the terminal WASM runtime. */
 export const CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE = "data-openclaw-terminal-enabled";
 
+/** Public feature opt-in for callback/loader startup; never carries viewer data or authority. */
+export const CONTROL_UI_ID_LABS_ATTRIBUTE = "data-openclaw-id-enabled";
+
 export const CONTROL_UI_ENVIRONMENT_ATTRIBUTE = "data-openclaw-environment";
 export const CONTROL_UI_ENVIRONMENT_COLORS = [
   "teal",
@@ -92,6 +95,8 @@ export type ControlUiBootstrapConfig = {
   automaticallyFetchFavicons?: boolean;
   /** Whether experimental speech-bubble presentation is available. */
   chatBubblesEnabled?: boolean;
+  /** Explicit Labs opt-in; absence leaves every OpenClaw ID surface inert. */
+  openclawIdEnabled?: boolean;
   /** Whether optional composer prediction inference is enabled. */
   composerPredictionsEnabled?: boolean;
   seamColor?: string;

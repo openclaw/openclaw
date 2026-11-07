@@ -114,6 +114,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       captured.type === "devicePairing.redeemJoinCode" ||
       captured.type === "devicePairing.startBrowserRequest" ||
       captured.type === "devicePairing.collectBrowserRequest" ||
+      captured.type === "devicePairing.cancelBrowserRequest" ||
       captured.type === "devicePairing.inspectBrowserRequest" ||
       captured.type === "bootstrap.prune"
         ? undefined

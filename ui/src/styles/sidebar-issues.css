@@ -215,7 +215,6 @@
   padding: 6px 6px 14px;
   overscroll-behavior: contain;
   scroll-padding-block: 6px 18px;
-  scrollbar-width: thin;
   touch-action: pan-y;
 }
 

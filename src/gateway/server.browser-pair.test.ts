@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
+import { getRuntimeConfig, writeConfigFile } from "../config/io.js";
 import { signDevicePayload } from "../infra/device-identity.js";
 import {
   collectBrowserPairRequest,
@@ -217,6 +218,53 @@ describe("browser device-code pairing", () => {
     // The token is useless to anyone else, even when they obtain the bytes.
     expect((await connectBrowser(stranger, deviceToken)).ok).toBe(false);
     expect(await getPairedDevice(stranger.identity.deviceId)).toBeNull();
+    expect((await connectBrowser(browser, deviceToken)).ok).toBe(true);
+  });
+
+  it("withdraws a signed pending request, prevents approval, and tolerates repeated cancellation", async () => {
+    const browser = newBrowser();
+    const { code, requestId } = await start(browser);
+    const cancelled = await post("cancel", signedBody(browser, "cancel", requestId));
+    expect(cancelled.status).toBe(200);
+    expect(await cancelled.json()).toEqual({ status: "cancelled" });
+    expect(readFinalEffect(requestId)).toMatchObject({ request: undefined });
+    const inspect = await rpcReq(adminSocket, "device.pair.code", { code });
+    expect(inspect).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("No browser is waiting") },
+    });
+    const approve = await decide(code, requestId);
+    expect(approve.ok).toBe(false);
+    expect(await getPairedDevice(browser.identity.deviceId)).toBeNull();
+    expect(await (await post("cancel", signedBody(browser, "cancel", requestId))).json()).toEqual({
+      status: "expired",
+    });
+  });
+
+  it("does not disclose or withdraw another key's request and preserves an approval that won", async () => {
+    const browser = newBrowser();
+    const wrongBrowser = newBrowser();
+    const { code, requestId } = await start(browser);
+    const wrongKeyCancel = () => post("cancel", signedBody(wrongBrowser, "cancel", requestId));
+    const refused = await wrongKeyCancel();
+    expect(refused.status).toBe(200);
+    expect(await refused.json()).toEqual({ status: "expired" });
+    expect(readFinalEffect(requestId)).toMatchObject({ request: { status: "pending" } });
+    expect((await decide(code, requestId)).ok).toBe(true);
+    expect(await (await wrongKeyCancel()).json()).toEqual({ status: "expired" });
+    expect(await (await post("cancel", signedBody(browser, "cancel", requestId))).json()).toEqual({
+      status: "approved",
+    });
+    const collected = await collect(browser, requestId);
+    expect(collected.body.status).toBe("approved");
+    const deviceToken = collected.body.deviceToken as string;
+    expect((await connectBrowser(browser, deviceToken)).ok).toBe(true);
+    // Collection expiry removes only the request receipt, not its paired-device grant.
+    setExpiry(requestId, Date.now() - 1);
+    expect((await collect(browser, requestId)).body).toEqual({ status: "expired" });
+    expect(await (await post("cancel", signedBody(browser, "cancel", requestId))).json()).toEqual({
+      status: "expired",
+    });
     expect((await connectBrowser(browser, deviceToken)).ok).toBe(true);
   });
 
@@ -470,6 +518,53 @@ describe("browser device-code pairing", () => {
       ).rejects.toThrow("administrator revoked");
       expect(readFinalEffect(started.requestId)).toEqual(before);
       expect(await getPairedDevice(browser.identity.deviceId)).toBeNull();
+    }
+  });
+
+  // Config publication replaces the shared-auth view; finish cases opening shared-secret
+  // sockets above before exercising this real runtime configuration change.
+  it("refuses identity-less code pairing when roles are enabled, including already-pending approval", async () => {
+    const browser = newBrowser();
+    const { code, requestId } = await start(browser);
+    const originalConfig = getRuntimeConfig();
+    await writeConfigFile({
+      ...originalConfig,
+      gateway: {
+        ...originalConfig.gateway,
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: { sessions: { others: "none" }, agents: [], scopes: [] },
+          },
+        },
+      },
+    });
+    try {
+      const freshBrowser = newBrowser();
+      const response = await post("start", signedBody(freshBrowser, "start"));
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        error: "identity_required",
+        message: expect.stringContaining("identity-aware sign-in"),
+      });
+      expect(getRuntimeConfig().gateway?.roles).toBeDefined();
+      const approval = await decide(code, requestId);
+      expect(approval.ok).toBe(false);
+      expect(approval.error?.message).toContain("gateway.roles");
+      expect(readFinalEffect(requestId)).toMatchObject({
+        request: { status: "pending" },
+        paired: { total: 0 },
+        pending: { total: 0 },
+      });
+      expect(await getPairedDevice(browser.identity.deviceId)).toBeNull();
+      // Roles do not prevent withdrawing the pending request or change any other sign-in lane.
+      expect(await (await post("cancel", signedBody(browser, "cancel", requestId))).json()).toEqual(
+        {
+          status: "cancelled",
+        },
+      );
+    } finally {
+      await writeConfigFile(originalConfig);
     }
   });
 

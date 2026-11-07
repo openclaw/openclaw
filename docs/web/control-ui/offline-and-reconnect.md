@@ -160,6 +160,9 @@ cached transcript opens at its latest messages without an initial scroll animati
 It retains participant and completed-work timing information and the last task
 progress card for display while connecting; live Gateway results replace those
 cached facts in place. Cached progress does not authorize offline actions. The
+Details panel also retains its last child-activity preview while reconnecting.
+Child navigation becomes available only after the live child query returns;
+an empty or unavailable result removes the saved preview. The
 header also retains its last three viewer avatars and overflow count for that
 conversation while connecting. The reconnect indicator describes connection
 state; the full live presence roster replaces these last-known viewers when it
@@ -199,9 +202,11 @@ Unique display-name links use the same cached route resolution, including the
 
 Exact conversation links can restore their scoped transcript without waiting for
 the sidebar roster or the socket to open. A prepared snapshot supplies the header,
-transcript, and composer in the first pane frame. Cached content stays visible
-while live history and route confirmation finish; those checks do not show the
-header connection indicator. Dashboard layouts restore before the pane renders, and embedded
+transcript, and composer in the first pane frame, including the selected context-window
+badge and last run action. Stop stays disabled until the live connection confirms
+permission to stop the run. Cached content stays visible while live history and route
+confirmation finish; those checks do not show the header connection indicator.
+Dashboard layouts restore before the pane renders, and embedded
 HTML widgets restore their last board metadata from the same scoped conversation
 cache and start loading the isolated sandbox while connecting. Document requests
 still require the current Gateway connection and overlap the live board refresh.

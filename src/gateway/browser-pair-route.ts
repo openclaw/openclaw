@@ -9,5 +9,5 @@ export function parseBrowserPairRequestPath(
     return null;
   }
   const action = pathname.slice(prefix.length);
-  return action === "start" || action === "collect" ? action : null;
+  return action === "start" || action === "collect" || action === "cancel" ? action : null;
 }

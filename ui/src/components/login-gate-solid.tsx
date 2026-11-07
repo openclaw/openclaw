@@ -16,6 +16,7 @@ import { normalizeBasePath } from "../app-route-paths.ts";
 import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import { hasEmbedderTransport, isRemoteControlUiIngress } from "../app/remote-ingress.ts";
 import { retryStaleChunkReloadWhenReachable } from "../app/stale-chunk-reload.ts";
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
@@ -52,6 +53,9 @@ const LoginGateBrowserPairCard = lazy(() => import("./login-gate-browser-pair.ts
  * so another scheme (its default port differs too) or mount path is another Gateway.
  */
 export function canPairBrowserWithGateway(gatewayUrl: string, basePath: string): boolean {
+  if (isRemoteControlUiIngress() || hasEmbedderTransport()) {
+    return false;
+  }
   const parsed = URL.parse(gatewayUrl);
   const socketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return (

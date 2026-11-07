@@ -124,6 +124,8 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     ] as const) {
       const { toast: card, action } = await renderToast({ severity }, host);
       expect(card.classList.contains(`app-toast--${severity}`)).toBe(true);
+      expect(getComputedStyle(card).columnGap).toBe("6px");
+      expect(getComputedStyle(card.querySelector(".app-toast__content")!).columnGap).toBe("14px");
       expect(getComputedStyle(card.querySelector(".app-toast__icon")!).color).toBe(tone(token));
       expect(getComputedStyle(card).backgroundColor).toBe(neutral.card);
       expect(getComputedStyle(card).color).toBe(neutral.text);

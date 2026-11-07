@@ -650,6 +650,15 @@ describe("sidebar attention source publication", () => {
     containsLabel("Cached auth");
     invalidateModelAuthStatusRequests(harness.gateway.snapshot.client!);
     harness.emitEvent("chat.metadata.changed", {
+      agentId: "other",
+      modelCatalogChanged: true,
+      authChanged: true,
+      commandsChanged: false,
+    });
+    await Promise.resolve();
+    expect(authCalls).toBe(3);
+    containsLabel("Cached auth");
+    harness.emitEvent("chat.metadata.changed", {
       agentId: "main",
       usageUpdatedAt: now,
       modelCatalogChanged: false,
