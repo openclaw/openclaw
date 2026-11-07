@@ -318,9 +318,11 @@ describe("assertLocalMediaAllowed", () => {
 
   it("preserves not-found and not-file errors for root-bound reads", async () => {
     const root = tempDirs.make("openclaw-media-read-errors-");
-    await expect(read(path.join(root, "missing.bin"), [root])).rejects.toMatchObject({
-      code: "not-found",
-    });
+    const alias = path.join(tempDirs.make("openclaw-media-read-alias-"), "root");
+    await fs.symlink(root, alias, "junction");
+    for (const missing of [path.join(root, "missing.bin"), path.join(alias, "no-dir", "p.png")]) {
+      await expect(read(missing, [root])).rejects.toMatchObject({ code: "not-found" });
+    }
     await expect(read(root, [root])).rejects.toMatchObject({
       code: "not-file",
     });

@@ -77,15 +77,18 @@ export async function resolveLocalMediaRoots(
 }
 
 async function resolveLocalMediaPathForContainment(mediaPath: string): Promise<string> {
-  try {
-    return await fs.realpath(mediaPath);
-  } catch {
-    // Missing files (for example, staged outbound media supplied by host-read
-    // callbacks) still need symlink-aware parent containment.
+  // Missing files and directories (for example, staged outbound media supplied by
+  // host-read callbacks) still need symlink-aware containment, so canonicalize the
+  // nearest existing ancestor; the reader then reports absence instead of a denial.
+  const missing: string[] = [];
+  for (let ancestor = path.resolve(mediaPath); ; ancestor = path.dirname(ancestor)) {
     try {
-      return path.join(await fs.realpath(path.dirname(mediaPath)), path.basename(mediaPath));
+      return path.join(await fs.realpath(ancestor), ...missing);
     } catch {
-      return path.resolve(mediaPath);
+      if (path.dirname(ancestor) === ancestor) {
+        return path.resolve(mediaPath);
+      }
+      missing.unshift(path.basename(ancestor));
     }
   }
 }
