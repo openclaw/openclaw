@@ -1,8 +1,8 @@
 import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
-import { loadChatDetailsDesktopComposition } from "./chat-details-desktop-loader.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
 function mount() {
@@ -59,10 +59,20 @@ async function nextFrame() {
   flush();
 }
 
-it("renders prewarmed cached Details immediately without handoff work on scrolling", async () => {
+it("adds no handoff measurements or animations to cached and settled scrolling", async () => {
   const animations = vi.spyOn(Element.prototype, "animate");
   onTestFinished(() => animations.mockRestore());
-  await loadChatDetailsDesktopComposition();
+  // The shared browser graph may already have loaded these modules in another file.
+  const prepared = mount();
+  await waitForSolid(() =>
+    expect(prepared.container.querySelector(".chat-environment__branch-name")?.textContent).toBe(
+      "feature/cached",
+    ),
+  );
+  await document.fonts.ready;
+  await nextFrame();
+  await nextFrame();
+  prepared.dispose();
   const view = mount();
   expect(view.container.querySelector(".chat-environment__branch-name")?.textContent).toBe(
     "feature/cached",

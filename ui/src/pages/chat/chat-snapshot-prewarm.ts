@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { loadChatDetailsDesktopComposition } from "./components/chat-details-desktop-loader.ts";
 import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
 import {
   snapshotStoreGeneration,
@@ -75,12 +76,10 @@ export function prewarmChatSnapshot(cacheKey: string): Promise<void> {
         const docking = asOptionalRecord(details?.docking);
         // Only the viewport identity is known before the pane supplies its other layout facts.
         if (docking?.wide === true && matchesDockingViewport(docking.layout)) {
-          entry.detailsReady = import("./components/chat-details-desktop-loader.ts")
-            .then(({ loadChatDetailsDesktopComposition }) => loadChatDetailsDesktopComposition())
-            .then(
-              () => undefined,
-              () => undefined,
-            );
+          entry.detailsReady = loadChatDetailsDesktopComposition().then(
+            () => undefined,
+            () => undefined,
+          );
         }
         return record;
       })
