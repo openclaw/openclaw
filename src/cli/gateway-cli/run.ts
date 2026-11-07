@@ -838,7 +838,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           bind,
           ...(opts.updateCanary ? { updateCanary: true } : {}),
           ...(activeBootId ? { bootId: activeBootId } : {}),
-          restartResumeWindow: boot?.restartResumeWindow,
+          restartResumeWindows: boot?.restartResumeWindows,
           auth: authOverride,
           tailscale: tailscaleOverride,
           ...startupOptions,

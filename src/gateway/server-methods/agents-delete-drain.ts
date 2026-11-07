@@ -229,7 +229,7 @@ export async function drainAgentDeletionRuns(
     if (failures.length > 1) {
       throw new AggregateError(
         failures,
-        `Agent ${agentId} deletion failed: ${failures.map((error) => formatErrorMessage(error)).join("; ")}`,
+        `Agent ${agentId} deletion failed: ${[...new Set(failures.map((error) => formatErrorMessage(error)))].join("; ")}`,
       );
     }
     if (!settled) {

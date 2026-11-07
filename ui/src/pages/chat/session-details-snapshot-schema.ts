@@ -108,7 +108,7 @@ export const detailsSnapshotSchema = json.optional(
             autoDisabled: json.optional(json.boolean),
             running: json.optional(json.boolean),
             state: json.text,
-            timezone: optionalText,
+            nextRunAtMs: json.optional(json.nullable(nonnegative)),
           }),
           10,
         ),
