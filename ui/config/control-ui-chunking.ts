@@ -88,6 +88,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/pages/plugins/catalog-grid.tsx":
+    case "ui/src/pages/plugins/plugin-card.tsx":
+      // Catalogs already load both; a lazy skill reader must not split their first visit.
+      return "plugin-catalog-runtime";
     case "ui/src/components/sandbox-host.ts":
     case "ui/src/lib/widget-sandbox-host.ts":
     case "ui/src/lib/reactive/window-message.ts":
@@ -250,6 +254,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/hub-page-header.tsx":
     case "ui/src/components/solid/settings-workspace.tsx":
     case "ui/src/components/solid/settings-select.tsx":
+    case "ui/src/pages/config/settings-select-row.tsx":
     case "ui/src/lib/timezone-suggestions.ts":
       // Page chrome and its selectors stay separate from shared controls in lazy Chat panels.
       return "route-chrome";
@@ -259,6 +264,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/menu-shortcut-activation.ts":
     case "ui/src/components/solid/refresh-button.tsx":
     case "ui/src/components/solid/radio-navigation.ts":
+    case "ui/src/components/solid/floating-header-actions.tsx":
+    case "ui/src/lib/reactive/progressive-list.ts":
       // Share small navigation helpers without coupling their callers to page renderers.
       return "navigation-helpers";
     case "ui/src/components/config-form.analyze.ts":
@@ -267,11 +274,13 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Analysis stays independent of the optional editor's value validator.
       return "config-form-analysis-runtime";
     case "ui/src/lib/config-form-utils.ts":
+    case "ui/src/components/config-form.numeric.ts":
     case "ui/src/i18n/lib/config-hint-translation.ts":
     case "ui/src/components/config-form.array-items.ts":
       // Lightweight shape readers must not acquire analysis, validation, or Settings copy.
       return "config-form-utils-runtime";
     case "ui/src/components/solid/settings-ui.tsx":
+    case "ui/src/components/solid/settings-disclosure.tsx":
     case "ui/src/components/solid/switch.tsx":
     case "ui/src/pages/config/settings-section-header.tsx":
     case "ui/src/lib/reactive/live-checked.ts":
