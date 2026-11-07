@@ -1,0 +1,2 @@
+# Pin real first-visit asset counts and the shared chunk boundaries; cover lazy Skills reader opening.
+171
