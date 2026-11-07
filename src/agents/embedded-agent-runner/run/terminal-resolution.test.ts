@@ -392,7 +392,6 @@ describe("terminal resolution", () => {
     { provider: "anthropic", api: "anthropic-messages", narration: "unphased", isError: false },
     { provider: "ollama", api: "ollama", narration: "unphased", isError: false },
     { provider: "google", api: "google-generative-ai", narration: "unphased", isError: false },
-    { provider: "mistral", api: "mistral-conversations", narration: "unphased", isError: false },
     { provider: "ollama", api: "ollama", narration: "unphased", isError: true },
   ])(
     "settles $provider terminal tools with $narration narration only after success (error=$isError)",

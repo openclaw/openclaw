@@ -16,7 +16,6 @@ export type { AssistantMessageDiagnostic, DiagnosticErrorInfo } from "./utils/di
 /** Provider API families with first-class request/stream adapters in OpenClaw. */
 export type KnownApi =
   | "openai-completions"
-  | "mistral-conversations"
   | "openai-responses"
   | "azure-openai-responses"
   | "openai-chatgpt-responses"

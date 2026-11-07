@@ -9,7 +9,7 @@ import { makeProviderModel } from "./provider-model.test-support.js";
 import { frame, sseResponse } from "./provider-stream.test-support.js";
 import { registerBuiltInApiProviders } from "./register-builtins.js";
 
-const captured = vi.hoisted(() => ({ google: [] as unknown[], mistral: [] as unknown[] }));
+const captured = vi.hoisted(() => ({ google: [] as unknown[] }));
 vi.mock("@google/genai", () => ({
   GoogleGenAI: class {
     constructor(config: unknown) {
@@ -30,16 +30,6 @@ vi.mock("@google/genai", () => ({
     HIGH: "HIGH",
   },
 }));
-vi.mock("@mistralai/mistralai/sdk/chat", () => ({
-  Chat: class {
-    constructor(config: unknown) {
-      captured.mistral.push(config);
-    }
-    async stream() {
-      throw new Error("fixture constructor reached");
-    }
-  },
-}));
 const initial = getDefaultAiTransportHost();
 const opaque = "prefix-oc-sent-v2." + "A".repeat(48) + ".end-suffix";
 const gatewayFetch = vi.fn(() => {
@@ -50,7 +40,6 @@ const gatewayResolve = vi.fn(() => {
 });
 beforeEach(() => {
   captured.google = [];
-  captured.mistral = [];
   vi.clearAllMocks();
   configureAiTransportHost({
     buildModelFetch: gatewayFetch,
@@ -94,21 +83,14 @@ function responseFrames(api: string) {
 }
 
 it.each([
-  ["google-generative-ai", "google", "google"],
-  ["google-vertex", "google-vertex", "google"],
-  ["mistral-conversations", "mistral", "mistral"],
-] as const)(
-  "preserves external opaque values at %s SDK construction",
-  async (api, provider, sdk) => {
-    const expected =
-      sdk === "google"
-        ? { apiKey: opaque, httpOptions: { headers: { "X-Provider-Token": opaque } } }
-        : { apiKey: opaque };
-    const result = await complete(api, provider);
-    expect(result.errorMessage).toContain("fixture constructor reached");
-    expect(captured[sdk]).toMatchObject([expected]);
-  },
-);
+  ["google-generative-ai", "google"],
+  ["google-vertex", "google-vertex"],
+] as const)("preserves external opaque values at %s SDK construction", async (api, provider) => {
+  const expected = { apiKey: opaque, httpOptions: { headers: { "X-Provider-Token": opaque } } };
+  const result = await complete(api, provider);
+  expect(result.errorMessage).toContain("fixture constructor reached");
+  expect(captured.google).toMatchObject([expected]);
+});
 it.each(["google-generative-ai", "google-vertex"])(
   "retains each runtime's managed fetch in the %s SDK",
   async (api) => {

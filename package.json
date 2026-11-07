@@ -2433,7 +2433,6 @@
     "@openclaw/fs-safe": "0.27.1",
     "@openclaw/proc-safe": "0.4.2",
     "@openclaw/proxyline": "0.4.1",
-    "@opentelemetry/semantic-conventions": "1.43.0",
     "@resvg/resvg-js": "2.6.2",
     "@silvia-odwyer/photon-node": "0.3.4",
     "@trycua/cua-driver": "0.37.0",
@@ -2485,14 +2484,12 @@
     "web-tree-sitter": "0.27.1",
     "ws": "8.22.0",
     "yaml": "2.9.1",
-    "zod": "4.6.7",
-    "zod-to-json-schema": "3.25.2"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@babel/types": "8.0.8",
     "@copilotkit/aimock": "1.47.0",
     "@mdx-js/mdx": "3.1.1",
-    "@mistralai/mistralai": "3.4.0",
     "@openclaw/crabline": "0.2.0",
     "@openclaw/session-url-contract": "workspace:*",
     "@opentelemetry/sdk-node": "0.223.0",

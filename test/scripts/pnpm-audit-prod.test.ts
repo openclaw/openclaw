@@ -22,14 +22,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
-const mistralAdvisory = {
-  id: "1118204",
-  severity: "critical",
-  title: "Malware in @mistralai/mistralai",
-  vulnerable_versions: ">=0",
-  url: "https://github.com/advisories/GHSA-3q49-cfcf-g5fm",
-};
-const { vulnerable_versions: vulnerableVersions, ...mistralFinding } = mistralAdvisory;
 const highAdvisory = {
   id: "GHSA-high",
   severity: "high",
@@ -93,13 +85,6 @@ function requestPayload(init: RequestInit | undefined) {
   return JSON.parse(init.body);
 }
 
-function expectGraph(importers: string, snapshots: string, expected: Record<string, string[]>) {
-  const lock = `lockfileVersion: '9.0'\nimporters:\n${importers}\nsnapshots:\n${snapshots}`;
-  expect(createBulkAdvisoryPayload(collectProdResolvedPackagesFromLockfile(lock))).toEqual(
-    expected,
-  );
-}
-
 it("keeps toolchain snapshots separate from production while auditing both documents", () => {
   const lockfile = `---
 lockfileVersion: '9.0'
@@ -158,10 +143,8 @@ it("rejects unsupported audit levels", () => {
   expect(() => filterFindingsBySeverity({}, "unknown")).toThrow("Unsupported audit level");
 });
 
-it.each<[string, string, string, Record<string, string[]>]>([
-  [
-    "resolves production, optional, aliased and tarball dependencies without development or workspace edges",
-    `  .:
+it("resolves production, optional, aliased and tarball dependencies without development or workspace edges", () => {
+  const importers = `  .:
     dependencies:
       pkg-a:
         version: 1.0.0
@@ -172,8 +155,8 @@ it.each<[string, string, string, Record<string, string[]>]>([
   extensions/demo:
     dependencies:
       '@scope/pkg': {'version': '2.0.0(peer@4.0.0)'}
-      workspace-lib: {version: link:../../packages/workspace-lib}`,
-    `  pkg-a@1.0.0:
+      workspace-lib: {version: link:../../packages/workspace-lib}`;
+  const snapshots = `  pkg-a@1.0.0:
     dependencies:
       transitive: 3.0.0(patch_hash=abc123)
       libsignal: '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/abc123'
@@ -186,49 +169,19 @@ it.each<[string, string, string, Record<string, string[]>]>([
   '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/abc123':
     dependencies:
       curve25519-js: 0.0.4
-  curve25519-js@0.0.4: {}`,
-    {
-      "@cypress/request": ["3.0.10"],
-      "@scope/pkg": ["2.0.0"],
-      "@whiskeysockets/libsignal-node": [
-        "https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/abc123",
-      ],
-      "curve25519-js": ["0.0.4"],
-      "opt-dep": ["4.0.0"],
-      "pkg-a": ["1.0.0"],
-      transitive: ["3.0.0"],
-    },
-  ],
-  [
-    "audits bundled Mistral and its transitives without unrelated development dependencies",
-    `  .:
-    devDependencies:
-      '@mistralai/mistralai': {version: 3.0.0}
-  packages/ai:
-    devDependencies:
-      '@mistralai/mistralai': {version: 2.7.0}
-      build-tool: {version: 1.0.0}`,
-    `  '@mistralai/mistralai@2.7.0':
-    dependencies:
-      schema: 1.0.0
-    optionalDependencies:
-      telemetry: 2.0.0
-  schema@1.0.0: {}
-  telemetry@2.0.0: {}
-  '@mistralai/mistralai@3.0.0': {}
-  build-tool@1.0.0: {}`,
-    { "@mistralai/mistralai": ["2.7.0"], schema: ["1.0.0"], telemetry: ["2.0.0"] },
-  ],
-])("%s", (_name, importers, snapshots, expected) => expectGraph(importers, snapshots, expected));
-
-it.each(["2.2.1", "2.2.4"])("applies the Mistral malware override to locked %s", (version) => {
-  const findings = filterFindingsBySeverity(
-    { "@mistralai/mistralai": [mistralAdvisory] },
-    "high",
-    new Map([["@mistralai/mistralai", new Set([version])]]),
-  );
-  const finding = { ...mistralFinding, packageName: "@mistralai/mistralai", vulnerableVersions };
-  expect(findings).toEqual(version === "2.2.1" ? [] : [finding]);
+  curve25519-js@0.0.4: {}`;
+  const lock = `lockfileVersion: '9.0'\nimporters:\n${importers}\nsnapshots:\n${snapshots}`;
+  expect(createBulkAdvisoryPayload(collectProdResolvedPackagesFromLockfile(lock))).toEqual({
+    "@cypress/request": ["3.0.10"],
+    "@scope/pkg": ["2.0.0"],
+    "@whiskeysockets/libsignal-node": [
+      "https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/abc123",
+    ],
+    "curve25519-js": ["0.0.4"],
+    "opt-dep": ["4.0.0"],
+    "pkg-a": ["1.0.0"],
+    transitive: ["3.0.0"],
+  });
 });
 
 it("preserves a complete surrogate pair when truncating bulk advisory errors", async () => {

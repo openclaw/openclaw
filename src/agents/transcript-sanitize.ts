@@ -109,7 +109,6 @@ const isOpenAICompletionsRoute = (route?: TranscriptAssistantRoute) =>
 function isCustomProviderRoute(route: TranscriptAssistantRoute | undefined): boolean {
   return (
     Boolean(route?.api && route.model && route.provider) &&
-    route?.api !== "mistral-conversations" &&
     !isOpenAIResponsesRoute(route) &&
     !isGoogleReasoningRoute(route) &&
     !isAnthropicReasoningRoute(route) &&

@@ -9,10 +9,8 @@ import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
-import { configureAiTransportHost } from "../../packages/ai/src/host.js";
 import { projectAnthropicTools } from "../../packages/ai/src/providers/anthropic-tool-projection.js";
 import { convertGoogleTools } from "../../packages/ai/src/providers/google-messages.js";
-import { streamMistral } from "../../packages/ai/src/providers/mistral.js";
 import { convertResponsesToolPayload } from "../../packages/ai/src/providers/openai-responses-tools.js";
 import { normalizeOpenAIStrictCompatSchema } from "../../packages/ai/src/providers/openai-tool-schema-compat.js";
 import { publishRuntimeToolInputSchema } from "../../packages/ai/src/providers/tool-schema-json-projection.js";
@@ -156,25 +154,6 @@ const context = (entries: Entry[]): Context => ({
   tools: entries.map(({ tool }) => tool),
 });
 
-// The real Mistral SDK serializes into an in-process fetch; no network or credentials are used.
-let mistralPayload: unknown;
-configureAiTransportHost({
-  buildModelFetch: () => async (input, init) => {
-    const request = input instanceof Request ? input : new Request(input, init);
-    mistralPayload = JSON.parse(await request.text());
-    const chunk = {
-      id: "schema-probe",
-      object: "chat.completion.chunk",
-      created: 1,
-      model: "schema-probe",
-      choices: [{ index: 0, delta: { content: "done" }, finish_reason: "stop" }],
-    };
-    return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
-      headers: { "content-type": "text/event-stream" },
-    });
-  },
-});
-
 const workloads: Record<string, (entries: Entry[]) => unknown> = {
   "compat-owner": (entries) =>
     entries.map(({ tool }) => normalizeOpenAIStrictCompatSchema(tool.parameters)),
@@ -204,17 +183,6 @@ const workloads: Record<string, (entries: Entry[]) => unknown> = {
   google: (entries) => convertGoogleTools(entries.map(({ tool }) => tool)),
   validation: (entries) =>
     entries.map(({ tool, value }) => validateJsonSchemaValue({ schema: tool.parameters, value })),
-  mistral: async (entries) => {
-    const result = await streamMistral(
-      { ...model, api: "mistral-conversations", provider: "mistral" },
-      context(entries),
-      { apiKey: "synthetic-benchmark-key", cacheRetention: "none" },
-    ).result();
-    if (result.stopReason === "error") {
-      throw new Error(result.errorMessage);
-    }
-    return mistralPayload;
-  },
 };
 if (values.workload && !(values.workload in workloads)) {
   throw new Error(`Unknown workload: ${values.workload}`);

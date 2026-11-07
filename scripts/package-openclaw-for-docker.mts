@@ -678,8 +678,8 @@ export async function prepareBundledAiRuntimePackage(
     // recursively bundling duplicate packages alongside the one private workspace runtime.
     delete stagedPackageJson.dependencies;
     // npm may omit required dependencies when the bundled copy also declares them as peers.
-    // Root owns composed dependencies; the Anthropic SDK also requires the API transitively.
-    for (const peer of ["@opentelemetry/api", ...Object.keys(packageJson.dependencies!)]) {
+    // Root owns composed dependencies.
+    for (const peer of Object.keys(packageJson.dependencies!)) {
       delete stagedPackageJson.peerDependencies?.[peer];
       delete stagedPackageJson.peerDependenciesMeta?.[peer];
     }

@@ -87,11 +87,6 @@ const registerBuiltIns: RegisterBuiltIn[] = [
     }),
   ),
   createLazyRegistration(
-    "mistral-conversations",
-    () => import("./mistral.js"),
-    (module) => ({ stream: module.streamMistral, streamSimple: module.streamSimpleMistral }),
-  ),
-  createLazyRegistration(
     "openai-responses",
     () => import("./openai-responses.js"),
     (module) => ({

@@ -12,10 +12,10 @@ it("removes audited development files while preserving runtime data and every Ma
     "openclaw/dist/plugin-sdk/index.d.ts",
     "openclaw/node_modules/dependency/index.d.mts",
     "openclaw/node_modules/dependency/index.d.cts.map",
-    "@mistralai/mistralai/src/client.ts",
-    "@mistralai/mistralai/tests/client.test.ts",
-    "@mistralai/mistralai/examples/client.js",
-    "@mistralai/mistralai/packages/mistralai-azure/examples/client.ts",
+    "@anthropic-ai/sdk/src/client.ts",
+    "pino/test/client.test.ts",
+    "pino/examples/client.js",
+    "pino/test/nested/client.ts",
     "pino/benchmarks/run.js",
   ];
   const retained = [
@@ -24,12 +24,12 @@ it("removes audited development files while preserving runtime data and every Ma
     "openclaw/dist/control-ui/index.html.br",
     "openclaw/dist/extensions/plugin/assets/example.d.ts",
     "openclaw/extensions/plugin/node_modules/dependency/index.d.ts",
-    "@mistralai/mistralai/esm/client.js",
-    "@mistralai/mistralai/src/README.md",
-    "@mistralai/mistralai/tests/nested/guide.MD",
-    "@mistralai/mistralai/tests/LICENSE",
-    "@mistralai/mistralai/examples/NOTICE.txt",
-    "@mistralai/mistralai/examples/package.json",
+    "@anthropic-ai/sdk/client.js",
+    "@anthropic-ai/sdk/src/README.md",
+    "pino/test/nested/guide.MD",
+    "pino/test/LICENSE",
+    "pino/examples/NOTICE.txt",
+    "pino/examples/package.json",
     "unknown/src/index.ts",
     "unknown/__tests__/runtime.js",
     "unknown/example/runtime.js",
@@ -44,8 +44,8 @@ it("removes audited development files while preserving runtime data and every Ma
     writeFileSync(path.join(root, file), file);
   }
   writeFileSync(
-    path.join(root, "@mistralai/mistralai/package.json"),
-    JSON.stringify({ name: "@mistralai/mistralai", version: "3.2.0" }),
+    path.join(root, "@anthropic-ai/sdk/package.json"),
+    JSON.stringify({ name: "@anthropic-ai/sdk", version: "0.132.1" }),
   );
   writeFileSync(
     path.join(root, "openai/package.json"),
