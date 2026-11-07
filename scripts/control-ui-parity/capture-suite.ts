@@ -222,6 +222,14 @@ suite.define(() => {
                 });
                 await page.clock.setFixedTime(fixedTime);
                 await page.addInitScript(() => {
+                  // Scenes allow workers only for Playwright's sandbox-frame limit. The app
+                  // worker's script bypasses the capture proxy, and its build probe can
+                  // reload the page mid-capture.
+                  if (window === window.top) {
+                    Object.defineProperty(navigator.serviceWorker, "register", {
+                      value: () => Promise.reject(new Error("Parity captures run without workers")),
+                    });
+                  }
                   // A fixed draw keeps module-level decorative salts independent of load order.
                   Math.random = () => 0.42;
                   // Keep native frame delivery for readiness, but sample JS animation time
