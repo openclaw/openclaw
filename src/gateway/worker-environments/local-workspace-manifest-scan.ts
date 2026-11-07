@@ -36,6 +36,7 @@ import {
   type LocalWorkspaceManifestRecord,
 } from "./local-workspace-manifest-tree.js";
 import type {
+  LocalWorkspaceCheckpointReceipt,
   LocalWorkspaceManifestMutation,
   LocalWorkspaceManifestScan,
   LocalWorkspaceManifestValue,
@@ -97,6 +98,12 @@ export function readLocalWorkspaceManifestRows(
 
 function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceManifestInput) {
   const query = getNodeSqliteKysely<DB>(db);
+  const target =
+    input.action.kind === "scan" || input.action.kind === "probe"
+      ? input.action.target
+      : input.action.kind === "archive"
+        ? "canonical"
+        : undefined;
   const row = executeSqliteQueryTakeFirstSync(
     db,
     query
@@ -110,9 +117,16 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
         "baseline_ref",
         "tree_root_digest",
         "source_paths_digest",
-        "canonical_fingerprints",
-        "projection_fingerprints",
         "pending_ref",
+      ])
+      // Keep the snapshot shape without materializing fingerprints this action never consumes.
+      .select((eb) => [
+        (target === "projection" ? eb.ref("canonical_fingerprints") : eb.val(null)).as(
+          "canonical_fingerprints",
+        ),
+        (target === "canonical" ? eb.ref("projection_fingerprints") : eb.val(null)).as(
+          "projection_fingerprints",
+        ),
       ])
       .$if(input.action.kind === "repair", (builder) => builder.select("checkpoint_json"))
       .where("worktree_id", "=", input.id),
@@ -230,9 +244,15 @@ export async function executeLocalWorkspaceManifestRead(
     const retained = buildCacheInputPaths(parseLocalWorkspaceSourcePaths(row.source_paths_json));
     // A pending receipt can name an intact result after both live sides have
     // moved beyond the baseline. Its saved delta can reconstruct the merge base.
-    const checkpoint = row.checkpoint_json
-      ? (JSON.parse(row.checkpoint_json) as LocalWorkspaceManifestCheckpoint) // SAFETY: Owner-written checkpoint.
+    const receipt = row.checkpoint_json
+      ? (JSON.parse(row.checkpoint_json) as LocalWorkspaceCheckpointReceipt) // SAFETY: Owner-written checkpoint.
       : undefined;
+    const checkpoint =
+      receipt?.kind === "rejected"
+        ? receipt.checkpoint
+          ? (JSON.parse(receipt.checkpoint) as LocalWorkspaceManifestCheckpoint) // SAFETY: Preserved owner-written checkpoint.
+          : undefined
+        : receipt;
     const documents = checkpoint
       ? [
           parseWorkerWorkspaceManifest(

@@ -331,6 +331,12 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
   --bundle-dir dist/control-ui --pairs 10 --viewport both
 ```
 
+Idle scenarios default to a 30-second Node-side measurement window. Use
+`--idle-duration-ms` for a bounded diagnostic or rotated comparison; the manifest
+records the chosen duration. `--idle-warmup-ms` independently controls settlement
+before measurement. Normalize costs using the measured interval when comparing
+window lengths.
+
 Giant completed runs are opt-in: `--steps completed-direct-run-2000-open,completed-direct-run-2000-scroll,completed-single-run-2000-expand,completed-single-run-2000-scroll`.
 Replace `2000` with `400` for the scaling control. These reuse the cold-load
 long-session fixture and desktop 61-frame scroll trajectory in both engines. Open checks
@@ -356,6 +362,43 @@ translation wave cannot disappear behind an early English render. Use
 `--steps cold-boot,warm-boot --network-profiles rtt-100ms` to inspect request waves.
 One-pair screens only identify candidates: confirm deviations over 20% with ten
 rotated pairs plus `control`, and fixes with twenty pairs within the same configuration.
+
+Chromium accessibility is an explicit axis, excluded from `all` so the default
+cross-engine census stays supported. Use `accessibility` for forced renderer
+accessibility and `accessibility-off` for a disabled-accessibility baseline;
+`accessibility-control` and `accessibility-off-control` provide matching A/A
+samples. `default` and `control` leave the browser's accessibility behavior unchanged.
+For an on/off screen with an off/off control:
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --bundle-dir dist/control-ui --engines chromium --pairs 10 --viewport both \
+  --configurations accessibility-off,accessibility-off-control,accessibility
+```
+
+Each accessibility mode uses an isolated browser process. On mode enables CDP's
+Accessibility domain before navigation, reads the full tree before warm actions
+and after the timed interval, and records `nodesUpdated`/`loadComplete` events.
+Tree serialization stays outside timing; off mode never queries the tree.
+Explicit modes are skipped for WebKit, Firefox, and idle scenarios. AX tree
+evidence proves exposed roles, names, and live-region state; it cannot prove what
+a real screen reader announces or when it speaks.
+
+Use `--live-region-audit --steps streaming-645-deltas` in a separate diagnostic
+run to record text/addition deliveries, raw and inherited ARIA metadata, and
+bounded text samples. This observer adds work and does not model a screen
+reader's announcement queue. Pair `--native-audit` with the explicit on/off
+configurations to retain Chromium accessibility trace events. The
+`transcript-fast-scroll` and `large-transcript-fast-scroll` scenarios exercise
+the same scrolling workload with 400 and 2,000 messages respectively.
+
+Full observations, including skipped cells and memory samples, append to
+`observations.jsonl` as each cell completes; complete newline-terminated records
+are available for live progress or after interruption. Per-cell JSON files remain
+available, and `observations.json` retains its array schema and is published once
+with an atomic rename during final cleanup, including the recorded prefix when a
+run fails. The command still propagates failures; a final array does not certify
+a successful run. These artifacts do not use `fsync`.
 
 Every run counts `ResizeObserver loop` errors per observation and summary cell,
 including untraced streaming runs. The report shows error totals and affected
@@ -388,6 +431,17 @@ Measure first-use costs separately with
 These explicit steps are excluded from normal `--pages` runs. Keep first-open
 results separate from route visits and warm interactions; the Terminal step
 creates its session before timing ten typed characters and submission.
+Terminal has direct-document cases at
+`--steps page-terminal-cold-visit,page-terminal-cold-attach-visit`.
+They navigate directly to Terminal without loading an origin route or settling
+preloads first. The first measures its initial Sessions picker; the second
+attaches a synthetic shell and waits for its replay banner in a visible canvas.
+Readiness is sampled in the new document over two frames, from navigation start.
+The banner proves glyph drawing and canvas visibility, not compositor paint or
+real PTY latency. The `page-terminal-first-create-visit` and
+`page-terminal-first-attach-visit` cases instead start from a settled origin;
+the create case includes selecting the automatically created shell from the picker.
+`page-terminal-first-output-revisit` measures restored output on a warm return.
 The Memory Import action now reviews a ten-file collection before deselecting
 it, so its results are not directly comparable with older deselect-only timings.
 Virtualized inventories use their logical row count for readiness, including
@@ -398,7 +452,7 @@ metrics are null. DOM counts are collected after the measured interval so the
 census does not add list-size-dependent work to timings. Use a separate `--trace` pass for WebKit script/style/layout
 attribution; its durations are elapsed time, never action CPU. One-pair sweeps
 rank candidates; performance claims require the paired runs and controls below.
-Every phase starts after New Session reports route-ready. Route-ready time ends
+Default page phases start after New Session reports route-ready. Route-ready time ends
 after the loaded page is visible for two animation frames;
 wall time additionally includes driver round trips and assertions. Page targets
 are a longest task of 50 ms at 1x or 200 ms at 4x, zero CLS, and WebKit ready time
@@ -625,6 +679,41 @@ complete syntax before ending or starting their respective interval. The
 benchmark-only Worker wrapper records highlighter starts, replies, errors,
 termination and live count; no-op completion uses these events rather than an
 assumed delay.
+
+`heavy-window-{code,diff,table,terminal-dense,json-nested-dense,images,large-images}`
+loads 2,000 messages and evicts/remounts the heavy row three times. Code is
+expanded again on each return (its disclosure state is DOM-local); tool-card
+expansion retains its session-owned state. `crossing1Ms` through `crossing3Ms`
+measure browser-local scroll-to-content settlement without intervening driver
+round trips. These programmatic crossings isolate rendering, not native input
+or compositor latency. Evidence includes highlighter requests, loaded images,
+page-wide explicit `decode()` calls, settled mounted rows, retained messages and
+settled heights. `observedHeightChanges` counts virtualizer size updates after
+each target row is found, excluding its initial insertion/measurement. Image
+load/decode-call counts do not identify physical browser decoder work.
+The large-image case uses the same forty embedded 1-megapixel images as the
+arrival workload, keeping source and admission behavior comparable.
+
+Add `-counts` to a window scenario for diagnostic source-map instrumentation of
+Markdown rendering, Markdown-it parsing, tool formatting and diff analysis.
+Check each `*Instrumented` flag before interpreting a zero. Formatter entries
+are not cache misses, and Markdown-it counts cover `render`, not direct `parse`.
+`targetMarkdownRenders` and `targetParserRenders` count only input beginning with
+the fixture's exact `Heavy window target ` prefix; the page-wide totals also
+include unrelated prewarming. `warmup*` totals cover navigation and preparation
+before the measured crossings, providing a positive instrumentation control.
+The diff fixture is a Markdown fence; tool cases reopen the 8,000-character
+in-row preview, not the full-output sidebar. These intercepted builds are for
+work counts only. `heavy-megabyte-{markdown,line}-arrival` and
+`heavy-window-megabyte-{markdown,line}` exercise the existing one-MiB source /
+140,000-character fallback contract on first arrival and return.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --bundle-dir <base> --compare-bundle-dir <head> --control-bundle-dir <base> \
+  --steps heavy-window-code,heavy-window-diff --pairs 20 \
+  --engines chromium,webkit,firefox --viewport desktop --output .artifacts/heavy-window
+```
 
 `heavy-table-copy` verifies independent expected TSV; code/diff and tool copy
 steps verify every original text character. Native scrolling uses overlapping

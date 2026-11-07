@@ -293,10 +293,23 @@ function createMismatchedWrapperTemplate({
   git(canonical, ["add", "."]);
   git(canonical, ["commit", "-m", "test: canonical wrapper"]);
   git(canonical, ["push", "-u", "origin", "main"]);
+  expect(git(canonical, ["rev-parse", "refs/remotes/origin/main"]).stdout.trim()).toBe(
+    git(canonical, ["rev-parse", "main"]).stdout.trim(),
+  );
+  // Prepare both histories once; worktree back-links belong to each private copy.
+  git(canonical, ["checkout", "-b", "feature"]);
+  writeFileSync(
+    join(canonical, "scripts", "pr-lib", "gates.sh"),
+    'ci_dispatch() { echo "local wrapper executed"; }\n',
+  );
+  git(canonical, ["add", "scripts/pr-lib/gates.sh"]);
+  git(canonical, ["commit", "-m", "test: local wrapper"]);
+  const localRevision = git(canonical, ["rev-parse", "HEAD"]).stdout.trim();
+  git(canonical, ["checkout", "main"]);
   // Pack once so private fixture copies do not repeat thousands of loose files.
   git(canonical, ["repack", "-ad"]);
   git(origin, ["repack", "-ad"]);
-  return { canonical, origin, bin };
+  return { canonical, origin, bin, localRevision };
 }
 
 function makeMismatchedWrapperRepo({
@@ -325,22 +338,9 @@ function makeMismatchedWrapperRepo({
   copyTreeCloseOnExec(template.canonical, canonical);
   cpSync(template.origin, origin, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
   git(canonical, ["remote", "set-url", "origin", origin]);
-  git(canonical, ["worktree", "add", "-b", "feature", linkedPath, "main"]);
+  git(canonical, ["worktree", "add", linkedPath, "feature"]);
 
   const linked = realpathSync(linkedPath);
-  git(linked, ["config", "commit.gpgSign", "false"]);
-  expect(git(linked, ["rev-parse", "refs/remotes/origin/main"]).stdout.trim()).toBe(
-    git(canonical, ["rev-parse", "main"]).stdout.trim(),
-  );
-
-  writeFileSync(
-    join(linked, "scripts", "pr-lib", "gates.sh"),
-    'ci_dispatch() { echo "local wrapper executed"; }\n',
-  );
-  git(linked, ["add", "scripts/pr-lib/gates.sh"]);
-  git(linked, ["commit", "-m", "test: local wrapper"]);
-  const localRevision = git(linked, ["rev-parse", "HEAD"]).stdout.trim();
-
   linkPrWrapperDependencies(canonical);
 
   return {
@@ -349,7 +349,7 @@ function makeMismatchedWrapperRepo({
     env: fixtureEnv,
     git,
     linked,
-    localRevision,
+    localRevision: template.localRevision,
     root,
     gitText(args: string[], cwd = canonical) {
       return git(cwd, args).stdout.trim();
@@ -1705,12 +1705,22 @@ if (targeted) {
 if (output) writeFileSync(1, output);
 `,
     );
-    for (const tool of ["git", "tar"]) {
-      writeExecutable(
-        join(fixture.bin, tool),
-        `#!/bin/sh\nexec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" ${tool} "$@"\n`,
-      );
-    }
+    writeExecutable(
+      join(fixture.bin, "git"),
+      `#!/bin/sh
+# Only archive verification needs Node; other prefixes retain its Git parser.
+# Restore the backend PATH for direct calls so policy Git cannot select this stub again.
+case "$1:\${3-}" in
+  -C:|-C:-*|-C:archive|-C:ls-tree|-C:hash-object) ;;
+  --version:|-C:*) PATH="$OPENCLAW_TEST_BACKEND_PATH" exec "$OPENCLAW_TEST_GIT" "$@" ;;
+esac
+exec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" git "$@"
+`,
+    );
+    writeExecutable(
+      join(fixture.bin, "tar"),
+      '#!/bin/sh\nexec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" tar "$@"\n',
+    );
     return {
       readerLog,
       archives,
@@ -2317,6 +2327,17 @@ closeSync(fd);
       }
     },
   );
+
+  itPosix("settles dependency holds when a closed reader signals the creator", () => {
+    const fixture = makeFrozenDependencyFixture();
+    const wrapper = join(fixture.linked, "scripts/pr");
+    const shell = `"$0" unknown-command 2>&1 | true; echo "\${PIPESTATUS[0]}"`;
+    const result = runCommand("/bin/bash", ["-c", shell, wrapper], fixture.env, fixture.linked);
+    expect(result.stdout.trim()).toBe("141");
+    const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
+    const state = readPrCacheState(join(cache, prCacheEntries(cache)[0]!));
+    expect(state).toMatchObject({ anchors: [], settled: true });
+  });
 
   itPosix(
     "materializes and reuses an older anchor without changing the installed tooling root",

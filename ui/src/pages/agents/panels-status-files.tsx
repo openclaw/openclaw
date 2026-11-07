@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, isPending, Loading, Show } from "solid-js";
 import type { ChannelAccountSnapshot, ChannelsStatusSnapshot } from "../../api/types.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
@@ -125,10 +126,12 @@ export function AgentChannels(
         read={params.readState().channelsRead}
         retainedError={params.readState().channelsError}
       >
-        {(_pending, error) => (error ? <div class="callout danger">{error}</div> : undefined)}
+        {(_pending, error) =>
+          error ? <InlineAlert tone="danger">{error}</InlineAlert> : undefined
+        }
       </ChannelReadBoundary>
       {!params.readState().channelsSnapshot ? (
-        <div class="callout info">{t("agents.channels.loadHint")}</div>
+        <InlineAlert tone="info">{t("agents.channels.loadHint")}</InlineAlert>
       ) : undefined}
       <SettingsSection
         title={t("agents.channels.title")}

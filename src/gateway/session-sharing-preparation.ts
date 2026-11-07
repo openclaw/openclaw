@@ -161,7 +161,15 @@ export async function prepareSessionMutationFacts(
   const changed = (change: SessionRowChange) => {
     if ("all" in change) {
       if (isSessionStoreTopologyChange(change)) {
-        if (beforeDiscovery) {
+        // Another agent's admission cannot revoke this retained logical/physical store pair.
+        if (
+          beforeDiscovery ||
+          (facts?.target &&
+            typeof change.scope === "object" &&
+            change.scope.agentId &&
+            change.scope.agentId !== agentId &&
+            change.scope.agentId !== facts.sourceAgentId)
+        ) {
           return;
         }
         if (isOpenClawAgentDatabaseRegistryChange(change) && assertRegistryPublication) {

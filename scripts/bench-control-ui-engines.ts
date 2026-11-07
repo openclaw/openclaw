@@ -9,7 +9,13 @@ import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { chromium as chromiumEngine, webkit as webkitEngine, type Browser } from "playwright";
+import {
+  chromium as chromiumEngine,
+  firefox as firefoxEngine,
+  webkit as webkitEngine,
+  type Browser,
+  type JSHandle,
+} from "playwright";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
@@ -18,10 +24,14 @@ import { waitForControlUiInitialRoster } from "../ui/src/test-helpers/control-ui
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
-  installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
+import {
+  mapControlUiAllocationProfile,
+  summarizeControlUiAllocations,
+} from "./lib/control-ui-allocation-profile.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { controlUiBenchOrder } from "./lib/control-ui-bench-order.ts";
 import {
@@ -36,6 +46,7 @@ import {
   type ColdLoadCpuProfile,
 } from "./lib/control-ui-cold-load-trace.ts";
 import { createControlUiCpuCensus } from "./lib/control-ui-cpu-census.ts";
+import { createEngineAccessibilityObservation } from "./lib/control-ui-engine-accessibility.ts";
 import { createEngineActionScenarios } from "./lib/control-ui-engine-action-scenarios.ts";
 import {
   createEngineActionTiming,
@@ -50,9 +61,14 @@ import {
   installEngineConfigurationObserver,
   readEngineConfigurationObservation,
 } from "./lib/control-ui-engine-configuration-observer.ts";
-import { resolveEngineConfigurations } from "./lib/control-ui-engine-configurations.ts";
 import {
+  resolveEngineConfigurations,
+  type EngineConfiguration,
+} from "./lib/control-ui-engine-configurations.ts";
+import {
+  createEngineIdleControls,
   createEngineIdleScenarios,
+  isEngineIdleControl,
   isEngineIdleScenario,
   readEngineIdleState,
   verifyEngineIdleClocks,
@@ -69,6 +85,9 @@ import {
   createEnginePageScenarios,
   enginePageCoverage,
   enginePageFixtureCounts,
+  createEngineRouteTransitionScenarios,
+  engineRouteTransitionCoverage,
+  type EngineRouteTransition,
 } from "./lib/control-ui-engine-page-scenarios.ts";
 import { createEnginePluginMemoryScenarios } from "./lib/control-ui-engine-plugin-memory-scenarios.ts";
 import { createEngineStreamingScenarios } from "./lib/control-ui-engine-streaming-scenarios.ts";
@@ -87,11 +106,16 @@ import {
   type ControlUiLayerAudit,
 } from "./lib/control-ui-layer-audit.ts";
 import {
+  createControlUiLiveRegionAudit,
+  type ControlUiLiveRegionAudit,
+} from "./lib/control-ui-live-region-audit.ts";
+import {
   compareControlUiScreenshots,
   createControlUiMutationAudit,
   type ControlUiMutationAudit,
 } from "./lib/control-ui-mutation-audit.ts";
 import { summarizeControlUiNativeTrace } from "./lib/control-ui-native-trace.ts";
+import { createControlUiObservationWriter } from "./lib/control-ui-observation-output.ts";
 import {
   finishControlUiPageObserver,
   installControlUiPageObserver,
@@ -99,6 +123,11 @@ import {
   resetControlUiPageObserver,
   type ControlUiPageObservation,
 } from "./lib/control-ui-page-observer.ts";
+import {
+  createControlUiRemountAudit,
+  type ControlUiRemountAudit,
+} from "./lib/control-ui-remount-audit.ts";
+import { createEngineRemountScenarios } from "./lib/control-ui-remount-scenarios.ts";
 import { installControlUiResourceCounts } from "./lib/control-ui-resource-counts.ts";
 import { launchTalkObservationBrowser } from "./lib/control-ui-talk-fixture.ts";
 import {
@@ -129,8 +158,15 @@ const { values } = parseArgs({
     "cpu-only": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "native-audit": { type: "boolean", default: false },
+    allocations: { type: "boolean", default: false },
     "mutation-audit": { type: "boolean", default: false },
+    "live-region-audit": { type: "boolean", default: false },
+    "remount-audit": { type: "boolean", default: false },
+    "route-transitions": { type: "boolean", default: false },
+    "transition-targets": { type: "string" },
     "cpu-throttle": { type: "string", default: "1" },
+    "idle-warmup-ms": { type: "string" },
+    "idle-duration-ms": { type: "string", default: "30000" },
     "memory-soak-rounds": { type: "string", default: "10" },
   },
 });
@@ -150,18 +186,46 @@ if (pagePhases.some((phase) => !["visit", "revisit", "action", "leave"].includes
   throw new Error("page-phases must contain visit, revisit, action and/or leave");
 }
 const engines: ControlUiEngine[] = values.engines.split(",").map((name) => {
-  if (name !== "chromium" && name !== "webkit") {
+  if (name !== "chromium" && name !== "webkit" && name !== "firefox") {
     throw new Error(`Unsupported engine: ${name}`);
   }
   return name;
 });
 const cpuThrottle = Number(values["cpu-throttle"]);
+const idleDurationMs = Number(values["idle-duration-ms"]);
+if (!Number.isInteger(idleDurationMs) || idleDurationMs <= 0) {
+  throw new Error("idle-duration-ms must be a positive integer");
+}
+const idleWarmupOverrideMs =
+  values["idle-warmup-ms"] === undefined ? undefined : Number(values["idle-warmup-ms"]);
+if (
+  idleWarmupOverrideMs !== undefined &&
+  (!Number.isInteger(idleWarmupOverrideMs) || idleWarmupOverrideMs < 0)
+) {
+  throw new Error("idle-warmup-ms must be a non-negative integer");
+}
+const resolveIdleWarmupMs = (scenario: EngineScenario) =>
+  isEngineIdleScenario(scenario)
+    ? (idleWarmupOverrideMs ?? (scenario.visibility === "hidden" ? 60_000 : 0))
+    : 0;
 if (!Number.isFinite(cpuThrottle) || cpuThrottle < 1) {
   throw new Error("cpu-throttle must be at least 1");
 }
-if (cpuThrottle !== 1 && engines.includes("webkit")) {
+if (cpuThrottle !== 1 && engines.some((engine) => engine !== "chromium")) {
   throw new Error(
-    "WebKit does not expose CPU throttling; use --engines chromium for throttled runs",
+    "Only Chromium exposes CPU throttling; use --engines chromium for throttled runs",
+  );
+}
+if (
+  engines.includes("firefox") &&
+  (values.trace ||
+    values["cpu-only"] ||
+    values["cpu-profile"] ||
+    values["native-audit"] ||
+    values.allocations)
+) {
+  throw new Error(
+    "Firefox supports application elapsed timing, not CPU counters or native traces in this harness",
   );
 }
 const networkProfiles = values["network-profiles"].split(",").map((name) => {
@@ -193,10 +257,12 @@ if (values.trace && values["cpu-only"]) {
   throw new Error("Choose --trace or --cpu-only; use separate untraced timing runs");
 }
 if (
-  values["mutation-audit"] &&
+  (values["mutation-audit"] || values["remount-audit"]) &&
   (values.trace || values["cpu-only"] || values["cpu-profile"] || values["native-audit"])
 ) {
-  throw new Error("--mutation-audit is diagnostic; collect profiles and timings in separate runs");
+  throw new Error(
+    "Mutation/remount audits are diagnostic; collect profiles and timings separately",
+  );
 }
 if (values["cpu-profile"] && (values.trace || values["cpu-only"] || engines.includes("webkit"))) {
   throw new Error("--cpu-profile requires Chromium and a separate run from --trace/--cpu-only");
@@ -206,6 +272,17 @@ if (
   (engines.includes("webkit") || values.trace || values["cpu-only"] || values["cpu-profile"])
 ) {
   throw new Error("--native-audit requires Chromium and a separate run from other profiling modes");
+}
+if (
+  values.allocations &&
+  (engines.includes("webkit") ||
+    values.trace ||
+    values["cpu-only"] ||
+    values["cpu-profile"] ||
+    values["native-audit"] ||
+    values["mutation-audit"])
+) {
+  throw new Error("--allocations requires Chromium and a separate run from other profiling modes");
 }
 const artifactDir = createControlUiE2eArtifactDir("engines", values.output);
 const viewports = [
@@ -223,12 +300,20 @@ const sourceRoots = [
   ...(values["control-source-root"] ?? []),
 ];
 const needsWorkboard =
+  values["route-transitions"] ||
   values.pages ||
   values.steps
     ?.split(",")
     .some(
       (id) =>
         id.startsWith("workboard-") ||
+        (id.startsWith("remount-from-") &&
+          (id === "remount-from-plugin" ||
+            id === "remount-from-workboard" ||
+            !values["transition-targets"] ||
+            values["transition-targets"]
+              .split(",")
+              .some((target) => /^\/(?:plugin|workboard)(?:[/?]|$)/u.test(target)))) ||
         id.startsWith("noop-workboard-") ||
         /^page-(?:workboard|plugin)-(?:visit|revisit|action|leave)$/u.test(id),
     );
@@ -242,14 +327,29 @@ const servers: Array<{
   workboardSource?: Awaited<ReturnType<typeof prepareWorkboardResourceSource>>;
   server: Awaited<ReturnType<typeof startControlUiBenchGatewayServer>>;
 }> = [];
-const browsers = new Map<ControlUiEngine, Browser>();
-const launchEngine = (engine: ControlUiEngine) =>
+const browsers = new Map<string, Browser>();
+const browserKey = (
+  engine: ControlUiEngine,
+  accessibility: EngineConfiguration["accessibility"],
+) => (accessibility === "default" ? engine : `${engine}:${accessibility}`);
+const launchEngine = (
+  engine: ControlUiEngine,
+  accessibility: EngineConfiguration["accessibility"],
+) =>
   engine === "webkit"
     ? webkitEngine.launch({ headless: true })
-    : chromiumEngine.launch({
-        headless: true,
-        executablePath: resolvePlaywrightChromiumExecutablePath(chromiumEngine.executablePath()),
-      });
+    : engine === "firefox"
+      ? firefoxEngine.launch({ headless: true })
+      : chromiumEngine.launch({
+          headless: true,
+          args:
+            accessibility === "on"
+              ? ["--force-renderer-accessibility"]
+              : accessibility === "off"
+                ? ["--disable-renderer-accessibility"]
+                : [],
+          executablePath: resolvePlaywrightChromiumExecutablePath(chromiumEngine.executablePath()),
+        });
 
 function processMemory(browser: Browser) {
   // Pinned Playwright owns this child. Never include unrelated browser processes.
@@ -290,6 +390,14 @@ function processMemory(browser: Browser) {
 let planned = 0;
 type Observation = {
   configuration: string;
+  accessibility?: {
+    before?: Awaited<
+      ReturnType<Awaited<ReturnType<typeof createEngineAccessibilityObservation>>["snapshot"]>
+    >;
+    after?: Awaited<
+      ReturnType<Awaited<ReturnType<typeof createEngineAccessibilityObservation>>["finish"]>
+    >;
+  };
   configurationEvidence?: Awaited<ReturnType<typeof readEngineConfigurationObservation>>;
   engine: ControlUiEngine;
   networkProfile: NetworkProfile["name"];
@@ -310,11 +418,27 @@ type Observation = {
   metrics?: EngineMetrics;
   pageMetrics?: ControlUiPageObservation;
   native?: ReturnType<typeof summarizeControlUiNativeTrace>;
+  allocations?: ReturnType<typeof summarizeControlUiAllocations> & {
+    mappedFrames: number;
+    unmappedFrames: number;
+  };
   mutations?: ControlUiMutationAudit;
+  liveRegions?: ControlUiLiveRegionAudit;
+  remounts?: ControlUiRemountAudit;
+  transitions?: Array<
+    EngineRouteTransition & {
+      metrics?: EngineMetrics;
+      remounts?: ControlUiRemountAudit;
+      wallMs: number;
+      applicationMs?: number;
+      error?: string;
+    }
+  >;
   pixels?: Awaited<ReturnType<typeof compareControlUiScreenshots>>;
   computedTheme?: Record<string, string>;
   layers?: ControlUiLayerAudit;
   idle?: {
+    warmupMs: number;
     before: Awaited<ReturnType<typeof readEngineIdleState>>;
     after?: Awaited<ReturnType<typeof readEngineIdleState>>;
     revealed?: Awaited<ReturnType<typeof readEngineIdleState>>;
@@ -345,6 +469,7 @@ type Observation = {
   artifactPrefix: string;
 };
 const observations: Observation[] = [];
+const observationWriter = createControlUiObservationWriter(artifactDir);
 const cpuCensus = createControlUiCpuCensus();
 const writeJson = (name: string, value: unknown) =>
   writeFile(path.join(artifactDir, name), JSON.stringify(value, null, 2));
@@ -374,14 +499,22 @@ try {
     });
   }
   for (const engine of engines) {
-    browsers.set(engine, await launchEngine(engine));
+    for (const accessibility of new Set(
+      configurations.map((configuration) => configuration.accessibility),
+    )) {
+      if (engine !== "chromium" && accessibility !== "default") {
+        continue;
+      }
+      browsers.set(browserKey(engine, accessibility), await launchEngine(engine, accessibility));
+    }
   }
   const requestedIds = values.steps?.split(",");
   const catalog: EngineScenario[] = [
     ...createEngineBootScenarios(servers[0]!.server.baseUrl),
     ...createEngineActionScenarios(),
     ...createEngineCompletedRunScenarios(servers[0]!.server.baseUrl),
-    ...createEngineIdleScenarios(),
+    ...createEngineIdleScenarios(idleDurationMs),
+    ...createEngineIdleControls(idleDurationMs),
     ...createChatComposerScenarios(),
     ...createChatMessageScenarios(),
     ...createChatPanelScenarios().map((scenario) =>
@@ -391,7 +524,11 @@ try {
     ...createEngineMemoryScenarios(memorySoakRounds),
     ...createEnginePluginMemoryScenarios(),
     ...createEngineStreamingScenarios(),
-    ...createEnginePageScenarios(0, pageOrigin),
+    ...createEnginePageScenarios(0, pageOrigin, servers[0]!.server.baseUrl),
+    ...createEngineRemountScenarios(),
+    ...createEngineRouteTransitionScenarios(async (_page, _transition, run) => {
+      await run();
+    }, values["transition-targets"]?.split(",")),
     ...interactionScenarios.filter(
       (scenario) =>
         requestedIds?.includes(scenario.id) ||
@@ -402,18 +539,27 @@ try {
     ),
   ];
   const ids = requestedIds?.flatMap((id) =>
-    id === "chat-actions"
+    id === "remount-interactions"
       ? catalog
-          .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+          .filter(
+            (scenario) =>
+              scenario.id.startsWith("remount-") && !scenario.id.startsWith("remount-from-"),
+          )
           .map((scenario) => scenario.id)
-      : [id],
+      : id === "chat-actions"
+        ? catalog
+            .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+            .map((scenario) => scenario.id)
+        : [id],
   );
   const scenarios = catalog.filter(({ id, explicitOnly, memory }) =>
     ids
       ? ids.some((selected) => selected === id || (selected === "memory" && memory))
-      : values.pages
-        ? id.startsWith("page-") && pagePhases.some((phase) => id.endsWith(`-${phase}`))
-        : !explicitOnly,
+      : values["route-transitions"]
+        ? id.startsWith("remount-from-")
+        : values.pages
+          ? id.startsWith("page-") && pagePhases.some((phase) => id.endsWith(`-${phase}`))
+          : !explicitOnly,
   );
   if (
     !scenarios.length ||
@@ -423,6 +569,14 @@ try {
   }
   if (pageOrigin === "chat" && scenarios.some((scenario) => scenario.fixture?.workboardResources)) {
     throw new Error("Workboard/plugin resource fixtures require --page-origin new-session");
+  }
+  if (values["live-region-audit"] && scenarios.some((scenario) => scenario.navigation)) {
+    throw new Error("Live-region diagnostics require non-navigation scenarios");
+  }
+  if (engines.includes("firefox") && scenarios.some((scenario) => scenario.memory)) {
+    throw new Error(
+      "Firefox does not expose forced GC or heap snapshots in this harness; select non-memory steps",
+    );
   }
   if (
     networkProfiles.some(({ name }) => name !== "localhost") &&
@@ -453,8 +607,10 @@ try {
           "./lib/control-ui-layer-audit.ts",
           "./lib/control-ui-native-trace.ts",
           "./lib/control-ui-mutation-audit.ts",
+          "./lib/control-ui-live-region-audit.ts",
           "./lib/control-ui-cold-load-trace.ts",
           "./lib/control-ui-cpu-census.ts",
+          "./lib/control-ui-allocation-profile.ts",
           "./lib/control-ui-engine-boot-scenarios.ts",
           "./lib/control-ui-engine-completed-run-scenarios.ts",
           "./lib/control-ui-engine-idle-scenarios.ts",
@@ -484,6 +640,7 @@ try {
           "./lib/control-ui-bench-gateway-server.ts",
           "./lib/control-ui-bench-order.ts",
           "./lib/control-ui-engine-configurations.ts",
+          "./lib/control-ui-engine-accessibility.ts",
           "./lib/control-ui-engine-configuration-observer.ts",
         ].map(async (file) => [
           file,
@@ -496,6 +653,18 @@ try {
     browsers: Object.fromEntries(
       [...browsers].map(([engine, browser]) => [engine, browser.version()]),
     ),
+    accessibilityContract:
+      "Explicit on/off configurations use separate Chromium processes, with force/disable-renderer-accessibility respectively. On enables CDP Accessibility before navigation, requests the full tree before warm actions and after every interval, and counts requested-node update events. Full-tree reads are outside timing windows. Off never enables or queries AX. Default keeps ordinary launch flags. This proves browser accessibility data, not screen-reader speech. WebKit/Firefox explicit AX modes and native idle launchers are unsupported and skipped.",
+    firefoxCapabilities: engines.includes("firefox")
+      ? {
+          applicationElapsed: true,
+          cpuCounters: false,
+          nativeTraces: false,
+          heapSnapshots: false,
+          mobile: "viewport and touch only; isMobile emulation unavailable",
+          layoutInstability: "detected per observation; unsupported is null, not zero",
+        }
+      : undefined,
     bundles: servers.map(({ directory, build, sha256, workboardSource }) => ({
       directory,
       build,
@@ -513,41 +682,57 @@ try {
     cpuOnly: values["cpu-only"],
     cpuProfile: values["cpu-profile"],
     nativeAudit: values["native-audit"],
+    idleWarmupOverrideMs: idleWarmupOverrideMs ?? null,
+    idleDurationMs,
+    allocations: values.allocations,
     mutationAudit: values["mutation-audit"],
+    liveRegionAudit: values["live-region-audit"],
+    remountAudit: values["remount-audit"],
+    routeTransitions: values["route-transitions"],
+    transitionTargets: values["transition-targets"]?.split(","),
+    routeTransitionCoverage: values["route-transitions"]
+      ? engineRouteTransitionCoverage
+      : undefined,
     cpuThrottle,
     memorySoakRounds,
-    collection: values["mutation-audit"]
-      ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
-      : values["native-audit"]
-        ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
-        : values["cpu-profile"]
-          ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
-          : values.trace
-            ? "Playwright tracing and engine Inspector/Profiler; overhead included"
-            : values["cpu-only"]
-              ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
-              : "Untraced wall time; Chromium CDP counters only, unavailable WebKit counters are null",
+    collection: values["live-region-audit"]
+      ? "Live-region MutationObserver diagnostic; DOM update candidates, not screen-reader speech or timing proof"
+      : values.allocations
+        ? "V8 sampled allocations including major/minor-GC collected objects; diagnostic overhead, not timing proof"
+        : values["remount-audit"]
+          ? "DOM attachment census with synchronous removal snapshots; diagnostic overhead, not timing proof. DOM detach is not Solid disposal."
+          : values["mutation-audit"]
+            ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
+            : values["native-audit"]
+              ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
+              : values["cpu-profile"]
+                ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
+                : values.trace
+                  ? "Playwright tracing and engine Inspector/Profiler; overhead included"
+                  : values["cpu-only"]
+                    ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
+                    : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
     order:
-      "Serial network profile and engine order alternates each pair; configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
+      "Serial network profiles alternate each pair; engine/configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
-      "Census ranks >1.3x WebKit/Chromium. Fix proof: ten interleaved pairs plus A/A control; median regression <=5% and p95 no worse, otherwise ten more pairs. Profile/CPU and structural counts decide on a noisy host; >20% attributable regression blocks.",
+      "Census screens >1.3x engine/Chromium; confirm with ten rotated pairs plus A/A. Fix proof: twenty rotated pairs plus A/A; median regression <=5% and p95 no worse. Missing CPU clocks cannot certify CPU wins on a noisy host; >20% attributable regression blocks.",
     frameCadence:
       "Prepare and settle frame intervals are consecutive requestAnimationFrame timestamp differences, not the full wait duration. scenarioMs includes driver input and scenario assertions; settleWaitMs measures the final two-frame wait. Their sum is wallMs. These are automation-to-assertion timings, not input-to-paint latency. Browser-local actionTiming splits the driver prefix, application elapsed to the last observed DOM commit (or native value edit), and the assertion/settle tail. These three sum to browserSpanMs, not Node wallMs. Focus work can occur in the prefix; compound input spans retain intermediate driver delays. Trace-only marks expose the same boundaries. Missing native input or an explicit Gateway-response mark, or a missing commit, makes action timing unavailable.",
     boundary:
       "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request and every incoming mock Gateway frame (including the connect challenge); RPC replies thus include a simulated round trip, with no added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
     memoryContract:
       "Opt-in memory-* scenes retain one document, drain 4.1 s retirement timers, clear synthetic request history, then force two collections at each named checkpoint. Compare warm and late checkpoints; heap/native categories/RSS and DOM wrapper/native counts have different engine-specific meanings. Memory-scene elapsed times include forced GC and snapshots and are not latency evidence.",
-    scenarios: scenarios.map(
-      ({ id, route, expected, navigation, memory, diagnostic, viewports: scenarioViewports }) => ({
-        id,
-        route,
-        expected,
-        navigation,
-        memory,
-        diagnostic,
-        viewports: scenarioViewports,
-      }),
-    ),
+    idleContract: `Idle CPU spans a Node-side ${idleDurationMs} ms wait. Hidden idle defaults to 60000 ms of warmup after native visibility settles; visible idle defaults to 0 ms. An explicit idle-warmup-ms overrides either default; 0 measures the initial transition, which can include background memory reclamation. Each idle scenario records its resolved warmup. Counter/request endpoints also include measurement instrumentation setup/draining; reveal and clock recovery occur afterward. Blank/static controls retain shared observation instrumentation without loading the app or Gateway.`,
+    scenarios: scenarios.map((scenario) => ({
+      id: scenario.id,
+      route: scenario.route,
+      expected: scenario.expected,
+      navigation: scenario.navigation,
+      memory: scenario.memory,
+      diagnostic: scenario.diagnostic,
+      viewports: scenario.viewports,
+      ...(isEngineIdleScenario(scenario) ? { idleWarmupMs: resolveIdleWarmupMs(scenario) } : {}),
+    })),
     ...(pageBenchmark
       ? { pageCoverage: enginePageCoverage, pageFixtureCounts: enginePageFixtureCounts }
       : {}),
@@ -555,8 +740,8 @@ try {
   for (const viewport of viewports) {
     for (const item of scenarios) {
       for (let pair = 0; pair < pairs; pair++) {
-        const orderedEngines = pair % 2 ? engines.toReversed() : engines;
-        const slots = controlUiBenchOrder([...servers.entries()], pair);
+        const orderedEngines = controlUiBenchOrder(engines, pair);
+        const slots = [...servers.entries()];
         const orderedProfiles = pair % 2 ? networkProfiles.toReversed() : networkProfiles;
         for (const { networkProfile, engine } of orderedProfiles.flatMap((selectedProfile) =>
           orderedEngines.map((selectedEngine) => ({
@@ -572,7 +757,7 @@ try {
           );
           for (const [position, { configuration, bundle, slot }] of configuredSlots.entries()) {
             slot.server.setAssetLatencyMs(networkProfile.httpLatencyMs);
-            const scenario =
+            let scenario =
               createEngineBootScenarios(slot.server.baseUrl, networkProfile.gatewayLatencyMs).find(
                 ({ id }) => id === item.id,
               ) ??
@@ -580,11 +765,15 @@ try {
                 ({ id }) => id === item.id,
               ) ??
               (item.id.startsWith("page-")
-                ? createEnginePageScenarios(networkProfile.gatewayLatencyMs, pageOrigin).find(
-                    ({ id }) => id === item.id,
-                  )
+                ? createEnginePageScenarios(
+                    networkProfile.gatewayLatencyMs,
+                    pageOrigin,
+                    slot.server.baseUrl,
+                  ).find(({ id }) => id === item.id)
                 : undefined) ??
               item;
+            const idleControl = isEngineIdleControl(scenario);
+            const idleWarmupMs = resolveIdleWarmupMs(scenario);
             const artifactPrefix = `${viewport.name}-${scenario.id}-${networkProfile.name}-${pair + 1}-${engine}-${bundle}-${configuration.name.replaceAll(":", "-")}`;
             const observation: Observation = {
               configuration: configuration.name,
@@ -600,26 +789,73 @@ try {
               hostLoadAverage: os.loadavg(),
               artifactPrefix,
             };
+            if (scenario.id.startsWith("remount-from-")) {
+              observation.transitions = [];
+              scenario = createEngineRouteTransitionScenarios(async (page, transition, run) => {
+                const row: NonNullable<Observation["transitions"]>[number] = {
+                  ...transition,
+                  wallMs: 0,
+                };
+                const started = performance.now();
+                if (values["remount-audit"]) {
+                  await page.evaluate(() => {
+                    window.openclawRemountAudit = window.openclawCreateRemountAudit!();
+                    window.openclawRemountAudit.start();
+                  });
+                }
+                const measurement = await startEngineMeasurement(page, engine, { trace: false });
+                try {
+                  row.applicationMs = await run();
+                } catch (error) {
+                  row.error = String(error);
+                  await page.screenshot({
+                    path: path.join(
+                      artifactDir,
+                      `${artifactPrefix}.transition-${observation.transitions!.length}-failed.png`,
+                    ),
+                  });
+                } finally {
+                  row.wallMs = performance.now() - started;
+                  row.metrics = (await measurement.stop()).metrics;
+                  if (values["remount-audit"]) {
+                    row.remounts = await page.evaluate(() => window.openclawRemountAudit!.finish());
+                  }
+                  observation.transitions!.push(row);
+                  await writeJson(`${artifactPrefix}.transitions.json`, observation.transitions);
+                }
+              }, values["transition-targets"]?.split(",")).find(({ id }) => id === scenario.id)!;
+            }
             if (scenario.viewports && !scenario.viewports.some((name) => name === viewport.name)) {
               observation.status = "skipped";
               observation.skipReason = "This control is unavailable at this viewport.";
               observations.push(observation);
-              await writeJson(`${artifactPrefix}.json`, observation);
-              await writeJson("observations.json", observations);
+              await observationWriter.record(observation);
               continue;
             }
-            if (scenario.visibility === "hidden" && engine === "webkit") {
+            if (scenario.visibility === "hidden" && engine !== "chromium") {
+              observation.status = "skipped";
+              observation.skipReason = `${engine} has no supported native headless hiding API; no simulated visibility proof.`;
+              observations.push(observation);
+              await observationWriter.record(observation);
+              continue;
+            }
+            if (
+              configuration.accessibility !== "default" &&
+              (engine !== "chromium" ||
+                isEngineIdleScenario(scenario) ||
+                scenario.visibility === "hidden")
+            ) {
               observation.status = "skipped";
               observation.skipReason =
-                "WebKit has no supported native headless hiding API; no simulated visibility proof.";
+                "Explicit accessibility modes require the Chromium Playwright launcher.";
               observations.push(observation);
-              await writeJson(`${artifactPrefix}.json`, observation);
-              await writeJson("observations.json", observations);
+              await observationWriter.record(observation);
               continue;
             }
-            if (scenario.memory || !browsers.get(engine)!.isConnected()) {
-              await browsers.get(engine)!.close();
-              browsers.set(engine, await launchEngine(engine));
+            const browserSlotKey = browserKey(engine, configuration.accessibility);
+            if (scenario.memory || !browsers.get(browserSlotKey)!.isConnected()) {
+              await browsers.get(browserSlotKey)!.close();
+              browsers.set(browserSlotKey, await launchEngine(engine, configuration.accessibility));
             }
             // Use the existing runner-owned full Chrome helper for both idle states.
             // Normal Playwright contexts force visibility even after minimization.
@@ -628,12 +864,13 @@ try {
               engine === "chromium"
                 ? await launchTalkObservationBrowser(artifactDir, false)
                 : undefined;
-            const observationBrowser = nativeBrowser?.browser ?? browsers.get(engine)!;
+            const observationBrowser = nativeBrowser?.browser ?? browsers.get(browserSlotKey)!;
             const context =
               nativeBrowser?.context ??
               (await observationBrowser.newContext({
                 viewport: { width: viewport.width, height: viewport.height },
-                isMobile: viewport.name === "mobile",
+                // Firefox supports the narrow viewport and touch, but not isMobile emulation.
+                ...(engine === "firefox" ? {} : { isMobile: viewport.name === "mobile" }),
                 hasTouch: viewport.name === "mobile",
                 serviceWorkers: "block",
                 colorScheme: configuration.colorScheme,
@@ -644,7 +881,7 @@ try {
               }));
             const page = await context.newPage();
             page.setDefaultTimeout(scenario.id.startsWith("chat-actions-") ? 15_000 : 30_000);
-            const traceAction = values.trace && !scenario.navigation;
+            const traceAction = (values.trace || values["native-audit"]) && !scenario.navigation;
             const errors: Array<{ message: string; phase: string }> = [];
             let phase = "setup";
             page.on("pageerror", (error: Error) => {
@@ -659,8 +896,19 @@ try {
             let layerAudit: Awaited<ReturnType<typeof createControlUiLayerAudit>> | undefined;
             let memory: Awaited<ReturnType<typeof createEngineMemoryCollector>> | undefined;
             let throttle: Awaited<ReturnType<typeof context.newCDPSession>> | undefined;
+            let accessibility:
+              | Awaited<ReturnType<typeof createEngineAccessibilityObservation>>
+              | undefined;
+            let liveRegionAudit:
+              | JSHandle<ReturnType<typeof createControlUiLiveRegionAudit>>
+              | undefined;
             let minimizedWindow: number | undefined;
+            let idleRequests: Array<{ method: string }> | undefined;
             try {
+              if (configuration.accessibility === "on") {
+                accessibility = await createEngineAccessibilityObservation(page);
+                observation.accessibility = {};
+              }
               if (nativeBrowser) {
                 await page.setViewportSize(viewport);
                 await page.emulateMedia({
@@ -675,6 +923,9 @@ try {
                   deviceScaleFactor: configuration.deviceScaleFactor,
                   mobile: viewport.name === "mobile",
                 });
+                if (viewport.name === "mobile") {
+                  await throttle.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+                }
                 await throttle.send("Emulation.setLocaleOverride", {
                   locale: configuration.locale,
                 });
@@ -688,6 +939,11 @@ try {
                 await throttle.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
               }
               await page.addInitScript("globalThis.__name = (fn) => fn");
+              if (values["remount-audit"]) {
+                await page.addInitScript(
+                  `window.openclawCreateRemountAudit = ${createControlUiRemountAudit.toString()};${scenario.navigation ? "window.openclawRemountAudit = window.openclawCreateRemountAudit(); window.openclawRemountAudit.start();" : ""}`,
+                );
+              }
               if (values["mutation-audit"]) {
                 await page.addInitScript(
                   `window.openclawMutationAudit = (${createControlUiMutationAudit.toString()})();${scenario.navigation ? "window.openclawMutationAudit.start();" : ""}`,
@@ -735,28 +991,30 @@ try {
                   });
                 });
               }
-              await page.addInitScript(
-                ({ key, gatewayUrl, settings }) => {
-                  if (window === window.top) {
-                    localStorage.setItem(
-                      key,
-                      JSON.stringify({ ...settings, gatewayUrl, lobsterPetVisits: false }),
-                    );
-                    localStorage.setItem("openclaw.i18n.locale", settings.locale);
-                  }
-                },
-                {
-                  key: controlUiBundledSettingsStorageKey(slot.server.baseUrl),
-                  gatewayUrl: controlUiBundledGatewayUrl(slot.server.baseUrl),
-                  settings: {
-                    ...scenario.settings,
-                    theme: configuration.theme,
-                    themeMode: configuration.themeMode,
-                    locale: configuration.locale,
+              if (!idleControl) {
+                await page.addInitScript(
+                  ({ key, gatewayUrl, settings }) => {
+                    if (window === window.top) {
+                      localStorage.setItem(
+                        key,
+                        JSON.stringify({ ...settings, gatewayUrl, lobsterPetVisits: false }),
+                      );
+                      localStorage.setItem("openclaw.i18n.locale", settings.locale);
+                    }
                   },
-                },
-              );
-              const fixture: ReturnType<typeof createScenarioFixture> = scenario.fixture
+                  {
+                    key: controlUiBundledSettingsStorageKey(slot.server.baseUrl),
+                    gatewayUrl: controlUiBundledGatewayUrl(slot.server.baseUrl),
+                    settings: {
+                      ...scenario.settings,
+                      theme: configuration.theme,
+                      themeMode: configuration.themeMode,
+                      locale: configuration.locale,
+                    },
+                  },
+                );
+              }
+              let fixture: ReturnType<typeof createScenarioFixture> = scenario.fixture
                 ?.workboardResources
                 ? createWorkboardResourceFixture(
                     slot.build.buildId,
@@ -764,6 +1022,38 @@ try {
                     slot.workboardSource!.root,
                   )
                 : createScenarioFixture(slot.build.buildId, slot.build.version, scenario);
+              if (scenario.fixture?.workboardResources && scenario.id.startsWith("remount-from-")) {
+                const broad = createScenarioFixture(
+                  slot.build.buildId,
+                  slot.build.version,
+                  scenario,
+                );
+                fixture = {
+                  ...broad,
+                  nativePlugins: fixture.nativePlugins,
+                  controlUiTabs: fixture.controlUiTabs,
+                  sessions: [
+                    ...new Map(
+                      [...broad.sessions, ...fixture.sessions].map((row) => [row.key, row]),
+                    ).values(),
+                  ],
+                  featureMethods: [
+                    ...new Set([
+                      ...(broad.featureMethods ?? []),
+                      ...(fixture.featureMethods ?? []),
+                    ]),
+                  ],
+                  methodResponses: {
+                    ...broad.methodResponses,
+                    ...fixture.methodResponses,
+                    "plugins.uiDescriptors": Object.assign(
+                      {},
+                      broad.methodResponses?.["plugins.uiDescriptors"],
+                      { controlUiTabs: fixture.controlUiTabs },
+                    ),
+                  },
+                };
+              }
               const configResponse = fixture.methodResponses?.["config.get"];
               if (isRecord(configResponse) && isRecord(configResponse.config)) {
                 const config = configResponse.config;
@@ -799,14 +1089,20 @@ try {
                   return sessions.list(params).result;
                 },
               };
-              const gateway = await installMockGateway(
-                page,
-                { ...fixture, awaitInitialRoster: false },
-                {
-                  requestHandlers: { ...defaults, ...scenario.createRequestHandlers?.(defaults) },
-                  afterInitScript: scenario.initScript,
-                },
-              );
+              const gateway = idleControl
+                ? undefined
+                : await installNativePluginMockGateway(
+                    page,
+                    { ...fixture, awaitInitialRoster: false },
+                    {
+                      nativeAssetLatencyMs: networkProfile.httpLatencyMs,
+                      requestHandlers: {
+                        ...defaults,
+                        ...scenario.createRequestHandlers?.(defaults),
+                      },
+                      afterInitScript: `${scenario.initScript ?? ""}\n//# sourceURL=openclaw-bench://test-helpers/mock-gateway.js\n`,
+                    },
+                  );
               if (networkProfile.httpLatencyMs) {
                 // The mock fulfills bootstrap configuration before it reaches the HTTP owner.
                 await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, async (route) => {
@@ -827,7 +1123,11 @@ try {
                   );
                 }
               }
-              await scenario.prepare(page, gateway);
+              if (isEngineIdleControl(scenario)) {
+                await scenario.prepare(page);
+              } else {
+                await scenario.prepare(page, gateway!);
+              }
               if (scenario.navigation !== "measured") {
                 if (!scenario.standaloneDocument) {
                   observation.navigationPreloads = await settleInteractionNavigationPreloads(page);
@@ -836,7 +1136,10 @@ try {
                 await page.evaluate(() => document.fonts.ready.then(() => undefined));
                 observation.prepareFrameIntervalMs = await frames(page);
               }
-              const before = (await gateway.getRequests()).length;
+              if (accessibility && scenario.navigation !== "measured") {
+                observation.accessibility!.before = await accessibility.snapshot();
+              }
+              let before = (await gateway?.getRequests())?.length ?? 0;
               if (values.trace) {
                 // DOM snapshots execute injected script on each action and distort the profile.
                 await context.tracing.start({
@@ -853,7 +1156,8 @@ try {
                 await installChatActionObservation(
                   page,
                   values.trace,
-                  scenario.id === "chat-actions-fork",
+                  scenario.id === "chat-actions-fork" ||
+                    scenario.id.startsWith("chat-actions-split-"),
                 );
               }
               const actionTiming =
@@ -870,6 +1174,16 @@ try {
                 : undefined;
               if (values["mutation-audit"] && !scenario.navigation) {
                 await page.evaluate(() => window.openclawMutationAudit!.start());
+              }
+              if (
+                values["remount-audit"] &&
+                !scenario.navigation &&
+                !scenario.id.startsWith("remount-from-")
+              ) {
+                await page.evaluate(() => {
+                  window.openclawRemountAudit = window.openclawCreateRemountAudit!();
+                  window.openclawRemountAudit.start();
+                });
               }
               if (values["native-audit"]) {
                 layerAudit = await createControlUiLayerAudit(page);
@@ -892,6 +1206,11 @@ try {
                   await visibility.detach();
                 }
               }
+              if (isEngineIdleScenario(scenario) && idleWarmupMs > 0) {
+                await new Promise<void>((resolve) => {
+                  setTimeout(resolve, idleWarmupMs);
+                });
+              }
               // Hide first so minimizing does not become part of hidden-idle paint counts.
               // Creation above obtains the compositor inventory while a surface is visible.
               await layerAudit?.capture();
@@ -899,29 +1218,36 @@ try {
                 const idleBefore = await readEngineIdleState(page);
                 if (
                   idleBefore.document.visibility !== (scenario.visibility ?? "visible") ||
-                  idleBefore.document.gatewayPhase !== "connected"
+                  (!idleControl && idleBefore.document.gatewayPhase !== "connected")
                 ) {
                   throw new Error(
                     "Idle requires the requested native visibility and a connected Gateway",
                   );
                 }
                 observation.idle = {
+                  warmupMs: idleWarmupMs,
                   before: idleBefore,
                   fixture: {
-                    sessions: fixture.sessions.length,
-                    transcriptMessages: Object.values(fixture.sessionTranscripts ?? {}).reduce(
-                      (total, transcript) => total + transcript.messages.length,
-                      0,
-                    ),
+                    sessions: idleControl ? 0 : fixture.sessions.length,
+                    transcriptMessages: Object.values(
+                      idleControl ? {} : (fixture.sessionTranscripts ?? {}),
+                    ).reduce((total, transcript) => total + transcript.messages.length, 0),
                   },
                 };
+                before = (await gateway?.getRequests())?.length ?? 0;
               }
               measurement = await startEngineMeasurement(page, engine, {
                 trace: values.trace,
                 cpuOnly: values["cpu-only"],
                 cpuProfile: values["cpu-profile"],
                 nativeAudit: values["native-audit"],
+                allocations: values.allocations,
               });
+              if (values["live-region-audit"]) {
+                liveRegionAudit = await page.evaluateHandle(createControlUiLiveRegionAudit);
+                await liveRegionAudit.evaluate((audit) => audit.start());
+              }
+              accessibility?.reset();
               phase = "measurement";
               const start = performance.now();
               if (scenario.memory) {
@@ -940,49 +1266,54 @@ try {
                 }, artifactPrefix);
               }
               observation.evidence =
-                (await scenario.run(
-                  page,
-                  gateway,
-                  memory
-                    ? async (checkpoint) => {
-                        // MCP retirement and reconnect feedback own intentional timers up to 4 s.
-                        await page.waitForTimeout(4_100);
-                        await frames(page);
-                        const checkpointState = await page.evaluate(
-                          ({ identity, timeOrigin: initialTimeOrigin }) => {
-                            if (
-                              Reflect.get(window, "openclawMemoryDocumentIdentity") !== identity
-                            ) {
-                              throw new Error("Memory workload reloaded the document");
-                            }
-                            const requests = (window as MockGatewayWindow)
-                              .openclawControlUiE2eGateway!.requests;
-                            const clearedFixtureRequests = requests.length;
-                            requests.length = 0;
-                            return {
-                              timeOrigin: {
-                                initial: initialTimeOrigin,
-                                current: performance.timeOrigin,
+                (isEngineIdleControl(scenario)
+                  ? await scenario.run()
+                  : await scenario.run(
+                      page,
+                      gateway!,
+                      memory
+                        ? async (checkpoint) => {
+                            // MCP retirement and reconnect feedback own intentional timers up to 4 s.
+                            await page.waitForTimeout(4_100);
+                            await frames(page);
+                            const checkpointState = await page.evaluate(
+                              ({ identity, timeOrigin: initialTimeOrigin }) => {
+                                if (
+                                  Reflect.get(window, "openclawMemoryDocumentIdentity") !== identity
+                                ) {
+                                  throw new Error("Memory workload reloaded the document");
+                                }
+                                const requests = (window as MockGatewayWindow)
+                                  .openclawControlUiE2eGateway!.requests;
+                                const clearedFixtureRequests = requests.length;
+                                requests.length = 0;
+                                return {
+                                  timeOrigin: {
+                                    initial: initialTimeOrigin,
+                                    current: performance.timeOrigin,
+                                  },
+                                  clearedFixtureRequests,
+                                  resources: Reflect.get(window, "openclawResourceCounts")(),
+                                };
                               },
-                              clearedFixtureRequests,
-                              resources: Reflect.get(window, "openclawResourceCounts")(),
-                            };
-                          },
-                          { identity: artifactPrefix, timeOrigin },
-                        );
-                        const metrics = await memory!.capture(
-                          path.join(artifactDir, `${artifactPrefix}-${checkpoint}.heapsnapshot`),
-                        );
-                        observation.memory!.push({
-                          checkpoint,
-                          ...checkpointState,
-                          metrics,
-                          process: processMemory(observationBrowser),
-                        });
-                        await writeJson(`${artifactPrefix}-memory.json`, observation.memory);
-                      }
-                    : undefined,
-                )) ?? undefined;
+                              { identity: artifactPrefix, timeOrigin },
+                            );
+                            const metrics = await memory!.capture(
+                              path.join(
+                                artifactDir,
+                                `${artifactPrefix}-${checkpoint}.heapsnapshot`,
+                              ),
+                            );
+                            observation.memory!.push({
+                              checkpoint,
+                              ...checkpointState,
+                              metrics,
+                              process: processMemory(observationBrowser),
+                            });
+                            await writeJson(`${artifactPrefix}-memory.json`, observation.memory);
+                          }
+                        : undefined,
+                    )) ?? undefined;
               if (actionTiming) {
                 await actionTiming.evaluate((timing) => timing.endScenario());
               }
@@ -1006,12 +1337,33 @@ try {
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (liveRegionAudit) {
+                observation.liveRegions = await liveRegionAudit.evaluate((audit) => audit.finish());
+                await liveRegionAudit.dispose();
+                liveRegionAudit = undefined;
+              }
+              if (accessibility) {
+                observation.accessibility!.after = await accessibility.finish();
+              }
+              if (captured.allocations) {
+                const mapped = await mapControlUiAllocationProfile(captured.allocations, {
+                  assetBaseUrl: `${slot.server.baseUrl}/assets/`,
+                  assetDirectory: path.join(slot.directory, "assets"),
+                });
+                await writeJson(`${artifactPrefix}.heapprofile`, mapped.profile);
+                observation.allocations = {
+                  ...summarizeControlUiAllocations(mapped.profile),
+                  mappedFrames: mapped.mappedFrames,
+                  unmappedFrames: mapped.unmappedFrames,
+                };
+              }
               if (observation.idle) {
                 observation.idle.after = await readEngineIdleState(page);
+                idleRequests = ((await gateway?.getRequests()) ?? []).slice(before);
                 const { before: idleBefore, after } = observation.idle;
                 if (
                   after.document.visibility !== idleBefore.document.visibility ||
-                  after.document.gatewayPhase !== "connected" ||
+                  (!idleControl && after.document.gatewayPhase !== "connected") ||
                   after.document.route !== idleBefore.document.route
                 ) {
                   throw new Error("Idle changed route, Gateway connection, or native visibility");
@@ -1036,6 +1388,11 @@ try {
                   before: beforePixels!.toString("base64"),
                   after: afterPixels.toString("base64"),
                 });
+              }
+              if (values["remount-audit"] && !scenario.id.startsWith("remount-from-")) {
+                observation.remounts = await page.evaluate(() =>
+                  window.openclawRemountAudit!.finish(),
+                );
               }
               if (scenario.navigation) {
                 await page.waitForLoadState("networkidle");
@@ -1102,12 +1459,12 @@ try {
                     path: path.join(artifactDir, `${artifactPrefix}.before-scroll.png`),
                   });
                 }
-                observation.idle.clockRecovery = await verifyEngineIdleClocks(page, gateway);
+                observation.idle.clockRecovery = await verifyEngineIdleClocks(page, gateway!);
               }
               if (scenario.id === "sidebar-running-clock-scroll-resize") {
                 observation.evidence = {
                   ...observation.evidence,
-                  clockRecoveryChecks: (await verifyEngineIdleClocks(page, gateway)).length,
+                  clockRecoveryChecks: (await verifyEngineIdleClocks(page, gateway!)).length,
                 };
               }
               if (values["cpu-profile"]) {
@@ -1141,13 +1498,20 @@ try {
                 await writeJson(`${artifactPrefix}.inspector.json`, captured);
               }
               observation.requests = {};
-              for (const { method } of (await gateway.getRequests()).slice(
-                scenario.navigation || scenario.memory ? 0 : before,
-              )) {
+              for (const { method } of idleRequests ??
+                ((await gateway?.getRequests()) ?? []).slice(
+                  scenario.navigation || scenario.memory ? 0 : before,
+                )) {
                 observation.requests[method] = (observation.requests[method] ?? 0) + 1;
               }
               if (errors.length) {
                 throw new Error(errors.map(({ message }) => message).join("\n"));
+              }
+              const failedTransitions = observation.transitions?.filter((row) => row.error);
+              if (failedTransitions?.length) {
+                throw new Error(
+                  `${failedTransitions.length} transition(s) failed; see transitions.json`,
+                );
               }
               if (
                 configuration.forcedColors === "active" &&
@@ -1205,6 +1569,7 @@ try {
                 observation.status = "failed";
               }
               try {
+                await accessibility?.dispose();
                 await throttle?.detach();
                 await context.close();
                 if (scenario.memory) {
@@ -1229,8 +1594,7 @@ try {
                 await writeJson("cpu-census.json", cpuCensus.report());
               }
               observations.push(observation);
-              await writeJson(`${artifactPrefix}.json`, observation);
-              await writeJson("observations.json", observations);
+              await observationWriter.record(observation);
               console.log(
                 JSON.stringify(
                   observation.memory
@@ -1245,11 +1609,15 @@ try {
     }
   }
 } finally {
-  for (const browser of browsers.values()) {
-    await browser.close();
-  }
-  for (const { server } of servers) {
-    await server.close();
+  try {
+    for (const browser of browsers.values()) {
+      await browser.close();
+    }
+    for (const { server } of servers) {
+      await server.close();
+    }
+  } finally {
+    await observationWriter.finish(observations);
   }
 }
 function distribution(samples: number[]) {
@@ -1318,6 +1686,11 @@ const summary = [...cells.values()].map((cell) => {
     failed: rows.filter((row) => row.status === "failed").length,
     skipped: rows.filter((row) => row.status === "skipped").length,
     measured: measured.length,
+    observerSupport: {
+      layoutShifts: pageRows.filter((row) => row.layoutShiftsSupported).length,
+      longTasks: pageRows.filter((row) => row.longTasksSupported).length,
+      observations: pageRows.length,
+    },
     resizeErrorCount: rows.reduce((total, row) => total + row.resizeErrorCount, 0),
     resizeErrorObservations: rows.filter((row) => row.resizeErrorCount > 0).length,
     targets: cell.step.startsWith("page-")
@@ -1411,45 +1784,60 @@ const summary = [...cells.values()].map((cell) => {
 });
 const rows = summary
   .filter(({ engine }) => engine === "chromium")
-  .map((chromium) => {
-    const webkit = summary.find(
-      (row) =>
-        row.engine === "webkit" &&
-        row.step === chromium.step &&
-        row.viewport === chromium.viewport &&
-        row.bundle === chromium.bundle &&
-        row.networkProfile === chromium.networkProfile &&
-        row.configuration === chromium.configuration,
-    );
-    const application = chromium.actionTiming.applicationMs;
-    const webkitApplication = webkit?.actionTiming.applicationMs;
-    const driver = chromium.actionTiming.driverMs;
-    const webkitDriver = webkit?.actionTiming.driverMs;
-    const ratio =
-      application && webkitApplication && application.median > 0
-        ? webkitApplication.median / application.median
-        : null;
-    const driverRatio =
-      driver && webkitDriver && driver.median > 0 ? webkitDriver.median / driver.median : null;
-    const wallRatio =
-      chromium.wallMs && webkit?.wallMs ? webkit.wallMs.median / chromium.wallMs.median : null;
-    const chromiumReady = chromium.evidence.visitReadyMs ?? chromium.evidence.leaveReadyMs;
-    const webkitReady = webkit?.evidence.visitReadyMs ?? webkit?.evidence.leaveReadyMs;
-    const routeReadyRatio =
-      chromiumReady && webkitReady && chromiumReady.median > 0
-        ? webkitReady.median / chromiumReady.median
-        : null;
-    return {
-      chromium,
-      webkit,
-      ratio,
-      driverRatio,
-      wallRatio,
-      chromiumReady,
-      webkitReady,
-      routeReadyRatio,
-    };
-  })
+  .flatMap((chromium) =>
+    engines
+      .filter((engine) => engine !== "chromium")
+      .map((engine) => {
+        const compared = summary.find(
+          (row) =>
+            row.engine === engine &&
+            row.step === chromium.step &&
+            row.viewport === chromium.viewport &&
+            row.bundle === chromium.bundle &&
+            row.networkProfile === chromium.networkProfile &&
+            row.configuration === chromium.configuration,
+        );
+        const application = chromium.actionTiming.applicationMs;
+        const comparedApplication = compared?.actionTiming.applicationMs;
+        const driver = chromium.actionTiming.driverMs;
+        const comparedDriver = compared?.actionTiming.driverMs;
+        const ratio =
+          application && comparedApplication && application.median > 0
+            ? comparedApplication.median / application.median
+            : null;
+        const driverRatio =
+          driver && comparedDriver && driver.median > 0
+            ? comparedDriver.median / driver.median
+            : null;
+        const wallRatio =
+          chromium.wallMs && compared?.wallMs
+            ? compared.wallMs.median / chromium.wallMs.median
+            : null;
+        const chromiumReady =
+          chromium.evidence.visitReadyMs ??
+          chromium.evidence.leaveReadyMs ??
+          chromium.evidence.readyMs;
+        const comparedReady =
+          compared?.evidence.visitReadyMs ??
+          compared?.evidence.leaveReadyMs ??
+          compared?.evidence.readyMs;
+        const routeReadyRatio =
+          chromiumReady && comparedReady && chromiumReady.median > 0
+            ? comparedReady.median / chromiumReady.median
+            : null;
+        return {
+          engine,
+          chromium,
+          compared,
+          ratio,
+          driverRatio,
+          wallRatio,
+          chromiumReady,
+          comparedReady,
+          routeReadyRatio,
+        };
+      }),
+  )
   .toSorted((a, b) => (b.ratio ?? 0) - (a.ratio ?? 0));
 await writeJson("summary.json", {
   headlineMetric: "applicationMs",
@@ -1459,7 +1847,8 @@ await writeJson("summary.json", {
     .map((row) => {
       const baseline = summary.find(
         (candidate) =>
-          candidate.configuration === "default" &&
+          candidate.configuration ===
+            (row.configuration.startsWith("accessibility") ? "accessibility-off" : "default") &&
           candidate.engine === row.engine &&
           candidate.viewport === row.viewport &&
           candidate.step === row.step &&
@@ -1483,12 +1872,17 @@ await writeJson("summary.json", {
         bundle: row.bundle,
         networkProfile: row.networkProfile,
         metric,
+        taskCpuMedianRatio:
+          row.metrics.taskMs && baseline?.metrics.taskMs && baseline.metrics.taskMs.median > 0
+            ? row.metrics.taskMs.median / baseline.metrics.taskMs.median
+            : null,
         medianRatio:
           sample && control && control.median > 0 ? sample.median / control.median : null,
         p95Ratio: sample && control && control.p95 > 0 ? sample.p95 / control.p95 : null,
       };
     }),
-  comparisons: rows.map(({ chromium, ratio, driverRatio, wallRatio, routeReadyRatio }) => ({
+  comparisons: rows.map(({ engine, chromium, ratio, driverRatio, wallRatio, routeReadyRatio }) => ({
+    engine,
     configuration: chromium.configuration,
     viewport: chromium.viewport,
     step: chromium.step,
@@ -1502,7 +1896,8 @@ await writeJson("summary.json", {
   planned,
   executed: observations.length,
   failed: observations.filter((row) => row.status === "failed").length,
-  skipped: planned - observations.length,
+  skipped:
+    observations.filter((row) => row.status === "skipped").length + planned - observations.length,
   ...(pageBenchmark ? { pageCoverage: enginePageCoverage } : {}),
   passed: observations.filter((row) => row.status === "passed").length,
   summary,
@@ -1529,9 +1924,17 @@ await writeFile(
   [
     "# Control UI engine comparison",
     "",
-    `Synthetic Gateway; production HTTP/bundle. ${values.trace ? "Traced samples include profiler overhead." : values["cpu-only"] ? "Sampled WebKit process CPU; Chromium main-thread CPU. No timeline or script profiler." : "Untraced wall samples; WebKit Inspector counters are unavailable (null)."} Wall time includes automation and assertions, not INP. WebKit Inspector script/layout/style durations are wall time; Chromium CDP uses thread CPU. Do not compare these as CPU ratios. Cold contexts are fresh; warm reload retains IndexedDB but mock routing disables HTTP cache.`,
+    `Synthetic Gateway; production HTTP/bundle. ${values.trace ? "Traced samples include profiler overhead." : values["cpu-only"] ? "Sampled WebKit process CPU; Chromium main-thread CPU. No timeline or script profiler." : "Untraced wall samples; WebKit/Firefox native counters are unavailable (null)."} Wall time includes automation and assertions, not INP. WebKit Inspector script/layout/style durations are wall time; Chromium CDP uses thread CPU. Do not compare these as CPU ratios. Cold contexts are fresh; warm reload retains IndexedDB but mock routing disables HTTP cache.`,
     "",
     `Completed ${observations.length}/${planned} observations; ${observations.filter(({ status }) => status === "failed").length} failed; ${observations.filter(({ status }) => status === "skipped").length} unsupported-viewport cells skipped. Timing summaries retain completed intervals with browser errors; failures are never passing proof. Browser-local boot milestones, metrics, counts, CPU coverage, host load and errors: [observations](observations.json), [summary](summary.json), [manifest](manifest.json).`,
+    "",
+    ...(observations.some((row) => row.idle)
+      ? [
+          `Idle warmup defaults to 60000 ms for hidden scenarios and 0 ms for visible scenarios, after visibility settles. ${idleWarmupOverrideMs === undefined ? "No CLI warmup override was supplied." : `The CLI warmup override is ${idleWarmupOverrideMs} ms.`} Resolved warmup is recorded per scenario in the manifest and per idle observation. Explicit --idle-warmup-ms 0 measures the initial transition, including browser reclamation; do not extrapolate it as sustained idle CPU. Counter/request endpoints include measurement instrumentation setup/draining but exclude warmup and reveal/recovery; resourceIntervalMs records the counter window.`,
+          "",
+        ]
+      : []),
+    "Firefox uses the pinned Playwright build. Its mobile cells emulate viewport and touch only (isMobile is unsupported). CPU/native traces/heap snapshots are unavailable; application elapsed time keeps the same browser-local boundaries. Layout Instability and Long Tasks support are detected per observation; missing entries remain null.",
     "",
     "ResizeObserver loop errors are counted in every run, including without tracing or observer-origin diagnostics. Any browser error fails its observation and the command; completed timing intervals do not waive the zero-error requirement.",
     "",
@@ -1546,9 +1949,9 @@ await writeFile(
     "",
     "Application elapsed is first trusted native input (or an explicitly marked Gateway response delivery) to last observed DOM commit/native value edit before scenario return. Gateway marks run inside the page immediately before releasing the deferred response. It excludes the initial driver prefix and later assertion/settle tail, but includes intermediate driver gaps in compound actions; it is not CPU or paint latency. Navigation/memory and actions without both boundaries are unranked. The driver prefix may include application focus work. Browser-local phases do not include boundary RPC transport and do not sum to Node wall time.",
     "",
-    "| Configuration | Viewport | Scenario | Network | Bundle | Chromium application median/p95 (ms) | WebKit application median/p95 (ms) | Application W/C | Driver W/C | Chromium wall median/p95 (ms) | WebKit wall median/p95 (ms) | Wall W/C |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    ...rows.map(({ chromium, webkit, ratio, driverRatio, wallRatio }) => {
+    "| Engine | Configuration | Viewport | Scenario | Network | Bundle | Chromium application median/p95 (ms) | Compared application median/p95 (ms) | Application /C | Driver /C | Chromium wall median/p95 (ms) | Compared wall median/p95 (ms) | Wall /C |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...rows.map(({ engine, chromium, compared, ratio, driverRatio, wallRatio }) => {
       const format = (
         value: ReturnType<typeof distribution> | undefined,
         cell: typeof chromium | undefined,
@@ -1557,26 +1960,28 @@ await writeFile(
           ? `${value.median.toFixed(1)} / ${value.p95.toFixed(1)} (n=${value.n})`
           : cell?.skipped
             ? "unsupported viewport"
-            : "failed/absent";
-      return `| ${chromium.configuration} | ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromium.actionTiming.applicationMs, chromium)} | ${format(webkit?.actionTiming.applicationMs, webkit)} | ${ratio?.toFixed(2) ?? "—"} | ${driverRatio?.toFixed(2) ?? "—"} | ${format(chromium.wallMs, chromium)} | ${format(webkit?.wallMs, webkit)} | ${wallRatio?.toFixed(2) ?? "—"} |`;
+            : cell?.failed
+              ? "failed/unavailable"
+              : "unavailable";
+      return `| ${engine} | ${chromium.configuration} | ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromium.actionTiming.applicationMs, chromium)} | ${format(compared?.actionTiming.applicationMs, compared)} | ${ratio?.toFixed(2) ?? "—"} | ${driverRatio?.toFixed(2) ?? "—"} | ${format(chromium.wallMs, chromium)} | ${format(compared?.wallMs, compared)} | ${wallRatio?.toFixed(2) ?? "—"} |`;
     }),
-    ...(summary.some(({ step }) => step.startsWith("page-"))
+    ...(rows.some(({ chromiumReady, comparedReady }) => chromiumReady || comparedReady)
       ? [
           "",
-          "## Per-page phases",
+          "## Boot and page readiness",
           "",
-          `CPU throttle: ${cpuThrottle}x (Chromium only). Long-task target: ${50 * cpuThrottle} ms. CLS target: 0; all-shift sum also includes shifts within 500 ms of user input. Missing WebKit observer entries are unavailable, never zero. Inspector phases require a separate traced run and are elapsed wall time in WebKit, thread CPU in Chromium. Wall includes driver and assertions.`,
+          `CPU throttle: ${cpuThrottle}x (Chromium only). Long-task target: ${50 * cpuThrottle} ms. CLS target: 0; all-shift sum also includes shifts within 500 ms of user input. Missing WebKit/Firefox observer entries are unavailable, never zero. Inspector phases require a separate traced run and are elapsed wall time in WebKit, thread CPU in Chromium. Wall includes driver and assertions.`,
           "",
           "Visit and departure comparisons use browser-local route readiness; content complete also waits for the fixture's full row/control counts. CPU and task collection spans both boundaries. Action comparisons above use native-input-to-commit timing.",
           "",
-          "| Viewport | Phase | Network | Bundle | Chromium route-ready median/p95 ms | WebKit route-ready median/p95 ms | Ready W/C |",
-          "| --- | --- | --- | --- | --- | --- | --- |",
+          "| Engine | Configuration | Viewport | Phase | Network | Bundle | Chromium route-ready median/p95 ms | Compared route-ready median/p95 ms | Ready /C |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
           ...rows
-            .filter(({ chromiumReady, webkitReady }) => chromiumReady || webkitReady)
-            .map(({ chromium, chromiumReady, webkitReady, routeReadyRatio }) => {
+            .filter(({ chromiumReady, comparedReady }) => chromiumReady || comparedReady)
+            .map(({ engine, chromium, chromiumReady, comparedReady, routeReadyRatio }) => {
               const format = (value: ReturnType<typeof distribution> | undefined) =>
                 value ? `${value.median.toFixed(1)} / ${value.p95.toFixed(1)}` : "unavailable";
-              return `| ${chromium.configuration} | ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromiumReady)} | ${format(webkitReady)} | ${routeReadyRatio?.toFixed(2) ?? "—"} |`;
+              return `| ${engine} | ${chromium.configuration} | ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromiumReady)} | ${format(comparedReady)} | ${routeReadyRatio?.toFixed(2) ?? "—"} |`;
             }),
           "",
           "| Engine | Viewport | Phase | Network | Bundle | Passed/failed | Route ready median/p95 ms | Content complete median/p95 ms | Wall median/p95 ms | Ready assets / HTTP/1.1 wave floor | Longest task p95 ms | Script/style/layout median ms | CLS max | All shifts max | Elements after |",

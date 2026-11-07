@@ -12,6 +12,7 @@ type CronJobMutationOptions = Pick<
   | "pluginCommand"
   | "pluginCommandSourceDigest"
   | "streamSandbox"
+  | "streamOperatorSource"
   | "enabledExplicit"
   | "systemOwned"
   | "createdActor"
