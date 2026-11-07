@@ -525,6 +525,7 @@ export async function runEmbeddedAttemptPromptPhase(
         normalizeToolCallIds: preparedStreamRuntime.normalizeToolCallIds,
         images: imageResult.images,
         modelPrompt: promptContext.promptForModel,
+        modelPromptProvenance: promptContext.modelPromptProvenance,
         onFinalPromptText: (prompt) => {
           promptState.finalPromptText = prompt;
         },
