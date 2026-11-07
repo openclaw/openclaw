@@ -484,11 +484,14 @@ The node's iroh secret key is generated locally and stored separately at
 not a Gateway token and is never written into configuration or worker descriptors.
 Do not delete or copy that key to another node: a new key requires new enrollment.
 
-The main WebSocket, worker WebSocket, worker bundle downloads, and workspace
-transfers share the authenticated tunnel through an owner-only Unix socket
+The main WebSocket, worker WebSocket, desktop and portal attachment streams,
+worker bundle downloads, and workspace transfers share the authenticated tunnel through an owner-only Unix socket
 (`0600` inside a `0700` directory). There is no localhost TCP proxy. This preview
 supports Unix hosts and native-process workers; Windows and container-isolated
 workers require a separate transport integration.
+
+Saved OpenClaw ID targets do not inherit Cloudflare Access or Gateway bearer
+credentials from the installing shell; the service resumes its enrolled key.
 
 The transport sends QUIC keep-alives, probes silent connections, and backs off
 when the relay denies admission. A removed or unadmitted node key stops the host

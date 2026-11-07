@@ -307,7 +307,13 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     // runtime toolchain on PATH for sibling binaries when needed.
     extraPathDirs: resolveDaemonRuntimeBinDir(runtimePath),
   });
-  if (!opts.authFromEnv) {
+  if (gatewayTarget?.kind === "openclaw-id") {
+    // This service resumes an enrolled key, not the installing shell's WebSocket credentials.
+    delete environment.OPENCLAW_GATEWAY_TOKEN;
+    delete environment.OPENCLAW_GATEWAY_PASSWORD;
+    delete environment.CF_ACCESS_CLIENT_ID;
+    delete environment.CF_ACCESS_CLIENT_SECRET;
+  } else if (!opts.authFromEnv) {
     const savedGateway = (await loadNodeHostConfig(installEnv))?.gateway;
     const identity = savedGateway
       ? await loadDeviceIdentityIfPresentAsync({ env: installEnv })
