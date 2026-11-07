@@ -35,7 +35,6 @@ import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
 import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
 import {
   applyAuthHeaderOverride,
-  applySecretRefHeaderSentinels,
   applyLocalNoAuthHeaderOverride,
   formatMissingAuthError,
   getApiKeyForModelCore,
