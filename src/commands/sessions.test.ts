@@ -165,6 +165,47 @@ describe("sessionsCommand", () => {
     }
   });
 
+  it("renders the label column (and leaves it empty when absent)", async () => {
+    const store = await writeStore({
+      "agent:main:labelled": makeSession("labelled", {
+        label: "research helper",
+        color: "purple",
+      }),
+      "agent:main:plain": makeSession("plain", {}),
+    });
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+    const lines = stripAnsi(logs.join("\n")).split("\n");
+    const header = lines.find((line) => line.includes("Key") && line.includes("Model")) ?? "";
+    expect(header).toContain("Label");
+    const cells = (id: string) =>
+      (lines.find((line) => line.includes(id)) ?? "")
+        .split(/[│|]/u)
+        .slice(1, -1)
+        .map((cell) => cell.trim());
+    const labelIndex = header.split(/[│|]/u).findIndex((c) => c.trim() === "Label");
+    expect(cells("agent:main:labelled")[labelIndex - 1]).toBe("research helper");
+    expect(cells("agent:main:plain")[labelIndex - 1]).toBe("");
+  });
+
+  it("hides the label column when no displayed session has a label", async () => {
+    const store = await writeStore({
+      "agent:main:alpha": makeSession("alpha", {}),
+      "agent:main:beta": makeSession("beta", {}),
+    });
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+    const lines = stripAnsi(logs.join("\n")).split("\n");
+    const header = lines.find((line) => line.includes("Key") && line.includes("Model")) ?? "";
+    expect(header).not.toContain("Label");
+    expect(
+      header
+        .split(/[│|]/u)
+        .slice(1, -1)
+        .map((cell) => cell.trim()),
+    ).toEqual(["Kind", "Key", "Age", "Model", "Runtime", "Tokens (ctx %)", "Flags"]);
+  });
+
   it("preserves recorded tokens without freshness provenance in text and JSON", async () => {
     const store = await writeSession(
       "boundary-session",
@@ -178,6 +219,8 @@ describe("sessionsCommand", () => {
       "agent:main:boundary",
     );
     const logs = await readSessionsText(store);
+    // No label on this sole session, so the Label column is hidden and Tokens
+    // sits at index 5 (columns: Kind/Key/Age/Model/Runtime/Tokens/Flags).
     expect(singleSessionTableCells(logs)[5]).toBe("49/200k (?%)");
     const payload = await readSessionsJson(store);
     expect(payload.sessions).toEqual([
