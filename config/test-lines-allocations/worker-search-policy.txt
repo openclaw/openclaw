@@ -1,3 +1,2 @@
-119
-# Worker inference dashboard web_search regression: 67 new test lines.
-# Reconciles 52 lines of test-line debt already present at CI base 58ac8a385809.
+67
+# Worker inference dashboard web_search regression before the provider call.
