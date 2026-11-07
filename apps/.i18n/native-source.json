@@ -5291,6 +5291,7 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt","kind":"ui-call","surface":"android","id":"native.android.40db4106c43664c7","source":"Device access; Gateway opt-in still required"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt","kind":"ui-call","surface":"android","id":"native.android.f45e93674426e614","source":"Device information"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt","kind":"ui-call","surface":"android","id":"native.android.29abb74db5e7cd16","source":"Enabled"},
+    {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt","kind":"ui-call","surface":"android","id":"native.android.5039bfdcb6ff9fcb","source":"Enter fingerprint manually"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt","kind":"ui-call","surface":"android","id":"native.android.94cf9c9dd3a53696","source":"Enter setup code"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt","kind":"ui-call","surface":"android","id":"native.android.41d4d2aca75d8826","source":"Enter the setup code from openclaw qr."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt","kind":"ui-call","surface":"android","id":"native.android.116d68ef41f0c596","source":"Find people and contact details"},

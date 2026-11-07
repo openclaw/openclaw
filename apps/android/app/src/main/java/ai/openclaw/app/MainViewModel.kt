@@ -1251,6 +1251,10 @@ class MainViewModel internal constructor(
     launchGatewayConnectionOperation { runtime, isCurrent -> runtime.refreshGatewayConnection(isCurrent) }
   }
 
+  fun enterGatewayFingerprintManually() {
+    launchGatewayConnectionOperation { runtime, isCurrent -> runtime.refreshGatewayConnection(isCurrent, manualTlsTrust = true) }
+  }
+
   fun startGatewayDiscovery() {
     queueRuntimeStartup()
   }
