@@ -33,9 +33,13 @@ const Subview = lazy(() => import("./chat-composer-plus-menu-subview.tsx"), {
   export: "ChatComposerPlusMenuSubview",
 });
 
-function rootRenderInputs(menu: ChatComposerPlusMenuContentProps) {
+function rootRenderInputs(
+  menu: ChatComposerPlusMenuContentProps,
+  canUpload: boolean,
+  imagesOnly: boolean,
+) {
   const inputs: unknown[] = [i18nRevision()];
-  inputs.push(uploadsEnabled(menu.attachments.uploadConfig), menu.showCapabilities);
+  inputs.push(canUpload, imagesOnly, menu.showCapabilities);
   for (const toggle of menu.rootToggles ?? []) {
     inputs.push(
       toggle.value,
@@ -58,11 +62,14 @@ function rootRenderInputs(menu: ChatComposerPlusMenuContentProps) {
   return inputs;
 }
 
-function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
+function rootItems(
+  menu: ChatComposerPlusMenuContentProps,
+  canUpload: boolean,
+  imagesOnly: boolean,
+): MenuEntry[] {
   const entries: MenuEntry[] = [];
-  const canUpload = uploadsEnabled(menu.attachments.uploadConfig);
   if (canUpload) {
-    entries.push(...composerAttachmentMenuItems(menu));
+    entries.push(...composerAttachmentMenuItems(imagesOnly));
   }
   if (menu.showCapabilities || menu.rootToggles?.length) {
     if (canUpload) {
@@ -219,7 +226,13 @@ export function ChatComposerPlusMenuBody(props: ChatComposerPlusMenuResolvedProp
     }
   };
   const rootInputs = createMemo(
-    () => ({ menu: props.menu, values: rootRenderInputs(props.menu) }),
+    () => {
+      // Sample display inputs here; selection and sketch lifetimes still read live controls.
+      const menu = { ...props.menu };
+      const canUpload = uploadsEnabled(menu.attachments.uploadConfig);
+      const imagesOnly = menu.attachments.imagesOnly === true;
+      return { menu, canUpload, imagesOnly, values: rootRenderInputs(menu, canUpload, imagesOnly) };
+    },
     {
       lazy: true,
       equals: (previous, next) =>
@@ -227,7 +240,13 @@ export function ChatComposerPlusMenuBody(props: ChatComposerPlusMenuResolvedProp
         previous.values.every((value, index) => Object.is(value, next.values[index])),
     },
   );
-  const items = createMemo(() => rootItems(rootInputs().menu), { lazy: true });
+  const items = createMemo(
+    () => {
+      const { menu, canUpload, imagesOnly } = rootInputs();
+      return rootItems(menu, canUpload, imagesOnly);
+    },
+    { lazy: true },
+  );
   onSettled(() => {
     if (props.readMenu().overlay.open) {
       props.menu.onLoadSkills();

@@ -1,2 +1,2 @@
-# Sketch admission coverage (82) plus browser regressions for click dots, rejected attachment retry, composer lifetime, and retained side-chat menu (95).
-177
+# Sketch admission (82), browser lifetime/retry controls (95), and retained menu image-only display controls (9).
+186

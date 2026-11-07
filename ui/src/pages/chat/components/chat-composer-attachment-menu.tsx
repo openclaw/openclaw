@@ -12,9 +12,9 @@ registerEnglishCatalog(registerChatSketchEnglish);
 
 const SketchDialog = lazy(() => import("./chat-sketch-dialog.tsx"), { export: "SketchDialog" });
 
-export function composerAttachmentMenuItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
+export function composerAttachmentMenuItems(imagesOnly: boolean): MenuEntry[] {
   const sources: MenuEntry[] = [];
-  const mediaOption = menu.attachments.imagesOnly
+  const mediaOption = imagesOnly
     ? (["photo", "image", t("chat.composer.attachPhoto")] as const)
     : (["media", "image", t("chat.composer.attachMedia")] as const);
   const nativeSourceMenu = useNativeAttachmentSourceMenu();
@@ -24,7 +24,7 @@ export function composerAttachmentMenuItems(menu: ChatComposerPlusMenuContentPro
         ["camera", "camera", t("chat.composer.cameraInput")],
         mediaOption,
         // Image-only composers keep the single picker's file input, filtered to images.
-        ...(menu.attachments.imagesOnly
+        ...(imagesOnly
           ? []
           : ([["file", "paperclip", t("chat.composer.attachFileOption")]] as const)),
       ] as const)) {
