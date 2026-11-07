@@ -15,13 +15,13 @@ const watchMocks = vi.hoisted(() => ({
   delay: vi.fn<(milliseconds: number) => Promise<void>>(),
 }));
 vi.mock("node:timers/promises", () => ({ setTimeout: watchMocks.delay }));
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
+vi.mock("openclaw/plugin-sdk/file-access-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/file-access-runtime")>();
   return {
     ...actual,
-    readFile: async (...args: Parameters<typeof actual.readFile>) => {
-      await watchMocks.beforeRead(args[0]);
-      return actual.readFile(...args);
+    readRegularFile: async (...args: Parameters<typeof actual.readRegularFile>) => {
+      await watchMocks.beforeRead(args[0].filePath);
+      return actual.readRegularFile(...args);
     },
   };
 });
@@ -387,8 +387,9 @@ describe("policy commands", () => {
     await writeFixture(join(workspaceDir, "policy.jsonc"), {});
     const reading = createDeferred(),
       release = createDeferred();
+    const policyPath = await fs.realpath(join(workspaceDir, "policy.jsonc"));
     watchMocks.beforeRead.mockImplementation(async (file) => {
-      if (file === join(workspaceDir, "policy.jsonc")) {
+      if (file === policyPath) {
         reading.resolve();
         await release.promise;
       }
@@ -602,7 +603,7 @@ describe("policy commands", () => {
     );
   });
 
-  it("returns JSON findings for missing policy compare files", async () => {
+  it("returns JSON findings for unreadable policy compare files", async () => {
     await writeFixture(join(workspaceDir, "policy.jsonc"), {});
 
     const { exitCode, parsed } = await runPolicyCompareJson({
@@ -633,6 +634,18 @@ describe("policy commands", () => {
     expectIncludedFindings(missingLiteral.parsed.findings, {
       checkId: "policy/policy-conformance-invalid",
     });
+    await fs.mkdir(join(workspaceDir, "not-a-file"));
+    for (const paths of [
+      { baseline: "not-a-file", policy: "policy.jsonc" },
+      { baseline: "baseline.policy.jsonc", policy: "not-a-file" },
+    ]) {
+      const refused = await runPolicyCompareJson(paths);
+      expect(refused.exitCode).toBe(1);
+      expectIncludedFindings(refused.parsed.findings, {
+        checkId: "policy/policy-conformance-invalid",
+        message: expect.stringContaining("regular file"),
+      });
+    }
   });
 
   it("rejects scoped policy rules that do not have a valid supported selector", async () => {

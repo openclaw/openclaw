@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
+import { readRegularFile } from "openclaw/plugin-sdk/file-access-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { POLICY_RULE_METADATA, type PolicyRuleMetadata } from "./doctor/metadata.js";
 import { policyRuleValueIsValid } from "./doctor/ordered-shape.js";
@@ -392,7 +393,9 @@ async function readPolicyDocument(path: string): Promise<PolicyDocumentReadResul
   const displayName = basename(path);
   let operation = "read";
   try {
-    const raw = await fs.readFile(path, "utf-8");
+    // Selected links remain valid; special files must fail before policy admission can hang.
+    const { buffer } = await readRegularFile({ filePath: await fs.realpath(path) });
+    const raw = buffer.toString("utf8");
     operation = "parsed";
     return { ok: true, displayName, value: JSON5.parse(raw) };
   } catch (err) {
