@@ -22,11 +22,13 @@ export const page = defineSolidPage<"devices", ApplicationContext, DevicesRouteD
       const auth = gatewaySnapshot.hello?.auth ?? null;
       const canPair = !auth || hasOperatorPairingAccess(auth);
       const canAdmin = hasOperatorAdminAccess(auth);
+      // Warm the shared read without activating the editor before the page mounts.
+      // Bindings observe its receipt independently of inventory and approvals.
+      void context.runtimeConfig.refreshDisplay({ background: true }).catch(() => undefined);
       await Promise.all([
         loadNodes(devices),
         Promise.allSettled([
           canPair && loadDevices(devices),
-          context.runtimeConfig.refresh(),
           canAdmin && loadExecApprovals(devices),
         ]),
       ]);
