@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import {
   normalizeOptionalString,
@@ -105,6 +106,9 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
           return;
         }
         const retainedRequester = req.screencastAuthority?.retainRequester();
+        // The session checks each navigation from a page listener on the shared connection,
+        // which runs in another call's async context. Resolve policy as this minting request.
+        const runInMintingRequest = AsyncLocalStorage.snapshot();
         try {
           const { token, expiresAtMs } = mintBrowserScreencastToken({
             profileName,
@@ -122,12 +126,13 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
             isRequesterCurrent: retainedRequester?.isCurrent ?? req.requester?.isCurrent,
             releaseRequester: retainedRequester?.release,
             assertCurrent,
-            checkNavigationAllowed: async (nextUrl) => {
-              await assertBrowserNavigationResultAllowed({
-                url: nextUrl,
-                ...browserNavigationPolicyForProfile(ctx, profileCtx),
-              });
-            },
+            checkNavigationAllowed: (nextUrl) =>
+              runInMintingRequest(() =>
+                assertBrowserNavigationResultAllowed({
+                  url: nextUrl,
+                  ...browserNavigationPolicyForProfile(ctx, profileCtx),
+                }),
+              ),
           });
           res.json({
             token,

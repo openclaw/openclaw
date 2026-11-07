@@ -26,7 +26,6 @@ import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import type { AppSidebarElement, AppSidebarMethods } from "./app-sidebar.tsx";
-import type { SessionTitleDisplay } from "./markdown-link-display.ts";
 import { registryFor } from "./overlay-registry.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
 import { controlsForHovercard, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
@@ -37,6 +36,7 @@ import {
   SESSION_MENU_OPEN_EVENT,
   sessionProgressHoverPlacementForTarget,
   sessionProgressHoverTargetFromEvent,
+  type SessionTitleDisplay,
 } from "./session-progress-hovercard-target.ts";
 
 const OPEN_DELAY_MS = 450;

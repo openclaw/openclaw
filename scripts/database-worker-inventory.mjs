@@ -3532,6 +3532,7 @@ const workerModules = new Set([
   "src/state/user-profile-read.worker.ts", // Shared-state read registry owns catalog identity and channel identity reads.
   "src/state/user-profile-enterprise-github-identity.ts", // Profile read-worker dispatch and profile writer merge/commit projections own these SQL readers; host attribution uses the async read command.
   "src/state/user-profile-catalog-identity.read.ts", // Only readUserProfileReadCommand in user-profile-read.worker.ts executes this reader.
+  "src/state/user-profile-openclaw-id.read.ts", // Only openclaw-state-read-operation-registry.ts imports this worker operation table.
   "src/gateway/github-personal-publication-store.worker.ts", // Shared-state publication request, mutation, and read workers only.
   "src/gateway/github-publication-store.worker.ts", // Shared-state publication request, mutation, and read workers only.
   "src/state/user-github-connections.worker.ts", // openclaw-state-worker-registry installs its operation table; host imports are type-only.
@@ -3595,6 +3596,7 @@ const workerModules = new Set([
   "src/audit/message-execution-binding.ts", // Audit writer alone ensures and confirms outbound execution bindings.
 
   "src/channels/message/ingress-queue-health.kernel.ts",
+  "src/channels/message/ingress-queue-prune.kernel.ts", // Only channelIngress.prune in ingress-queue.worker.ts executes runtime retention writes.
   "src/channels/message/ingress-queue.kernel.ts",
 
   "src/config/sessions/session-accessor.sqlite-archive.worker.ts", // The archive owner starts this native worker; cold-prepare callbacks stay inside its read-only scope and private-port dispatcher.

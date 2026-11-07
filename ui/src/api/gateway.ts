@@ -17,7 +17,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { trackForegroundActivity } from "../app/foreground-activity.ts";
 import { NativeGatewayAuthUnavailableError } from "../app/native-gateway-auth.ts";
 import { isRemoteControlUiIngress } from "../app/remote-ingress.ts";
-import { formatUiError } from "../lib/format-error.ts";
+import { formatConnectionErrorSummary } from "../lib/connection-error.ts";
 import { clearDeviceAuthToken, storeDeviceAuthToken } from "../lib/nodes/index.ts";
 import { listSessionPlacementRecoveryStorageKeys } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -142,7 +142,7 @@ export class GatewayBrowserClient {
               ? error
               : new GatewayRequestError({
                   code: "UNAVAILABLE",
-                  message: formatUiError(error),
+                  message: formatConnectionErrorSummary(error),
                   retryable: error instanceof NativeGatewayAuthUnavailableError,
                 });
           return {
@@ -243,10 +243,7 @@ export class GatewayBrowserClient {
       onCallbackError: (label, error) => console.error(`[gateway] ${label} handler error:`, error),
       handshake: { mode: "require-challenge", timeoutMs: DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS },
       reconnect: { initialMs: 800, multiplier: 1.7, maxMs: 15_000 },
-      nowMs: () =>
-        typeof performance !== "undefined" && typeof performance.now === "function"
-          ? performance.now()
-          : Date.now(),
+      nowMs: () => performance.now(),
     });
   }
 

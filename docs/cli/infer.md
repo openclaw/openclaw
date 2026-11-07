@@ -111,6 +111,7 @@ shell-completion metadata.
   `embedding create`, and `model auth login/logout/status`) also accept `--agent <id>`. They resolve
   an explicit id first, then `agents.defaults.systemAgent.agentId`, then the sole configured agent.
 - Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged. An interrupt cancels image generation or editing and discards late provider results before output writes begin. It also stops an in-progress provider-URL video download instead of letting it finish and publish a late result.
+- Ctrl-C or SIGTERM cancels image description provider requests and prevents later model fallback attempts.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
 - Model runs load the catalog for case correction only when an explicit model override contains uppercase characters. Runs using the configured default or a lowercase model ref skip that catalog lookup.
 - `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.
@@ -165,6 +166,8 @@ Notes:
 - Use `model run --gateway` to test Gateway routing or agent-runtime setup while keeping the model input raw. Use [`openclaw agent`](/cli/agent) or a chat surface for full agent context, tools, memory, and session transcript.
 - `--thinking adaptive` maps to the completion-runtime level `medium`; `--thinking max` maps to `max` for OpenAI models that support the native max effort, otherwise `xhigh`.
 - `model auth login`, `model auth logout`, and `model auth status` manage saved provider auth state.
+- An interrupt accepted during generation cancels the in-flight local request or Gateway call and stops waiting for it instead of letting the run finish, and publishes no output for the interrupted run.
+- For `model run --gateway`, interruption cancels the caller's RPC and does not change the lifetime of Gateway-owned generation.
 
 ## Image
 
@@ -189,6 +192,7 @@ openclaw infer image describe --file ./photo.jpg --model ollama/qwen2.5vl:7b --p
 Notes:
 
 - Use `image edit` when starting from existing input files; `--size`, `--aspect-ratio`, or `--resolution` add geometry hints on providers/models that support them.
+- `image edit --file` accepts regular files and symlinks to regular files. Special files such as FIFOs are refused before any provider request.
 - `image generate` and `image edit` accept positive numeric `W:H` aspect ratios, including `7:5` and `1.5:1`. Malformed values such as `16x9`, `16/9`, or `0:5` fail before a provider request or output file is created.
 - `--output-format png --background transparent` with `--model openai/gpt-image-1.5` gives transparent-background OpenAI PNG output; `--openai-background` is an OpenAI-specific alias for the same hint. Providers that do not declare background support report it as an ignored override (see `ignoredOverrides` in the [JSON envelope](#json-output)).
 - `--quality low|medium|high|auto` works for providers that support image-quality hints, including OpenAI. OpenAI also accepts `--openai-moderation low|auto`.
@@ -225,6 +229,12 @@ openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --jso
 
 `--model` must be `<provider/model>`.
 
+An accepted interrupt cancels the pending transcription request and suppresses
+late transcript output.
+
+The same cancellation behavior applies to `infer video describe`: interruption
+stops the pending provider request and suppresses late description output.
+
 For audio transcription and video description on POSIX systems, `--file` follows
 directory symlinks before resolving `..`, matching filesystem path resolution.
 Final-file symlinks remain subject to the existing media-directory checks.
@@ -253,6 +263,7 @@ Notes:
 - `tts status` only supports `--gateway` (it reflects gateway-managed TTS state).
 - Local and loopback-Gateway `tts convert --output` copies stage beside the destination and replace it only after success; a failed copy leaves an existing file unchanged.
 - If interruption is accepted before the output copy begins, `tts convert` leaves the requested destination unchanged. Completed synthesis audio remains in the media store for its normal lifetime.
+- Interrupting `tts convert --gateway` cancels the caller's pending RPC and exits with status 130 without printing a late result. Gateway-owned speech synthesis keeps its existing lifetime.
 - Remote-Gateway `tts convert --output` is rejected before requesting speech synthesis.
 - Use `tts convert --provider <id>` when selecting a provider without overriding its model.
 - `--channel <id>` is an output-format hint, not a delivery request. Local conversion
@@ -313,6 +324,9 @@ that prefix; model ids that contain a slash keep the provider prefix, for exampl
 Without `--json`, `embedding create` shows the provider and model, followed by
 each input, its dimension count, and a preview of the first eight vector values.
 Longer vectors end with `...`; use `--json` to retrieve complete vectors.
+
+An accepted interrupt forwards cancellation to the embedding provider and suppresses
+output from the interrupted batch.
 
 ## JSON output
 

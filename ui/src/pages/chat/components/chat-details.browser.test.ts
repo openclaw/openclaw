@@ -1,8 +1,10 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal, merge } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
+import { observeResize } from "../../../lib/reactive/observers.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubResizeObserver } from "../../../test-helpers/resize-observer.ts";
 import { phase } from "../../../test-helpers/solid-menu.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
@@ -107,6 +109,7 @@ async function fixture(
       update({ chat: { ...current().chat!, ...patch } }),
     open: (source: HTMLElement) => details?.open(source),
     frame,
+    elements: current().elements!,
     pane,
     footer,
     get session() {
@@ -132,6 +135,34 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
+  it("keeps unchanged resize targets and observes replaced refs in the same layout object", async () => {
+    await page.viewport(1700, 900);
+    const view = await fixture(props(), 1320, false, "desktop", true);
+    onTestFinished(observeResize([view.frame], () => {}));
+    const settle = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    await settle();
+    const read = vi.spyOn(view.frame, "getBoundingClientRect");
+    onTestFinished(() => read.mockRestore());
+    view.updateChat({ messages: [] });
+    flush();
+    await Promise.resolve();
+    expect(read).not.toHaveBeenCalled();
+
+    const replacement = document.createElement("div");
+    replacement.style.cssText = view.frame.style.cssText;
+    view.pane.append(replacement);
+    const replacedRead = vi.spyOn(replacement, "getBoundingClientRect");
+    onTestFinished(() => replacedRead.mockRestore());
+    view.elements.frame = replacement;
+    view.updateChat({ messages: [] });
+    flush();
+    await settle();
+    expect(replacedRead).toHaveBeenCalled();
+  });
+
   it("resolves composer observation after refs attach", () => {
     const observe = vi.spyOn(ResizeObserver.prototype, "observe");
     const pane = document.createElement("div");
@@ -189,7 +220,7 @@ describe("chat Details presentation", () => {
   it.each([undefined, "desktop"] as const)(
     "reserves automatic Details before the first resize delivery (presentation: %s)",
     async (nativePresentation) => {
-      vi.stubGlobal("ResizeObserver", undefined);
+      stubResizeObserver();
       try {
         await page.viewport(1700, 900);
         const { conversation, panel } = await fixture(
@@ -354,25 +385,26 @@ describe("chat Details presentation", () => {
         createComponent(ChatDetailsDesktopBody, {
           presented: true,
           get children() {
-            return createComponent(ChatDetailsEnvironment, {
-              details: props({
-                detailsWorkspace: {
-                  root: "/workspace/details",
-                  label: null,
+            return () =>
+              createComponent(ChatDetailsEnvironment, {
+                details: props({
+                  detailsWorkspace: {
+                    root: "/workspace/details",
+                    label: null,
+                    branch: "feature/details",
+                  },
+                }),
+                presented: true,
+                onOpenUncommitted: openChanges,
+                uncommitted: {
+                  sessionKey: card.sessionKey,
                   branch: "feature/details",
+                  baseRef: "HEAD",
+                  files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
+                  additions: 3,
+                  deletions: 1,
                 },
-              }),
-              presented: true,
-              onOpenUncommitted: openChanges,
-              uncommitted: {
-                sessionKey: card.sessionKey,
-                branch: "feature/details",
-                baseRef: "HEAD",
-                files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
-                additions: 3,
-                deletions: 1,
-              },
-            });
+              });
           },
         }),
       { container: panel },

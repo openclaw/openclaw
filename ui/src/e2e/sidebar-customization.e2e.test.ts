@@ -4,11 +4,11 @@ import { expect, it } from "vitest";
 import {
   controlUiBundledGatewayUrl,
   controlUiSessionPath,
-  installMockGateway,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
+import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
 import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
@@ -46,7 +46,7 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { height: 954, width: 1105 } },
         async ({ page }) => {
-          await installMockGateway(page, {
+          await installNativePluginMockGateway(page, {
             sessions: Array.from({ length: 40 }, (_, index) => ({
               key: `agent:main:divider-session-${index}`,
               label: `Project checkpoint ${index + 1}`,
@@ -143,7 +143,7 @@ suite.define(() => {
             { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
             { id: "ops", name: "Operations", total: 0, active: 0, archived: 0, byStatus: {} },
           ];
-          await installMockGateway(page, {
+          await installNativePluginMockGateway(page, {
             ...workboardUi,
             methodResponses: {
               "workboard.boards.list": { boards },
@@ -271,7 +271,7 @@ suite.define(() => {
       key: hiddenSessionCatalogsStorageKey,
       value: ["claude", "offline-catalog"],
     });
-    const gateway = await installMockGateway(page, {
+    const gateway = await installNativePluginMockGateway(page, {
       featureMethods: ["sessions.catalog.list"],
       methodResponses: {
         "sessions.catalog.list": {
@@ -320,7 +320,7 @@ suite.define(() => {
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    await installMockGateway(page, {
+    await installNativePluginMockGateway(page, {
       controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
       methodResponses: {
         "config.get": {
@@ -704,7 +704,7 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        await installMockGateway(page, {
+        await installNativePluginMockGateway(page, {
           sessions: [
             { hasActiveRun: true, key: "main", kind: "direct", status: "running", updatedAt: 100 },
           ],
@@ -800,7 +800,7 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, {
+        const gateway = await installNativePluginMockGateway(page, {
           methodResponses: {
             "cron.list": {
               jobs: [

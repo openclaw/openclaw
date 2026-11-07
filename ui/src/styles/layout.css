@@ -1,6 +1,5 @@
 @import "./session-menu.css";
 
-.context-usage__title,
 .palette-session-settings__title,
 .palette-session-settings__machine {
   color: var(--muted);
@@ -707,7 +706,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   border: 0;
   border-radius: var(--radius-md);
   background: var(--sidebar-rail-action-bg);
-  color: var(--accent-foreground);
+  color: var(--sidebar-rail-action-foreground);
   text-decoration: none;
 }
 
@@ -718,7 +717,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .header-new-session:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-hover-bg);
-  color: var(--accent-foreground);
+  color: var(--sidebar-rail-action-foreground);
 }
 
 .header-new-session:focus-visible {
@@ -885,34 +884,23 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
      both values share --sidebar-pad-x so they cannot drift. */
   margin-right: calc(-1 * var(--sidebar-pad-x));
   padding-right: var(--sidebar-pad-x);
-  scrollbar-color: color-mix(in srgb, var(--muted) 10%, transparent) transparent;
 }
 
-.sidebar-shell:hover .sidebar-shell__body {
-  scrollbar-color: color-mix(in srgb, var(--muted) 16%, transparent) transparent;
-}
-
+/* The whole sidebar counts as the scroller's hover zone, header and footer included. */
 @supports selector(::-webkit-scrollbar) {
-  .sidebar-shell__body {
-    /* Native scrollbar colors override the separate thumb-hover treatment. */
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
-  .sidebar-shell:hover .sidebar-shell__body {
-    scrollbar-color: auto;
-  }
-
-  .sidebar-shell__body::-webkit-scrollbar-thumb {
-    background-color: color-mix(in srgb, var(--muted) 10%, transparent);
-  }
-
   .sidebar-shell:hover .sidebar-shell__body::-webkit-scrollbar-thumb {
-    background-color: color-mix(in srgb, var(--muted) 16%, transparent);
+    background-color: var(--scrollbar-thumb-near);
   }
 
-  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:hover {
+  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:hover,
+  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:active {
     background-color: var(--scrollbar-thumb-hover);
+  }
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .sidebar-shell:hover .sidebar-shell__body {
+    scrollbar-color: var(--scrollbar-thumb-near) transparent;
   }
 }
 
@@ -1515,6 +1503,16 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   overflow-anchor: none;
 }
 
+/* While an archived row fades out (app-sidebar-archive-exit.ts), the rows below
+   and the sections after the list glide into its slot; 60 + 180 ms matches it. */
+.sidebar-session-window[data-sidebar-archive-exiting] {
+  transition: height 180ms cubic-bezier(0.2, 0, 0, 1) 60ms;
+}
+
+.sidebar-session-window[data-sidebar-archive-exiting] > .sidebar-session-tree {
+  transition: transform 180ms cubic-bezier(0.2, 0, 0, 1) 60ms;
+}
+
 .sidebar-recent-sessions__list {
   min-height: 12px;
 }
@@ -2107,8 +2105,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   display: none;
 }
 
-/* The disclosure stays rightmost; actions sit beside it. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
+/* Every depth shares the disclosure endcap. Keep row-host specificity so touch
+   alignment cannot reset its horizontal space. */
+.sidebar-recent-session.session-row-host:has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
   right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
@@ -2531,8 +2530,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   bottom: -2px;
 }
 
+/* Rows keep their intrinsic height; capped menus scroll instead of squeezing multiline labels. */
 .sidebar-customize-menu__item {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 6px;
   width: 100%;
@@ -3588,7 +3589,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .content--workboard > openclaw-router-outlet,
-.content--custodian > openclaw-router-outlet {
+.content--custodian > openclaw-router-outlet,
+.content.content--systems > openclaw-router-outlet {
   /* These pages already fill the shell. A retained outlet box would move when
      their route inset replaces the previous page's, creating a layout shift. */
   display: contents;
@@ -3758,7 +3760,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   );
 
   /* Stacked headers and pages without a toolbar clear floating chrome with padding. */
-  &:not(.content--toolbar-header) {
+  &:not(.content--toolbar-header, .content--plugin-embed) {
     padding-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance) + 16px);
   }
 
@@ -3782,7 +3784,7 @@ html.openclaw-native-web-chrome
       var(--shell-native-titlebar-controls-width) + 8px - var(--content-inline-padding)
   );
 
-  &:not(.content--toolbar-header) {
+  &:not(.content--toolbar-header, .content--plugin-embed) {
     padding-top: calc(var(--page-toolbar-height) + 16px);
   }
 }
@@ -3822,12 +3824,6 @@ html.openclaw-native-web-chrome
 
 .page-subtitle .learn-more-link {
   white-space: nowrap;
-}
-
-.page-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .grid {

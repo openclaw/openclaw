@@ -5,6 +5,8 @@ export type {
   ChannelAccountSnapshot,
   ChannelAgentTool,
   ChannelCapabilities,
+  ChannelDisplayMention,
+  ChannelMentionAdapter,
   ChannelDirectoryEntry,
   ChannelDirectoryEntryKind,
   ChannelGroupContext,

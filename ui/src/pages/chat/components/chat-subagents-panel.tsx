@@ -68,7 +68,12 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     let mobileReturn: { scrollTop: number; focus: HTMLElement | null } | undefined;
     const data = useSessionPanel(
       host,
-      () => ({ sessionKey: host.sessionKey, agentId: host.agentId, presented: host.presented }),
+      () => ({
+        sessionKey: host.sessionKey,
+        agentId: host.agentId,
+        presented: host.presented,
+        includeDescendants: host.mobile !== true,
+      }),
       SubagentsPanelData,
       syncSelection,
     );
@@ -588,6 +593,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
         key === "sessionKey" ||
         key === "agentId" ||
         key === "presented" ||
+        key === "mobile" ||
         key === "showRequest"
       ) {
         syncSessionPanelInputs(host);

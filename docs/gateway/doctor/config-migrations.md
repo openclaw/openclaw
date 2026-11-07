@@ -101,14 +101,16 @@ entry, including its old settings, and the `skill-workshop` id in `plugins.deny`
 Validation reports that Doctor will remove them.
 
 Doctor, which also runs during `openclaw update`, removes that older policy and records
-the marker. It does not change `plugins.allow` or `plugins.enabled`. An ordinary
+the marker. A non-empty `plugins.allow` from that era never governed Workshop, so Doctor
+adds `skill-workshop` to it and existing users keep Workshop. Doctor never changes
+`plugins.enabled`. An ordinary
 config write records the marker only when no older policy needs repair. While an older
 entry or deny id is ignored, config writes that change `plugins` are refused with the
 next step: run `openclaw doctor --fix`, then retry. After that, `skill-workshop` policy
 applies like any other plugin's.
 
-An exclusive `plugins.allow` without `skill-workshop`, or `plugins.enabled: false`, keeps
-the plugin off, so learned skills do not load. Doctor's Skill Workshop health check warns
+After the migration, an exclusive `plugins.allow` without `skill-workshop`, or
+`plugins.enabled: false`, keeps the plugin off, so learned skills do not load. Doctor's Skill Workshop health check warns
 about either switch while Workshop is on and names the fix.
 
 ## Group allowlist fallback
@@ -273,6 +275,8 @@ not read the recreated file or follow its symlink.
 Unrelated invalid fields, unsupported legacy shapes, and heartbeat repairs in
 read-only, future-written, or included configuration still require operator
 repair before admission.
+If Doctor's projected configuration still fails validation, admission reports
+the remaining validation paths so you can correct them before retrying.
 
 ### Memory flush model selection
 
@@ -355,6 +359,15 @@ key, `ANTHROPIC_API_KEY`, or `ANTHROPIC_OAUTH_TOKEN`). An API default model with
 a Claude CLI fallback is left unchanged, and an existing `anthropic/*` entry is
 never replaced. Updates run the same repair through the backed-up Doctor config
 write; `openclaw doctor` without `--fix` reports it.
+
+Doctor rewrites legacy `claude-cli/<model>` refs to `anthropic/<model>` and pins
+the `claude-cli` runtime on that model entry. Runtime is chosen per model, so the
+rewrite would also move any direct `anthropic/<model>` selection onto Claude CLI.
+Doctor keeps the `claude-cli/*` refs as written, and reports a warning, when an
+agent runs the same model both ways: in its primary, fallbacks, heartbeat, or
+subagent model (including selections inherited from `agents.defaults`), or by
+listing both spellings in one model map or allowlist. Both routes keep working.
+The same rule applies to `google-gemini-cli/*` refs.
 
 ## Command-owner target kinds
 
@@ -972,6 +985,21 @@ naming the configured path, harness model, and resolved native default. Matching
 and differing selections are both supported configurations. This notice proposes
 no repair and does not rewrite the config; ACP turns keep their configured harness
 selection.
+
+## Saved model output caps
+
+OpenClaw's default output cap for a model with no authored, provider, or catalog
+`maxTokens` is 32768 tokens, or half the context window when that window is below
+65,536 tokens (never below 8192 unless the window is smaller). Earlier releases used
+8192, and onboarding saved 4096 (custom-provider wizard) or 8192 (self-hosted setup)
+into model rows.
+
+Doctor reports model rows under `models.providers.*.models` that still pin
+`maxTokens` to 4096 or 8192 as information (`core/doctor/legacy-output-cap`), grouped
+per provider, when removing the value would raise the cap. It skips providers with a
+provider-level `maxTokens` and Mistral, whose 8192 cap is intentional. A saved cap may
+be deliberate, so Doctor proposes no repair and never rewrites it: remove `maxTokens`
+from those rows to use the catalog limit or the new default.
 
 ## Missing plugins during migration
 

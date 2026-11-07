@@ -86,11 +86,11 @@ suite.define(() => {
         const connection = (scope: string) =>
           section.locator(`[data-github-connection="${scope}"]`);
         await expect(connection("system")).toContainText("@system-octocat");
-        await expect(button("Change system GitHub")).toHaveCount(0);
+        await expect(button("Change System GitHub")).toHaveCount(0);
         await expect(connection("agent")).toHaveCount(0);
         const configReads = (await gateway.getRequests("config.get")).length;
         const configWrites = (await gateway.getRequests("config.set")).length;
-        await button("Connect my GitHub").click();
+        await button("Connect My GitHub").click();
         await expect(connection("personal").locator("[data-github-setup]")).toBeVisible();
         await expect(connection("system").locator("[data-github-setup]")).toHaveCount(0);
         await expect(button("Use a PAT instead")).toHaveCount(0);
@@ -121,7 +121,7 @@ suite.define(() => {
         await expect(section.locator("[data-github-setup]")).toHaveCount(0);
         await expect(button("Continue with GitHub")).toHaveCount(0);
         await gateway.setMethodResponse("users.github.status", status);
-        await button("Change my GitHub").click();
+        await button("Change My GitHub").click();
         await button("Disconnect").click();
         expect((await gateway.waitForRequest("users.github.disconnect")).params).toEqual({});
         await expect(connection("personal")).toContainText("Disconnected");

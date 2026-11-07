@@ -35,6 +35,7 @@ import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-work
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
+  loadStagedWorkspaceManifest,
   captureWorkspaceManifestDocument,
   workspaceManifestPaths,
 } from "./workspace-manifest-worker.js";
@@ -54,9 +55,8 @@ import {
   hasWorkerWorkspaceResultRef,
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
-  withStagedWorkerWorkspaceResult,
+  withStagedWorkerWorkspaceManifest,
   deleteStagedWorkerWorkspaceResult,
-  readStagedWorkerWorkspaceResult,
 } from "./workspace-result-staging.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -168,7 +168,9 @@ export function projectionOperations(
     const document = selected.baseline_ref ? await baselineDocument() : undefined;
     return await selectLocalWorkspaceCanonicalPaths({
       root: owner.worktree.path,
-      admittedPaths: selected.source_paths_json,
+      admittedPaths: preparedInputPaths
+        ? undefined
+        : parseLocalWorkspaceSourcePaths(selected.source_paths_json),
       preparedPaths: preparedInputPaths,
       signal,
       assertCurrent,
@@ -197,9 +199,6 @@ export function projectionOperations(
     return snapshot;
   };
   const scan = async (target: Direction): Promise<LocalWorkspaceManifestCheckpoint> => {
-    if (owner.worktree.snapshotRef) {
-      await buildCacheInputs();
-    }
     await assertLocalWorkspaceDirectory(sourcePath(target));
     const snapshot = await readManifest({
       kind: "scan",
@@ -356,7 +355,7 @@ export function projectionOperations(
     }
     const refreshBaseline = refresh ? await baselineDocument() : undefined;
     let conflictPaths: string[] | undefined;
-    await withStagedWorkerWorkspaceResult(
+    await withStagedWorkerWorkspaceManifest(
       {
         root: owner.worktree.path,
         stagedResultRef: selected.pending_ref,
@@ -547,7 +546,7 @@ export function projectionOperations(
       }
       await settle();
       // The host snapshot admits selected source and retained cache inputs, including unchanged files.
-      const snapshot = await readStagedWorkerWorkspaceResult(owner.worktree.path, stagedResultRef);
+      const snapshot = await loadStagedWorkspaceManifest(owner.worktree.path, stagedResultRef);
       const incoming = buildCacheInputPaths(snapshot.current.entries.map((entry) => entry.path));
       const selected = current();
       const admitted = parseLocalWorkspaceSourcePaths(selected.source_paths_json);
@@ -572,9 +571,10 @@ export function projectionOperations(
       if (!selected.pending_target) {
         // A failed restore may have applied the overlay before its checkout was
         // rolled back. Retain and replay the same accepted receipt on retry.
-        const receipt = await readStagedWorkerWorkspaceResult(
+        const receipt = await loadStagedWorkspaceManifest(
           owner.worktree.repoRoot,
           selected.pending_ref,
+          undefined,
           await buildCacheInputs(),
         );
         current();
@@ -655,9 +655,10 @@ export function projectionOperations(
           throw new Error("Archive receipt still owns its restore data");
         }
         if (selected.pending_target) {
-          const receipt = await readStagedWorkerWorkspaceResult(
+          const receipt = await loadStagedWorkspaceManifest(
             owner.worktree.repoRoot,
             selected.pending_ref,
+            undefined,
             await buildCacheInputs(),
           );
           current();

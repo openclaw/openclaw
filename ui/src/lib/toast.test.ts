@@ -133,6 +133,24 @@ describe("shared toast", () => {
     expect(onDismiss).toHaveBeenCalledOnce();
   });
 
+  it("keeps equal copy distinct by key and replaces only the matching notice", async () => {
+    const host = await mountHost();
+    const firstDismiss = vi.fn();
+    const secondDismiss = vi.fn();
+    const message = "Session started";
+    showToast({ severity: "success", message, dedupeKey: "first", onDismiss: firstDismiss });
+    showToast({ severity: "success", message, dedupeKey: "second", onDismiss: secondDismiss });
+    showToast({ severity: "success", message });
+    await settleHost(host);
+    expect(titles(host)).toEqual([message, message, message]);
+
+    showToast({ severity: "success", message: "Session created", dedupeKey: "first" });
+    await settleHost(host);
+    expect(firstDismiss).toHaveBeenCalledExactlyOnceWith("replaced");
+    expect(secondDismiss).not.toHaveBeenCalled();
+    expect(titles(host)).toEqual(["Session created", message, message]);
+  });
+
   it("separates actions in the center from arrivals on the right", async () => {
     const host = await mountHost();
     showToast({ severity: undefined, message: "Session archived" });

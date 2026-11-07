@@ -1152,7 +1152,8 @@ openclaw-appearance-background .settings-background-preview .session-background_
 /* Short values line up with the selects in the same column. */
 .settings-row:not(.settings-row--stacked)
   .settings-row__control
-  > :is([data-settings-chat-message-width], [data-settings-terminal-font]) {
+  > [data-settings-chat-message-width],
+.settings-row:not(.settings-row--stacked) .settings-row__control > [data-settings-terminal-font] {
   width: 220px;
   text-align: start;
 }
@@ -2118,6 +2119,21 @@ openclaw-approvals-page .data-table-pagination__info {
 
   .approval-log__chevron {
     grid-area: 1 / 4;
+  }
+}
+
+.standing-grants-empty {
+  display: grid;
+
+  &::before,
+  & > span {
+    grid-area: 1 / 1;
+  }
+
+  /* Reserve the translated empty copy while the read still says Unknown. */
+  &::before {
+    content: attr(data-empty-message);
+    visibility: hidden;
   }
 }
 
