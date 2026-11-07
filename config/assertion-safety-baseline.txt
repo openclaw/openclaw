@@ -2119,7 +2119,6 @@ src/plugins/loader-load-context.ts	4
 src/plugins/loader-module-runtime.ts	5
 src/plugins/loader-records.ts	1
 src/plugins/loader-runtime-candidate.ts	1
-src/plugins/loader-shared.ts	2
 src/plugins/managed-npm-retention.ts	3
 src/plugins/manifest-setup-normalizers.ts	4
 src/plugins/manifest.ts	2

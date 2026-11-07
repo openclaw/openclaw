@@ -23,7 +23,7 @@ const startupFixture = createFixtureLifetime();
 // Join timed-out startup before the outer hooks retire its runtime owners.
 afterEach(() => startupFixture.cleanup());
 
-it.each([false, true])("captures catalog before bootstrap (absent=%s)", (absent, { signal }) =>
+it.for([false, true])("captures catalog before bootstrap (absent=%s)", (absent, { signal }) =>
   startupFixture.run(() => captureCatalogBeforeBootstrap(absent, signal)),
 );
 
