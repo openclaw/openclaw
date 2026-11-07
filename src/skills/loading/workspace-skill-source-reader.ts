@@ -7,6 +7,7 @@ import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { hasBinary, resolveSkillRequiredBins } from "./config.js";
 import { loadSingleSkillDirectory } from "./local-loader.js";
 import { createSkillEntry } from "./skill-entry-metadata.js";
+import { createSkillLoadDiagnostics } from "./skill-load-diagnostics.js";
 import { mergeSkillRecords } from "./skill-precedence.js";
 import { resolveSkillDiscoveryLimits } from "./skill-root-discovery.js";
 import {
@@ -26,6 +27,7 @@ export function readWorkspaceSkillSources(
   request: WorkspaceSkillSourceRequest,
   batch?: SkillSourceReadBatch,
 ): WorkspaceSkillSources {
+  const diagnostics = createSkillLoadDiagnostics();
   const config: OpenClawConfig = {
     skills: {
       limits: request.limits,
@@ -34,13 +36,13 @@ export function readWorkspaceSkillSources(
   };
   const entries =
     request.bundledSkillName !== undefined
-      ? readBundledSkillEntries(request.bundledSkillName, {
+      ? readBundledSkillEntries(request.bundledSkillName, diagnostics, {
           config,
           bundledSkillsDir: request.sourcePlan.bundledSkillsDir,
         })
-      : loadWorkspaceSkillSourceEntries(request.sourcePlan, config, batch);
+      : loadWorkspaceSkillSourceEntries(request.sourcePlan, diagnostics, config, batch);
   const executionEntries = request.executionWorkspaceDir
-    ? loadExecutionSkillEntries(request.executionWorkspaceDir, config, batch)
+    ? loadExecutionSkillEntries(request.executionWorkspaceDir, diagnostics, config, batch)
     : [];
   const bins = [
     ...new Set([
@@ -60,6 +62,7 @@ export function readWorkspaceSkillSources(
   return {
     entries,
     executionEntries,
+    diagnostics: diagnostics.snapshot(),
     runtime: { platform: process.platform, bins },
     ...(request.status
       ? {
@@ -77,6 +80,7 @@ export function readWorkspaceSkillSources(
 /** Read a single bundle with the same boundary and file limits as local discovery. */
 function readBundledSkillEntries(
   skillName: string,
+  diagnostics: ReturnType<typeof createSkillLoadDiagnostics>,
   opts?: { config?: OpenClawConfig; bundledSkillsDir?: string },
 ): SkillEntry[] {
   const normalizedName = skillName.trim().toLowerCase();
@@ -98,7 +102,10 @@ function readBundledSkillEntries(
       origin: "bundled",
       rootDir: rootRealPath,
     }),
-    onDiagnostic: (diagnostic) => warnInvalidSkill("openclaw-bundled", diagnostic),
+    onDiagnostic: (diagnostic) => {
+      diagnostics.add(diagnostic);
+      warnInvalidSkill("openclaw-bundled", diagnostic);
+    },
   });
   if (!loaded || loaded.skill.name.trim().toLowerCase() !== normalizedName) {
     return [];
