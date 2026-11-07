@@ -1,0 +1,2 @@
+# Catalog normalization preserves identity changes and transport route semantics.
+105

@@ -263,21 +263,19 @@ function completeProviderRuntimeContext<
 
 export function normalizeProviderResolvedModelWithPlugin(
   params: ProviderRuntimeLookup & {
+    runtimeHandle?: ProviderRuntimePluginHandle;
     pluginMetadataSnapshot?: PluginMetadataRegistryView;
     context: ProviderNormalizeResolvedModelContext;
   },
 ): ProviderRuntimeModel | undefined {
   const context = completeProviderRuntimeContext(params);
-  return (
-    resolveProviderRuntimePlugin({
-      ...params,
-      modelId: params.context.modelId,
-    })?.normalizeResolvedModel?.(context) ?? undefined
-  );
+  const plugin = ensureProviderRuntimePluginHandle({ ...params, modelId: context.modelId }).plugin;
+  return plugin?.normalizeResolvedModel?.(context) ?? undefined;
 }
 
 export function applyProviderResolvedTransportWithPlugin(
   params: ProviderRuntimeLookup & {
+    runtimeHandle?: ProviderRuntimePluginHandle;
     context: ProviderNormalizeResolvedModelContext;
   },
 ): ProviderRuntimeModel | undefined {
@@ -289,6 +287,7 @@ export function applyProviderResolvedTransportWithPlugin(
     workspaceDir,
     env: params.env,
     modelId: params.context.modelId,
+    runtimeHandle: params.runtimeHandle,
     context: {
       ...(config !== undefined ? { config } : {}),
       ...(workspaceDir !== undefined ? { workspaceDir } : {}),
@@ -319,6 +318,7 @@ export function applyProviderResolvedTransportWithPlugin(
 export function normalizeProviderTransportWithPlugin(
   params: ProviderRuntimeLookup & {
     modelId?: string | null;
+    runtimeHandle?: ProviderRuntimePluginHandle;
     context: ProviderNormalizeTransportContext;
   },
 ): { api?: string | null; baseUrl?: string } | undefined {

@@ -84,4 +84,16 @@ describe("catalog-owned model compat", () => {
       ),
     ).toBeUndefined();
   });
+
+  it.each([
+    [{ baseUrl: " https://api.example.test/v1/ " }, true],
+    [{ baseUrl: null }, true],
+    [{ baseUrl: "/" }, true],
+    [{ baseUrl: "https://API.example.test:443/v1" }, true],
+    [{ baseUrl: "https://api.example.test/v1?tenant=other" }, false],
+    [{ baseUrl: "https://api.example.test/v1#other" }, false],
+    [{ api: "anthropic-messages", baseUrl: catalogRoute.baseUrl }, false],
+  ] as const)("preserves route comparison for %j", (configuredRoute, expected) => {
+    expect(modelTransportRoutesMatch(catalogRoute, configuredRoute)).toBe(expected);
+  });
 });
