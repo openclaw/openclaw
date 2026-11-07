@@ -567,7 +567,7 @@ describe("OpenClaw shell server preferences", () => {
 });
 
 describe("OpenClaw shell settings search", () => {
-  it("does not load schema through a replaced runtime config capability", async () => {
+  it("loads search schema alongside config through the original capability", async () => {
     const loadGate = createDeferred();
     const firstRuntimeConfig = {
       ensureLoaded: vi.fn(() => loadGate.promise),
@@ -580,6 +580,7 @@ describe("OpenClaw shell settings search", () => {
     const shell = testShell({ runtimeConfig: firstRuntimeConfig });
 
     const load = shell.handleSettingsSearchQueryChange("browser");
+    expect(firstRuntimeConfig.ensureSchemaLoaded).toHaveBeenCalledOnce();
     shell.runtime = {
       context: { runtimeConfig: secondRuntimeConfig } as unknown as ApplicationContext,
     };
@@ -587,7 +588,6 @@ describe("OpenClaw shell settings search", () => {
     await load;
 
     expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
-    expect(firstRuntimeConfig.ensureSchemaLoaded).not.toHaveBeenCalled();
     expect(secondRuntimeConfig.ensureSchemaLoaded).not.toHaveBeenCalled();
   });
 
