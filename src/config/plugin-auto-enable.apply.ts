@@ -1,8 +1,13 @@
-import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
-import type { PluginDiscoveryResult } from "../plugins/discovery.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  isCurrentPluginMetadataSnapshotRuntimeGeneration,
+} from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginSetupPreparation } from "../plugins/plugin-setup-module.js";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { getPublishedConfigRuntimeEnvState } from "./config-env-vars.js";
 import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";
 import { materializePluginAutoEnableCandidatesInternal } from "./plugin-auto-enable.materialize.js";
 import {
@@ -11,20 +16,12 @@ import {
 } from "./plugin-auto-enable.shared.js";
 import type {
   PluginAutoEnableCandidate,
+  PluginAutoEnableConfigCache,
+  PluginAutoEnableDiscoveryCache,
   PluginAutoEnableResult,
 } from "./plugin-auto-enable.types.js";
+import { getRuntimeConfigSnapshot } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
-
-type PluginAutoEnableCacheEntry = {
-  candidates: PluginDiscoveryResult["candidates"];
-  plugins: PluginManifestRegistry["plugins"];
-  ambientEnvTriggers: AmbientEnvTriggerPolicy;
-  result: PluginAutoEnableResult;
-};
-type PluginAutoEnableDiscoveryCache = WeakMap<object, PluginAutoEnableCacheEntry>;
-type PluginAutoEnableRegistryCache = WeakMap<object, PluginAutoEnableDiscoveryCache>;
-type PluginAutoEnableEnvCache = WeakMap<object, PluginAutoEnableRegistryCache>;
-type PluginAutoEnableConfigCache = WeakMap<object, PluginAutoEnableEnvCache>;
 
 let sameTurnApplyCache: PluginAutoEnableConfigCache | undefined;
 let sameTurnApplyCacheClearScheduled = false;
@@ -95,16 +92,39 @@ export function applyPluginAutoEnable(
 ): PluginAutoEnableResult {
   const config = params.config;
   const ambientEnvTriggers = params.ambientEnvTriggers ?? "allow";
+  const env = params.env ?? process.env;
+  const capturedConfig =
+    config && config === getRuntimeConfigSnapshot()
+      ? getRuntimeConfigSnapshot({ capture: true })!
+      : config && isDeeplyFrozenPlainData(config)
+        ? config
+        : undefined;
+  const snapshot = capturedConfig
+    ? getCurrentPluginMetadataSnapshot({ config, env, allowWorkspaceScopedSnapshot: true })
+    : undefined;
+  const runtimeCache =
+    snapshot &&
+    isCurrentPluginMetadataSnapshotRuntimeGeneration(snapshot) &&
+    params.manifestRegistry === snapshot.manifestRegistry &&
+    (!params.discovery || params.discovery === snapshot.discovery) &&
+    (env === process.env || isDeeplyFrozenPlainData(env))
+      ? getPluginMetadataSnapshotCache(snapshot).metadata.autoEnable
+      : undefined;
+  const discoveryKey = runtimeCache ? snapshot : params.discovery;
   let discoveryCache: PluginAutoEnableDiscoveryCache | undefined;
-  if (config && typeof config === "object" && params.manifestRegistry && params.discovery) {
-    const env = params.env ?? process.env;
-    const envCache = getOrCreateWeakMap((sameTurnApplyCache ??= new WeakMap()), config);
-    const registryCache = getOrCreateWeakMap(envCache, env);
+  if (config && params.manifestRegistry && discoveryKey) {
+    const envCache = getOrCreateWeakMap(
+      runtimeCache ?? (sameTurnApplyCache ??= new WeakMap()),
+      config,
+    );
+    const envKey = runtimeCache && env === process.env ? getPublishedConfigRuntimeEnvState() : env;
+    const registryCache = getOrCreateWeakMap(envCache, envKey);
     discoveryCache = getOrCreateWeakMap(registryCache, params.manifestRegistry);
-    const cached = discoveryCache.get(params.discovery);
+    const cached = discoveryCache.get(discoveryKey);
     if (
       cached &&
-      cached.candidates === params.discovery.candidates &&
+      cached.capturedConfig === capturedConfig &&
+      cached.candidates === params.discovery?.candidates &&
       cached.plugins === params.manifestRegistry.plugins &&
       cached.ambientEnvTriggers === ambientEnvTriggers
     ) {
@@ -112,21 +132,34 @@ export function applyPluginAutoEnable(
     }
   }
 
-  const candidates = detectPluginAutoEnableCandidates(params);
+  const preparationConfig = runtimeCache ? capturedConfig : config;
+  const candidates = detectPluginAutoEnableCandidates({ ...params, config: preparationConfig });
   const result = materializePluginAutoEnableCandidates({
-    config,
+    config: preparationConfig,
     candidates,
     env: params.env,
     manifestRegistry: params.manifestRegistry,
   });
-  if (discoveryCache && params.discovery && params.manifestRegistry) {
-    discoveryCache.set(params.discovery, {
-      candidates: params.discovery.candidates,
+  if (runtimeCache) {
+    // Preserve the no-rewrite identity without freezing the mutable publication.
+    // Rewritten captures reuse config-state's existing immutable policy projection.
+    if (result.config === capturedConfig) {
+      result.config = config!;
+    } else {
+      freezeJsonSnapshot(result.config);
+    }
+  }
+  if (discoveryCache && discoveryKey && params.manifestRegistry) {
+    discoveryCache.set(discoveryKey, {
+      capturedConfig,
+      candidates: params.discovery?.candidates,
       plugins: params.manifestRegistry.plugins,
       ambientEnvTriggers,
       result,
     });
-    scheduleSameTurnApplyCacheClear();
+    if (!runtimeCache) {
+      scheduleSameTurnApplyCacheClear();
+    }
   }
   return result;
 }
