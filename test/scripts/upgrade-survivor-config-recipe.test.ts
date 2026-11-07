@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONFIG_COMMAND_MAX_BUFFER_BYTES,
   CONFIG_COMMAND_TIMEOUT_MS,
-  resolveScenarioConfigSteps,
   resolveUpgradeSurvivorConfigSteps as recipeSteps,
   resolveUpgradeSurvivorConfigStepsForBaseline as baselineSteps,
   resolveUpgradeSurvivorOpenClawCommand,
@@ -270,6 +269,12 @@ esac
     expect(configValue(steps, "plugins").allow).toEqual(
       expect.arrayContaining(Object.keys(providers)),
     );
+
+    const stable = configValue(baselineSteps("base", "2026.10.10"), "agents").defaults;
+    const beta = configValue(baselineSteps("base", "2026.11.5-beta.1"), "agents").defaults;
+    expect(stable.heartbeat).toEqual({ every: "0m" });
+    expect(beta).not.toHaveProperty("heartbeat");
+    expect(beta.model).toEqual(stable.model);
   });
 
   it.each([
@@ -300,12 +305,6 @@ esac
       mode: "password",
       password: { source: "env", provider: "default", id: "GATEWAY_AUTH_PASSWORD_REF" },
     });
-  });
-
-  it("composes configured plugin installs into the SQLite volume scenario", () => {
-    expect(resolveScenarioConfigSteps("sqlite-volume")).toEqual(
-      resolveScenarioConfigSteps("configured-plugin-installs"),
-    );
   });
 
   it.each(["2026.7.1-2"])("authors one version-correct recovery roster for %s", (version) => {

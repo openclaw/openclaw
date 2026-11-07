@@ -24,6 +24,7 @@ import {
   hasEventScope,
   isPlainEventPayload,
   isSessionReadInvalidation,
+  isTargetedTranscriptionEvent,
   modelMetadataInvalidationFragment,
 } from "./server-broadcast-scopes.js";
 import type {
@@ -309,18 +310,17 @@ export function createGatewayBroadcaster(params: {
     let sessionReadContext: boolean | undefined;
     const hasSessionReadContext = () =>
       (sessionReadContext ??=
-        (event === "users.prefs.changed" && isTargeted) ||
-        (params.canReceiveSessionEvent !== undefined &&
-          sessionKeys.length > 0 &&
-          sessionKeys.every((key) => key.trim().length > 0)) ||
-        metadataInvalidation !== undefined ||
-        isSessionReadInvalidation(event, payload, isTargeted));
+        (event !== "talk.event" || isTargetedTranscriptionEvent(payload, isTargeted)) &&
+        ((event === "users.prefs.changed" && isTargeted) ||
+          (params.canReceiveSessionEvent !== undefined &&
+            sessionKeys.length > 0 &&
+            sessionKeys.every((key) => key.trim().length > 0)) ||
+          metadataInvalidation !== undefined ||
+          isSessionReadInvalidation(event, payload, isTargeted)));
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
     let presenceFragments: Map<SystemPresence[], Buffer> | undefined;
     let sessionFragments: Map<unknown, string | EncodedSessionPayload> | undefined;
-    let projectSession:
-      | ((client: GatewayWsClient) => SessionEventProjection | undefined)
-      | undefined;
+    let projectSession: ReturnType<NonNullable<typeof params.prepareSessionEventProjection>>;
     let skipSourcePayload = false;
     let sessionProjectionPrepared = false;
     let outboundEventLogged = false;

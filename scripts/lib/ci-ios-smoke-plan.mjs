@@ -35,7 +35,7 @@ const voiceOwners = [
 const lifecycleOwners = [
   /^apps\/ios\/Tests\/QRScannerResultHandoffTests\.swift$/u,
   /^scripts\/ios-access-restart-proof\.py$/u,
-  /^apps\/ios\/Tests\/(?:CloudflareAccessClientTests|CloudflareAccessBrowserPresenterTests|CloudflareAccessTransferTests|CloudflareAccessSessionStoreTests|CloudflareAccessTestTokens|ChatTypingFocusTests|ChatSendHydrationTests|GatewayIngressControllerTests|GatewayIngressActivationTests|GatewayIngressWireTests|GatewayIngressLoginPreparationTests|GatewayAccessRestartTests|GatewayOperatorFleetTests|GatewayConnectionControllerTests|GatewayConnectionSecurityTests|GatewaySettingsStoreTests|IOSMediaArtifactLoaderTests|OpenClawTypographyTests)\.swift$/u,
+  /^apps\/ios\/Tests\/(?:CloudflareAccessClientTests|CloudflareAccessBrowserPresenterTests|CloudflareAccessTransferTests|CloudflareAccessSessionStoreTests|CloudflareAccessTestTokens|ChatTypingFocusTests|ChatSendHydrationTests|SettingsHubTests|GatewayIngressControllerTests|GatewayIngressActivationTests|GatewayIngressWireTests|GatewayIngressLoginPreparationTests|GatewayAccessDeviceAuthBindingTests|GatewayAccessRestartTests|GatewayOperatorFleetTests|GatewayConnectionControllerTests|GatewayConnectionSecurityTests|GatewaySettingsStoreTests|IOSMediaArtifactLoaderTests|OpenClawTypographyTests)\.swift$/u,
   /^apps\/shared\/OpenClawKit\/Tests\/OpenClawKitTests\/ChatComposerTextViewIOSTests\.swift$/u,
 ];
 

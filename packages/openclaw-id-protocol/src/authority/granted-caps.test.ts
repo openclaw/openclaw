@@ -75,8 +75,13 @@ describe("granted owner-device capabilities", () => {
   it("never lets a re-add through an owner device raise a listed device's caps", async () => {
     const world = await buildWorld();
     const limited = await worldKey("limited");
-    const state = await addLimited(world, limited, LIMITED);
-    // device1 holds every cap, so the grant is within its own caps, but above the device's.
+    const added = await grant(world.state, world.device1.signer, limited, LIMITED);
+    if (!added.ok) {
+      throw new Error(`refused: ${added.code}`);
+    }
+    const state = added.state;
+    // device1 approved the device and holds every cap, so the grant is within its own caps, but
+    // above the device's.
     await expect(
       grant(state, world.device1.signer, limited, ["approve_device", "bind", "invite"]),
     ).resolves.toMatchObject({ ok: false, code: "caps_escalation", state });

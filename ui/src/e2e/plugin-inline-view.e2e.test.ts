@@ -6,9 +6,10 @@ import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-scr
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
-  installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
 import { prepareNativeControlUiPluginFixtures } from "../test-helpers/control-ui-plugin-fixture.ts";
+import { scrollChatThreadToTop } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { incidentPluginFixture } from "./incident-plugin.test-support.ts";
 
@@ -55,7 +56,7 @@ suite.define(() => {
       async ({ page }) => {
         const prompt = "Review the incident and release checklist.";
         const match = "Release checklist: smoke tests passed; rollout is ready.";
-        const gateway = await installMockGateway(page, {
+        const gateway = await installNativePluginMockGateway(page, {
           agentModel: "openai/gpt-4.1",
           sessionKey,
           historyMessages: [
@@ -121,7 +122,7 @@ suite.define(() => {
         const { catalog } = await prepareNativeControlUiPluginFixtures([
           incidentPluginFixture([descriptor]),
         ]);
-        const gateway = await installMockGateway(page, {
+        const gateway = await installNativePluginMockGateway(page, {
           deferredMethods: ["plugins.controlUi.list"],
           agentModel: "openai/gpt-4.1",
           sessionKey,
@@ -224,7 +225,7 @@ suite.define(() => {
           },
           toolResult("history-" + index, now + 1001 + index * 10),
         ]).flat();
-        const gateway = await installMockGateway(page, {
+        const gateway = await installNativePluginMockGateway(page, {
           agentModel: "openai/gpt-4.1",
           sessionKey,
           historyMessages: history,
@@ -249,11 +250,7 @@ suite.define(() => {
         expect(reads).toBeGreaterThan(0);
         expect(reads).toBeLessThan(15);
         expect(await page.locator(".incident-tools-card").count()).toBeLessThan(10);
-        const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-        await thread.evaluate((element) => {
-          element.scrollTop = 0;
-          element.dispatchEvent(new Event("scroll"));
-        });
+        await scrollChatThreadToTop(page);
         const first = page.locator('[data-plugin-inline-view="history-0"]');
         await first.getByRole("heading", { name: incident.title }).waitFor();
         expect(await last.locator(".incident-tools-card").count()).toBe(0);

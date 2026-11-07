@@ -89,7 +89,7 @@ const manifestSource = readFileSync(
 const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
-const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6";
+const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c";
 const CREATE_GITHUB_APP_TOKEN_V3_3 =
   "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
@@ -1692,7 +1692,7 @@ AFTER_CD
         );
         const hosted = runnerBackend === "github" || runAttempt > 1;
         expect(runner, JSON.stringify(context)).toBe(
-          hosted ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404",
+          hosted ? "ubuntu-24.04" : "blacksmith-2vcpu-ubuntu-2404",
         );
         expect(parallel, JSON.stringify(context)).toBe(hosted ? 2 : 4);
       }
@@ -1760,7 +1760,7 @@ AFTER_CD
     } as const;
     expect(evaluateWorkflowExpression("${{ " + prepare.if + " }}", releaseChild)).toBe(true);
     expect(evaluateWorkflowExpression(job["runs-on"], releaseChild)).toBe(
-      "blacksmith-16vcpu-ubuntu-2404",
+      "blacksmith-4vcpu-ubuntu-2404",
     );
     expect(evaluateWorkflowExpression(parallelism!, releaseChild)).toBe(1);
     for (const recovery of [
@@ -2122,12 +2122,10 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(sdkSaveStep.uses).toBe(CACHE_SAVE_V5);
     expect(sdkSaveStep.with?.key).toBe("${{ steps.android-sdk-cache.outputs.cache-primary-key }}");
     expect(gradleCacheStep).toMatchObject({
-      if: "inputs.cache-mode != 'off'",
       uses: SETUP_GRADLE_V6,
       with: {
         "add-job-summary": "never",
         "cache-provider": "basic",
-        "cache-read-only": "${{ inputs.cache-mode != 'read-write' }}",
       },
     });
     expect(installStep.run).toContain(`"${packageId}"`);
@@ -2154,6 +2152,49 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       "sha256sum --check -",
     ]);
   });
+
+  it("restores release Gradle inputs without SDK caches or cache writes", () => {
+    const steps = readAndroidToolchainAction().runs.steps;
+    const gradle = requiredWorkflowStep(steps, "Setup Gradle cache");
+    const sdk = requiredWorkflowStep(steps, "Restore Android SDK cache");
+    const release = requiredWorkflowStep(
+      readWorkflow(".github/workflows/android-store-release.yml").jobs.release.steps,
+      "Setup Android toolchain",
+    );
+    expect(release.with).toMatchObject({ "cache-mode": "off", "gradle-cache-mode": "restore" });
+    for (const [inputs, restoreGradle, restoreSdk, readOnly] of [
+      [release.with, true, false, true],
+      [{ "cache-mode": "off" }, false, false, true],
+      [{ "cache-mode": "restore" }, true, true, true],
+      [{ "cache-mode": "read-write" }, true, true, false],
+      [{ "cache-mode": "read-write", "gradle-cache-mode": "off" }, false, true, true],
+    ] as const) {
+      expect(evaluateWorkflowExpression(`\${{ ${gradle.if} }}`, { inputs })).toBe(restoreGradle);
+      expect(evaluateWorkflowExpression(`\${{ ${sdk.if} }}`, { inputs })).toBe(restoreSdk);
+      expect(evaluateWorkflowExpression(gradle.with?.["cache-read-only"], { inputs })).toBe(
+        readOnly,
+      );
+    }
+  });
+
+  it.each(["CACHE_MODE", "GRADLE_CACHE_MODE"])(
+    "rejects invalid Android cache authority in %s",
+    (invalidInput) => {
+      const validation = requiredWorkflowStep(
+        readAndroidToolchainAction().runs.steps,
+        "Validate cache mode",
+      );
+      const result = runWorkflowShellScript(expectDefined(validation.run, "cache validation"), {
+        env: {
+          CACHE_MODE: "off",
+          GRADLE_CACHE_MODE: "restore",
+          INSTALL_SCREENSHOT_EMULATORS: "false",
+          [invalidInput]: "invalid",
+        },
+      });
+      expect(result.status).toBe(2);
+    },
+  );
 
   it("binds release targets to current authenticated ref evidence", () => {
     const workflow = readCiWorkflow();
@@ -2377,7 +2418,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         ciValue(jobName, "runs-on", { ...context, ...overrides });
       for (const eventName of ["pull_request", "push"] as const) {
         expect(runner({ eventName }), jobName).toBe(
-          jobName === "security-fast" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04",
+          jobName === "security-fast" ? "blacksmith-2vcpu-ubuntu-2404" : "ubuntu-24.04",
         );
       }
       expect(
@@ -2386,7 +2427,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           headRepository: "contributor/openclaw",
         }),
         `${jobName}: untrusted fork first attempt`,
-      ).toBe("blacksmith-4vcpu-ubuntu-2404");
+      ).toBe("blacksmith-2vcpu-ubuntu-2404");
       for (const override of [
         { runAttempt: 0 },
         { runAttempt: 2 },
@@ -2400,7 +2441,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       for (const runnerBackend of ["", "blacksmith"] as const) {
         for (const eventName of ["pull_request", "push"] as const) {
           expect(runner({ eventName, runnerBackend }), jobName).toBe(
-            jobName === "preflight" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04",
+            jobName === "preflight" ? "blacksmith-2vcpu-ubuntu-2404" : "ubuntu-24.04",
           );
         }
       }
@@ -2408,10 +2449,10 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     for (const [jobName, task, expected] of [
       ["preflight", undefined, "ubuntu-24.04"],
       ["security-fast", undefined, "ubuntu-24.04"],
-      ["checks-ui", undefined, "blacksmith-8vcpu-ubuntu-2404"],
+      ["checks-ui", undefined, "blacksmith-2vcpu-ubuntu-2404"],
       ["checks-ui-e2e", "browser-extension", "ubuntu-24.04"],
-      ["checks-ui-e2e", "control-ui", "blacksmith-16vcpu-ubuntu-2404"],
-      ["checks-ui-e2e-real-gateway", undefined, "blacksmith-16vcpu-ubuntu-2404"],
+      ["checks-ui-e2e", "control-ui", "blacksmith-4vcpu-ubuntu-2404"],
+      ["checks-ui-e2e-real-gateway", undefined, "blacksmith-4vcpu-ubuntu-2404"],
     ] as const) {
       expect(
         ciValue(jobName, "runs-on", {
@@ -2428,7 +2469,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           ...context,
           preflightOutputs: { frozen_target: frozenTarget },
         }),
-      ).toBe("blacksmith-32vcpu-ubuntu-2404");
+      ).toBe("blacksmith-8vcpu-ubuntu-2404");
     }
     for (const authorAssociation of ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]) {
       for (const headRepository of ["openclaw/openclaw", "contributor/openclaw"]) {
@@ -2444,7 +2485,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           ).toBe(
             runnerBackend === "hybrid" && headRepository === "openclaw/openclaw"
               ? "ubuntu-24.04"
-              : "blacksmith-4vcpu-ubuntu-2404",
+              : "blacksmith-2vcpu-ubuntu-2404",
           );
         }
       }
@@ -2454,12 +2495,12 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
   it.each([
     {
       file: "full-release-validation.yml",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
-      job: "release_checks_independent",
+      runner: "blacksmith-2vcpu-ubuntu-2404",
+      job: "release_decision",
     },
     {
       file: "openclaw-npm-preflight.yml",
-      runner: "blacksmith-32vcpu-ubuntu-2404",
+      runner: "blacksmith-8vcpu-ubuntu-2404",
       job: "check_openclaw_npm",
     },
   ])("honors the global hosted runner override for $file/$job", ({ file, runner, job }) => {
@@ -2497,6 +2538,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       const runsOn = readCiWorkflow().jobs["check-shard"]["runs-on"];
       const lintMatrix = {
         runner: "blacksmith-32vcpu-ubuntu-2404",
+        runner_label: "blacksmith-8vcpu-ubuntu-2404",
         task: "lint",
       };
       const evaluateDispatch = (
@@ -2510,7 +2552,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           ...overrides,
         });
 
-      expect(evaluateDispatch("blacksmith")).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(evaluateDispatch("blacksmith")).toBe("blacksmith-8vcpu-ubuntu-2404");
       for (const backend of ["blacksmith", "github", "hybrid"] as const) {
         expect(
           evaluateDispatch(backend, backend === "blacksmith" ? { releaseGate: true } : {}),
@@ -2522,7 +2564,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         frozenTarget: true,
         targetContextRef,
       };
-      expect(evaluateDispatch("hybrid", frozenFrv)).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(evaluateDispatch("hybrid", frozenFrv)).toBe("blacksmith-8vcpu-ubuntu-2404");
       expect(evaluateDispatch("github", frozenFrv)).toBe("ubuntu-24.04");
       for (const overrides of [
         { frozenTarget: false },
@@ -2540,7 +2582,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           matrix: lintMatrix,
           runnerBackend: "blacksmith",
         }),
-      ).toBe("blacksmith-32vcpu-ubuntu-2404");
+      ).toBe("blacksmith-8vcpu-ubuntu-2404");
     },
   );
 
@@ -2620,7 +2662,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           runnerBackend,
           preflightOutputs: { hybrid_hosted_offload: String(offload) },
         } as const;
-        expect(ciValue("checks-ui", "runs-on", context)).toBe("blacksmith-8vcpu-ubuntu-2404");
+        expect(ciValue("checks-ui", "runs-on", context)).toBe("blacksmith-2vcpu-ubuntu-2404");
         for (const [jobName, timeout] of [
           ["build-artifacts", 20],
           ["android", 20],
@@ -2737,7 +2779,9 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     writeFileSync(path.join(source, "base.txt"), "base\n");
     mkdirSync(path.join(source, "config"));
     writeFileSync(path.join(source, "config/test-lines-baseline.txt"), "0\n");
-    for (const file of ["scripts/check-test-lines-ratchet.mts", "scripts/lib/shrink-ratchet.mts"]) {
+    for (const file of collectRuntimeImportClosure(process.cwd(), [
+      "scripts/check-test-lines-ratchet.mts",
+    ])) {
       mkdirSync(path.dirname(path.join(source, file)), { recursive: true });
       copyFileSync(file, path.join(source, file));
     }
@@ -2886,7 +2930,12 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       jobId?: string;
       jobCondition?: string;
     }> = [];
-    const rubySetups: Array<{ file: string; step: WorkflowStep }> = [];
+    const rubySetups: Array<{
+      file: string;
+      step: WorkflowStep;
+      jobId?: string;
+      jobCondition?: string;
+    }> = [];
     for (const file of [
       ...findYamlFiles(".github/workflows"),
       ...findYamlFiles(".github/actions"),
@@ -2909,7 +2958,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
             directCaches.push({ file, step, jobId, jobCondition });
           }
           if (step.uses?.startsWith("ruby/setup-ruby@")) {
-            rubySetups.push({ file, step });
+            rubySetups.push({ file, step, jobId, jobCondition });
           }
           if (
             step.uses === "./.github/actions/setup-node-env" ||
@@ -2923,11 +2972,20 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       }
     }
     expect(rubySetups.length).toBeGreaterThan(0);
-    for (const { file, step } of rubySetups) {
+    for (const { file, step, jobId, jobCondition } of rubySetups) {
       const bundlerCache = step.with?.["bundler-cache"] ?? false;
       expect([false, true, "false", "true"], `${file}: ${step.name}`).toContain(bundlerCache);
       if (bundlerCache === true || bundlerCache === "true") {
-        expect(String(step.if), `${file}: ${step.name}`).toContain("cache_write_allowed == 'true'");
+        if (file === ".github/workflows/ios-store-release.yml" && jobId === "release") {
+          expectIncludes(jobCondition, [
+            "github.repository == 'openclaw/openclaw'",
+            "github.ref == 'refs/heads/main'",
+          ]);
+        } else {
+          expect(String(step.if), `${file}: ${step.name}`).toContain(
+            "cache_write_allowed == 'true'",
+          );
+        }
       }
     }
     expect(callers.length).toBeGreaterThan(0);
@@ -3013,6 +3071,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         }
         const releaseCacheId = new Map([
           ["${{ runner.temp }}/openclaw-watch-rtc-release-libraries", "watch-rtc-cache"],
+          ["${{ runner.temp }}/openclaw-ios-release-cas", "ios-compilation-cache"],
           ["~/Library/Developer/Xcode/DerivedData/OpenClaw-*/SourcePackages", "ios-packages-cache"],
         ]).get(String(step.with?.path));
         if (file === ".github/workflows/ios-store-release.yml" && releaseCacheId) {
@@ -3740,62 +3799,6 @@ server.listen(0, "127.0.0.1", () => {
     });
   });
 
-  it("shares transform generations with the warmer after CI exports its harness", () => {
-    const action = readWorkflow(".github/actions/setup-node-env/action.yml");
-    const generationStep = (action.runs.steps as WorkflowStep[]).find(
-      (step) => step.name === "Resolve Vitest transform cache generation",
-    );
-    const expression = expectDefined(
-      generationStep?.run?.match(/\$\{\{(.*?)\}\}/u)?.[1],
-      "transform generation expression",
-    );
-    const sourceFiles = {
-      "pnpm-lock.yaml": "lockfileVersion: '9.0'",
-      "pnpm-workspace.yaml": "packages: ['packages/*']",
-      "package.json": '{"name":"fixture"}',
-      "packages/worker/package.json": '{"name":"worker"}',
-      "packages/worker/tsconfig.json": "{}",
-      "vitest.config.ts": "export default {}",
-      "test/vitest/shared.ts": "export const shared = {}",
-      "src/state/schema.sql": "CREATE TABLE fixture (id TEXT);",
-      ".github/actions/setup-security-review/package.json": '{"name":"review"}',
-      ".ci-harness-source/package.json": '{"name":"real-source"}',
-    };
-    const files: Record<string, string> = { ...sourceFiles };
-    const fingerprint = () =>
-      runInNewContext(expression, {
-        hashFiles: (...patterns: string[]) => {
-          const includes = patterns.filter((pattern) => !pattern.startsWith("!"));
-          const excludes = patterns
-            .filter((pattern) => pattern.startsWith("!"))
-            .map((pattern) => pattern.slice(1));
-          const hash = createHash("sha256");
-          for (const [file, contents] of Object.entries(files).toSorted(([left], [right]) =>
-            left.localeCompare(right),
-          )) {
-            if (
-              includes.some((pattern) => minimatch(file, pattern, { dot: true })) &&
-              !excludes.some((pattern) => minimatch(file, pattern, { dot: true }))
-            ) {
-              hash.update(createHash("sha256").update(contents).digest());
-            }
-          }
-          return hash.digest("hex");
-        },
-      });
-    const warmer = fingerprint();
-    files[".ci-harness/.github/actions/setup-security-review/package.json"] =
-      sourceFiles[".github/actions/setup-security-review/package.json"];
-    files[".ci-harness/tsconfig.json"] = "{}";
-    files["node_modules/dependency/package.json"] = '{"name":"dependency"}';
-    expect(fingerprint()).toBe(warmer);
-    for (const [file, contents] of Object.entries(sourceFiles)) {
-      files[file] = `${contents}\n`;
-      expect(fingerprint(), file).not.toBe(warmer);
-      files[file] = contents;
-    }
-  });
-
   it("persists isolated transform and compile caches through immutable protected archives", () => {
     const action = readWorkflow(".github/actions/setup-node-env/action.yml");
     const step = (name: string) => requiredWorkflowStep(action.runs.steps, name);
@@ -3810,8 +3813,8 @@ server.listen(0, "127.0.0.1", () => {
     }
     expect(transform.if).toContain("runner.os != 'Windows'");
     expect(transform.if).not.toMatch(/runner\.(?:environment|labels|name)/u);
-    expect(transform.with.key).toContain("vitest-fs-v4-protected-");
-    expect(compile.with.key).toContain("node-compile-v3-test-protected-");
+    expect(transform.with.key).toContain("vitest-fs-v5-protected-");
+    expect(compile.with.key).toContain("node-compile-v4-test-protected-");
     expect(compile.with.key).not.toContain("pull_request");
     const transformConfiguration = step("Configure Vitest transform cache");
     expect(transformConfiguration.env.CACHE_WRITER).toBe("0");
@@ -5660,7 +5663,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           : `checks-ui (${shard}/${scenario.shards.length})`,
       );
       expect(evaluateWorkflowExpression(ui["runs-on"], rowContext)).toBe(
-        scenario.frozenTarget ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404",
+        scenario.frozenTarget ? "ubuntu-24.04" : "blacksmith-2vcpu-ubuntu-2404",
       );
       const env = Object.fromEntries(
         Object.entries({ ...ui.env, ...test.env }).map(([key, value]) => [

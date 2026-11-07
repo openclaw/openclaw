@@ -116,6 +116,7 @@ export function snapshotSessions(
         isChild: row.isChild,
         category: row.category,
         archived: row.archived,
+        snoozedUntil: row.snoozedUntil,
         boardFace: row.boardFace,
         state: Object.values(state).some((value) => value !== undefined) ? state : undefined,
         childrenDisplayMode: display?.childrenDisplayMode,

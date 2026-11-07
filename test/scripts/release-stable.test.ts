@@ -116,13 +116,22 @@ function publicationWatchFixture(approvalPending = false) {
     release,
     plugin,
     observe: (observedChildren = [plugin], json = true) => {
-      const inventory = jsonStep("gh", ["api", "*"], { workflow_runs: observedChildren });
+      const inventory = [
+        "plugin-npm-release.yml",
+        "plugin-clawhub-release.yml",
+        "plugin-clawhub-new.yml",
+        "openclaw-npm-release.yml",
+      ].map((file) =>
+        jsonStep("gh", ["api", "*"], {
+          workflow_runs: observedChildren.filter((run) => run.path.endsWith(`/${file}`)),
+        }),
+      );
       return release.run(
         [
           readRun(parent),
-          inventory,
+          ...inventory,
           ...observedChildren.map(readRun),
-          ...[parent, ...observedChildren].map((run) =>
+          ...[parent, ...observedChildren].flatMap((run) => [
             jsonStep(
               "gh",
               ["api", `repos/${REPOSITORY}/actions/runs/${run.id}/pending_deployments`],
@@ -135,8 +144,9 @@ function publicationWatchFixture(approvalPending = false) {
                   ]
                 : [],
             ),
-          ),
-          inventory,
+            jsonStep("gh", ["api", "*"], { total_count: 0, jobs: [] }),
+          ]),
+          ...inventory,
           readRun(parent),
         ],
         ["--watch", "--once", ...(json ? ["--json"] : [])],
