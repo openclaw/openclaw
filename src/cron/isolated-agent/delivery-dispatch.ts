@@ -7,6 +7,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
+import { shouldIncludeCronInspectLink } from "../inspect-links.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import { normalizeCronRunErrorText } from "../service/execution-errors.js";
 import type { CronResolvedDeliveryState } from "../types.js";
@@ -366,11 +367,13 @@ export async function dispatchCronDelivery(
           );
         },
         tts: { auto: params.ttsAuto },
-        inspectionUrl: resolveControlUiSessionUrl(params.cfgWithAgentDefaults, {
-          sessionKey: params.runSessionKey,
-          fallbackAgentId: params.agentId,
-          exactKey: true,
-        }),
+        inspectionUrl: shouldIncludeCronInspectLink(params.cfgWithAgentDefaults, "completion")
+          ? resolveControlUiSessionUrl(params.cfgWithAgentDefaults, {
+              sessionKey: params.runSessionKey,
+              fallbackAgentId: params.agentId,
+              exactKey: true,
+            })
+          : undefined,
         abortSignal: params.abortSignal ?? new AbortController().signal,
         bestEffort: params.deliveryBestEffort,
         completion: {

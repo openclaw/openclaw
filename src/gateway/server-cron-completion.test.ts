@@ -341,6 +341,51 @@ async function withCompletionFixture(
 describe("completion announcement", () => {
   const confirmed = { deliveryAttempted: true, delivered: true };
 
+  it.each(["errors", "never"] as const)(
+    "omits the inspection link for successful announcements when mode is %s",
+    async (inspectLinks) => {
+      await withCompletionFixture("command", async (fixture) => {
+        fixture.cfg.cron = { announce: { inspectLinks } };
+        await expect(fixture.finalize()).resolves.toMatchObject(confirmed);
+        expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ text: fixture.text }),
+        );
+        await fixture.assertText(fixture.text);
+      });
+    },
+  );
+
+  it.each([
+    { inspectLinks: "errors", includesLink: true },
+    { inspectLinks: "never", includesLink: false },
+  ] as const)(
+    "honors cron.announce.inspectLinks=$inspectLinks in failure alerts",
+    async ({ inspectLinks, includesLink }) => {
+      await withCompletionFixture("command", async (fixture) => {
+        fixture.cfg.cron = { announce: { inspectLinks } };
+        const expectedText = includesLink
+          ? "Scheduled command failed.\n[Inspect run](https://automation.example.test/automations?job=command-job)"
+          : "Scheduled command failed.";
+        await sendGatewayCronFailureAlert({
+          deps: {},
+          logger: { warn: vi.fn() },
+          resolveCronAgent: () => ({ agentId: "main", cfg: fixture.cfg }),
+          job: fixture.job,
+          routing: { defaultAgentId: "main" },
+          payload: { text: "Scheduled command failed." },
+          channel: "telegram",
+          to: "123",
+          mode: "announce",
+          onDeliverySettled: vi.fn(async () => {}),
+        });
+        expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ text: expectedText }),
+        );
+        await fixture.assertText(expectedText);
+      });
+    },
+  );
+
   it.each(["explicit", "session"])(
     "records a failure alert once for its %s owner, not the creating conversation",
     async (ownership) => {

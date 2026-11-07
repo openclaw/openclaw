@@ -125,6 +125,54 @@ describe("sendCronAnnouncePayloadStrict", () => {
     },
   );
 
+  it.each(["errors", "never"] as const)(
+    "omits the isolated-delivery Inspect link for completions when mode is %s",
+    async (inspectLinks) => {
+      await send({
+        cfg: { cron: { announce: { inspectLinks } } },
+        inspectionUrl: "https://gateway.example/inspect/run-1",
+      });
+
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payloads: [{ text: "Automation failed" }],
+        }),
+        undefined,
+        undefined,
+      );
+    },
+  );
+
+  it.each([
+    { inspectLinks: "always", includesLink: true },
+    { inspectLinks: "errors", includesLink: true },
+    { inspectLinks: "never", includesLink: false },
+  ] as const)(
+    "honors cron.announce.inspectLinks=$inspectLinks for failure alerts",
+    async ({ inspectLinks, includesLink }) => {
+      const inspectionUrl = "https://gateway.example/inspect/run-1";
+      await send({
+        cfg: { cron: { announce: { inspectLinks } } },
+        inspectionUrl,
+        inspectionLinkKind: "error",
+      });
+
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payloads: [
+            {
+              text: includesLink
+                ? `Automation failed\n[Inspect run](${inspectionUrl})`
+                : "Automation failed",
+            },
+          ],
+        }),
+        undefined,
+        undefined,
+      );
+    },
+  );
+
   it("retries a proven not-dispatched failure through the notification sender", async () => {
     vi.useFakeTimers();
     const signal = new AbortController().signal;
