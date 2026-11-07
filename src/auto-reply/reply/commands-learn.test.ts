@@ -204,7 +204,7 @@ describe("learn command", () => {
 
       expect(result?.shouldContinue).toBe(false);
       expect(result?.reply?.text).toBe(
-        "/learn can't save anything on this agent: no learning tools are available here. They need a non-sandboxed session, a model and harness with tool support, and a tool policy that allows them.",
+        "/learn can't save anything on this agent: no learning tools are available here. They need a non-sandboxed session or a sandbox-compatible learning plugin, a model and harness with tool support, and a tool policy that allows them.",
       );
     } finally {
       registeredContributions = [skillsContribution];
@@ -235,6 +235,47 @@ describe("learn command", () => {
 
     afterEach(() => {
       registeredContributions = [skillsContribution];
+    });
+
+    it("admits only opted-in learning contributors in a sandbox and still enforces tool policy", async () => {
+      const safeSkills = {
+        ...skillsContribution,
+        contribution: Object.assign({}, skillsContribution.contribution, {
+          sandboxCompatible: true,
+        }),
+      };
+      const memoryGuidance = vi.fn(() => ({ lines: [MEMORY_GUIDANCE] }));
+      registeredContributions = [
+        safeSkills,
+        {
+          pluginId: "acme-memory",
+          contribution: {
+            medium: "memory",
+            toolNames: ["memory_save"],
+            buildGuidance: memoryGuidance,
+          },
+        },
+      ];
+      const sandboxConfig: OpenClawConfig = {
+        agents: { entries: { isolated: { sandbox: { mode: "all" } } } },
+      };
+      const allowed = buildLearnParams("/learn", sandboxConfig);
+      allowed.agentId = "isolated";
+      allowed.sessionKey = "agent:isolated:webchat:test";
+
+      expect((await learn(allowed))?.shouldContinue).toBe(true);
+      expect(allowed.ctx.BodyForAgent).toContain(SKILLS_GUIDANCE);
+      expect(allowed.ctx.BodyForAgent).not.toContain(MEMORY_GUIDANCE);
+      expect(memoryGuidance).not.toHaveBeenCalled();
+
+      const denied = buildLearnParams("/learn", {
+        agents: {
+          entries: { isolated: { sandbox: { mode: "all" }, tools: { deny: ["skill_workshop"] } } },
+        },
+      });
+      denied.agentId = "isolated";
+      denied.sessionKey = "agent:isolated:webchat:test";
+      expect((await learn(denied))?.shouldContinue).toBe(false);
     });
 
     it("keeps the skills-and-memory prompt bytes", async () => {
