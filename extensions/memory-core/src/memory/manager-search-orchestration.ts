@@ -27,8 +27,8 @@ import {
   type KeywordSearchHit,
   type MemoryRetrievalResult,
 } from "./manager-search-retrieval.js";
+import type { MemoryKeywordWorkerResult } from "./manager-search-types.js";
 import { prepareExactPathMatcher } from "./manager-search.js";
-import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
 import type { MemorySourceFileStateRow } from "./manager-source-state.js";
 import { applyRetrievalRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";

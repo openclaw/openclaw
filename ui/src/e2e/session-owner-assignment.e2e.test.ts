@@ -228,6 +228,7 @@ async function expandAssignment(assignTo: Locator, compact: boolean) {
     await assignTo.click();
   } else {
     await assignTo.hover();
+    await expectBrowser(sessionMenuSubmenu(assignTo)).toHaveAttribute("data-phase", "open");
   }
 }
 

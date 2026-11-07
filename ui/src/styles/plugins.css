@@ -296,8 +296,7 @@
   contain-intrinsic-block-size: auto 280px;
 }
 
-.plugin-catalog-section__header,
-.plugins-settings-error {
+.plugin-catalog-section__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1609,8 +1608,8 @@
   }
 
   /* Refresh sits beside the page menu here, not at the end of the row. */
-  openclaw-skills-page .skill-library-search__action .btn.refresh-button {
-    justify-content: center;
+  openclaw-skills-page .skill-library-search__action .refresh-button {
+    justify-items: center;
   }
 
   openclaw-skills-page .skill-library-search__icon > .oc-menu-item__label {
@@ -1690,17 +1689,17 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: rgb(8 8 8);
+  background: var(--bg);
 }
 
-/* The neutral substrate stays fixed. Independent RGB intensity masks retain the
-   original grain and brightness levels while CSS follows the live primary token. */
+/* Transparent artwork leaves the active canvas visible in every theme. The
+   intensity masks retain the grain while a quiet tint follows the live primary. */
 .plugin-recommended-prompts__art {
   position: absolute;
   inset: 0;
   isolation: isolate;
   pointer-events: none;
-  background: url("../assets/plugin-prompts-ember-substrate.png") 38% 50% / cover no-repeat;
+  opacity: 0.18;
 }
 
 .plugin-recommended-prompts__art > span {
@@ -1736,24 +1735,21 @@
 }
 
 .plugin-recommended-prompts__list > button.btn.plugin-recommended-prompts__prompt {
+  --btn-bg: var(--card);
+  --btn-bg-hover: var(--bg-hover);
+
   gap: 12px;
   width: 100%;
   padding: 12px 16px;
-  color: rgb(255 255 255);
+  color: var(--card-foreground);
   font: inherit;
   text-align: start;
-  background: rgb(17 19 24 / 88%);
-  border: 1px solid rgb(255 255 255 / 10%);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
 }
 
-.plugin-recommended-prompts__list
-  > button.btn.plugin-recommended-prompts__prompt:hover:not(:disabled) {
-  background: rgb(17 19 24 / 96%);
-}
-
 .plugin-recommended-prompts__prompt:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: var(--control-ui-focus-ring);
   outline-offset: 3px;
 }
 
@@ -1788,7 +1784,7 @@
 }
 
 .plugin-recommended-prompts__prompt .plugin-prompt-mention {
-  color: color-mix(in srgb, var(--accent) 55%, white);
+  color: var(--link);
 }
 
 .plugin-recommended-prompts__action {
@@ -1797,7 +1793,7 @@
   place-items: center;
   width: 30px;
   height: 30px;
-  background: rgb(255 255 255 / 8%);
+  background: var(--surface-hover);
   border-radius: 50%;
 }
 

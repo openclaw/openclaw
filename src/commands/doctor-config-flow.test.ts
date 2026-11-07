@@ -230,7 +230,15 @@ async function inspectConfig(...params: Parameters<typeof runConfig>) {
 }
 
 function repairResult(state: unknown, overrides: Record<string, unknown> = {}) {
-  return { state, changeNotes: [], warningNotes: [], authProfilesRepaired: false, ...overrides };
+  return {
+    state,
+    changeNotes: [],
+    warningNotes: [],
+    repairWarningNotes: overrides.warningNotes ?? [],
+    advisoryNotes: [],
+    authProfilesRepaired: false,
+    ...overrides,
+  };
 }
 
 function mockRepair(overrides: Record<string, unknown> = {}) {
@@ -834,9 +842,18 @@ describe("doctor config flow", () => {
         postSessionPluginMigration: sessionPlan(),
         ...facts,
       };
-      mockRepair({ modelRetirementRepairRan: true, modelRetirementOnly: true });
+      const advisory = "Custom Codex app-server command bypasses the managed binary.";
+      mockRepair({
+        modelRetirementRepairRan: true,
+        modelRetirementOnly: true,
+        warningNotes: [advisory],
+        repairWarningNotes: [],
+        advisoryNotes: [advisory],
+      });
       await using result = await runConfig({ config, exists, repair: true });
       expect([result.retirementOnly, result.retirementOnlyBlocker]).toEqual([!expected, expected]);
+      expect(result.warnings).toContain(advisory);
+      expect(noteText("Doctor warnings")).toContain(advisory);
     },
   );
 });
