@@ -1933,6 +1933,149 @@ class GatewaySessionReconnectTest {
     }
 
   @Test
+  fun inboundOverloadClosesOnceAndDrainsTheAcceptedConnectToken() =
+    runBlocking {
+      for (limit in listOf("count", "bytes", "frame")) {
+        val authStore = RecordingDeviceAuthStore()
+        val connectRequestId = CompletableDeferred<String>()
+        val blockEventStarted = CountDownLatch(1)
+        val allowBlockEvent = CountDownLatch(1)
+        val terminalCallback = CompletableDeferred<Unit>()
+        val allowTerminalCallback = CountDownLatch(1)
+        val closeRequests = ConcurrentLinkedQueue<Pair<Int, String>>()
+        val terminalCount = AtomicInteger()
+        val retiredEventCount = AtomicInteger()
+        val server =
+          startGatewayServer(json = Json { ignoreUnknownKeys = true }) { _, id, method ->
+            if (method == "connect") connectRequestId.complete(id)
+          }
+        val harness =
+          createReconnectHarness(
+            deviceAuthStore = authStore,
+            onDisconnected = { message ->
+              if (message.contains("inbound", ignoreCase = true)) {
+                terminalCount.incrementAndGet()
+                assertTrue(authStore.savedToken.isCompleted)
+                terminalCallback.complete(Unit)
+                allowTerminalCallback.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+              }
+            },
+            onEvent = { event, _ ->
+              if (event == "block") {
+                blockEventStarted.countDown()
+                allowBlockEvent.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+              } else {
+                retiredEventCount.incrementAndGet()
+              }
+            },
+            webSocketFactory = { client, request, listener ->
+              val socket = client.newWebSocket(request, listener)
+              object : WebSocket by socket {
+                override fun close(
+                  code: Int,
+                  reason: String?,
+                ): Boolean {
+                  closeRequests.add(code to reason.orEmpty())
+                  return socket.close(code, reason)
+                }
+              }
+            },
+          )
+        try {
+          connectSession(harness.session, server.port)
+          val requestId = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connectRequestId.await() }
+          val connection = readField<Any>(harness.session, "currentConnection")
+          val listener = readField<WebSocketListener>(connection, "listener")
+          val socket = readField<WebSocket>(connection, "socket")
+          val block = """{"type":"event","event":"block","payload":{}}"""
+          val response =
+            """{"type":"res","id":"$requestId","ok":true,"payload":{"auth":{"deviceToken":"issued-token","role":"node","scopes":[]}}}"""
+          val smallEvent = """{"type":"event","event":"queued","payload":{}}"""
+          listener.onMessage(socket, block)
+          assertTrue(blockEventStarted.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+          listener.onMessage(socket, response)
+          when (limit) {
+            "count" -> {
+              repeat(254) { listener.onMessage(socket, smallEvent) }
+            }
+
+            "bytes" -> {
+              val firstBytes = 25 * 1024 * 1024
+              val secondBytes = firstBytes - block.length - response.length
+              listener.onMessage(socket, inboundEventWithUtf8Size(firstBytes))
+              listener.onMessage(socket, inboundEventWithUtf8Size(secondBytes))
+            }
+          }
+          assertTrue("$limit: a full budget must remain usable", closeRequests.isEmpty())
+
+          val overflow = if (limit == "frame") inboundEventWithUtf8Size(25 * 1024 * 1024 + 1) else smallEvent
+          listener.onMessage(socket, overflow)
+          assertEquals("$limit: overload must close the transport", 1013, closeRequests.single().first)
+          assertTrue(closeRequests.single().second.contains("inbound", ignoreCase = true))
+          repeat(3) { listener.onMessage(socket, overflow) }
+          assertEquals(1, closeRequests.size)
+          assertFalse(terminalCallback.isCompleted)
+
+          allowBlockEvent.countDown()
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { terminalCallback.await() }
+          assertEquals("issued-token", authStore.savedToken.await())
+          assertEquals(0, retiredEventCount.get())
+          assertEquals(1, terminalCount.get())
+          allowTerminalCallback.countDown()
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { harness.session.disconnectAndJoin() }
+        } finally {
+          allowBlockEvent.countDown()
+          allowTerminalCallback.countDown()
+          shutdownReconnectHarness(harness, server)
+        }
+      }
+    }
+
+  @Test
+  fun inboundByteBudgetIsReusableAfterAHandlerFails() =
+    runBlocking {
+      val ready = CompletableDeferred<Unit>()
+      val delivered = Channel<Unit>(Channel.UNLIMITED)
+      val server =
+        startGatewayServer(json = Json { ignoreUnknownKeys = true }) { socket, id, _ ->
+          socket.send(connectResponseFrame(id))
+        }
+      val harness =
+        createReconnectHarness(
+          onConnected = { ready.complete(Unit) },
+          onEvent = { event, _ ->
+            if (event == "queued") {
+              delivered.trySend(Unit)
+              error("Synthetic handler failure")
+            }
+          },
+        )
+      try {
+        connectSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.await() }
+        val connection = readField<Any>(harness.session, "currentConnection")
+        val listener = readField<WebSocketListener>(connection, "listener")
+        val socket = readField<WebSocket>(connection, "socket")
+        val frame = inboundEventWithUtf8Size(12 * 1024 * 1024)
+        // Total processed bytes exceed the aggregate budget, but no more than two frames overlap.
+        repeat(5) {
+          listener.onMessage(socket, frame)
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { delivered.receive() }
+        }
+        assertTrue(harness.session.isReady())
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  private fun inboundEventWithUtf8Size(bytes: Int): String {
+    val prefix = """{"type":"event","event":"queued","payload":""""
+    val suffix = "\"}"
+    val payloadBytes = bytes - prefix.length - suffix.length
+    return prefix + "€".repeat(payloadBytes / 3) + "a".repeat(payloadBytes % 3) + suffix
+  }
+
+  @Test
   fun definitelyUnsentNodeEventRemainsQueued() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
