@@ -1,0 +1,85 @@
+import { Virtualizer } from "@tanstack/virtual-core";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
+import { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
+import { TranscriptReaderAnchor } from "./chat-transcript-reader-anchor.ts";
+
+it("preserves a visible row when newly revealed predecessors first measure inside the viewport", async () => {
+  const viewport = document.body.appendChild(document.createElement("div"));
+  viewport.style.cssText = "height:400px;width:400px;overflow:auto;overflow-anchor:none";
+  const content = viewport.appendChild(document.createElement("div"));
+  content.style.cssText = "height:12000px;position:relative";
+  const column = content.appendChild(document.createElement("div"));
+  column.style.cssText = "position:absolute;top:740px;width:400px";
+  const row = (index: number) => {
+    const element = document.createElement("div");
+    element.style.height = "80px";
+    element.dataset.index = String(index);
+    element.dataset.virtualRowKey = String(index);
+    return element;
+  };
+  const retained = column.appendChild(row(2));
+  viewport.scrollTop = 500;
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 100,
+    estimateSize: () => 120,
+    getItemKey: String,
+    getScrollElement: () => viewport,
+    initialRect: { width: 400, height: 400 },
+    initialOffset: 500,
+    scrollMargin: 500,
+    overscan: 1,
+    scrollToFn: vi.fn(),
+    observeElementRect: vi.fn(),
+    observeElementOffset: vi.fn(),
+  });
+  virtualizer.scrollElement = viewport;
+  virtualizer.targetWindow = window;
+  virtualizer.elementsCache.set("2", retained);
+  const anchor = new TranscriptReaderAnchor(
+    {
+      virtualizer,
+      layout: new TranscriptLayoutOwner(() => {}),
+      offsetState: new TranscriptOffsetState(),
+      renderer: { columnElement: column, queueAfterCommit: () => {} },
+      initialRange: { pending: false },
+      prependAnchor: { messageKey: null },
+      headerHeight: 0,
+      scrollElement: viewport,
+      contentElement: content,
+    },
+    () => {},
+  );
+  const rows = [retained];
+  onTestFinished(() => {
+    rows.forEach((element) => anchor.unobserve(element));
+    viewport.remove();
+  });
+  anchor.observe(retained);
+  await new Promise<void>((resolve) => {
+    const ready = new ResizeObserver(() => {
+      ready.disconnect();
+      resolve();
+    });
+    onTestFinished(() => ready.disconnect());
+    ready.observe(retained);
+  });
+  const top = retained.getBoundingClientRect().top;
+  const predecessors = [row(0), row(1)];
+  rows.push(...predecessors);
+  const measured = new Promise<number>((resolve) => {
+    const ready = new ResizeObserver(() => {
+      ready.disconnect();
+      resolve(retained.getBoundingClientRect().top);
+    });
+    onTestFinished(() => ready.disconnect());
+    predecessors.forEach((element) => {
+      virtualizer.elementsCache.set(element.dataset.index!, element);
+      anchor.observe(element);
+    });
+    ready.observe(predecessors[1]!);
+  });
+  column.prepend(...predecessors);
+  column.style.top = "500px";
+  expect(await measured).toBe(top);
+});

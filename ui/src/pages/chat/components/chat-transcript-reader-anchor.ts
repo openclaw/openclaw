@@ -142,6 +142,19 @@ export class TranscriptReaderAnchor {
           : [];
       })
       .toSorted((left, right) => left.top - right.top);
+    // Newly revealed rows can enter inside the viewport ahead of retained content.
+    // Their first measurement must preserve that content, just like rows above it.
+    const retainedIndex = compensating
+      ? virtualizer.getVirtualItems().find((item) => {
+          const row = virtualizer.elementsCache.get(item.key);
+          return (
+            item.end > (virtualizer.scrollOffset ?? 0) &&
+            row?.dataset.preparedRow !== "true" &&
+            row !== undefined &&
+            this.heights.has(row)
+          );
+        })?.index
+      : undefined;
     let moved = 0;
     let correction = 0;
     for (const { entry, row, top } of rows) {
@@ -168,7 +181,10 @@ export class TranscriptReaderAnchor {
         index < range.startIndex - overscan ||
         index > range.endIndex + overscan ||
         Math.abs(delta) < 0.5 ||
-        !isAboveReader(previousTop, previous, first, readerTop)
+        !(
+          isAboveReader(previousTop, previous, first, readerTop) ||
+          (first && retainedIndex !== undefined && index < retainedIndex)
+        )
       ) {
         continue;
       }

@@ -131,3 +131,58 @@ it("counts only interval assets completed by route readiness and retains the lat
     completedByReady: false,
   });
 });
+
+it("retains a shifted text node's row identity after virtualization removes it", async () => {
+  let deliver: ((entries: unknown[]) => void) | undefined;
+  class LayoutObserver extends TaskObserver {
+    static supportedEntryTypes = ["layout-shift"];
+    constructor(callback: (list: { getEntries(): unknown[] }) => void) {
+      super();
+      deliver = (entries) => callback({ getEntries: () => entries });
+    }
+  }
+  vi.stubGlobal("PerformanceObserver", LayoutObserver);
+  const clock = vi.spyOn(performance, "now").mockReturnValue(100);
+  // SAFETY: Run the serialized browser observer and its callbacks in this DOM realm.
+  const page = {
+    addInitScript: async () => {},
+    evaluate: async (expression: string | ((value?: unknown) => unknown), value?: unknown) =>
+      typeof expression === "string" ? runInThisContext(expression) : expression(value),
+  } as unknown as Page;
+  await installControlUiPageObserver(page);
+  await resetControlUiPageObserver(page);
+  const row = document.createElement("div");
+  row.dataset.virtualRowKey = "synthetic-row";
+  row.className = "chat-virtual-row";
+  const paragraph = document.createElement("p");
+  paragraph.textContent = "Synthetic reply";
+  row.append(paragraph);
+  document.body.append(row);
+  deliver!([
+    {
+      startTime: 150,
+      value: 0.01,
+      hadRecentInput: false,
+      sources: [
+        {
+          node: paragraph.firstChild,
+          previousRect: new DOMRect(10, 20, 100, 18),
+          currentRect: new DOMRect(10, 41, 100, 18),
+        },
+      ],
+    },
+  ]);
+  row.remove();
+  paragraph.remove();
+  clock.mockReturnValue(200);
+  await finishControlUiPageObserver(page);
+  const result = await readControlUiPageObserver(page);
+  expect(result.cls).toBe(0.01);
+  expect(result.layoutShiftSources[0]?.nodes[0]).toMatchObject({
+    tag: "#text",
+    rowKey: "synthetic-row",
+    ancestors: ["p.", "div.chat-virtual-row", "body.", "html."],
+    before: [10, 20, 100, 18],
+    after: [10, 41, 100, 18],
+  });
+});
