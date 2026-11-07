@@ -121,7 +121,8 @@ export function renderChatComposerView(
   const placeholder = createMemo(() =>
     context().goalComposer.active
       ? t("chat.goals.objectivePlaceholder")
-      : (slashArgsHint() ?? t("chat.composer.placeholder", { name: props.assistantName || "agent" })),
+      : (slashArgsHint() ??
+        t("chat.composer.placeholder", { name: props.assistantName || "agent" })),
   );
   const mirrorCameraPreview = createMemo(
     () =>
@@ -584,7 +585,9 @@ export function renderChatComposerView(
                     }),
                   ]}
                 >
-                  {context().dictation?.active || context().predictionText ? "" : (
+                  {context().dictation?.active || context().predictionText ? (
+                    ""
+                  ) : (
                     <>
                       {slashArgsHint() ? (
                         <span style={{ visibility: "hidden", "white-space": "pre" }}>
