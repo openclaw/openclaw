@@ -555,7 +555,8 @@ If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with
 `openclaw sessions cleanup --dry-run --fix-dm-scope`. Applying the same flag
 retires those old direct-DM rows and keeps their transcripts as deleted
-archives.
+archives. DM rows still produced by a route binding's `session.dmScope` override
+are kept, even when the global scope is `main`.
 
 Preview any maintenance run with `openclaw sessions cleanup --dry-run`.
 
