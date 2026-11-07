@@ -674,90 +674,17 @@ struct RootSidebar: View {
         let session = node.session
         let isSelected = session.key == rowPass.selectedSessionKey
         return HStack(spacing: 0) {
-            Button {
-                self.selectSession(session)
-            } label: {
-                HStack(spacing: 9) {
-                    ZStack {
-                        if node.badges.runningCount > 0 {
-                            ProgressView()
-                                .controlSize(.mini)
-                                .tint(OpenClawSidebarPalette.accent)
-                        } else {
-                            Image(systemName: "bubble.left")
-                                .font(OpenClawType.captionSemiBold)
-                                .foregroundStyle(isSelected
-                                    ? OpenClawSidebarPalette.accent
-                                    : OpenClawSidebarPalette.muted)
-                        }
-                    }
-                    .frame(width: 18)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(verbatim: CommandCenterTab.sessionTitle(session))
-                            .font(OpenClawType.subheadSemiBold)
-                            .foregroundStyle(isSelected
-                                ? OpenClawSidebarPalette.accent
-                                : OpenClawSidebarPalette.textStrong)
-                            .lineLimit(1)
-                        // Web-parity subtitle: the work line (repo/branch) names the
-                        // session; recency moves to the trailing metadata slot.
-                        if let subtitle = ChatSessionSidebarModel.subtitle(
-                            for: session,
-                            workSubtitle: ChatSessionSidebarModel.workSubtitle(for: session))
-                        {
-                            Text(verbatim: subtitle)
-                                .font(OpenClawType.caption2Medium)
-                                .foregroundStyle(OpenClawSidebarPalette.muted)
-                                .lineLimit(1)
-                        }
-                    }
-
-                    Spacer(minLength: 4)
-                    if session.pinned == true {
-                        Image(systemName: "pin.fill")
-                            .font(OpenClawType.caption2Medium)
-                            .foregroundStyle(OpenClawSidebarPalette.accent)
-                            .accessibilityHidden(true)
-                    }
-                    Text(verbatim: CommandCenterTab.sessionDetail(session))
-                        .font(OpenClawType.caption2Medium)
-                        .foregroundStyle(OpenClawSidebarPalette.muted)
-                        .lineLimit(1)
-                    if session.unread == true {
-                        Circle()
-                            .fill(OpenClawSidebarPalette.accent)
-                            .frame(width: 7, height: 7)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .padding(.horizontal, 10)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
-                cornerRadius: OpenClawProMetric.controlRadius,
-                style: .continuous))
-            .overlay(alignment: .leading) {
-                OpenClawSessionColorStripe(color: session.color)
-            }
-            .commandSessionActions(
-                session: session,
+            RootSidebarSessionButton(
+                node: node,
+                isSelected: isSelected,
                 mainSessionKey: rowPass.mainSessionKey,
                 categories: rowPass.categories,
-                isEnabled: self.appModel.isOperatorGatewayConnected,
-                canArchive: ChatSessionSidebarModel.canArchiveSession(
-                    session,
-                    mainSessionKey: rowPass.mainSessionKey),
-                canDelete: ChatSessionSidebarModel.canDeleteSession(
-                    key: session.key,
-                    mainSessionKey: rowPass.mainSessionKey),
+                isConnected: self.appModel.isOperatorGatewayConnected,
+                minute: Int(Date().timeIntervalSince1970 / 60),
+                open: self.selectSession,
                 performMutation: self.performSessionMutation,
-                fork: { self.forkSession(session) })
-            .accessibilityValue(Self.sessionAccessibilityValue(
-                isPinned: session.pinned == true,
-                isUnread: session.unread == true))
+                fork: self.forkSession)
+                .equatable()
             self.attentionBadges(for: Self.flattened([node]).map(\.session), targetID: "session:\(session.key)")
         }
     }
