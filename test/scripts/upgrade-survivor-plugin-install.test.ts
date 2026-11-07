@@ -65,7 +65,7 @@ async function pluginFixture() {
   return {
     record,
     stateDir,
-    run(install: Record<string, unknown>, expectedVersion = version, retained = published) {
+    run: (install: Record<string, unknown>, expectedVersion = version, retained = published) => {
       writeJson(join(stateDir, "plugins", "installs.json"), {
         installRecords: { discord: install },
       });
