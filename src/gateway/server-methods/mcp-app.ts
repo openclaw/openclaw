@@ -4,6 +4,7 @@ import {
   errorShape,
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { reloadSessionMcpRuntimes } from "../../agents/agent-bundle-mcp-manager-api.js";
 import {
   getMcpAppModelContext,
   removeMcpAppModelContextItem,
@@ -15,6 +16,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logWarn } from "../../logger.js";
 import { createLazyRuntimeMethod } from "../../shared/lazy-runtime.js";
+import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import {
   executeMcpAppOperation,
   resolveMcpAppRequesterId,
@@ -191,6 +193,26 @@ function hostFileHandler(
 }
 
 export const mcpAppHandlers: GatewayRequestHandlers = {
+  "mcp.reloadRuntimes": mcpAppHandler(async (options) => {
+    const { context } = options;
+    // The Gateway's own config-reload path is lease-preserving: admitted calls
+    // keep their runtimes and only stale ones rebuild on the next turn. The
+    // shutdown-grade dispose used here previously aborted in-flight requests
+    // and closed healthy transports (#164642 Rev 3).
+    const authority = readGatewayRequestMutationAuthority(options);
+    const cfg = context.getRuntimeConfig();
+    // Revalidate the caller's mutation authority immediately before the
+    // side effect: the reload waits behind acquisition chains, and a caller
+    // revoked during that wait must not trigger it (#164642 Rev 3).
+    authority.assertCurrent();
+    // This command rebuilds runtimes from the Gateway's published snapshot; it
+    // is not the config-application owner. With gateway.reload.mode=off pending
+    // on-disk edits stay unapplied, so the response reports that instead of
+    // implying the caller's new config is live (#164642 Rev 5).
+    const configApplied = resolveGatewayReloadSettings(cfg).mode !== "off";
+    await reloadSessionMcpRuntimes({ cfg, reloadPlugins: false });
+    return { ok: true, reloaded: true, configApplied };
+  }),
   "mcp.app.formResource": mcpAppHandler(async (options) => {
     const { executeMcpAppFormResource } = await import("../mcp-app-form-resources.js");
     return executeMcpAppFormResource(options);

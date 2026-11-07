@@ -97,7 +97,7 @@ Notes:
 - `tools` updates per-server tool filters. Include/exclude entries accept raw MCP tool names, unambiguous unsuffixed tool names copied from `probe` (such as `docs__search`), and simple `*` globs. Globs match raw MCP tool names only; exact raw names take precedence over probe aliases. Use raw names for tools whose probe names collide or receive a collision suffix such as `-2`; such a probe name selects nothing in `include` and hides every tool that could carry it in `exclude`.
 - `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
 - `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
-- `reload` disposes cached in-process MCP runtimes for the current CLI process only. Gateway or agent processes in another process still need their own reload or restart path.
+- `reload` disposes cached in-process MCP runtimes and asks the configured Gateway to rebuild its cached session MCP runtimes. Both sides rebuild from their published config snapshot; the command does not apply pending on-disk config edits. With `gateway.reload.mode=off` the Gateway skips config application, so pending edits stay unapplied and the command reports that. When no Gateway is reachable, only CLI-local runtimes are rebuilt.
 - Use `transport: "streamable-http"` for Streamable HTTP MCP servers. `openclaw mcp set` also normalizes CLI-native `type: "http"` to the same current config format for compatibility.
 - `unset` fails if the named server does not exist.
 

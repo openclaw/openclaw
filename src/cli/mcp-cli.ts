@@ -29,7 +29,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { executableFileExists, safeStat } from "../infra/path-existence.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { defaultRuntime } from "../runtime.js";
-import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
@@ -43,15 +42,11 @@ import {
   configureMcpServerOffline,
   updateMcpToolsOffline,
 } from "./mcp-cli-state-owner.js";
+import { registerMcpReloadCommand } from "./mcp-cli.reload.js";
 import { exitCliAfterOutput, requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { parseKeyValueEntries } from "./parse-key-value-entries.js";
 import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
-
-const disposeAllSessionMcpRuntimes = createLazyRuntimeMethod(
-  () => import("../agents/agent-bundle-mcp-manager-api.js"),
-  (runtime) => runtime.disposeAllSessionMcpRuntimes,
-);
 
 function fail(message: string, json?: boolean): never {
   if (json) {
@@ -1107,15 +1102,7 @@ export function registerMcpCli(program: Command) {
       }),
     );
 
-  mcp
-    .command("reload")
-    .description("Dispose cached MCP runtimes so new config is used on the next turn")
-    .action(async () => {
-      await disposeAllSessionMcpRuntimes();
-      defaultRuntime.log(
-        "Disposed cached MCP runtimes. Active agents use new MCP config on their next runtime build.",
-      );
-    });
+  registerMcpReloadCommand(mcp);
 
   mcp
     .command("unset")
