@@ -142,6 +142,7 @@ import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import {
   gatewayClaudeProjectsRoot,
   registerClaudeConfigDirPreparationTests,
+  setCliBackendForPrepareTest,
 } from "./prepare-claude-config-dir.test-support.js";
 import {
   createCliMcpTool,
@@ -252,56 +253,6 @@ function createBundledMessageToolConfig(): OpenClawConfig {
     })),
   });
   return createCliBackendConfig({ bundleMcp: true });
-}
-
-function setCliBackendForPrepareTest(
-  params: {
-    authEpochMode?: CliBackendPlugin["authEpochMode"];
-    autoSelectAuthProfile?: boolean;
-    bundleMcp?: boolean;
-    command?: string;
-    id?: string;
-    liveSession?: boolean;
-    modelAliases?: Record<string, string>;
-    modelProvider?: string;
-    pluginId?: string;
-    prepareExecution?: CliBackendPlugin["prepareExecution"];
-    sessionMode?: "always" | "existing" | "none";
-    reseedFromRawTranscriptWhenUncompacted?: boolean;
-  } = {},
-) {
-  const id = params.id ?? "claude-cli";
-  // Keep preparation behind the same runtime resolver seam that production
-  // uses; direct backend constants would bypass provider ownership.
-  cliBackendsTesting.setDepsForTest({
-    resolvePluginSetupCliBackend: () => undefined,
-    resolveRuntimeCliBackends: () => [
-      {
-        id,
-        pluginId: params.pluginId ?? "anthropic",
-        modelProvider: params.modelProvider ?? "anthropic",
-        bundleMcp: params.bundleMcp ?? false,
-        ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
-        ...(params.bundleMcp ? { bundleMcpMode: "claude-config-file" as const } : {}),
-        ...(params.autoSelectAuthProfile !== undefined
-          ? { autoSelectAuthProfile: params.autoSelectAuthProfile }
-          : {}),
-        ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
-        config: {
-          ...createJsonlStdinBackendConfig(params.command ?? "claude"),
-          systemPromptFileArg: "--append-system-prompt-file",
-          systemPromptWhen: "always",
-          resumeArgs: ["--resume", "{sessionId}"],
-          sessionMode: params.sessionMode ?? "existing",
-          ...(params.modelAliases ? { modelAliases: params.modelAliases } : {}),
-          ...(params.liveSession ? { liveSession: "claude-stdio" as const } : {}),
-          ...(params.reseedFromRawTranscriptWhenUncompacted
-            ? { reseedFromRawTranscriptWhenUncompacted: true }
-            : {}),
-        },
-      },
-    ],
-  });
 }
 
 function createArgBackendConfig(

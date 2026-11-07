@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi, type Mock } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -14,7 +15,9 @@ import {
 import { createTestPreparedRunAdmission } from "../admitted-run-context.test-support.js";
 import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtures.test-support.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
+import { buildCliRunResult } from "../cli-runner/cli-run-settlement.js";
 import { buildCliMcpGrantContext } from "../cli-runner/mcp-grant-context.js";
+import { prepareCliRunTerminalReply } from "../cli-runner/terminal-reply.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { createAgentAttemptLifecycleCallbacks } from "./attempt-callbacks.js";
@@ -376,4 +379,35 @@ export function createCliBindingSettlementCase(
         ? binding
         : undefined;
   return { suppression, outerFallback, accepted, previousBinding, binding, expectedBinding };
+}
+
+export function settledCliResult(
+  context: Parameters<typeof buildCliRunResult>[0]["context"],
+  output: Parameters<typeof buildCliRunResult>[0]["output"],
+  effectiveCliSessionId: string,
+  bindingFlushOk = true,
+) {
+  return buildCliRunResult({
+    context,
+    output,
+    preparedReply: prepareCliRunTerminalReply(context, output),
+    effectiveCliSessionId,
+    bindingFlushOk,
+    usedHistoryPrompt: false,
+    userTurnHandled: true,
+    sessionBindingDisabled: false,
+    preparedContextAgentMeta: {},
+  });
+}
+
+export function cliRetry(run: RunCliAgentParams, sessionId: string, fork = false) {
+  return expectDefined(
+    fork ? run.onBeforeForkedCliSessionRetry : run.onBeforeFreshCliSessionRetry,
+    fork ? "fork recovery" : "fresh recovery",
+  )({ provider: "claude-cli", reason: "timeout", sessionId });
+}
+
+export async function persistFork(run: RunCliAgentParams, sessionId: string) {
+  await expectDefined(run.claimCliSessionFork, "fork claim")();
+  await expectDefined(run.persistCliSessionForkSuccessor, "fork persistence")(sessionId);
 }
