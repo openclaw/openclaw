@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isUserInitiatedAgentRunAbortReason } from "../../agents/run-termination.js";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { prepareSessionSystemTurnAuthority } from "../../gateway/session-system-turn-authority.js";
@@ -48,7 +49,10 @@ export async function prepareReplySourceAdmission(params: {
   const release = ownsCustody
     ? async () => {
         try {
-          recorder.finishPendingInput?.("cancelled");
+          recorder.finishPendingInput?.(
+            "cancelled",
+            isUserInitiatedAgentRunAbortReason(operation.abortSignal.reason) ? true : undefined,
+          );
         } finally {
           await recorder.waitForPendingInputSettlement?.();
         }
@@ -78,6 +82,34 @@ export async function prepareReplySourceAdmission(params: {
   } catch (error) {
     await release?.();
     throw error;
+  }
+}
+
+/** Required preflight can invoke models and tools before the reply runner exists. */
+export async function admitReplyMaintenance(
+  turn: {
+    readonly runId: string;
+    queued: FollowupRun;
+    operation: ReplyOperation;
+  },
+  sessionKey: string | undefined,
+  assertCurrent: () => void,
+): Promise<void> {
+  const execution = turn.queued.run.internalEventExecution;
+  await execution?.beforeScheduledStart?.(turn.runId);
+  assertCurrent();
+  // Maintenance owns the occurrence before effects, preventing pre-execution policy replay.
+  execution?.onStarted(turn.runId);
+  const automation = turn.queued.run.scheduledAutomation;
+  if (automation && sessionKey) {
+    automation.onExecutionStarted?.({
+      runId: turn.runId,
+      sessionId: turn.operation.sessionId,
+      sessionKey,
+      provider: turn.queued.run.provider,
+      model: turn.queued.run.model,
+    });
+    automation.onExecutionPhase?.({ jobId: automation.job.id, phase: "context_engine" });
   }
 }
 

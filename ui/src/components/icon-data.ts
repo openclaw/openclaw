@@ -19,13 +19,29 @@ export const iconData = {
     ["line", { x1: "15.41", x2: "8.59", y1: "6.51", y2: "10.49" }],
   ]),
   github: brandIconData.github,
-  incognito: strokePathData(
-    "m7 7 1.5-4.5 3.5 1 3.5-1L17 7M5 7h14",
-    "M8 10v3c0 3 1.8 5 4 5s4-2 4-5v-3M8 14H6m10 0h2",
-    "m2.5 9.5-1 3a2.5 2.5 0 0 0 5 0l-1-3-1.5 2-1.5-2Z",
-    "m18.5 9.5-1 3a2.5 2.5 0 0 0 5 0l-1-3-1.5 2-1.5-2Z",
-    "m10 18-2 3 4-1 4 1-2-3",
-    "M10.5 11h.01m2.99 0h.01",
+  // Lucide hat-glasses (ISC).
+  incognito: strokeIconData([
+    ["path", { d: "M14 18a2 2 0 0 0-4 0" }],
+    [
+      "path",
+      {
+        d: "m19 11-2.11-6.657a2 2 0 0 0-2.752-1.148l-1.276.61A2 2 0 0 1 12 4H8.5a2 2 0 0 0-1.925 1.456L5 11",
+      },
+    ],
+    ["path", { d: "M2 11h20" }],
+    ["circle", { cx: "17", cy: "18", r: "3" }],
+    ["circle", { cx: "7", cy: "18", r: "3" }],
+  ]),
+  // Lucide message-circle-dashed (ISC).
+  draft: strokePathData(
+    "M10.1 2.182a10 10 0 0 1 3.8 0",
+    "M13.9 21.818a10 10 0 0 1-3.8 0",
+    "M17.609 3.72a10 10 0 0 1 2.69 2.7",
+    "M2.182 13.9a10 10 0 0 1 0-3.8",
+    "M20.28 17.61a10 10 0 0 1-2.7 2.69",
+    "M21.818 10.1a10 10 0 0 1 0 3.8",
+    "M3.721 6.391a10 10 0 0 1 2.7-2.69",
+    "m6.163 21.117-2.906.85a1 1 0 0 1-1.236-1.169l.965-2.98",
   ),
   repeat: strokePathData(
     "m17 2 4 4-4 4",
@@ -289,6 +305,59 @@ export const iconData = {
     ["path", { d: "M12 7v4" }],
     ["path", { d: "M16 7v9" }],
   ]),
+  // Preserve the approved artwork’s viewBox and optical stroke weights.
+  blobster: {
+    attributes: {
+      viewBox: "0 0 46 45",
+      fill: "none",
+      stroke: "currentColor",
+    },
+    children: [
+      [
+        "path",
+        {
+          d: "m39.6 18.4c-0.61 0-1.2 0.11-1.68 0.29-0.03 0.01-0.07-0.01-0.08-0.05-1.33-7.67-7.65-13.08-14.84-13.08s-13.51 5.41-14.84 13.08c-0.01 0.04-0.05 0.06-0.08 0.05-0.48-0.18-1.07-0.29-1.64-0.29-1.95 0-3.37 1.45-3.37 3.48s1.24 4.03 3.44 4.03c0.56 0 1.1-0.1 1.49-0.22 0.07-0.02 0.14 0.02 0.15 0.09 0.98 5.59 4.66 10.04 8.89 11.84 0.04 0.02 0.06 0.06 0.06 0.1v2.89c0 0.28 0.21 0.48 0.48 0.48h2.64c0.27 0 0.47-0.2 0.47-0.48v-2.17c0-0.06 0.05-0.1 0.11-0.09 0.73 0.07 1.46 0.1 2.2 0.1 0.75 0 1.5-0.04 2.16-0.1 0.07-0.01 0.13 0.04 0.13 0.1v2.16c0 0.28 0.24 0.48 0.51 0.48h2.6c0.29 0 0.49-0.2 0.49-0.48v-2.89c0-0.04 0.03-0.08 0.07-0.1 4.49-2.09 8-6.48 8.85-11.83 0.01-0.07 0.08-0.11 0.15-0.09 0.45 0.13 0.99 0.21 1.58 0.21 2.22 0 3.38-2.11 3.38-4.03 0-2.11-1.54-3.48-3.32-3.48z",
+          "stroke-width": "1.2",
+        },
+      ],
+      [
+        "circle",
+        {
+          cx: "17.48",
+          cy: "14.51",
+          r: "1.819",
+          fill: "currentColor",
+          stroke: "none",
+        },
+      ],
+      [
+        "circle",
+        {
+          cx: "28.49",
+          cy: "14.51",
+          r: "1.819",
+          fill: "currentColor",
+          stroke: "none",
+        },
+      ],
+      [
+        "path",
+        {
+          d: "m17.09 6.63c-1.14-2.5-3.68-3.29-5.21-2.67",
+          "stroke-width": "1.423",
+          "stroke-linecap": "round",
+        },
+      ],
+      [
+        "path",
+        {
+          d: "m28.91 6.63c1.21-2.5 3.68-3.29 5.18-2.67",
+          "stroke-width": "1.423",
+          "stroke-linecap": "round",
+        },
+      ],
+    ],
+  },
   bot: strokeIconData([
     ["path", { d: "M12 8V4H8" }],
     ["rect", { width: "16", height: "12", x: "4", y: "8", rx: "2" }],
@@ -373,11 +442,24 @@ export const iconData = {
     "M6.391 20.279a10 10 0 0 1-2.69-2.7",
   ),
   check: strokePathData("M20 6 9 17l-5-5"),
+  // Lucide check-check (ISC).
+  checkCheck: strokePathData("M18 6 7 17l-5-5", "m22 10-7.5 7.5L13 16"),
   info: strokeIconData([
     ["circle", { cx: "12", cy: "12", r: "10" }],
     ["path", { d: "M12 16v-4" }],
     ["path", { d: "M12 8h.01" }],
   ]),
+  // Lucide circle-check, circle-alert and loader-circle (ISC).
+  circleCheck: strokeIconData([
+    ["circle", { cx: "12", cy: "12", r: "10" }],
+    ["path", { d: "m9 12 2 2 4-4" }],
+  ]),
+  circleAlert: strokeIconData([
+    ["circle", { cx: "12", cy: "12", r: "10" }],
+    ["line", { x1: "12", x2: "12", y1: "8", y2: "12" }],
+    ["line", { x1: "12", x2: "12.01", y1: "16", y2: "16" }],
+  ]),
+  loaderCircle: strokePathData("M21 12a9 9 0 1 1-6.219-8.56"),
   square: strokeIconData([["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }]]),
   play: strokeIconData([["polygon", { points: "6 3 20 12 6 21 6 3" }]]),
   pause: strokeIconData([
@@ -422,10 +504,11 @@ export const iconData = {
     "M10 10.5V6a2 2 0 0 0-4 0v8",
     "M6 14v-2a2 2 0 0 0-4 0v4c0 4.4 3.6 8 8 8h2c4.4 0 8-3.6 8-8v-5a2 2 0 0 0-4 0v2",
   ),
+  // Lucide key (ISC).
   key: strokeIconData([
-    ["circle", { cx: "7.5", cy: "15.5", r: "5.5" }],
-    ["path", { d: "m21 2-9.6 9.6" }],
-    ["path", { d: "m15.5 7.5 3 3L22 7l-3-3" }],
+    ["path", { d: "m2 21 9.6-9.6" }],
+    ["path", { d: "m7.5 15.5 2.3 2.3a1 1 0 0 1 0 1.4l-2.1 2.1a1 1 0 0 1-1.4 0L4 19" }],
+    ["circle", { cx: "15.5", cy: "7.5", r: "5.5" }],
   ]),
   flag: strokePathData("M5 22V4", "M5 4c5-4 9 4 14 0v11c-5 4-9-4-14 0"),
   lock: strokeIconData([
@@ -503,6 +586,13 @@ export const iconData = {
   search: strokeIconData([
     ["circle", { cx: "11", cy: "11", r: "8" }],
     ["path", { d: "m21 21-4.3-4.3" }],
+  ]),
+  textSearch: strokeIconData([
+    ["path", { d: "M21 6H3" }],
+    ["path", { d: "M10 12H3" }],
+    ["path", { d: "M10 18H3" }],
+    ["circle", { cx: "17", cy: "15", r: "3" }],
+    ["path", { d: "m21 19-1.9-1.9" }],
   ]),
   wrapText: strokePathData("M3 6h18", "M3 12h15a3 3 0 1 1 0 6h-4", "m16 16-2 2 2 2", "M3 18h7"),
   brain: strokePathData(

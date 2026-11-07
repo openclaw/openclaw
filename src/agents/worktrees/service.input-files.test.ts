@@ -14,6 +14,7 @@ import {
 import { captureGitHubPublicationWorkspaceSnapshot } from "../../gateway/github-publication-git-transport.js";
 import { prepareNodeWorkspaceTransferSnapshot } from "../../gateway/worker-environments/node-workspace-transfer-snapshot.js";
 import { prepareWorkerTurnMedia } from "../../gateway/worker-environments/worker-turn-media.js";
+import { prepareWorkspaceReconciliation } from "../../gateway/worker-environments/workspace-manifest-comparison.js";
 import { parseWorkerWorkspaceManifest } from "../../gateway/worker-environments/workspace-manifest.js";
 import { applyStagedWorkerWorkspace } from "../../gateway/worker-environments/workspace-reconcile.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../../gateway/worker-environments/workspace-sync-scripts.js";
@@ -243,7 +244,7 @@ it.each(["writable sandbox", "cloud"])(
         stagingRoot: remote,
         baseManifestRef: base.manifestRef,
         currentManifestRef: manifestRef,
-        base: base.manifest,
+        reconciliation: prepareWorkspaceReconciliation(base.manifest, current),
         current,
         acceptance: { kind: "reconcile" },
         journal: {

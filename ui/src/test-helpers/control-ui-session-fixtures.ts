@@ -422,7 +422,14 @@ export function createControlUiSessionFixtures(
     }
     return undefined;
   };
-  const materializeResponse = (params: unknown, response: unknown) => {
+  const materializeResponse = (method: string, params: unknown, response: unknown) => {
+    if (
+      method !== "sessions.create" &&
+      method !== "sessions.catalog.continue" &&
+      method !== "beam.owned.continue"
+    ) {
+      return;
+    }
     if (!isRecord(response)) {
       return;
     }

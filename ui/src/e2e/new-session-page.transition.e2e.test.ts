@@ -439,7 +439,10 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("agent.wait", { endedAt: Date.now(), runId, status: "ok" });
       const toast = page.locator(".app-toast");
-      await toast.getByText("Done").waitFor({ timeout: 10_000 });
+      // A finished run shows only the session name and Open session.
+      await toast
+        .getByRole("link", { name: "Open session", exact: true })
+        .waitFor({ timeout: 10_000 });
       await captureProof(page, `background-${label}-complete.png`);
       if (captureProofEnabled) {
         await page.waitForTimeout(800);
@@ -480,7 +483,7 @@ suite.define(() => {
     const firstKey = createdKey((await gateway.waitForRequest("sessions.create")).params);
     await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
     await captureProof(page, "ime-deliberate-enter-created.png");
-    await page.getByRole("link", { name: "New conversation" }).first().click();
+    await page.getByRole("link", { name: "New session" }).first().click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     await page.locator(".new-session-page__message").fill("verify another default mock");
     await page.locator(".new-session-page__message").press("Control+Enter");

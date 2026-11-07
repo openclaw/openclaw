@@ -595,6 +595,60 @@ describe("worktree Git maintenance", () => {
     expect(await packNames(repo)).toHaveLength(1);
   });
 
+  it("defers a pass whose checkout lease expires instead of suspending repository maintenance", async () => {
+    const repo = await initRepo(tempDirs.make("worktree-lost-lease-maintenance-"));
+    const { objects } = await packBlobs(repo, ["lost-a", "lost-b", "lost-c"]);
+    await git(repo, "prune-packed");
+    await register(repo, "lost-lease", { branch: "main" });
+    const real = Date.now();
+    // Keep the scheduler behind the real lease worker except for the stalled heartbeat.
+    let now = real - 3 * WORKTREE_GC_INTERVAL_MS;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const execute = gitExec.executeGitCommand;
+    let stalled = false;
+    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      const result = await execute(cwd, args, options);
+      if (args.at(-1) === "openclaw-consolidate" && !stalled) {
+        stalled = true;
+        // The host misses every renewal while Git rewrites packs, as in production.
+        now = real + 60_000;
+      }
+      return result;
+    });
+    const maintain = createWorktreeGitMaintenance(env);
+    let progress = new WorktreeGcProgress();
+    await maintain({ progress });
+    expect(progress.result.issues).toEqual([
+      expect.objectContaining({ stage: "git-maintenance", outcome: "deferred" }),
+    ]);
+    now = real - WORKTREE_GC_INTERVAL_MS;
+    progress = new WorktreeGcProgress();
+    await maintain({ progress });
+    expect(progress.result.gitMaintenance?.stage).toBe("completed");
+    expect(await packNames(repo)).toHaveLength(1);
+    expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+  });
+
+  it("admits ref mutations while packs are rewritten", async () => {
+    const repo = await initRepo(tempDirs.make("worktree-pack-ref-queue-"));
+    const { objects } = await packBlobs(repo, ["queue-a", "queue-b", "queue-c"]);
+    await git(repo, "prune-packed");
+    await register(repo, "pack-ref-queue", { branch: "main" });
+    const execute = gitExec.executeGitCommand;
+    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      // A base-ref fetch must not wait for the whole verification and rewrite.
+      const signal = AbortSignal.timeout(5_000);
+      if (args.at(-1) === "openclaw-consolidate") {
+        await gitExec.enqueueGitRefMutation(repo, ".git", async () => {}, signal);
+      }
+      return await execute(cwd, args, options);
+    });
+    const progress = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ progress });
+    expect(progress.result.gitMaintenance).toMatchObject({ stage: "completed", packsAfter: 1 });
+    expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+  });
+
   it("retains a replacement that is already an input and a pack pinned during publication", async () => {
     const repo = await initRepo(tempDirs.make("worktree-pack-existing-output-"));
     const directory = path.join(repo, ".git", "objects", "pack");
@@ -639,15 +693,17 @@ describe("worktree Git maintenance", () => {
       const repo = await initRepo(tempDirs.make("worktree-temporary-packs-"));
       const directory = path.join(repo, ".git", "objects", "pack");
       const old = path.join(directory, "tmp_pack_abandoned");
+      // An interrupted index-pack leaves its index beside the temporary pack.
+      const oldIndex = path.join(directory, "tmp_idx_abandoned");
       const active = path.join(directory, "tmp_pack_active");
       const young = path.join(directory, "tmp_pack_young");
       const unrelated = path.join(directory, "operator-note");
       const link = path.join(directory, "tmp_pack_symlink");
-      for (const file of [old, active, young, unrelated]) {
+      for (const file of [old, oldIndex, active, young, unrelated]) {
         await fs.writeFile(file, "retain or reclaim");
       }
       const yesterday = new Date(Date.now() - 48 * 60 * 60_000);
-      for (const file of [old, active, unrelated]) {
+      for (const file of [old, oldIndex, active, unrelated]) {
         await fs.utimes(file, yesterday, yesterday);
       }
       await fs.symlink(unrelated, link);
@@ -662,6 +718,7 @@ describe("worktree Git maintenance", () => {
         await service.gc();
         await fs.access(active);
         await expectMissing(old);
+        await expectMissing(oldIndex);
       } finally {
         await writer.close();
       }

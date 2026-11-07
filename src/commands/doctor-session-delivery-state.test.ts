@@ -108,7 +108,7 @@ function listEntries(env: NodeJS.ProcessEnv, agentId = "main", clone?: boolean) 
 describe("doctor canonical session delivery state", () => {
   it.each([undefined, "full"] as const)(
     "uses requested integrity coverage for delivery repairs (%s)",
-    (integrityCheck) => {
+    async (integrityCheck) => {
       const env = makeEnv("openclaw-delivery-integrity-");
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
       const sessionKey = "agent:main:delivery-integrity";
@@ -167,9 +167,9 @@ describe("doctor canonical session delivery state", () => {
           targets: [{ agentId: "main", storePath: databasePath, sqlitePath: databasePath }],
         });
       if (integrityCheck === "full") {
-        expect(repair).toThrow(/integrity_check.*idx_agent_cache_updated/su);
+        await expect(repair()).rejects.toThrow(/integrity_check.*idx_agent_cache_updated/su);
       } else {
-        expectReport(repair(), 1);
+        expectReport(await repair(), 1);
       }
       {
         using database = new DatabaseSync(databasePath, { readOnly: true });
@@ -201,16 +201,16 @@ describe("doctor canonical session delivery state", () => {
     },
   );
 
-  it("warns and skips an unmigrated agent database", () => {
+  it("warns and skips an unmigrated agent database", async () => {
     const env = makeEnv("openclaw-delivery-legacy-schema-");
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     database.db.exec("PRAGMA user_version = 8;");
     closeOpenClawAgentDatabasesForTest();
 
-    expectReport(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env }), 0);
+    expectReport(await repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env }), 0);
   });
 
-  it("publishes repaired delivery accounts to the existing SQLite connection without aging sessions", () => {
+  it("publishes repaired delivery accounts to the existing SQLite connection without aging sessions", async () => {
     const env = makeEnv("openclaw-delivery-warm-cache-");
     const sessionKey = "agent:main:delivery-warm-cache";
     insertSessionRow(env, sessionKey, {
@@ -225,7 +225,7 @@ describe("doctor canonical session delivery state", () => {
       updatedAt: 10,
       lastAccountId: "stale-slack-bot",
     });
-    expectReport(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env }), 1);
+    expectReport(await repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env }), 1);
     expect(readEntry(env, sessionKey)).toMatchObject({
       updatedAt: 10,
       delivery: { context: { accountId: "current-bot" } },
@@ -239,7 +239,7 @@ describe("doctor canonical session delivery state", () => {
     expect(repaired).not.toHaveProperty("lastAccountId");
   });
 
-  it("migrates a copied realistic store without touching the source or canonical row bytes", () => {
+  it("migrates a copied realistic store without touching the source or canonical row bytes", async () => {
     const sourceEnv = makeEnv("openclaw-delivery-source-");
     const canonicalEntry = {
       sessionId: "canonical-session",
@@ -303,14 +303,20 @@ describe("doctor canonical session delivery state", () => {
     fs.copyFileSync(sourcePath, copiedPath);
 
     expectReport(
-      repairCanonicalSessionDeliveryStates({ apply: false, cfg: {}, env: copiedEnv }),
+      await repairCanonicalSessionDeliveryStates({ apply: false, cfg: {}, env: copiedEnv }),
       3,
       0,
     );
-    expectReport(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env: copiedEnv }), 3);
+    expectReport(
+      await repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env: copiedEnv }),
+      3,
+    );
     closeOpenClawAgentDatabasesForTest();
     expect(listEntries(copiedEnv)).toHaveLength(4);
-    expectReport(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env: copiedEnv }), 0);
+    expectReport(
+      await repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env: copiedEnv }),
+      0,
+    );
 
     const migrated: Record<string, unknown> = readEntry(copiedEnv, "agent:main:legacy");
     expect(migrated.delivery).toEqual({
@@ -362,7 +368,7 @@ describe("doctor canonical session delivery state", () => {
 });
 
 describe("doctor canonical session resolved skills", () => {
-  it("refuses prepared repairs on a malformed excluded snapshot and retries in-process", () => {
+  it("refuses prepared repairs on a malformed excluded snapshot and retries in-process", async () => {
     const env = makeEnv("openclaw-skills-malformed-snapshot-");
     const sessionKey = "agent:main:a-skills";
     const tombstoneKey = "agent:main:z-tombstone";
@@ -407,7 +413,7 @@ describe("doctor canonical session resolved skills", () => {
         .all();
     const originalSnapshots = readSnapshots();
 
-    expectReport(repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env }), 0);
+    expectReport(await repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env }), 0);
     expect(readEntryJson(env, sessionKey)).toBe(originalEntry);
     expect(readEntryJson(env, tombstoneKey)).toBe("{}");
     expect(readSnapshots()).toEqual(originalSnapshots);
@@ -415,7 +421,7 @@ describe("doctor canonical session resolved skills", () => {
     database.db
       .prepare("UPDATE session_entry_snapshots SET value_json = '{}' WHERE session_key = ?")
       .run(tombstoneKey);
-    expectReport(repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env }), 1);
+    expectReport(await repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env }), 1);
     const repaired = loadExactSessionEntryReadOnly({ agentId: "main", env, sessionKey })?.entry;
     expect(repaired).toMatchObject({
       sessionId: "skills-session",
@@ -425,10 +431,10 @@ describe("doctor canonical session resolved skills", () => {
     });
     expect(repaired?.skillsSnapshot).toEqual(compactSkills);
     expect(readEntryJson(env, tombstoneKey)).toBe("{}");
-    expectReport(repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env }), 0);
+    expectReport(await repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env }), 0);
   });
 
-  it("repairs all agents without mutating dry-run rows or losing compact snapshots", () => {
+  it("repairs all agents without mutating dry-run rows or losing compact snapshots", async () => {
     const env = makeEnv("openclaw-skills-all-agents-");
     const compactSnapshot = {
       prompt: "compact skill prompt",
@@ -475,10 +481,20 @@ describe("doctor canonical session resolved skills", () => {
       ).toBe(0);
     }
 
-    expectReport(repairCanonicalSessionResolvedSkills({ apply: false, cfg: {}, env }), 2, 0, 2);
+    expectReport(
+      await repairCanonicalSessionResolvedSkills({ apply: false, cfg: {}, env }),
+      2,
+      0,
+      2,
+    );
     expect(readEntry(env, "agent:main:runtime-skills").skillsSnapshot.resolvedSkills).toBeDefined();
 
-    expectReport(repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env }), 2, 2, 2);
+    expectReport(
+      await repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env }),
+      2,
+      2,
+      2,
+    );
     for (const agentId of ["main", "work"]) {
       const sessionKey = `agent:${agentId}:runtime-skills`;
       expect(
@@ -494,6 +510,11 @@ describe("doctor canonical session resolved skills", () => {
     for (const agentId of ["main", "work"]) {
       expect(listEntries(env, agentId, false)[0]?.entry.skillsSnapshot).toEqual(compactSnapshot);
     }
-    expectReport(repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env }), 0, 0, 2);
+    expectReport(
+      await repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env }),
+      0,
+      0,
+      2,
+    );
   });
 });

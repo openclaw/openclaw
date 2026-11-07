@@ -228,6 +228,8 @@ export async function downloadClawHubGitHubSkillArchive(params: {
   const { bytes } = await fetchClawHubArchive(
     {
       url: downloadUrl.toString(),
+      // The operator-configured codeload origin is trusted like a registry base.
+      baseUrl,
       skipAuth: true,
     },
     `GitHub source archive for ${params.repo}@${params.commit}`,

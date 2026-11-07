@@ -1,4 +1,5 @@
 import type { JSX } from "@solidjs/web";
+import { t } from "../../../i18n/index.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import {
@@ -36,6 +37,8 @@ import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.t
 
 export type NativeMessageGroupOptions = Omit<RenderMessageGroupOptions, "frameContent"> & {
   frameContent?: JSX.Element[];
+  frameHeader?: boolean;
+  frameFooter?: boolean;
 };
 
 export type GroupMessage = MessageGroupData["messages"][number];
@@ -142,7 +145,7 @@ export function prepareMessageGroupFrame(
   const sourceOnly = isSourceOnlyUserGroup(group);
   const showAvatar =
     normalizedRole !== "user" || Boolean(group.sender || group.senderLabel?.trim());
-  const assistantName = opts.assistantName ?? "Assistant";
+  const assistantName = opts.assistantName ?? t("chat.messages.agentName");
   const isOwnGroup = isOwnSenderGroup(group, opts.userId);
   const isPeerGroup =
     normalizedRole === "user" && Boolean(opts.userId && group.sender) && !isOwnGroup;
@@ -234,6 +237,7 @@ export function prepareMessageGroupFrame(
     (isPeerGroup || Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown));
   const hasAvatar =
     showAvatar &&
+    opts.frameHeader !== false &&
     !isTurnBlock &&
     avatarPlacement === "gutter" &&
     (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false);
@@ -275,6 +279,7 @@ export function prepareMessageGroupFrame(
         "chat-group--forwarded": isForwarded,
         "chat-group--sender-tint": senderHue !== null,
         "chat-group--reply": holdsReplyRow,
+        "chat-group--frame-fragment": opts.frameFooter === false,
       },
     ],
     senderHue,

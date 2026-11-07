@@ -1,6 +1,7 @@
 // @vitest-environment node
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
+import { i18n } from "../../i18n/index.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import {
   normalizeChatFastModeInput,
@@ -485,4 +486,19 @@ it("preserves the wire preference without route recovery capability", () => {
     }),
     { currentOverride: "ultrafast", label: "Ultrafast", ultrafastSupported: false },
   );
+});
+
+it("routes the default model fallback through the catalog", () => {
+  const translate = vi.spyOn(i18n, "t");
+  try {
+    const state = resolveChatModelSelectState(
+      modelState({
+        sessionsResult: createSessionsListResult({ defaultsModel: "", defaultsProvider: "" }),
+      }),
+    );
+    expect(translate).toHaveBeenCalledWith("chat.modelControls.defaultModel", undefined);
+    expect(state.defaultLabel).toBe(i18n.t("chat.modelControls.defaultModel"));
+  } finally {
+    translate.mockRestore();
+  }
 });

@@ -1,0 +1,2 @@
+# Preserve accessible running status and spinner while hiding redundant Details-row copy.
+5

@@ -11,7 +11,8 @@ import type {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { callSessionTargetGateway, type SessionTargetGateway } from "./session-target.js";
 
 export type SessionsImportOptions = SessionTargetGateway & {

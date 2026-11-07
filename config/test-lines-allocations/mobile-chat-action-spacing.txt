@@ -1,0 +1,2 @@
+# Browser regression for even mobile chat footer action spacing without 44px-wide inline margins.
+47

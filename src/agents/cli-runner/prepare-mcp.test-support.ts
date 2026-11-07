@@ -1,11 +1,18 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as grants from "../../gateway/mcp-grant-store.js";
 import type { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
-import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
+import type {
+  CliBackendExecute,
+  CliBackendLiveSessionHandle,
+  CliBackendPlugin,
+} from "../../plugins/cli-backend.types.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import {
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
@@ -14,11 +21,19 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   type createCliRunnerPrepareFixture,
   createTestMcpLoopbackClientGrant,
+  createTestMcpLoopbackServer,
   createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
+import {
+  acceptsCliLiveSession,
+  createCliLiveSessionCapability,
+} from "./cli-live-session-registry.js";
 import { resolveCliChildEnv } from "./execution-env.js";
-import { setCliRunnerPrepareTestDeps } from "./prepare.test-support.js";
-import type { RunCliAgentParams } from "./types.js";
+import {
+  resetCliRunnerPrepareTestDeps,
+  setCliRunnerPrepareTestDeps,
+} from "./prepare.test-support.js";
+import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 type McpProjectionParams = Parameters<typeof resolveMcpLoopbackScopedTools>[0];
 type McpRunOverrides = Pick<RunCliAgentParams, "config" | "execOverrides" | "toolsAllow">;
@@ -46,6 +61,7 @@ export function createCliMcpTool(name: string, label: string, description: strin
 export function mockCliMcpPreparation(overrides: Record<string, unknown> = {}) {
   const mint = vi.fn(createTestMcpLoopbackClientGrant);
   const revoke = vi.fn(() => true);
+  const revokeMinted = vi.fn(() => true);
   setCliRunnerPrepareTestDeps({
     isWorkspaceBootstrapPending: async () => false,
     makeBootstrapWarn: () => () => undefined,
@@ -55,13 +71,116 @@ export function mockCliMcpPreparation(overrides: Record<string, unknown> = {}) {
     mintMcpLoopbackClientGrant: mint,
     bindMcpLoopbackClientGrantAdmission: () => true,
     revokeMcpLoopbackClientGrant: revoke,
+    revokeMintedMcpLoopbackClientGrant: revokeMinted,
     resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
     prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
     getCliLiveSessionGeneration: () => undefined,
     loadManifestModelCatalog: () => [],
     ...overrides,
   });
-  return { mint, revoke };
+  return { mint, revoke, revokeMinted };
+}
+
+export function registerCliMcpPreparationFailureTests({
+  getFixture,
+  createConfig,
+}: {
+  getFixture: () => ReturnType<typeof createCliRunnerPrepareFixture>;
+  createConfig: () => OpenClawConfig;
+}) {
+  it("cleans generated Gemini MCP settings when auth preparation fails", async () => {
+    const fixture = getFixture();
+    let generatedSystemSettingsPath: string | undefined;
+    const getActiveMcpLoopbackRuntime = vi.fn(loopbackRuntime);
+    const prepareExecution = vi.fn(async (ctx: unknown) => {
+      generatedSystemSettingsPath = (ctx as { env?: Record<string, string> }).env
+        ?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
+      throw new Error("Gemini auth profile was selected but no credential material was found");
+    });
+    const revokeMintedMcpLoopbackClientGrant = vi.fn(() => true);
+    setRawCliBackendForPrepareTest({
+      id: "google-gemini-cli",
+      pluginId: "google",
+      bundleMcp: true,
+      bundleMcpMode: "gemini-system-settings",
+      prepareExecution,
+      config: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+        output: "json",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      revokeMintedMcpLoopbackClientGrant,
+    });
+
+    await expect(
+      fixture.prepare({
+        sessionKey: "agent:main:main",
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        config: {},
+      }),
+    ).rejects.toThrow(/no credential material/);
+
+    expect(generatedSystemSettingsPath).toBeTruthy();
+    expect(fs.existsSync(generatedSystemSettingsPath ?? "")).toBe(false);
+    expect(revokeMintedMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ token: "loopback-token" }),
+    );
+  });
+
+  it("cleans prepared MCP and skills plugin dirs when mid-prepare reference lookup fails", async () => {
+    const fixture = getFixture();
+    const { dir } = fixture.session;
+    const tempEnvSnapshot = captureEnv(["TMPDIR", "TMP", "TEMP"]);
+    const tempRoot = path.join(dir, "tmp");
+    const skillsPluginDir = path.join(dir, "claude-skills-plugin");
+    const skillsCleanup = vi.fn(async () => {
+      fs.rmSync(skillsPluginDir, { recursive: true, force: true });
+    });
+    const revokeMintedMcpLoopbackClientGrant = vi.fn(() => true);
+    fs.mkdirSync(tempRoot, { recursive: true });
+    fs.mkdirSync(skillsPluginDir, { recursive: true });
+    setTestEnvValue("TMPDIR", tempRoot);
+    setTestEnvValue("TMP", tempRoot);
+    setTestEnvValue("TEMP", tempRoot);
+    const getActiveMcpLoopbackRuntime = vi.fn(loopbackRuntime);
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      revokeMintedMcpLoopbackClientGrant,
+      prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
+        args: ["--plugin-dir", skillsPluginDir],
+        cleanup: skillsCleanup,
+      })),
+      resolveOpenClawReferencePaths: vi.fn(async () => {
+        throw new Error("reference path lookup failed");
+      }),
+    });
+
+    try {
+      await expect(
+        fixture.prepare({
+          sessionKey: "agent:main:main",
+          config: createConfig(),
+        }),
+      ).rejects.toThrow("reference path lookup failed");
+
+      expect(skillsCleanup).toHaveBeenCalledOnce();
+      expect(revokeMintedMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ token: "loopback-token" }),
+      );
+      expect(fs.existsSync(skillsPluginDir)).toBe(false);
+      expect(
+        fs.readdirSync(tempRoot).filter((entry) => entry.startsWith("openclaw-cli-mcp-")),
+      ).toEqual([]);
+    } finally {
+      tempEnvSnapshot.restore();
+    }
+  });
 }
 
 export function registerCliMcpPreparationTests({
@@ -71,6 +190,153 @@ export function registerCliMcpPreparationTests({
   getFixture: () => ReturnType<typeof createCliRunnerPrepareFixture>;
   createConfig: () => OpenClawConfig;
 }) {
+  it("revokes each minted warm turn while reusing the same process for the next turn", async () => {
+    const fixture = getFixture();
+    // Keep real mint, transfer, capture and cleanup. Only external preparation
+    // seams are replaced, so the same regression also runs against token cleanup.
+    resetCliRunnerPrepareTestDeps();
+    const turnOwnerToken = `minted-turn-runtime-${randomUUID()}`;
+    setCliRunnerPrepareTestDeps({
+      isWorkspaceBootstrapPending: async () => false,
+      makeBootstrapWarn: () => () => undefined,
+      resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
+      getActiveMcpLoopbackRuntime: () => ({
+        port: 31783,
+        ownerToken: turnOwnerToken,
+        nonOwnerToken: "fixture-reader",
+      }),
+      ensureMcpLoopbackServer: createTestMcpLoopbackServer,
+      createMcpLoopbackServerConfig: createTestMcpLoopbackServerConfig,
+      resolveMcpLoopbackPolicyTools: () => ({ agentId: "main", tools: [] }),
+      resolveMcpLoopbackScopedTools: () => ({ agentId: "main", tools: [] }),
+      resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
+      prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
+      loadManifestModelCatalog: () => [],
+    });
+    setRawCliBackendForPrepareTest({
+      id: "native-cli",
+      pluginId: "native-plugin",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      prepareExecution: () => ({ execute: vi.fn<CliBackendExecute>() }),
+      config: {
+        ...createJsonlStdinBackendConfig("native-cli"),
+        liveSession: "claude-stdio",
+      },
+    });
+    const prepared: PreparedCliRunContext[] = [];
+    const originalCaptureKey = "original-process-capture";
+    const signal = new AbortController().signal;
+    const prepareTurn = async (runId: string) => {
+      const context = await fixture.prepare({
+        agentId: "main",
+        sessionKey: fixture.session.sessionTarget.sessionKey,
+        provider: "native-cli",
+        runId,
+        config: {},
+      });
+      prepared.push(context);
+      expect(acceptsCliLiveSession(context)).toBe(true);
+      return context;
+    };
+    const capabilityFor = (
+      context: PreparedCliRunContext,
+      captureKey: string,
+      requiredGeneration?: string,
+    ) => {
+      const capture = expectDefined(context.preparedBackend.mcpClientGrantCapture, "MCP capture");
+      return createCliLiveSessionCapability({
+        context,
+        argv: ["native-cli", "--print"],
+        env: context.preparedBackend.env ?? {},
+        captureKey,
+        beginCapture: (key) => capture.activate(expectDefined(key, "capture key"), () => {}),
+        abortSignal: signal,
+        ...(requiredGeneration ? { requiredGeneration } : {}),
+      });
+    };
+    try {
+      const first = await prepareTurn("minted-turn-first");
+      const firstCapture = expectDefined(
+        first.preparedBackend.mcpClientGrantCapture,
+        "first capture",
+      );
+      const bearerToken = firstCapture.transportToken;
+      const original = capabilityFor(first, originalCaptureKey);
+      const close = vi.fn();
+      const handle: CliBackendLiveSessionHandle = {
+        generation: "minted-turn-generation",
+        fingerprint: original.fingerprint,
+        isIdle: () => true,
+        close,
+        waitForExit: async () => {},
+      };
+      const processGrant = {
+        token: bearerToken,
+        runtimeOwnerToken: turnOwnerToken,
+        captureKey: originalCaptureKey,
+      };
+      const finish = async (context: PreparedCliRunContext) => {
+        context.preparedBackend.mcpClientGrantCapture?.deactivate(originalCaptureKey);
+        await context.preparedBackend.cleanup?.();
+      };
+      try {
+        original.register(handle);
+        original.activate(handle);
+        expect(grants.resolveMcpLoopbackClientGrant(processGrant)?.context.runId).toBe(
+          "minted-turn-first",
+        );
+        await finish(first);
+        expect(grants.activateMcpLoopbackClientGrantCapture(processGrant)).toBe(false);
+
+        const second = await prepareTurn("minted-turn-second");
+        const secondCapability = capabilityFor(second, "unused-second-capture", handle.generation);
+        expect(secondCapability.current()).toBe(handle);
+        expect(secondCapability.fingerprint).toBe(handle.fingerprint);
+        secondCapability.activate(handle);
+        const secondGrant = grants.resolveMcpLoopbackClientGrant(processGrant);
+        expect(secondGrant?.context.runId).toBe("minted-turn-second");
+        expect(secondGrant?.admittedRunContext).toBe(second.params.admittedRunContext);
+        expect(secondGrant?.isCurrent()).toBe(true);
+
+        // This cleanup must remove the transferred row before process removal.
+        // Resolving an inactive capture alone would conceal the retained-row bug.
+        await finish(second);
+        expect(grants.activateMcpLoopbackClientGrantCapture(processGrant)).toBe(false);
+        expect(secondGrant?.isCurrent()).toBe(false);
+        expect(close).not.toHaveBeenCalled();
+
+        const third = await prepareTurn("minted-turn-third");
+        const thirdCapability = capabilityFor(third, "unused-third-capture", handle.generation);
+        expect(thirdCapability.current()).toBe(handle);
+        expect(thirdCapability.fingerprint).toBe(handle.fingerprint);
+        thirdCapability.activate(handle);
+        const thirdGrant = grants.resolveMcpLoopbackClientGrant(processGrant);
+        expect(thirdGrant).toMatchObject({
+          captureKey: originalCaptureKey,
+          context: { runId: "minted-turn-third" },
+          admittedRunContext: third.params.admittedRunContext,
+        });
+        expect(thirdGrant?.isCurrent()).toBe(true);
+        await first.preparedBackend.cleanup?.();
+        await second.preparedBackend.cleanup?.();
+        expect(thirdGrant?.isCurrent()).toBe(true);
+        expect(thirdCapability.current()).toBe(handle);
+        expect(close).not.toHaveBeenCalled();
+        await finish(third);
+        expect(grants.activateMcpLoopbackClientGrantCapture(processGrant)).toBe(false);
+      } finally {
+        // Only fixture teardown removes the process; all three turn assertions precede it.
+        original.remove(handle);
+      }
+    } finally {
+      for (const context of prepared) {
+        await context.preparedBackend.cleanup?.();
+      }
+      grants.revokeMcpLoopbackClientGrantsForRuntime(turnOwnerToken);
+    }
+  });
+
   it("keeps prepared Gemini runtime settings in native-only child environments", async () => {
     const fixture = getFixture();
     const home = path.join(fixture.session.dir, "restricted-home");
@@ -120,7 +386,7 @@ export function registerCliMcpPreparationTests({
     const activateCapture = vi.fn(() => ({ captureNativeToolAuthority: () => true }));
     const deactivateCapture = vi.fn(() => true);
     const transferGrant = vi.fn(() => true);
-    const { mint, revoke } = mockCliMcpPreparation({
+    const { mint, revoke, revokeMinted } = mockCliMcpPreparation({
       activateMcpLoopbackClientGrantCapture: activateCapture,
       deactivateMcpLoopbackClientGrantCapture: deactivateCapture,
       transferMcpLoopbackClientGrant: transferGrant,
@@ -245,8 +511,8 @@ export function registerCliMcpPreparationTests({
     expect(systemPrompt).toContain("`send`: `target` + `message`; target required this turn");
     expect(systemPrompt).not.toContain("current source is default target");
     await preparedBackend.cleanup?.();
-    expect(revoke).toHaveBeenCalledTimes(2);
-    expect(revoke).toHaveBeenLastCalledWith(token);
+    expect(revoke).toHaveBeenCalledOnce();
+    expect(revokeMinted).toHaveBeenCalledExactlyOnceWith(mint.mock.results[0]?.value);
   });
 
   it.each<[name: string, managed: boolean, overrides?: McpRunOverrides]>([
@@ -305,7 +571,7 @@ export function registerCliMcpPreparationTests({
     });
     const release = vi.fn();
     const resolveAudience = vi.fn(async () => ({ memoryAudience, release }));
-    const { mint, revoke } = mockCliMcpPreparation({
+    const { mint, revokeMinted } = mockCliMcpPreparation({
       resolveCliMcpMemoryAudience: resolveAudience,
     });
     const sessionEntry = { sessionId: "session-test", chatType: "direct", updatedAt: 1 } as const;
@@ -329,7 +595,7 @@ export function registerCliMcpPreparationTests({
     );
     expect(release).not.toHaveBeenCalled();
     await context.preparedBackend.cleanup?.();
-    expect(revoke).toHaveBeenCalledWith(token);
+    expect(revokeMinted).toHaveBeenCalledExactlyOnceWith(mint.mock.results[0]?.value);
     expect(release).toHaveBeenCalledOnce();
   });
 

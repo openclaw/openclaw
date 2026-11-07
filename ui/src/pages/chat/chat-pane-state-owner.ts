@@ -445,6 +445,7 @@ export abstract class ChatPaneStateOwner {
     hasPendingScrollCommand: () =>
       this.state !== undefined && hasPendingManualChatScroll(this.state),
     onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
+    onNativeScroll: (event) => this.handleTranscriptScroll(event),
   });
   protected get progressCards() {
     return sessionProgressCardsForGateway(this.context.gateway);
@@ -502,6 +503,7 @@ export abstract class ChatPaneStateOwner {
     return {
       subagentSessions: sessions,
       subagentSessionsHydrated: Boolean(target && this.swarm.hydrator?.hydrated),
+      subagentSessionsUnavailable: Boolean(target && this.swarm.hydrator?.childrenUnavailable),
       subagentSessionsPending: Boolean(target && this.swarm.hydrator?.pendingChildRead),
       // Carry the admitted owner forward; route aliases do not identify child ancestry.
       subagentParentKey: target
@@ -743,5 +745,6 @@ export abstract class ChatPaneStateOwner {
   protected abstract cancelHeaderRename(): void;
   protected abstract handleArchiveSessionShortcut(event: KeyboardEvent): boolean;
   protected abstract resetOlderMessagesViewport(): void;
+  protected abstract handleTranscriptScroll(event: Event): void;
   protected abstract syncQueuedEditRetention(): void;
 }

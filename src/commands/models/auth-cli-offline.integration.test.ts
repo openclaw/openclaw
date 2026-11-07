@@ -5,6 +5,11 @@ import fs from "node:fs/promises";
 import { CANCEL_SYMBOL } from "@clack/prompts";
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  setAuthProfileOrder,
+  upsertAuthProfileAsync,
+} from "../../agents/auth-profiles/profiles.js";
+import { loadPersistedAuthProfileState } from "../../agents/auth-profiles/state.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store-runtime.js";
 import { registerModelsCli } from "../../cli/models-cli.js";
 import { createCliTtyMock } from "../../cli/test-runtime-capture.js";
@@ -68,8 +73,27 @@ it("keeps offline custody through credential input, writes, order changes, and r
 
       await run(["order", "set", "--provider", "synthetic", profileId]);
       expect(readStore().order?.synthetic).toEqual([profileId]);
+      await upsertAuthProfileAsync({
+        agentDir: state.agentDir(),
+        profileId: "synthetic:backup",
+        credential: { type: "api_key", provider: "synthetic", key: "synthetic-backup-key" },
+      });
+      const inheritedOrder = ["synthetic:backup", profileId];
+      await setAuthProfileOrder({
+        provider: "synthetic",
+        order: inheritedOrder,
+        sharedStoreWrite: true,
+      });
       await run(["order", "clear", "--provider", "synthetic"]);
-      expect(readStore().order?.synthetic).toBeUndefined();
+      expect(loadPersistedAuthProfileState(state.agentDir()).order?.synthetic).toBeUndefined();
+      expect(readStore().order?.synthetic).toEqual(inheritedOrder);
+      expect(defaultRuntime.log).toHaveBeenCalledWith(
+        "Auth profile order override cleared; effective order: synthetic:backup, synthetic:manual.",
+      );
+      await run(["order", "get", "--provider", "synthetic"]);
+      expect(defaultRuntime.log).toHaveBeenCalledWith(
+        "Auth profile order override: synthetic:backup, synthetic:manual",
+      );
 
       await run(["logout", profileId, "--yes"]);
       expect(readStore().profiles[profileId]).toBeUndefined();

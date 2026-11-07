@@ -2756,7 +2756,7 @@ if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$baseline_version" = "2026.9.
   phase prepare-native-assignment-proof prepare_native_assignment_proof
 fi
 if [ "$CANDIDATE_KIND" = "tarball" ] && [ -n "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" ] &&
-  { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ]; }; then
+  { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "legacy-operator-state" ]; }; then
   phase candidate-package-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs \
     candidate "$(package_root)" "$CANDIDATE_SPEC"
 fi
@@ -2879,7 +2879,7 @@ if [ "$native_assignment_enabled" = "1" ]; then
   phase assert-native-assignment-first-hop node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs post-update "$candidate_version"
 fi
 if [ "$CANDIDATE_KIND" = "tarball" ] && [ -n "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" ] &&
-  { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ]; }; then
+  { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "legacy-operator-state" ]; }; then
   phase installed-package-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs \
     installed "$(package_root)" "$CANDIDATE_SPEC"
 fi

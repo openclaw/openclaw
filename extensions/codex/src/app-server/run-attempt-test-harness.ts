@@ -71,7 +71,10 @@ import {
   useAutoCleanupTempDirTracker,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
-import { createCodexLifecycleTurnHarness } from "./thread-lifecycle.test-fixtures.js";
+import {
+  createCodexLifecycleTurnHarness,
+  createLeasedCodexLifecycleHarness,
+} from "./thread-lifecycle.test-fixtures.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 
 export {
@@ -438,6 +441,13 @@ export {
   turnStartResult,
   userMessage,
 } from "./codex-app-server.test-fixtures.js";
+
+/** Leases a lifecycle harness whose shared-client key is this test's agent directory. */
+export function createAgentLifecycleHarness(
+  options: Omit<Parameters<typeof createLeasedCodexLifecycleHarness>[0], "agentDir">,
+) {
+  return createLeasedCodexLifecycleHarness({ ...options, agentDir: path.join(tempDir, "agent") });
+}
 
 export function threadStartResult(threadId = "thread-1", options: { cwd?: string } = {}) {
   return createThreadStartResult(threadId, options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test");

@@ -1,0 +1,28 @@
+{
+  "name": "@openclaw/iroh-node",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Node.js binding for iroh endpoints and streams with Buffer-based I/O",
+  "license": "MIT",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "build": "npx --yes @napi-rs/cli@3.10.9 build --platform --release --strip",
+    "test": "node --test test/*.test.cjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "napi": {
+    "binaryName": "iroh-node",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl",
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "x86_64-pc-windows-msvc"
+    ]
+  }
+}

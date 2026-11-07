@@ -59,7 +59,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       env: { OPENCLAW_STATE_DIR: fixture.oauthDir },
     });
 
-  it("drops reserved MCP server names without touching sibling servers", () => {
+  it("drops reserved MCP server names without touching sibling servers", async () => {
     const raw: unknown = JSON.parse(
       '{"mcp":{"servers":{"__proto__":{"command":"bad"},"docs":{"command":"docs"}}},"nodeHost":{"mcp":{"servers":{"__proto__":{"command":"bad-node"},"local":{"command":"local"}}}}}',
     );
@@ -68,7 +68,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       mcp: { servers: { docs: { command: "docs" } } },
       nodeHost: { mcp: { servers: { local: { command: "local" } } } },
     };
-    const migrated = normalizeCompatibilityConfigValues(normalized, { sourceRaw: raw });
+    const migrated = await normalizeCompatibilityConfigValues(normalized, { sourceRaw: raw });
 
     expect(migrated.config.mcp?.servers).toStrictEqual({ docs: { command: "docs" } });
     expect(migrated.config.nodeHost?.mcp?.servers).toStrictEqual({ local: { command: "local" } });
@@ -79,11 +79,11 @@ describe("normalizeCompatibilityConfigValues", () => {
       'Dropped MCP server "__proto__" from nodeHost.mcp.servers because the name is reserved; re-add it under a different name.',
     ]);
 
-    const secondPass = normalizeCompatibilityConfigValues(migrated.config);
+    const secondPass = await normalizeCompatibilityConfigValues(migrated.config);
     expect(secondPass.config).toStrictEqual(migrated.config);
     expect(secondPass.changes).toStrictEqual([]);
 
-    const candidateOnly = normalizeCompatibilityConfigValues(raw, { sourceRaw: {} });
+    const candidateOnly = await normalizeCompatibilityConfigValues(raw, { sourceRaw: {} });
     expect(Object.hasOwn(candidateOnly.config.mcp?.servers ?? {}, "__proto__")).toBe(false);
     expect(Object.hasOwn(candidateOnly.config.nodeHost?.mcp?.servers ?? {}, "__proto__")).toBe(
       false,
@@ -91,7 +91,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(candidateOnly.changes).toStrictEqual(migrated.changes);
   });
 
-  it("defers the whole promotion for uncovered keys on an undeclared channel", () => {
+  it("defers the whole promotion for uncovered keys on an undeclared channel", async () => {
     const config = {
       channels: {
         "uninstalled-demo": {
@@ -103,13 +103,13 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     };
 
-    const res = normalizeCompatibilityConfigValues(config);
+    const res = await normalizeCompatibilityConfigValues(config);
 
     expect(res.config).toEqual(config);
     expect(res.changes).toStrictEqual([]);
   });
 
-  it("promotes the legacy tier when a loaded adapter is undeclared", () => {
+  it("promotes the legacy tier when a loaded adapter is undeclared", async () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -125,7 +125,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       ]),
     );
 
-    const res = normalizeCompatibilityConfigValues({
+    const res = await normalizeCompatibilityConfigValues({
       channels: {
         "undeclared-demo": { dmPolicy: "allowlist", appToken: "legacy-app-token", accounts: {} },
       },
@@ -142,8 +142,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
-  it("migrates nano-banana skill config to native image generation config", () => {
-    const res = normalizeSkills({
+  it("migrates nano-banana skill config to native image generation config", async () => {
+    const res = await normalizeSkills({
       "nano-banana-pro": {
         enabled: true,
         apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
@@ -162,8 +162,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toHaveLength(3);
   });
 
-  it("migrates legacy OpenAI provider api values to OpenAI completions", () => {
-    const res = normalizeProviders({
+  it("migrates legacy OpenAI provider api values to OpenAI completions", async () => {
+    const res = await normalizeProviders({
       openrouter: {
         baseUrl: "https://openrouter.ai/api/v1",
         api: "openai",
@@ -337,7 +337,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(result.changes).toHaveLength(3);
   });
 
-  it("keeps the whole provider-conflicted Codex namespace legacy", () => {
+  it("keeps the whole provider-conflicted Codex namespace legacy", async () => {
     const migrated = {
       models: {
         providers: {
@@ -370,7 +370,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     migrateCodexConfig(migrated);
 
     const blockedProviderPlan = collectBlockedLegacyOpenAICodexProviderPlan(migrated);
-    const normalized = normalizeCompatibilityConfigValues(migrated, {
+    const normalized = await normalizeCompatibilityConfigValues(migrated, {
       blockedModelIdentities: new Set(blockedProviderPlan.blockedModelIdentities),
     });
     const repaired = maybeRepairCodexRoutes({
@@ -396,7 +396,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
-  it("migrates a 2026.6 wizard-shaped Codex config into gateway-loadable canonical state", () => {
+  it("migrates a 2026.6 wizard-shaped Codex config into gateway-loadable canonical state", async () => {
     const raw = {
       models: {
         providers: {
@@ -424,7 +424,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       plugins: { entries: { codex: { enabled: true } } },
     };
     const migrated = migrateCodexConfig(structuredClone(raw));
-    const normalized = normalizeCompatibilityConfigValues(migrated);
+    const normalized = await normalizeCompatibilityConfigValues(migrated);
     const repaired = maybeRepairCodexRoutes({ cfg: normalized.config });
 
     expect(repaired.cfg.agents?.defaults?.model).toEqual({
@@ -448,8 +448,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(validateConfigObject(repaired.cfg).ok).toBe(true);
   });
 
-  it("migrates legacy Claude CLI refs in agent entries", () => {
-    const res = normalizeCompatibilityConfigValues({
+  it("migrates legacy Claude CLI refs in agent entries", async () => {
+    const res = await normalizeCompatibilityConfigValues({
       agents: {
         entries: {
           main: {
@@ -460,10 +460,7 @@ describe("normalizeCompatibilityConfigValues", () => {
             },
             models: {
               "claude-cli/claude-opus-4-7": { alias: "Legacy Opus" },
-              "anthropic/claude-opus-4-7": {
-                alias: "Canonical Opus",
-                agentRuntime: { id: "openclaw" },
-              },
+              "anthropic/claude-opus-4-7": { alias: "Canonical Opus" },
               "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
             },
             modelPolicy: {
@@ -485,7 +482,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         models: {
           "anthropic/claude-opus-4-7": {
             alias: "Canonical Opus",
-            agentRuntime: { id: "openclaw" },
+            agentRuntime: { id: "claude-cli" },
           },
           "anthropic/claude-sonnet-4-6": {
             alias: "Sonnet",
@@ -501,8 +498,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toHaveLength(3);
   });
 
-  it("preserves runtime policy for allowlist-only legacy refs", () => {
-    const res = normalizeCompatibilityConfigValues({
+  it("preserves runtime policy for allowlist-only legacy refs", async () => {
+    const res = await normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-7" },
@@ -519,8 +516,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
-  it("pins migrated Codex CLI refs to Codex when OpenAI uses a custom base URL", () => {
-    const res = normalizeCompatibilityConfigValues({
+  it("pins migrated Codex CLI refs to Codex when OpenAI uses a custom base URL", async () => {
+    const res = await normalizeCompatibilityConfigValues({
       agents: { defaults: { model: "codex-cli/gpt-5.5" } },
       models: {
         providers: {
@@ -537,8 +534,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
-  it("migrates existing Codex CLI runtime pins to the Codex app-server runtime", () => {
-    const res = normalizeCompatibilityConfigValues({
+  it("migrates existing Codex CLI runtime pins to the Codex app-server runtime", async () => {
+    const res = await normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
           models: { "openai/gpt-5.5": { agentRuntime: { id: "codex-cli", mode: "strict" } } },
@@ -574,8 +571,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toHaveLength(4);
   });
 
-  it("prefers legacy nano-banana env.GEMINI_API_KEY over skill apiKey during migration", () => {
-    const res = normalizeSkills({
+  it("prefers legacy nano-banana env.GEMINI_API_KEY over skill apiKey during migration", async () => {
+    const res = await normalizeSkills({
       "nano-banana-pro": {
         apiKey: "ignored-skill-api-key",
         env: { GEMINI_API_KEY: "env-gemini-key" },
@@ -592,8 +589,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
-  it("preserves explicit native config while removing legacy nano-banana skill config", () => {
-    const res = normalizeCompatibilityConfigValues({
+  it("preserves explicit native config while removing legacy nano-banana skill config", async () => {
+    const res = await normalizeCompatibilityConfigValues({
       agents: { defaults: { mediaModels: { image: { primary: "fal/fal-ai/flux/dev" } } } },
       models: {
         providers: {
@@ -622,8 +619,8 @@ describe("normalizeCompatibilityConfigValues", () => {
 
   it.each([{ retained: [] }, { retained: ["peekaboo"] }])(
     "keeps skills.allowBundled restrictive after removing nano-banana ($retained)",
-    ({ retained }) => {
-      const res = normalizeCompatibilityConfigValues({
+    async ({ retained }) => {
+      const res = await normalizeCompatibilityConfigValues({
         skills: { allowBundled: [...retained, "nano-banana-pro"] },
       });
 
@@ -632,8 +629,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     },
   );
 
-  it("migrates legacy web search provider config to plugin-owned config paths", () => {
-    const res = normalizeCompatibilityConfigValues({
+  it("migrates legacy web search provider config to plugin-owned config paths", async () => {
+    const res = await normalizeCompatibilityConfigValues({
       tools: {
         web: {
           search: {
@@ -671,8 +668,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toHaveLength(3);
   });
 
-  it("normalizes talk provider ids without overriding explicit provider config", () => {
-    const res = normalizeCompatibilityConfigValues({
+  it("normalizes talk provider ids without overriding explicit provider config", async () => {
+    const res = await normalizeCompatibilityConfigValues({
       talk: {
         provider: " elevenlabs ",
         providers: { " elevenlabs ": { voiceId: "voice-123" } },
@@ -686,7 +683,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toHaveLength(1);
   });
 
-  it("does not report talk provider normalization for semantically identical key ordering differences", () => {
+  it("does not report talk provider normalization for semantically identical key ordering differences", async () => {
     const input = {
       talk: {
         interruptOnSpeech: true,
@@ -698,14 +695,14 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     };
 
-    const res = normalizeCompatibilityConfigValues(input);
+    const res = await normalizeCompatibilityConfigValues(input);
 
     expect(res.config).toEqual(input);
     expect(res.changes).toStrictEqual([]);
   });
 
-  it("normalizes persisted mistral model maxTokens that matched the old context-sized defaults", () => {
-    const res = normalizeMistralModels([
+  it("normalizes persisted mistral model maxTokens that matched the old context-sized defaults", async () => {
+    const res = await normalizeMistralModels([
       makeModel("mistral-large-latest", { contextWindow: 262144, maxTokens: 262144 }),
       makeModel("magistral-small", { maxTokens: 128000 }),
     ]);
@@ -723,8 +720,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toHaveLength(4);
   });
 
-  it("normalizes old zero Mistral cacheRead costs while preserving custom costs", () => {
-    const res = normalizeMistralModels([
+  it("normalizes old zero Mistral cacheRead costs while preserving custom costs", async () => {
+    const res = await normalizeMistralModels([
       makeModel("codestral-latest", {
         contextWindow: 256000,
         cost: { input: 0.3, output: 0.9, cacheRead: 0, cacheWrite: 0 },

@@ -313,49 +313,55 @@ it.each([
   }
 });
 
-it("reuses approval id as the node runId for an explicit agent follow-up", async () => {
-  const node = nodeFixture();
-  const followup = mockFollowup("allow-once", { "node.invoke": node.handle });
-  const route = externalRoute("feishu");
-  const tool = approvalTool({ host: "node", ...agentFollowup, ...route });
-  const result = await tool.execute("call1", { command: "ls -la" });
-  const details = pendingDetails(result);
-  const pendingText = getResultText(result);
-  expectText(
-    result,
-    `Reply with: /approve ${details.approvalSlug} allow-once|deny`,
-    `full ${details.approvalId}`,
-    "Host: node",
-    "Node: node-1",
-    "CWD: (node default)",
-    "ls -la",
-    "Mode: foreground (interactive approvals available).",
-  );
-  expect(pendingText).not.toContain("Background mode");
-  const agent = await followup;
-  const run = requireRecord(node.runs[0], "system.run params");
-  expect(run).toMatchObject({ runId: details.approvalId, suppressNotifyOnExit: true });
-  expect(Object.hasOwn(run, "cwd")).toBe(false);
-  expect(agent).toMatchObject({
-    sessionKey: route.sessionKey,
-    message: expect.stringContaining("<<<BEGIN_UNTRUSTED_EXEC_OUTPUT>>>"),
-    internalRuntimeHandoffId: expect.any(String),
-    deliver: true,
-    bestEffortDeliver: true,
-    channel: "feishu",
-    to: "123",
-    accountId: "default",
-    threadId: "456",
-  });
-  expect(agent.inputProvenance).toEqual({
-    kind: "inter_session",
-    sourceSessionKey: route.sessionKey,
-    sourceTool: "exec_approval_followup",
-  });
-  expect(String(agent.idempotencyKey)).toMatch(/^exec-approval-followup:.+:nonce:/);
-  expect(sendMessage).not.toHaveBeenCalled();
-  expect(String(agent.idempotencyKey)).toContain(details.approvalId);
-});
+it.each([
+  { channel: "feishu", currentMessagingTarget: undefined, expectedTo: "123" },
+  { channel: "discord", currentMessagingTarget: "channel:222", expectedTo: "channel:222" },
+])(
+  "reuses approval id and routes the $channel agent follow-up to its conversation",
+  async ({ channel, currentMessagingTarget, expectedTo }) => {
+    const node = nodeFixture();
+    const followup = mockFollowup("allow-once", { "node.invoke": node.handle });
+    const route = { ...externalRoute(channel), currentMessagingTarget };
+    const tool = approvalTool({ host: "node", ...agentFollowup, ...route });
+    const result = await tool.execute("call1", { command: "ls -la" });
+    const details = pendingDetails(result);
+    const pendingText = getResultText(result);
+    expectText(
+      result,
+      `Reply with: /approve ${details.approvalSlug} allow-once|deny`,
+      `full ${details.approvalId}`,
+      "Host: node",
+      "Node: node-1",
+      "CWD: (node default)",
+      "ls -la",
+      "Mode: foreground (interactive approvals available).",
+    );
+    expect(pendingText).not.toContain("Background mode");
+    const agent = await followup;
+    const run = requireRecord(node.runs[0], "system.run params");
+    expect(run).toMatchObject({ runId: details.approvalId, suppressNotifyOnExit: true });
+    expect(Object.hasOwn(run, "cwd")).toBe(false);
+    expect(agent).toMatchObject({
+      sessionKey: route.sessionKey,
+      message: expect.stringContaining("<<<BEGIN_UNTRUSTED_EXEC_OUTPUT>>>"),
+      internalRuntimeHandoffId: expect.any(String),
+      deliver: true,
+      bestEffortDeliver: true,
+      channel,
+      to: expectedTo,
+      accountId: "default",
+      threadId: "456",
+    });
+    expect(agent.inputProvenance).toEqual({
+      kind: "inter_session",
+      sourceSessionKey: route.sessionKey,
+      sourceTool: "exec_approval_followup",
+    });
+    expect(String(agent.idempotencyKey)).toMatch(/^exec-approval-followup:.+:nonce:/);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(String(agent.idempotencyKey)).toContain(details.approvalId);
+  },
+);
 
 it("keeps ask=always prompts for gateway runs with durable trust", async () => {
   const allowlist: ExecApprovalsAgent["allowlist"] = [

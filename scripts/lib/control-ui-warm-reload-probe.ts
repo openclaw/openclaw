@@ -1,3 +1,5 @@
+import type { ApplicationContext } from "../../ui/src/app/context.ts";
+
 type TranscriptWitness = { messageId: string; rowKey: string; text: string };
 export type TranscriptWitnesses = { saved: TranscriptWitness; live: TranscriptWitness };
 
@@ -120,6 +122,7 @@ export function warmReloadProbe(
   let removedRows = 0;
   let stopped = false;
   let cachedRows: Element[] = [];
+  let previousRows = "";
   const factSelectors: Record<string, string> = {
     reactions: ".chat-message-reactions",
     notices: ".chat-run-failure",
@@ -204,6 +207,36 @@ export function warmReloadProbe(
   const mark = (name: string) => {
     milestones[name] ??= performance.now();
   };
+  let stopGateway: (() => void) | undefined;
+  const receiveContext = (event: Event) => {
+    const provider = event as Event & { context?: unknown; contextTarget?: HTMLElement };
+    if (provider.context !== "openclaw.application" || !provider.contextTarget) {
+      return;
+    }
+    const consumer = document.createElement("span");
+    provider.contextTarget.append(consumer);
+    try {
+      consumer.dispatchEvent(
+        Object.assign(new Event("context-request", { bubbles: true, composed: true }), {
+          context: "openclaw.application",
+          contextTarget: consumer,
+          subscribe: false,
+          callback: (context: Pick<ApplicationContext, "gateway">) => {
+            stopGateway = context.gateway.subscribe((snapshot) => {
+              if (snapshot.phase === "connected" && milestones.helloPublished === undefined) {
+                mark("helloPublished");
+                queueMicrotask(() => mark("helloHandled"));
+              }
+            });
+          },
+        }),
+      );
+    } finally {
+      consumer.remove();
+    }
+    window.removeEventListener("context-provider", receiveContext);
+  };
+  window.addEventListener("context-provider", receiveContext);
   const observe = (type: string, callback: (entries: PerformanceEntry[]) => void) => {
     new PerformanceObserver((list) => callback(list.getEntries())).observe({
       type,
@@ -550,6 +583,21 @@ export function warmReloadProbe(
     const thread = pane?.querySelector(".chat-thread");
     const inner = thread?.querySelector(".chat-thread-inner");
     const currentRows = [...(thread?.querySelectorAll(".chat-virtual-row") ?? [])];
+    const rowBounds = input.rowFacts
+      ? new Map(currentRows.map((row) => [row, row.getBoundingClientRect()]))
+      : undefined;
+    if (rowBounds) {
+      const signature = [...rowBounds]
+        .map(
+          ([row, box]) =>
+            `${row.getAttribute("data-virtual-row-key")}:${box.height}:${row.textContent?.length}`,
+        )
+        .join("|");
+      if (currentRows.length && signature !== previousRows) {
+        milestones.finalRowsDom = performance.now();
+      }
+      previousRows = signature;
+    }
     if (input.avatars && currentRows.length) {
       for (const element of document.querySelectorAll(
         ".chat-thread :is(.chat-avatar-slot, .chat-author-avatar, .identity-avatar--agent, img), aside.sidebar :is(.viewer-avatar, .identity-avatar--agent, img)",
@@ -701,7 +749,7 @@ export function warmReloadProbe(
           const bounds = thread.getBoundingClientRect();
           for (const row of currentRows) {
             const rowKey = row.getAttribute("data-virtual-row-key");
-            const rect = row.getBoundingClientRect();
+            const rect = rowBounds?.get(row) ?? row.getBoundingClientRect();
             if (rowKey && rect.bottom > bounds.top && rect.top < bounds.bottom) {
               // Keep the last cached frame, after initial virtualizer positioning.
               cachedAnchor = {
@@ -727,7 +775,9 @@ export function warmReloadProbe(
         liveAnchor = {
           at: performance.now(),
           rowKey: cachedAnchor.rowKey,
-          offset: row.getBoundingClientRect().top - thread.getBoundingClientRect().top,
+          offset:
+            (rowBounds?.get(row) ?? row.getBoundingClientRect()).top -
+            thread.getBoundingClientRect().top,
           scrollTop: thread.scrollTop,
         };
       }
@@ -735,8 +785,10 @@ export function warmReloadProbe(
     if (visible && caughtUp) {
       mark("firstLiveTranscript");
     }
-    const composer = pane?.querySelector<HTMLTextAreaElement>("textarea");
-    if (composer && !composer.disabled && !composer.readOnly) {
+    const hydratedComposer = pane?.querySelector<HTMLTextAreaElement>(
+      ".agent-chat__composer-combobox textarea:not(#openclaw-boot-composer)",
+    );
+    if (hydratedComposer && !hydratedComposer.disabled && !hydratedComposer.readOnly) {
       mark("inputReady");
     }
     const state = JSON.stringify({
@@ -747,7 +799,7 @@ export function warmReloadProbe(
       sidebar: Boolean(document.querySelector("aside.sidebar")),
       header: pane?.querySelector(".chat-pane__session-title-text")?.textContent ?? null,
       rows: visible,
-      input: Boolean(composer && !composer.disabled),
+      input: Boolean(hydratedComposer && !hydratedComposer.disabled),
       board: Boolean(document.querySelector(".board-widget__frame")),
     });
     if (states.at(-1)?.state !== state) {
@@ -788,6 +840,8 @@ export function warmReloadProbe(
     witnesses: readWitnesses,
     read() {
       stopped = true;
+      stopGateway?.();
+      window.removeEventListener("context-provider", receiveContext);
       observer.disconnect();
       resize?.disconnect();
       const perf = Reflect.get(window, "__perf");
@@ -858,6 +912,9 @@ export function warmReloadProbe(
         );
       }
       return {
+        transcriptStability: Reflect.get(window, "__activeTranscriptReload")?.ready
+          ? Reflect.get(window, "__activeTranscriptReload").read()
+          : undefined,
         milestones,
         transcriptPresentation: {
           at: performance.now(),

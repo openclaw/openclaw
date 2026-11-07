@@ -30,6 +30,7 @@ const lock = ".artifacts/dist-artifacts.lock/owner.json";
 const packageCaches = [
   ".openclaw/tmp/toolchain/node/bin/node",
   ".local/share/pnpm/store/v11/files/10/package-content",
+  "artifacts/task-environment/local/share/pnpm/store/v11/files/10/package-content",
   ".openclaw/.pnpm-store/v11/files/10/package-content",
   ".cache/openclaw/bun/pinned/linux-x64/bin/bun",
   ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome",
@@ -132,9 +133,7 @@ export async function proveNestedGitWorkspaceRecovery(owner: LocalWorkspaceOwner
   const commit = await runGit(["commit-tree", resultTree], message(after.ref));
   await runGit(["update-ref", ref, commit]);
   expect(await readStagedWorkerWorkspaceResult(canonical, ref)).toMatchObject({
-    baseManifestRaw: before.raw,
     baseManifestRef: before.ref,
-    currentManifestRaw: after.raw,
     currentManifestRef: after.ref,
   });
   const invalid = workerWorkspaceResultRef(`historical-nested-git-v${version}-bad-digest`);

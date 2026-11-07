@@ -222,7 +222,7 @@ suite.define(() => {
     const desktop = requester.page.locator("openclaw-desktop-panel[embedded]");
     await requester.gateway.waitForRequest("environments.status");
     await desktop.locator(".desktop-status-surface[role='status']").waitFor();
-    await desktop.getByText("Starting your machine…", { exact: true }).waitFor();
+    await desktop.getByText("Starting your device…", { exact: true }).waitFor();
     expect(await requester.gateway.getRequests("desktop.observe")).toHaveLength(0);
     await captureUiProof(suite, requester.page, "screen-requester-routing", "pending-desktop.png");
     await requester.gateway.setMethodResponse("environments.status", {
@@ -308,15 +308,11 @@ suite.define(() => {
     });
     await Promise.all(deliveries);
     const portal = requester.page.locator("openclaw-portals-page[embedded]");
-    await portal
-      .getByText("Machine ready. Waiting for your application…", { exact: true })
-      .waitFor();
+    await portal.getByText("Device ready. Waiting for your app…", { exact: true }).waitFor();
     expect(await requester.gateway.getRequests("portal.list")).toHaveLength(0);
     await captureUiProof(suite, requester.page, "screen-requester-routing", "pending-portal.png");
     await requester.page.reload();
-    await portal
-      .getByText("Machine ready. Waiting for your application…", { exact: true })
-      .waitFor();
+    await portal.getByText("Device ready. Waiting for your app…", { exact: true }).waitFor();
     expect(await requester.gateway.getRequests("portal.list")).toHaveLength(0);
 
     await screen.execute("show-web", {

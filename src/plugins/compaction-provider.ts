@@ -6,7 +6,9 @@ export type { CompactionProvider } from "./registry-contribution-types.js";
 
 export function getCompactionProvider(id: string): CompactionProvider | undefined {
   const registry = requireActivePluginRegistry();
-  const registration = registry.compactionProviders.find((entry) => entry.provider.id === id);
+  const registration = registry.compactionProviders.find(
+    (entry) => entry.provider.id.trim() === id,
+  );
   if (!registration) {
     return undefined;
   }
