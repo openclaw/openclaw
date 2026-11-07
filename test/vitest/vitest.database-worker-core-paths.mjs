@@ -1039,6 +1039,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/command/delivery.custody.integration.test.ts",
   "src/auto-reply/reply/route-reply.prepared.test.ts",
   "src/auto-reply/reply/route-reply.recovery-owner.test.ts",
+  "src/auto-reply/reply/route-reply.ambiguous-final.test.ts",
   "src/media/store.cleanup.test.ts",
   "src/media/generated-html-provenance.test.ts",
   "src/media/web-media.test.ts",

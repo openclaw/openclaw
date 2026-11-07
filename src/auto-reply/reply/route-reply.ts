@@ -380,6 +380,8 @@ async function routeReplyOperation(
             }
           : (assertGatewayCurrent ?? params.assertCurrent),
       ...(params.assertCurrent ? { deliveryRetryOwner: "caller" as const } : {}),
+      // Routed finals (exec completions, followups, session events) are agent finals too.
+      ...(params.replyKind === "final" ? { retryAmbiguousFinalText: true as const } : {}),
       ...(params.deliveryIntentId
         ? {
             deliveryIntentId: params.deliveryIntentId,

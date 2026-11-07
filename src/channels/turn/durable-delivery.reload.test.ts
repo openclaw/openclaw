@@ -90,6 +90,7 @@ async function replacementFixture(options?: {
       id: "telegram",
       durableFinal: {
         capabilities: { text: true, media: true, payload: true, messageSendingHooks: true },
+        replayAmbiguousFinalText: true,
       },
       send: {
         text: sendText,
