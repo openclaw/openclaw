@@ -92,6 +92,7 @@ import {
   type EngineRouteTransition,
 } from "./lib/control-ui-engine-page-scenarios.ts";
 import { createEnginePluginMemoryScenarios } from "./lib/control-ui-engine-plugin-memory-scenarios.ts";
+import { createEngineRapidNavigationScenarios } from "./lib/control-ui-engine-rapid-navigation-scenarios.ts";
 import { createEngineStreamingScenarios } from "./lib/control-ui-engine-streaming-scenarios.ts";
 import { createEngineStyleScenarios } from "./lib/control-ui-engine-style-scenarios.ts";
 import {
@@ -536,6 +537,7 @@ try {
     ...createEngineGestureScenarios(),
     ...createEngineMemoryScenarios(memorySoakRounds),
     ...createEnginePluginMemoryScenarios(),
+    ...createEngineRapidNavigationScenarios(),
     ...createEngineStreamingScenarios(),
     ...createEnginePageScenarios(0, pageOrigin, servers[0]!.server.baseUrl),
     ...createEngineRemountScenarios(),
@@ -552,22 +554,26 @@ try {
     ),
   ];
   const ids = requestedIds?.flatMap((id) =>
-    id === "gestures"
+    id === "rapid-navigation"
       ? catalog
-          .filter((scenario) => scenario.id.startsWith("gesture-"))
+          .filter((scenario) => scenario.id.startsWith("rapid-"))
           .map((scenario) => scenario.id)
-      : id === "remount-interactions"
+      : id === "gestures"
         ? catalog
-            .filter(
-              (scenario) =>
-                scenario.id.startsWith("remount-") && !scenario.id.startsWith("remount-from-"),
-            )
+            .filter((scenario) => scenario.id.startsWith("gesture-"))
             .map((scenario) => scenario.id)
-        : id === "chat-actions"
+        : id === "remount-interactions"
           ? catalog
-              .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+              .filter(
+                (scenario) =>
+                  scenario.id.startsWith("remount-") && !scenario.id.startsWith("remount-from-"),
+              )
               .map((scenario) => scenario.id)
-          : [id],
+          : id === "chat-actions"
+            ? catalog
+                .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+                .map((scenario) => scenario.id)
+            : [id],
   );
   const scenarios = catalog.filter(({ id, explicitOnly, memory }) =>
     ids
@@ -599,11 +605,14 @@ try {
     networkProfiles.some(({ name }) => name !== "localhost") &&
     scenarios.some(
       ({ id }) =>
-        id !== "cold-boot" && id !== "warm-boot" && !/^page-.+-(?:visit|revisit)$/u.test(id),
+        id !== "cold-boot" &&
+        id !== "warm-boot" &&
+        !id.startsWith("rapid-") &&
+        !/^page-.+-(?:visit|revisit)$/u.test(id),
     )
   ) {
     throw new Error(
-      "Nonlocal --network-profiles require cold-boot, warm-boot or page-<route>-visit/revisit steps",
+      "Nonlocal --network-profiles require cold-boot, warm-boot, rapid-* or page-<route>-visit/revisit steps",
     );
   }
   planned =
@@ -651,6 +660,7 @@ try {
           "./lib/control-ui-engine-memory.ts",
           "./lib/control-ui-engine-memory-scenarios.ts",
           "./lib/control-ui-engine-plugin-memory-scenarios.ts",
+          "./lib/control-ui-engine-rapid-navigation-scenarios.ts",
           "./lib/control-ui-engine-page-scenarios.ts",
           "./lib/control-ui-data-board-scenarios.ts",
           "./lib/control-ui-data-log-scenarios.ts",
@@ -736,6 +746,8 @@ try {
       "Serial network profiles alternate each pair; engine/configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
       "Census screens >1.3x engine/Chromium; confirm with ten rotated pairs plus A/A. Fix proof: twenty rotated pairs plus A/A; median regression <=5% and p95 no worse. Missing CPU clocks cannot certify CPU wins on a noisy host; >20% attributable regression blocks.",
+    rapidNavigationContract:
+      "Rapid scenarios pace input against browser-local deadlines without waiting for intermediate destinations. Actual event delivery and lateness remain visible; delivery includes driver overhead and application work, not just input queue delay. Final input to two correct frames measures settled application state, not paint. Route/history automation is marked non-native. Total interval CPU is not attributable to abandoned destinations. ResourceTiming counts completed chunks only; in-flight chunks and unsupported long tasks are unavailable.",
     frameCadence:
       "Prepare and settle frame intervals are consecutive requestAnimationFrame timestamp differences, not the full wait duration. scenarioMs includes driver input and scenario assertions; settleWaitMs measures the final two-frame wait. Their sum is wallMs. These are automation-to-assertion timings, not input-to-paint latency. Browser-local actionTiming splits the driver prefix, application elapsed to the last observed DOM commit (or native value edit), and the assertion/settle tail. These three sum to browserSpanMs, not Node wallMs. Focus work can occur in the prefix; compound input spans retain intermediate driver delays. Trace-only marks expose the same boundaries. Missing native input or an explicit Gateway-response mark, or a missing commit, makes action timing unavailable.",
     boundary:
@@ -1981,6 +1993,24 @@ await writeFile(
       : []),
     "Firefox uses the pinned Playwright build. Its mobile cells emulate viewport and touch only (isMobile is unsupported). CPU/native traces/heap snapshots are unavailable; application elapsed time keeps the same browser-local boundaries. Layout Instability and Long Tasks support are detected per observation; missing entries remain null.",
     "",
+    ...(summary.some((row) => row.step.startsWith("rapid-"))
+      ? [
+          "## Interrupted navigation",
+          "",
+          "Input pacing does not wait for intermediate content. Delivery lateness includes driver overhead; it is not isolated input queue delay. Settlement is the final input to two consecutive correct animation-frame observations, not paint. Programmatic route/history actions are marked non-native in observations. CPU covers the whole interval, not individual abandoned owners. Completed chunk counts exclude in-flight requests. Compare rapid scenes with their direct controls and retain A/A noise before claiming a win.",
+          "",
+          "| Engine | Viewport | Scenario | Network | Bundle | Passed/failed | Final input → settled median/p95 ms | Total task CPU median ms | Longest task p95 ms | RPCs median | Retained panes median |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+          ...summary
+            .filter((row) => row.step.startsWith("rapid-"))
+            .map((row) => {
+              const number = (value: number | undefined) => value?.toFixed(2) ?? "unavailable";
+              const ready = row.evidence.finalInputToSettledMs;
+              return `| ${row.engine} | ${row.viewport} | ${row.step} | ${row.networkProfile} | ${row.bundle} | ${row.passed}/${row.failed} | ${number(ready?.median)}/${number(ready?.p95)} | ${number(row.metrics.taskMs?.median)} | ${number(row.evidence.longestTaskMs?.p95)} | ${number(row.evidence.rpcRequests?.median)} | ${number(row.evidence.retainedPanes?.median)} |`;
+            }),
+          "",
+        ]
+      : []),
     "ResizeObserver loop errors are counted in every run, including without tracing or observer-origin diagnostics. Any browser error fails its observation and the command; completed timing intervals do not waive the zero-error requirement.",
     "",
     ...(observations.some((row) => row.gesture)
