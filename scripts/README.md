@@ -331,6 +331,29 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
   --bundle-dir dist/control-ui --pairs 10 --viewport both
 ```
 
+Continuous gestures are opt-in with `--steps gestures`: pointer sweeps and wheel
+scrolling over Sidebar, Chat, Advanced Settings and Sessions; transcript selection
+across the virtual window and within a message; sidebar/split dividers; window
+resizing; and mobile portrait/landscape viewport changes. Fixtures use 100/2,000
+messages and 100/1,000 sessions (Sessions still renders its 100-row page, and
+Advanced Settings has 303 fields in both variants). Pointer and wheel input target
+60 Hz; viewport commands serialize to preserve driver correctness. Each result
+records actual delivery cadence, rAF interval median/p95 and counts above 16.7/33 ms,
+and ResizeObserver deliveries/entries per frame. These are application callback
+intervals, not presented frames or CPU time. Mobile viewport changes do not prove
+native device orientation events. Desktop-only gestures are explicitly skipped
+on mobile. Use Chromium alone with `--cpu-throttle 4` for the throttled matrix.
+
+Use `--compare-bundle-dir` plus an identical `--control-bundle-dir` for rotated
+base/head/A/A gesture measurements. Native attribution is separate: `--trace`
+records style/layout passes (WebKit exposes native layout stacks), while
+Chromium `--native-audit` also captures forced-layout stacks. These counts include
+the gesture's bounds/assertion and settle work; dividing by native input count is
+an amortized cost, not causal per-event attribution. Missing engine fields remain
+null. `--gesture-geometry` additionally captures bounded geometry-read stacks;
+read attempts are not proof of forced layout, and this diagnostic instrumentation
+must not be used for timing acceptance.
+
 Idle scenarios default to a 30-second Node-side measurement window. Use
 `--idle-duration-ms` for a bounded diagnostic or rotated comparison; the manifest
 records the chosen duration. `--idle-warmup-ms` independently controls settlement
@@ -362,6 +385,35 @@ translation wave cannot disappear behind an early English render. Use
 `--steps cold-boot,warm-boot --network-profiles rtt-100ms` to inspect request waves.
 One-pair screens only identify candidates: confirm deviations over 20% with ten
 rotated pairs plus `control`, and fixes with twenty pairs within the same configuration.
+
+Chromium accessibility is an explicit axis, excluded from `all` so the default
+cross-engine census stays supported. Use `accessibility` for forced renderer
+accessibility and `accessibility-off` for a disabled-accessibility baseline;
+`accessibility-control` and `accessibility-off-control` provide matching A/A
+samples. `default` and `control` leave the browser's accessibility behavior unchanged.
+For an on/off screen with an off/off control:
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --bundle-dir dist/control-ui --engines chromium --pairs 10 --viewport both \
+  --configurations accessibility-off,accessibility-off-control,accessibility
+```
+
+Each accessibility mode uses an isolated browser process. On mode enables CDP's
+Accessibility domain before navigation, reads the full tree before warm actions
+and after the timed interval, and records `nodesUpdated`/`loadComplete` events.
+Tree serialization stays outside timing; off mode never queries the tree.
+Explicit modes are skipped for WebKit, Firefox, and idle scenarios. AX tree
+evidence proves exposed roles, names, and live-region state; it cannot prove what
+a real screen reader announces or when it speaks.
+
+Use `--live-region-audit --steps streaming-645-deltas` in a separate diagnostic
+run to record text/addition deliveries, raw and inherited ARIA metadata, and
+bounded text samples. This observer adds work and does not model a screen
+reader's announcement queue. Pair `--native-audit` with the explicit on/off
+configurations to retain Chromium accessibility trace events. The
+`transcript-fast-scroll` and `large-transcript-fast-scroll` scenarios exercise
+the same scrolling workload with 400 and 2,000 messages respectively.
 
 Full observations, including skipped cells and memory samples, append to
 `observations.jsonl` as each cell completes; complete newline-terminated records
