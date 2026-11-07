@@ -38,6 +38,7 @@ import { controlUiPluginDistributionsPlugin } from "./config/control-ui-plugin-d
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
 import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 import { extractControlUiStartupAssetPaths } from "./config/control-ui-startup-assets.ts";
+import { controlUiUpdateCachePlugins } from "./config/control-ui-update-cache.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -996,6 +997,7 @@ export default function controlUiViteConfig(
       controlUiNavigationPreloadsPlugin(),
       controlUiPrecompressedAssetsPlugin(),
       controlUiBuildOutputPlugin(buildInfo, copiedInputs),
+      ...controlUiUpdateCachePlugins(),
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {

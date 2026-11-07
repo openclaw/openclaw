@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { Dynamic } from "@solidjs/web";
 import { createComponent, createSignal, Show } from "solid-js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -108,6 +108,11 @@ const themeImage = (background: HTMLElement) =>
 const createObjectUrl = vi.fn<typeof URL.createObjectURL>();
 const revokeObjectUrl = vi.fn<typeof URL.revokeObjectURL>();
 const getCanvasContext = vi.fn<typeof HTMLCanvasElement.prototype.getContext>();
+
+// The host lazy-loads its renderer; pay the cold import here, not inside the first timed wait.
+beforeAll(async () => {
+  await import("./session-background.tsx");
+});
 
 beforeEach(() => {
   profilePreferences.ready = true;
