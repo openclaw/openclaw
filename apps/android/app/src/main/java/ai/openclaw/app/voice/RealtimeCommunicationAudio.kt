@@ -1,8 +1,10 @@
 package ai.openclaw.app.voice
 
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import kotlinx.coroutines.CancellationException
@@ -92,6 +94,7 @@ internal class RealtimeCommunicationAudio private constructor(
     check(granted && focus.get() == Focus.Granted) { "audio focus unavailable" }
     modeRequested = true
     audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+    requestSpeakerOutput()
     mode = audioManager.mode
   }
 
@@ -108,8 +111,37 @@ internal class RealtimeCommunicationAudio private constructor(
         current = null
         // AOSP tracks mode requests per PID. NORMAL withdraws ours; replaying a saved global
         // mode would assert another app's request as our own after Talk has stopped.
-        if (modeRequested) runCatching { audioManager.mode = AudioManager.MODE_NORMAL }
+        if (modeRequested) {
+          runCatching { audioManager.mode = AudioManager.MODE_NORMAL }
+          clearSpeakerOutput()
+        }
       }
+    }
+  }
+
+  // MODE_IN_COMMUNICATION defaults to the earpiece on most devices unless a bundled
+  // Bluetooth/wired headset is attached - fine for a literal phone call held to the ear, but
+  // Talk is a hands-free continuous conversation (matches iOS's existing speakerphone Talk
+  // setting; Android had no equivalent request here at all). Request the speaker explicitly;
+  // Bluetooth/wired routing in AndroidAudioInputSession still takes priority when connected,
+  // this only changes the otherwise-silent default.
+  private fun requestSpeakerOutput() = runCatching {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      audioManager.availableCommunicationDevices
+        .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+        ?.let { audioManager.setCommunicationDevice(it) }
+    } else {
+      @Suppress("DEPRECATION")
+      audioManager.isSpeakerphoneOn = true
+    }
+  }
+
+  private fun clearSpeakerOutput() = runCatching {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      audioManager.clearCommunicationDevice()
+    } else {
+      @Suppress("DEPRECATION")
+      audioManager.isSpeakerphoneOn = false
     }
   }
 }
