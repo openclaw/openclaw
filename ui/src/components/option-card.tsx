@@ -3,6 +3,7 @@ import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import "../styles/option-card.css";
+import { nextRadio } from "./solid/radio.tsx";
 
 type OptionCardOption = {
   value: string;
@@ -18,13 +19,6 @@ type OptionCardProps = {
   disabled?: boolean;
   onSelect?: (value: string) => void;
   onSkip?: () => void;
-};
-
-const ARROW_STEPS: Partial<Record<string, number>> = {
-  ArrowDown: 1,
-  ArrowRight: 1,
-  ArrowUp: -1,
-  ArrowLeft: -1,
 };
 
 export function OptionCard(input: { props: OptionCardProps }) {
@@ -84,24 +78,16 @@ export function OptionCard(input: { props: OptionCardProps }) {
   };
   // Arrow keys move the checked choice without answering; Space and Enter still answer.
   const onChoicesKeyDown = (event: KeyboardEvent) => {
-    const values = options().map((option) => option.value);
-    const target = [...choices].find((button) => button === event.target);
-    const current = target ? values.indexOf(target.dataset.optionValue ?? "") : -1;
-    const step = ARROW_STEPS[event.key];
-    const next =
-      event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? values.length - 1
-          : step === undefined
-            ? -1
-            : (current + step + values.length) % values.length;
-    if (input.props.disabled || current < 0 || next < 0) {
+    const ordered = options().flatMap(
+      (option) => [...choices].find((button) => button.dataset.optionValue === option.value) ?? [],
+    );
+    const next = nextRadio(event, ordered);
+    if (input.props.disabled || !next) {
       return;
     }
     event.preventDefault();
-    setSelected(values[next]!);
-    [...choices].find((button) => button.dataset.optionValue === values[next])?.focus();
+    setSelected(next.dataset.optionValue ?? "");
+    next.focus();
   };
   return (
     <openclaw-option-card ref={(element) => (host = element)}>

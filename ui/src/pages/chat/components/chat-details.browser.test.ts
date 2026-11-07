@@ -4,10 +4,10 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
 import { observeResize } from "../../../lib/reactive/observers.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubResizeObserver } from "../../../test-helpers/resize-observer.ts";
 import { phase } from "../../../test-helpers/solid-menu.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
-import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./chat-details.tsx";
@@ -219,7 +219,7 @@ describe("chat Details presentation", () => {
   it.each([undefined, "desktop"] as const)(
     "reserves automatic Details before the first resize delivery (presentation: %s)",
     async (nativePresentation) => {
-      vi.stubGlobal("ResizeObserver", undefined);
+      stubResizeObserver();
       try {
         await page.viewport(1700, 900);
         const { conversation, panel } = await fixture(
@@ -379,34 +379,44 @@ describe("chat Details presentation", () => {
     panel.style.cssText = "position:relative;inset:auto;width:600px;max-width:none;height:400px";
     document.body.append(panel);
     mounted.push(panel, styles);
-    mountSolid(
-      () =>
-        createComponent(ChatDetailsDesktopBody, {
-          presented: true,
-          get children() {
-            return createComponent(ChatDetailsEnvironment, {
-              details: props({
-                detailsWorkspace: {
-                  root: "/workspace/details",
-                  label: null,
-                  branch: "feature/details",
-                },
-              }),
-              presented: true,
-              onOpenUncommitted: openChanges,
-              uncommitted: {
-                sessionKey: card.sessionKey,
+    const mountContent = () =>
+      mountSolid(
+        () =>
+          createComponent(ChatDetailsDesktopContent, {
+            presented: true,
+            dismissed: false,
+            cachedReady: true,
+            progressMenuRef: () => {},
+            onHideProgress: () => {},
+            chat: props({
+              progressCard: undefined,
+              detailsWorkspace: {
+                root: "/workspace/details",
+                label: null,
                 branch: "feature/details",
-                baseRef: "HEAD",
-                files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
-                additions: 3,
-                deletions: 1,
               },
-            });
-          },
-        }),
-      { container: panel },
-    );
+              environment: {
+                onOpenUncommitted: openChanges,
+                uncommitted: {
+                  sessionKey: card.sessionKey,
+                  branch: "feature/details",
+                  baseRef: "HEAD",
+                  files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
+                  additions: 3,
+                  deletions: 1,
+                },
+              },
+            }),
+          }),
+        { container: panel },
+      );
+    // Load the public boundary, then measure a fresh scroll owner before its first layout turn.
+    const prepared = mountContent();
+    await expect
+      .poll(() => panel.querySelector(".chat-environment__branch-controls button.chat-pr__diff"))
+      .not.toBeNull();
+    prepared.unmount();
+    mountContent();
     flush();
     const heading = panel.querySelector(".chat-details-desktop-section__heading")!;
     const expectHeadingInsets = () => {
@@ -420,10 +430,6 @@ describe("chat Details presentation", () => {
       panel.style.width = width + "px";
       expectHeadingInsets();
     }
-    // The Environment body loads lazily; capture its controls only after it renders.
-    await expect
-      .poll(() => panel.querySelector(".chat-environment__branch-controls button.chat-pr__diff"))
-      .not.toBeNull();
     const navigation = panel.querySelector<HTMLButtonElement>(
       ".chat-environment__branch-controls button.chat-pr__diff",
     )!;

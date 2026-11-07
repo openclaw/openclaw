@@ -48,6 +48,9 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
     private var timeout: Task<Void, Never>?
     private var webView: WKWebView?
     private var documentReady = false
+    #if DEBUG
+    private var traceDocumentID: UUID?
+    #endif
 
     override init() {
         super.init()
@@ -104,9 +107,9 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         }
         guard active.completions.isEmpty else { return }
         self.trace("canceled", job: active)
-        // Retire the process document before the next job can reuse the owner.
-        // A canceled script cannot repaint or publish into the next request.
-        self.retireDocument()
+        // Loading has not injected request-specific JavaScript. Let the next job
+        // reuse initialization; retire running scripts so they cannot repaint it.
+        if active.phase != .loading { self.retireDocument() }
         self.finish(active, result: .failure(.unavailable))
     }
 
@@ -147,9 +150,8 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        try configuration.setURLSchemeHandler(
-            ChatMermaidSchemeHandler(directory: directory),
-            forURLScheme: ChatMermaidResources.scheme)
+        let handler = try ChatMermaidSchemeHandler(directory: directory)
+        configuration.setURLSchemeHandler(handler, forURLScheme: ChatMermaidResources.scheme)
         configuration.userContentController.add(Bridge(owner: self), contentWorld: .page, name: Self.bridgeName)
         let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: width, height: 1), configuration: configuration)
         webView.navigationDelegate = self
@@ -161,6 +163,9 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         #endif
         self.documentReady = false
         self.webView = webView
+        #if DEBUG
+        self.traceDocumentID = handler.traceDocumentID
+        #endif
         self.trace("document-created")
         webView.load(URLRequest(url: ChatMermaidResources.documentURL))
     }
@@ -336,6 +341,9 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         self.documentReady = false
         guard let webView = self.webView else { return }
         self.webView = nil
+        #if DEBUG
+        self.traceDocumentID = nil
+        #endif
         webView.navigationDelegate = nil
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: Self.bridgeName,
@@ -407,14 +415,13 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         else { return }
         var record: [String: Any] = [
             "event": event, "job": job.id.uuidString,
-            "pid": ProcessInfo.processInfo.processIdentifier,
-            "at": Date().timeIntervalSince1970,
             "elapsedMs": Int((ProcessInfo.processInfo.systemUptime - job.startedAt) * 1000),
             "phase": String(describing: job.phase), "width": job.request.width,
             "displayScale": job.request.displayScale,
             "queued": self.queued.count, "subscribers": job.completions.count,
             "documentReady": self.documentReady,
         ]
+        if let traceDocumentID { record["document"] = traceDocumentID.uuidString }
         if let javascriptEnteredAtMs { record["javascriptEnteredAtMs"] = javascriptEnteredAtMs }
         if let error = error as NSError? {
             record["errorCode"] = error.code
@@ -425,19 +432,7 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
             default: record["errorDomain"] = "other"
             }
         }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mermaid-renderer.log")
-        do {
-            let data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) + Data([0x0A])
-            if !FileManager.default.fileExists(atPath: url.path) {
-                FileManager.default.createFile(atPath: url.path, contents: nil)
-            }
-            let file = try FileHandle(forWritingTo: url)
-            defer { try? file.close() }
-            try file.seekToEnd()
-            try file.write(contentsOf: data)
-        } catch {
-            // Optional incident evidence must not change rendering or screenshot results.
-        }
+        ChatMermaidTrace.write(record)
         #endif
     }
 

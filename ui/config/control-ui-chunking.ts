@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build, type Plugin, type ResolvedConfig } from "vite";
 import {
+  controlUiLocaleErrorNamespaces,
   resolvedLocaleConfigHintsModulePrefix,
   resolvedLocaleNamespaceModulePrefix,
 } from "./control-ui-locales.ts";
@@ -154,6 +155,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "src/shared/dedupe-by-key.ts":
       // Config search shares this helper without loading optional session UI.
       return "control-ui-boot-shared";
+    case "ui/src/lib/text-diff.ts":
     case "ui/src/components/session-git-diff.tsx":
     case "ui/src/lib/sessions/usage.ts":
     case "src/shared/weak-owner-map.ts":
@@ -189,19 +191,39 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/desktop/desktop-source.ts":
     case "ui/src/components/solid/panel-loading-skeleton.tsx":
     case "ui/src/components/solid/sanitized-html.tsx":
+    case "ui/src/components/solid/checkbox.tsx":
     case "ui/src/lib/session-progress-cards.ts":
-      // These shared helpers load together in Chat without retaining its renderers.
+    case "ui/src/pages/templates/creator-publication.ts":
+    case "src/agents/core-tool-facts.ts":
+    case "src/agents/tools/automations-tool-name.ts":
+    case "ui/src/components/terminal/terminal-controller-lifecycle.ts":
+    case "ui/src/components/terminal/terminal-pending-actions.ts":
+    case "ui/src/components/terminal/terminal-session-storage.ts":
+    case "ui/src/components/terminal/terminal-tab-readiness.ts":
+      // Shared owners load together without retaining Chat's renderers on other routes.
       return "deferred-ui-support";
     case "ui/src/styles/panel-loading-skeleton.css":
       // Keep the inline string with its renderer so recursive Chat grouping cannot capture it.
       return "deferred-ui-support";
     case "ui/src/components/mcp-app-catalog.tsx":
     case "ui/src/lib/mcp-app-catalog.ts":
+    case "ui/src/components/mcp-app-security.ts":
+    case "ui/src/lib/mcp-app-message-content.ts":
+    case "ui/src/lib/protocol-validators.generated/board.js":
+    case "ui/src/lib/board/provider.ts":
+    case "ui/src/lib/board/gateway-provider.ts":
+    case "ui/src/lib/board/provider-helpers.ts":
+    case "ui/src/lib/board/provider-signals.ts":
+    case "ui/src/lib/board/mcp-app-view-cache.ts":
+    case "ui/src/lib/board/widget-names.ts":
+    case "ui/src/lib/board/widget-ticket-lifetime.ts":
     case "ui/src/i18n/locales/en-mcp-app.ts":
+    case "ui/src/lib/reactive/format.ts":
+    case "ui/src/lib/permission-error.ts":
+    case "ui/src/i18n/locales/en-permission-errors.ts":
     case "ui/src/components/mcp-app-launch.ts":
     case "ui/src/lib/sessions/session-create-params.ts":
-    case "packages/gateway-protocol/src/question-media.ts":
-      // Shared catalogs and session parameters must not pull Chat into other routes.
+      // Shared Board/MCP owners, catalogs, and labels must not load Chat's styles on other routes.
       return "deferred-ui-support";
     case "ui/src/lib/page-request.ts":
     case "ui/src/lib/checkout-snapshot.ts":
@@ -215,6 +237,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/agent-select-registration.ts":
     case "ui/src/lib/sessions/session-placement-recovery.ts":
     case "ui/src/components/solid/connect-command.tsx":
+    case "ui/src/components/cloud-profile-icon-data.ts":
+    case "ui/src/components/solid/cloud-profile-icon.tsx":
       // Creation fetches these together; keep their compression without a whole route.
       return "route-controls-runtime";
     case "ui/src/components/solid/tabs.tsx":
@@ -401,7 +425,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // These shared Cron owners already load together in Cron and Agents.
       return "cron-domain";
     case "ui/src/lib/cron/model-suggestions.ts":
-    case "ui/src/pages/chat/chat-transcript-pages.ts":
     case "packages/model-catalog-core/src/configured-model-refs.ts":
     case "ui/src/styles/cron.css":
     case "ui/src/pages/cron/cron-page.tsx":
@@ -437,10 +460,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/sidebar-update-card.tsx":
     case "ui/src/styles/sidebar-update-card.css":
       return "sidebar-update-runtime";
+    case "ui/src/components/solid/markdown-html.tsx":
     case "ui/src/components/markdown-parser.ts":
     case "ui/src/components/markdown.ts":
     case "ui/src/components/github-link-target.ts":
     case "ui/src/components/markdown-assistant-transcript.ts":
+    case "ui/src/components/markdown-block-presentation.ts":
     case "ui/src/components/markdown-code-blocks.ts":
     case "ui/src/components/markdown-copy.ts":
     case "ui/src/components/markdown-details.ts":
@@ -450,6 +475,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown-icon.ts":
     case "ui/src/components/markdown-json.ts":
     case "ui/src/components/markdown-link-boundary.ts":
+    case "ui/src/components/markdown-link-display.ts":
     case "ui/src/components/markdown-raw-content.ts":
     case "ui/src/components/markdown-render-options.ts":
     case "ui/src/components/markdown-sanitizer.ts":
@@ -470,7 +496,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown-tokens.ts":
       return "markdown-streaming-runtime";
     case "ui/src/styles/session-panel-rail.css":
-      // Keep normal rail CSS in Chat; other panels import its neutral inline text.
+      // Inline consumers keep their text; the raw sheet shares the cross-route style group.
       return /[?&]inline(?:[=&]|$)/u.test(id) ? "session-panel-rail-inline" : undefined;
     case "ui/src/pages/chat/session-snapshot-database.ts":
       // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.
@@ -490,6 +516,14 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
   }
   if (normalized.startsWith(resolvedLocaleNamespaceModulePrefix)) {
+    const [locale, namespace] = normalized
+      .slice(resolvedLocaleNamespaceModulePrefix.length)
+      .split("/");
+    // The local-error registrar prepares these together. Share their request without
+    // pulling them into the locale entry or changing when their copy is installed.
+    if (controlUiLocaleErrorNamespaces.includes(namespace!)) {
+      return `locale-errors-${locale}`;
+    }
     return `locale-namespace-${normalized.slice(resolvedLocaleNamespaceModulePrefix.length).replace("/", "-")}`;
   }
 
@@ -619,11 +653,14 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // Document styles also serve Agents without loading Chat's visible renderers.
                 styles.add("ui/src/styles/sidebar-markdown.css");
                 styles.add("ui/src/styles/mcp-app-extensions.css");
+                // Terminal renders this rail immediately without needing Chat's stylesheet.
+                styles.add("ui/src/styles/session-panel-rail.css");
               }
               if (route === "chat") {
                 styles.delete("ui/src/components/solid/text-overflow.css");
                 styles.delete("ui/src/styles/sidebar-markdown.css");
                 styles.delete("ui/src/styles/mcp-app-extensions.css");
+                styles.delete("ui/src/styles/session-panel-rail.css");
                 // These optional views share the route's preloaded stylesheet.
                 styles.add("ui/src/pages/chat/components/chat-pane-mobile-header.css");
                 styles.add("ui/src/pages/chat/components/chat-pane-mobile-composition.css");

@@ -986,6 +986,21 @@ and differing selections are both supported configurations. This notice proposes
 no repair and does not rewrite the config; ACP turns keep their configured harness
 selection.
 
+## Saved model output caps
+
+OpenClaw's default output cap for a model with no authored, provider, or catalog
+`maxTokens` is 32768 tokens, or half the context window when that window is below
+65,536 tokens (never below 8192 unless the window is smaller). Earlier releases used
+8192, and onboarding saved 4096 (custom-provider wizard) or 8192 (self-hosted setup)
+into model rows.
+
+Doctor reports model rows under `models.providers.*.models` that still pin
+`maxTokens` to 4096 or 8192 as information (`core/doctor/legacy-output-cap`), grouped
+per provider, when removing the value would raise the cap. It skips providers with a
+provider-level `maxTokens` and Mistral, whose 8192 cap is intentional. A saved cap may
+be deliberate, so Doctor proposes no repair and never rewrites it: remove `maxTokens`
+from those rows to use the catalog limit or the new default.
+
 ## Missing plugins during migration
 
 Doctor owns deferred plugin migrations. Normal CLI commands, Gateway startup,

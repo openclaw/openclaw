@@ -1,11 +1,13 @@
+/* OpenClaw source: "OpenClaw uses Bluetooth to securely set up a nearby ESP device when you choose device setup." */
+"NSBluetoothAlwaysUsageDescription" = "当你选择设置设备时，OpenClaw 会使用蓝牙安全地设置附近的 ESP 设备。";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsFullAccessUsageDescription" = "启用日历访问权限后，OpenClaw 会使用你的日历来显示日程和日程安排的相关信息。";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsUsageDescription" = "启用日历访问权限后，OpenClaw 会使用你的日历来显示日程和日程安排的相关信息。";
 /* OpenClaw source: "OpenClaw uses your calendars to add events when you enable calendar access." */
 "NSCalendarsWriteOnlyAccessUsageDescription" = "启用日历访问权限后，OpenClaw 会使用你的日历来添加日程。";
-/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
-"NSCameraUsageDescription" = "当你扫描 Gateway 设置二维码，或要求已配对的 Gateway 或助手使用这台 iPhone 拍摄照片或短视频时，OpenClaw 会使用摄像头，例如用于连接你的 Gateway，或向助手展示文档、设备屏幕或工作空间。";
+/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway or device setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
+"NSCameraUsageDescription" = "当你扫描 Gateway 或设备设置二维码，或要求已配对的 Gateway 或助手使用这部 iPhone 拍摄照片或短视频时，OpenClaw 会使用相机，例如用于连接到你的 Gateway，或向助手展示文档、设备屏幕或工作空间。";
 /* OpenClaw source: "OpenClaw uses your contacts so you can search and reference people while using the assistant." */
 "NSContactsUsageDescription" = "OpenClaw 会使用你的通讯录，以便你在使用助手时搜索和引用联系人。";
 /* OpenClaw source: "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider." */

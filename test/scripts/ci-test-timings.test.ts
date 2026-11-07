@@ -1887,7 +1887,60 @@ describe("CI timing sampler provenance", () => {
     expect(result.contributingRunIds.toolingBlacksmith).toEqual([3, 4]);
   });
 
-  it.each(["release", "tooling"])(
+  it("collects successful jobs from failed PR workflows without pruning absent timings", () => {
+    const fixture = makeFixture({
+      baseline: {
+        ...retained,
+        toolingFileSeconds: { blacksmith: { unobserved: 90 }, github: {}, boat: {} },
+      },
+      toolingRuns: [
+        ...Array.from({ length: 100 }, (_, index) =>
+          samplerRun(100 + index, { event: "pull_request", conclusion: "cancelled" }),
+        ),
+        ...samplerRuns([3, 4], {
+          event: "pull_request",
+          conclusion: "failure",
+          run_attempt: 2,
+        }),
+      ],
+      jobs: [
+        ...pair().jobs,
+        ...[3, 4].flatMap((id) => [
+          samplerJob(id * 10 + 1, id, { log: samplerToolingLog(20) }),
+          samplerJob(id * 10 + 5, id, {
+            run_attempt: 2,
+            log: samplerToolingLog(60),
+          }),
+          samplerJob(id * 10 + 2, id, {
+            conclusion: "failure",
+            log: samplerToolingLog(900),
+          }),
+          samplerJob(id * 10 + 3, id, {
+            conclusion: "cancelled",
+            log: samplerToolingLog(900),
+          }),
+        ]),
+      ],
+    });
+    const result = invoke(fixture);
+    expect(readTimings(fixture).toolingFileSeconds).toEqual({
+      blacksmith: { unobserved: 90, [toolingFile]: 40 },
+      github: {},
+      boat: {},
+    });
+    expect(result.stdout).toContain("Independent PR tooling contributors: 2");
+    const requests = fixture.requestUrls();
+    const prPages = requests.filter((url) => url.includes("event=pull_request"));
+    expect(prPages).toHaveLength(2);
+    for (const url of prPages) {
+      expect(new URL(url, "https://api.github.com").searchParams.get("status")).toBe("completed");
+      expectWindow(url);
+    }
+    expect(requests.some((url) => /\/jobs\/(?:32|33|42|43)\/logs$/u.test(url))).toBe(false);
+    expect(requests.some((url) => /\/runs\/1\d\d\/attempts\//u.test(url))).toBe(false);
+  });
+
+  it.each(["release", "explicit tooling"])(
     "keeps failed %s workflows out of the sampling cohort",
     (source) => {
       const failed = samplerRun(9, {
@@ -1898,7 +1951,7 @@ describe("CI timing sampler provenance", () => {
         jobs: [...pair().jobs, samplerJob(91, 9)],
         ...(source === "release" ? { releaseRuns: [failed] } : { toolingRuns: [failed] }),
       });
-      reject(fixture, "conclusion", false);
+      reject(fixture, "conclusion", false, false, 2, source === "release" ? [] : [9]);
       expect(fixture.requestUrls().some((url) => url.includes("/runs/9/"))).toBe(false);
     },
   );

@@ -10,7 +10,7 @@ import type {
 // Public media-understanding runtime API types for file-based image/audio/video
 // helpers and direct structured extraction.
 import type { OpenClawConfig } from "../config/types.js";
-import type { StructuredExtractionRequest } from "./types.js";
+import type { StructuredExtractionRequest } from "./provider-types.js";
 
 export type RunMediaUnderstandingFileParams = {
   capability: "image" | "audio" | "video";

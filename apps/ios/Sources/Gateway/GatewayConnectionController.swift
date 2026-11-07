@@ -699,6 +699,7 @@ extension GatewayConnectionController {
             } ?? false
             self.appModel?.disconnectForgottenGateway(
                 preservingPendingConnectAttempt: hasDifferentPendingTarget)
+            self.appModel?.focusChatSession(nil)
         }
         if shouldDisconnect, let appModel = self.appModel {
             await appModel.waitForGatewaySessionResetIfNeeded()
@@ -729,6 +730,8 @@ extension GatewayConnectionController {
         _ = GatewaySettingsStore.clearGatewayCustomHeaders(gatewayStableID: stableID)
         _ = GatewayTLSStore.clearFingerprint(stableID: stableID)
         GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        // Re-pairing the same Gateway must not reopen the forgotten conversation.
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
         let shareRelayGatewayID = ShareGatewayRelaySettings.loadConfig()?.gatewayStableID
         if GatewayStableIdentifier.matches(shareRelayGatewayID, stableID) {
             ShareGatewayRelaySettings.clearConfig()
@@ -1382,7 +1385,7 @@ extension GatewayConnectionController {
                 fingerprintSha256: fp,
                 isManual: pendingConnect.isManual,
                 attemptGeneration: pendingConnect.suppressionLease.generation)
-            self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
+            self.appModel?.awaitGatewayTrustDecision()
             return .accepted
         case let .failure(failure):
             let problem = self.tlsProbeFailureProblem(failure, host: host, port: port)

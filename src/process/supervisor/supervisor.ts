@@ -13,7 +13,8 @@ import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viabil
 import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { watchChildMemory } from "../child-memory.js";
+import { watchHostExecMemory } from "../child-memory.js";
+import { applyAgentExecMemoryBudget } from "../linux-exec-cgroup.js";
 import { setProcessTimeout } from "../process-deadline.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
@@ -182,6 +183,8 @@ export function createProcessSupervisor(): ProcessSupervisor & {
 
   const startRun = async (input: SpawnInput, owner: OwnedRun): Promise<ManagedRun> => {
     const external = input.cleanupOwnership === "external";
+    const hostExec =
+      process.platform === "linux" && input.executionIntent === "agent-tool" && !external;
     const treeCleanupOwners = owner.cleanupOwners.filter((scope) =>
       requiresProcessTree(scope, external),
     );
@@ -198,7 +201,6 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     }
     const { runId, scopeKey } = owner;
     const startedAtMs = Date.now();
-    const startingTerminationReason = owner.terminationReason;
 
     const settleConstructionResult = (
       reason: TerminationReason,
@@ -227,10 +229,10 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         cancel: () => undefined,
       };
     };
-    if (startingTerminationReason) {
+    if (owner.terminationReason) {
       // A replacement can be cancelled behind its scope fence. Never launch
       // its command or terminate the surviving scope after that cancellation.
-      return settleConstructionResult(startingTerminationReason);
+      return settleConstructionResult(owner.terminationReason);
     }
 
     // Finish fallible argument preparation before affecting a surviving scope or arming cancellation.
@@ -258,9 +260,12 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     }
     if (input.prepareSpawn) {
       await input.prepareSpawn();
-      if (owner.terminationReason) {
-        return settleConstructionResult(owner.terminationReason);
-      }
+    }
+    if (hostExec && !owner.terminationReason) {
+      await applyAgentExecMemoryBudget();
+    }
+    if (owner.terminationReason) {
+      return settleConstructionResult(owner.terminationReason);
     }
     input.assertCurrent?.();
     input.beforeSpawn?.();
@@ -377,22 +382,22 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       void cleanup.promise.catch(() => undefined);
       let constructionCleanup: Promise<ProcessExtinctionResult> | undefined;
       let ownedAdapter: SpawnProcessAdapter | undefined;
-      const onSpawnCleanup = (promise: Promise<ProcessExtinctionResult>) => {
-        constructionCleanup = promise;
-        void promise.catch(() => undefined);
-      };
       overallDeadline.reset();
       outputDeadline.reset();
       const construction = {
         executionIntent: input.executionIntent,
         executionScopeKey: input.executionScopeKey ?? scopeKey,
         assertCurrent: input.assertCurrent,
+        ...(input.mode === "child" ? { prepareTargetSpawn: input.prepareTargetSpawn } : {}),
         beforeSpawn: input.beforeSpawn,
         initiateSpawn: input.initiateSpawn,
         cwd: input.cwd,
         env: input.env,
         abortSignal: constructionAbort.signal,
-        onSpawnCleanup,
+        onSpawnCleanup: (promise: Promise<ProcessExtinctionResult>) => {
+          constructionCleanup = promise;
+          void promise.catch(() => undefined);
+        },
       };
       const startupPromise =
         input.mode === "pty"
@@ -408,7 +413,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
               })
             : createChildAdapter({
                 ...construction,
-                ...((requireProcessTree || input.memoryLimitBytes !== undefined) && !external
+                ...((requireProcessTree || hostExec) && !external
                   ? { ownProcessTree: true as const }
                   : {}),
                 argv,
@@ -598,10 +603,10 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         forceKillTimer.unref?.();
       };
 
-      if (!external && !cleanupSettled) {
-        stopMemoryWatch = watchChildMemory({
-          pid: adapter.memoryRootPid ?? adapter.pid,
-          limitBytes: input.memoryLimitBytes,
+      const memoryRootPid = adapter.memoryRootPid ?? adapter.pid;
+      if (hostExec && !cleanupSettled && memoryRootPid) {
+        stopMemoryWatch = watchHostExecMemory({
+          pid: memoryRootPid,
           onLimit: () => requestCancel("memory-limit"),
           onDiagnostic: withOutputFence((chunk: string) => {
             if (captureOutput) {

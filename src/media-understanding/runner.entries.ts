@@ -62,9 +62,10 @@ import {
   type MediaExecutionContext,
 } from "./provider-execution.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { resolveCliModelEntry, resolveEntryRunOptions } from "./resolve.js";
 import { isTranscriptArtifactText } from "./transcription-text.js";
-import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
+import type { AudioTranscriptionRequest } from "./types.js";
 
 function trimOutput(text: string, maxChars?: number): string {
   const trimmed = text.trim();
@@ -220,6 +221,7 @@ export async function runProviderEntry(params: {
       attachmentIndex: params.attachmentIndex,
       maxBytes,
       timeoutMs,
+      signal: params.execution?.signal,
     });
     const normalizedMedia = await normalizeImageDescriptionInput({
       buffer: media.buffer,
@@ -300,6 +302,7 @@ export async function runProviderEntry(params: {
       attachmentIndex: params.attachmentIndex,
       maxBytes,
       timeoutMs,
+      signal: params.execution?.signal,
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
     const audioLanguage = params.request?.language ?? entry.language ?? params.config?.language;
@@ -400,6 +403,7 @@ export async function runProviderEntry(params: {
     attachmentIndex: params.attachmentIndex,
     maxBytes,
     timeoutMs,
+    signal: params.execution?.signal,
   });
   const estimatedBase64Bytes = estimateBase64Size(media.size);
   const maxBase64Bytes = resolveVideoMaxBase64Bytes(maxBytes);
@@ -477,6 +481,7 @@ export async function runCliEntry(
     attachmentIndex,
     maxBytes,
     timeoutMs,
+    signal: params.execution?.signal,
   });
   if (capability === "audio") {
     const stat = await fs.stat(attachmentPath);
