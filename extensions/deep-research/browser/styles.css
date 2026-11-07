@@ -25,8 +25,7 @@
 }
 .deep-research-pane button,
 .deep-research-pane select,
-.deep-research-pane textarea,
-.deep-research-accessory {
+.deep-research-pane textarea {
   font: inherit;
   color: var(--text);
   background: var(--bg-elevated);
@@ -155,10 +154,73 @@
   display: inline;
   font-size: inherit;
 }
-.deep-research-accessory {
-  font-size: 0.8rem;
-  white-space: normal;
-}
 .deep-research-pane [hidden] {
   display: none;
+}
+
+.deep-research-chip {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  align-self: flex-start;
+  gap: 7px;
+  max-width: calc(100% - 32px);
+  min-height: 28px;
+  margin: 12px 16px 0;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel-strong) 84%, transparent);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.deep-research-chip > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.deep-research-chip:hover,
+.deep-research-chip:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  color: var(--text);
+}
+.deep-research-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.deep-research-chip[data-offline] {
+  opacity: 0.7;
+}
+.deep-research-chip__dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.deep-research-chip[data-tone="running"] .deep-research-chip__dot {
+  background: var(--info);
+  animation: deep-research-chip-pulse 1.4s ease-in-out infinite;
+}
+.deep-research-chip[data-tone="ready"] .deep-research-chip__dot {
+  background: var(--ok);
+}
+.deep-research-chip[data-tone="attention"] .deep-research-chip__dot {
+  background: var(--warn);
+}
+.deep-research-chip[data-tone="failed"] .deep-research-chip__dot {
+  background: var(--danger);
+}
+@keyframes deep-research-chip-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .deep-research-chip[data-tone="running"] .deep-research-chip__dot {
+    animation: none;
+  }
 }

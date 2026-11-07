@@ -2,6 +2,7 @@
 import { render } from "@solidjs/web";
 import { defineControlUiPlugin, type ControlUiPanel } from "openclaw/plugin-sdk/control-ui";
 import { Show, createSignal, onSettled } from "solid-js";
+import type { ResearchView } from "../api.js";
 import { createResearchClient, type Snapshot } from "./client.js";
 import { ResearchPane } from "./pane.js";
 import "./styles.css";
@@ -55,7 +56,7 @@ export default defineControlUiPlugin({
       host.ui.registerAction({
         id: "research",
         label: "Deep research",
-        placement: "header",
+        placement: "session",
         run: (context) =>
           context.host.ui.openPanel("research", {
             sessionKey: context.sessionKey,
@@ -74,6 +75,35 @@ export default defineControlUiPlugin({
     };
   },
 });
+
+type ChipTone = "running" | "ready" | "attention" | "failed" | "idle";
+
+// Maps a retained job state to the chip's wording and tone.
+function describeJob(job: Pick<ResearchView, "state" | "phase">): {
+  label: string;
+  tone: ChipTone;
+} {
+  switch (job.state) {
+    case "queued":
+    case "submitting":
+    case "running":
+      return { label: `Researching · ${job.phase}`, tone: "running" };
+    case "completed":
+      return { label: "Research report ready", tone: "ready" };
+    case "partial":
+      return { label: "Partial research report", tone: "attention" };
+    case "paused":
+      return { label: "Research paused", tone: "attention" };
+    case "indeterminate":
+      return { label: "Research status unknown", tone: "attention" };
+    case "failed":
+      return { label: "Research failed", tone: "failed" };
+    case "cancelled":
+      return { label: "Research cancelled", tone: "idle" };
+  }
+}
+
+/** Session-header chip, shown only while this session has retained research. */
 function ResearchAccessory(props: {
   client: ReturnType<typeof createResearchClient>;
   open: () => void;
@@ -84,23 +114,32 @@ function ResearchAccessory(props: {
     void props.client.refresh();
     return stop;
   });
+  // The full view may still be loading; the list entry already carries state and counts.
+  const job = () =>
+    snapshot().job ?? snapshot().jobs.find((entry) => entry.jobId === snapshot().selected);
   return (
-    <button
-      class="deep-research-accessory"
-      type="button"
-      onClick={() => props.open()}
-      aria-label="Open deep research progress"
-    >
-      {snapshot().offline
-        ? "Research · offline"
-        : snapshot().job
-          ? `Research · ${snapshot().job!.phase}`
-          : "Deep research"}
-      <Show when={snapshot().job?.counts}>
-        {(counts) => (
-          <span>{` · ${counts().sources} ${counts().sources === 1 ? "source" : "sources"}`}</span>
-        )}
-      </Show>
-    </button>
+    <Show when={job()}>
+      {(current) => {
+        const label = () => {
+          const sources = current().counts?.sources;
+          const count =
+            sources === undefined ? "" : ` · ${sources} ${sources === 1 ? "source" : "sources"}`;
+          return `${describeJob(current()).label}${count}${snapshot().offline ? " · offline" : ""}`;
+        };
+        return (
+          <button
+            class="deep-research-chip"
+            data-tone={describeJob(current()).tone}
+            data-offline={snapshot().offline ? "" : undefined}
+            type="button"
+            onClick={() => props.open()}
+            aria-label={`Open deep research: ${label()}`}
+          >
+            <span class="deep-research-chip__dot" aria-hidden="true" />
+            <span>{label()}</span>
+          </button>
+        );
+      }}
+    </Show>
   );
 }
