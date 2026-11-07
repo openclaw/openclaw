@@ -1838,12 +1838,16 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   :hover,
   :focus-within,
   .sidebar-recent-session--active,
-  .sidebar-recent-session--selected
+  .sidebar-recent-session--selected,
+  .sidebar-recent-session--menu-open
 ) {
   --session-row-muted: var(--text);
 }
 
-.sidebar-recent-session:hover {
+/* An open row menu moves the pointer off the row; keep its hover fill so the
+   menu's target stays identifiable. */
+.sidebar-recent-session:hover,
+.sidebar-recent-session.sidebar-recent-session--menu-open {
   --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
 
   color: var(--text);
@@ -2770,7 +2774,8 @@ a:is(
   }
 }
 
-.sidebar-zone-entry .sidebar-recent-session:hover {
+.sidebar-zone-entry .sidebar-recent-session:hover,
+.sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--menu-open {
   --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
 
   color: var(--text);
@@ -2782,7 +2787,8 @@ a:is(
   color: var(--text-strong);
 }
 
-.sidebar-recent-session.sidebar-recent-session--active:hover {
+.sidebar-recent-session.sidebar-recent-session--active:hover,
+.sidebar-recent-session.sidebar-recent-session--active.sidebar-recent-session--menu-open {
   --session-row-bg: var(--surface-selected-hover);
 }
 
@@ -2804,7 +2810,10 @@ a:is(
   ),
 .sidebar-recent-session--colored.sidebar-recent-session--active:not(
     .sidebar-recent-session--selected
-  ):hover {
+  ):hover,
+.sidebar-recent-session--colored.sidebar-recent-session--active.sidebar-recent-session--menu-open:not(
+    .sidebar-recent-session--selected
+  ) {
   --session-row-bg: color-mix(
     in srgb,
     var(--session-color) calc(var(--session-color-tint) * 2.4),
