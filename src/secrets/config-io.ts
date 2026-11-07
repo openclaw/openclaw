@@ -3,6 +3,7 @@ import path from "node:path";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { createConfigIO } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { allowDrvfsRenameRecovery } from "../infra/fs-safe-drvfs.js";
 import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
 import { writePrivateTextFileAtomicSync } from "../infra/private-file-store.js";
 
@@ -36,6 +37,7 @@ export function writeTextFileAtomic(
   const stateDir = resolveStateDir(env);
   if (mode !== 0o600) {
     replaceFileAtomicSync({
+      allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(path.dirname(pathname)),
       filePath: pathname,
       content: value,
       mode,

@@ -9,6 +9,7 @@ import {
   type SecretFileReadOptions as FsSafeSecretFileReadOptions,
 } from "@openclaw/fs-safe/secret";
 import { resolveUserPath } from "../utils.js";
+import { allowDrvfsRenameRecovery } from "./fs-safe-drvfs.js";
 import { tightenPrivateDirChain } from "./private-dir-mode.js";
 
 export {
@@ -41,12 +42,22 @@ function tightenSecretDirectoryModes(params: {
 
 export async function writePrivateSecretFileAtomic(params: SecretFileWriteParams): Promise<void> {
   await tightenSecretDirectoryModes(params);
-  await writeSecretFileAtomicImpl(params);
+  await writeSecretFileAtomicImpl({
+    ...params,
+    allowDrvfsRenameRecovery:
+      params.allowDrvfsRenameRecovery !== false &&
+      allowDrvfsRenameRecovery(path.dirname(params.filePath)),
+  });
 }
 
 export async function createSecretFileAtomic(params: SecretFileWriteParams): Promise<void> {
   await tightenSecretDirectoryModes(params);
-  await createSecretFileAtomicImpl(params);
+  await createSecretFileAtomicImpl({
+    ...params,
+    allowDrvfsRenameRecovery:
+      params.allowDrvfsRenameRecovery !== false &&
+      allowDrvfsRenameRecovery(path.dirname(params.filePath)),
+  });
 }
 
 export type SecretFileReadResult =
