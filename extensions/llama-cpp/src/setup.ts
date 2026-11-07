@@ -464,7 +464,7 @@ export async function runLlamaCppSetup(ctx: LlamaCppSetupContext): Promise<Provi
       chatModel = { mode: mediaModels ? "preserve" : "remove" };
     }
     const embeddingModelLabel = embeddingModel.isDefault
-      ? "EmbeddingGemma"
+      ? "EmbeddingGemma 2"
       : "configured embedding model";
     const embeddingModelPath = await ensureLlamaCppModel({
       source: embeddingModel.source,
