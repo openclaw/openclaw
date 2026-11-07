@@ -6,44 +6,33 @@ Regression tests for quick skill validation.
 import tempfile
 from pathlib import Path
 from unittest import TestCase, main
+from unittest.mock import patch
 
 import quick_validate
 
 
 class TestQuickValidate(TestCase):
     def setUp(self):
-        self.temp_dir = Path(tempfile.mkdtemp(prefix="test_quick_validate_"))
+        temp_dir = tempfile.TemporaryDirectory(prefix="test_quick_validate_")
+        self.addCleanup(temp_dir.cleanup)
+        self.skill_dir = Path(temp_dir.name)
 
-    def tearDown(self):
-        import shutil
-
-        if self.temp_dir.exists():
-            shutil.rmtree(self.temp_dir)
+    def validate_content(self, content):
+        (self.skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+        return quick_validate.validate_skill(self.skill_dir)
 
     def test_accepts_crlf_frontmatter(self):
-        skill_dir = self.temp_dir / "crlf-skill"
-        skill_dir.mkdir(parents=True, exist_ok=True)
         content = "---\r\nname: crlf-skill\r\ndescription: ok\r\n---\r\n# Skill\r\n"
-        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
-
-        valid, message = quick_validate.validate_skill(skill_dir)
-
+        valid, message = self.validate_content(content)
         self.assertTrue(valid, message)
 
     def test_rejects_missing_frontmatter_closing_fence(self):
-        skill_dir = self.temp_dir / "bad-skill"
-        skill_dir.mkdir(parents=True, exist_ok=True)
         content = "---\nname: bad-skill\ndescription: missing end\n# no closing fence\n"
-        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
-
-        valid, message = quick_validate.validate_skill(skill_dir)
-
+        valid, message = self.validate_content(content)
         self.assertFalse(valid)
         self.assertEqual(message, "Invalid frontmatter format")
 
     def test_fallback_parser_handles_multiline_frontmatter_without_pyyaml(self):
-        skill_dir = self.temp_dir / "multiline-skill"
-        skill_dir.mkdir(parents=True, exist_ok=True)
         content = """---
 name: multiline-skill
 description: DESCRIPTION
@@ -56,9 +45,7 @@ metadata: |
 ---
 # Skill
 """
-        previous_yaml = quick_validate.yaml
-        quick_validate.yaml = None
-        try:
+        with patch.object(quick_validate, "yaml", None):
             cases = [
                 ("Works without pyyaml\n  Use for notes.", True),
                 *[
@@ -75,17 +62,11 @@ metadata: |
             ]
             for description, expected in cases:
                 with self.subTest(description=description):
-                    (skill_dir / "SKILL.md").write_text(
-                        content.replace("DESCRIPTION", description), encoding="utf-8"
-                    )
-                    valid, message = quick_validate.validate_skill(skill_dir)
+                    rendered = content.replace("DESCRIPTION", description)
+                    valid, message = self.validate_content(rendered)
                     self.assertEqual(valid, expected, message)
-        finally:
-            quick_validate.yaml = previous_yaml
 
     def test_rejects_blank_name_or_description(self):
-        skill_dir = self.temp_dir / "blank-field-skill"
-        skill_dir.mkdir(parents=True, exist_ok=True)
         cases = [
             ('""', "a valid description", "Name must not be empty"),
             ("'   '", "a valid description", "Name must not be empty"),
@@ -94,17 +75,13 @@ metadata: |
         ]
         for name, description, expected in cases:
             with self.subTest(name=name, description=description):
-                (skill_dir / "SKILL.md").write_text(
-                    f"---\nname: {name}\ndescription: {description}\n---\n# Skill\n",
-                    encoding="utf-8",
+                valid, message = self.validate_content(
+                    f"---\nname: {name}\ndescription: {description}\n---\n# Skill\n"
                 )
-                valid, message = quick_validate.validate_skill(skill_dir)
                 self.assertFalse(valid)
                 self.assertEqual(message, expected)
 
     def test_fallback_distinguishes_inline_comments_from_scalar_content(self):
-        skill_dir = self.temp_dir / "comment-skill"
-        skill_dir.mkdir()
         cases = [
             ("comment-skill # identifier", "Summarize reports", True),
             ('"comment-skill" # identifier', "Summarize reports", True),
@@ -122,22 +99,15 @@ metadata: |
             ("comment-skill", "Summarize#<reports>", False),
             ("comment-skill", "|\n  Summarize # <reports>", False),
         ]
-        previous_yaml = quick_validate.yaml
-        quick_validate.yaml = None
-        try:
+        with patch.object(quick_validate, "yaml", None):
             for name, description, expected in cases:
                 with self.subTest(name=name, description=description):
-                    (skill_dir / "SKILL.md").write_text(
-                        f"---\nname: {name}\ndescription: {description}\n---\n", encoding="utf-8"
+                    valid, message = self.validate_content(
+                        f"---\nname: {name}\ndescription: {description}\n---\n"
                     )
-                    valid, message = quick_validate.validate_skill(skill_dir)
                     self.assertEqual(valid, expected, message)
-        finally:
-            quick_validate.yaml = previous_yaml
 
     def test_accepts_openclaw_invocation_frontmatter(self):
-        skill_dir = self.temp_dir / "invocable-skill"
-        skill_dir.mkdir(parents=True, exist_ok=True)
         content = """---
 name: invocable-skill
 description: A manually invoked skill
@@ -149,10 +119,7 @@ command-arg-mode: raw
 ---
 # Skill
 """
-        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
-
-        valid, message = quick_validate.validate_skill(skill_dir)
-
+        valid, message = self.validate_content(content)
         self.assertTrue(valid, message)
 
 
