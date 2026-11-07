@@ -108,7 +108,7 @@ export default definePluginEntry({
     };
     api.registerCommand({
       name: "active-memory",
-      description: "Enable, disable, or inspect Active Memory for this session.",
+      description: "Enable, disable, or inspect Active Memory for this session",
       acceptsArgs: true,
       exposeSenderIsOwner: true,
       handler: async (ctx) => {

@@ -16,7 +16,7 @@ export default defineBundledChannelEntry({
   registerFull(api) {
     api.registerCommand({
       name: "card",
-      description: "Send a rich card message.",
+      description: "Send a rich card message",
       channels: ["line"],
       acceptsArgs: true,
       requireAuth: false,

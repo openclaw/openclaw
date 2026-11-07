@@ -1,6 +1,6 @@
 ---
 name: goplaces
-description: "Query Google Places for text search, place details, resolve, reviews, or scriptable JSON via goplaces."
+description: "Query Google Places for text search, place details, resolve, reviews, or scriptable JSON via goplaces"
 homepage: https://github.com/steipete/goplaces
 metadata:
   {

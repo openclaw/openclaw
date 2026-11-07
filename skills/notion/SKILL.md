@@ -1,6 +1,6 @@
 ---
 name: notion
-description: "Notion CLI/API for pages, Markdown content, data sources, files, comments, search, Workers, and raw API calls."
+description: "Notion CLI/API for pages, Markdown content, data sources, files, comments, search, Workers, and raw API calls"
 homepage: https://developers.notion.com/cli/get-started/overview
 metadata:
   {

@@ -1,6 +1,6 @@
 ---
 name: knowledge-meeting-ingest
-description: Ingest meeting transcripts from any recorder into Knowledge with attendee enrichment, source notes, supported decisions and commitments, and verification of substance and sequence. Summary-only input is not a verified meeting ingestion.
+description: Ingest meeting transcripts from any recorder into Knowledge with attendee enrichment, source notes, supported decisions and commitments, and verification of substance and sequence. Summary-only input is not a verified meeting ingestion
 ---
 
 # Meeting ingestion

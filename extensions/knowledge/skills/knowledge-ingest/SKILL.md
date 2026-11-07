@@ -1,6 +1,6 @@
 ---
 name: knowledge-ingest
-description: Ingest documents, articles, conversations, or supplied text into Knowledge with retained originals, sourced claims, entity updates, source notes, and cross-links; also learn durable lessons from a set of conversations, transcripts, or past sessions (/learn), including the Learn from conversations and Learn from Memory scribes. Routes meetings to knowledge-meeting-ingest and short thoughts to knowledge-capture.
+description: Ingest documents, articles, conversations, or supplied text into Knowledge with retained originals, sourced claims, entity updates, source notes, and cross-links; also learn durable lessons from a set of conversations, transcripts, or past sessions (/learn), including the Learn from conversations and Learn from Memory scribes. Routes meetings to knowledge-meeting-ingest and short thoughts to knowledge-capture
 ---
 
 # Ingest Skill

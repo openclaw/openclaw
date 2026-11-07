@@ -1,6 +1,6 @@
 ---
 name: knowledge-capture
-description: Save durable preferences, decisions, project facts, commitments, and lessons cheaply with knowledge_remember, or short notes and page updates with attribution and readback. Use for explicit saves or agent-driven remembering when Knowledge is the selected memory provider.
+description: Save durable preferences, decisions, project facts, commitments, and lessons cheaply with knowledge_remember, or short notes and page updates with attribution and readback. Use for explicit saves or agent-driven remembering when Knowledge is the selected memory provider
 ---
 
 # Capture durable knowledge

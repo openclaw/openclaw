@@ -1,6 +1,6 @@
 ---
 name: camsnap
-description: "Capture frames or clips from RTSP/ONVIF cameras and local webcams, including USB pan/tilt/zoom control."
+description: "Capture frames or clips from RTSP/ONVIF cameras and local webcams, including USB pan/tilt/zoom control"
 homepage: https://camsnap.ai
 metadata:
   {

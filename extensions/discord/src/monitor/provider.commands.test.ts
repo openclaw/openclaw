@@ -147,7 +147,7 @@ it("deduplicates provider-renamed primary specs before Discord cap planning", as
 
   expect(resolved.commandSpecs).toHaveLength(100);
   expect(voiceSpecs(resolved.commandSpecs)).toEqual([
-    expect.objectContaining({ description: "Control text-to-speech (TTS)." }),
+    expect.objectContaining({ description: "Control text-to-speech (TTS)" }),
   ]);
   expect(runtime.log).not.toHaveBeenCalled();
 });

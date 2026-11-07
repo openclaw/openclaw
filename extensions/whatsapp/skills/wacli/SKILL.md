@@ -1,6 +1,6 @@
 ---
 name: wacli
-description: "Send third-party WhatsApp messages or sync/search WhatsApp history via wacli, not normal active chats."
+description: "Send third-party WhatsApp messages or sync/search WhatsApp history via wacli, not normal active chats"
 homepage: https://wacli.sh
 metadata:
   {

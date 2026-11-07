@@ -1,7 +1,7 @@
 ---
 name: feishu-doc
 description: |
-  Feishu document read/write workflows. Activate when the user mentions Feishu docs, cloud docs, or docx links.
+  Feishu document read/write workflows. Activate when the user mentions Feishu docs, cloud docs, or docx links
 ---
 
 # Feishu documents

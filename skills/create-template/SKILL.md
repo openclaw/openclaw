@@ -1,6 +1,6 @@
 ---
 name: create-template
-description: Turn this agent into a shareable Template for a person to review.
+description: Turn this agent into a shareable Template for a person to review
 user-invocable: true
 disable-model-invocation: true
 ---

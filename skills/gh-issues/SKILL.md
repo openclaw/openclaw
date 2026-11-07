@@ -1,6 +1,6 @@
 ---
 name: gh-issues
-description: "Fetch GitHub issues, select candidates, spawn background fix agents, open PRs, and optionally process PR review comments."
+description: "Fetch GitHub issues, select candidates, spawn background fix agents, open PRs, and optionally process PR review comments"
 user-invocable: true
 metadata:
   {

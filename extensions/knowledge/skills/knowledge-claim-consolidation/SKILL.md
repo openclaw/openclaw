@@ -1,6 +1,6 @@
 ---
 name: knowledge-claim-consolidation
-description: Review and consolidate Knowledge claims over a chosen scope - the unlinked residue after relinking, the claims on one hub or over-budget page, or the claims about one subject since a date. File claims on their most specific subject page, create pages for substantial subjects, retire duplicates, supersede status snapshots and replaced claims by an existing claim, and fold durable outcomes into page State. Use for claim cleanup, consolidation, or the Knowledge Consolidation scribe.
+description: Review and consolidate Knowledge claims over a chosen scope - the unlinked residue after relinking, the claims on one hub or over-budget page, or the claims about one subject since a date. File claims on their most specific subject page, create pages for substantial subjects, retire duplicates, supersede status snapshots and replaced claims by an existing claim, and fold durable outcomes into page State. Use for claim cleanup, consolidation, or the Knowledge Consolidation scribe
 ---
 
 # Claim consolidation review

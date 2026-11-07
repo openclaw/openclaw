@@ -1,6 +1,6 @@
 ---
 name: things-mac
-description: "Add, update, list, search, or inspect Things 3 todos, inbox, today, projects, areas, and tags on macOS."
+description: "Add, update, list, search, or inspect Things 3 todos, inbox, today, projects, areas, and tags on macOS"
 homepage: https://github.com/ossianhempel/things3-cli
 metadata:
   {

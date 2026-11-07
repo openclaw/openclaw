@@ -1,7 +1,7 @@
 ---
 name: feishu-wiki
 description: |
-  Feishu knowledge-base navigation workflows. Activate when the user mentions a knowledge base, wiki, or wiki link.
+  Feishu knowledge-base navigation workflows. Activate when the user mentions a knowledge base, wiki, or wiki link
 ---
 
 # Feishu wiki

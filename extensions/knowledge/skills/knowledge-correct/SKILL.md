@@ -1,6 +1,6 @@
 ---
 name: knowledge-correct
-description: Correct or withdraw specific saved Knowledge claims, explicit relationships, or pages at the user's request, preserving provenance and inspecting affected knowledge. Use for “that's wrong”, “retract that”, or a Knowledge chat reference; not automatic contradiction resolution or physical erasure.
+description: Correct or withdraw specific saved Knowledge claims, explicit relationships, or pages at the user's request, preserving provenance and inspecting affected knowledge. Use for “that's wrong”, “retract that”, or a Knowledge chat reference; not automatic contradiction resolution or physical erasure
 ---
 
 # Correct saved knowledge through agent tools

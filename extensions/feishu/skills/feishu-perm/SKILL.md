@@ -1,7 +1,7 @@
 ---
 name: feishu-perm
 description: |
-  Feishu collaborator and permission workflows. Activate when the user explicitly asks to inspect or change sharing, permissions, or collaborators.
+  Feishu collaborator and permission workflows. Activate when the user explicitly asks to inspect or change sharing, permissions, or collaborators
 ---
 
 # Feishu permissions

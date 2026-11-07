@@ -375,7 +375,7 @@ export default definePluginEntry({
 
     api.registerCommand({
       name: "pair",
-      description: "Generate setup codes and approve device pairing requests.",
+      description: "Generate setup codes and approve device pairing requests",
       acceptsArgs: true,
       clientPresentation: {
         when: "no-arguments",
