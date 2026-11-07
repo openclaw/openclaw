@@ -74,6 +74,7 @@ import {
   getBeforeToolCallSourceTool,
   type BeforeToolCallDiagnosticOptions,
 } from "./before-tool-call-metadata.js";
+import { runWithHookAuthoredMeta } from "./before-tool-call-request-meta.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import {
   CODE_MODE_WAIT_TOOL_NAME,
@@ -485,7 +486,11 @@ export function wrapToolWithBeforeToolCallHook(
               );
               skillUse = skillUseScope;
               return liveness.run(() =>
-                skillUseScope.run(() => (execute as ForwardedToolExecution)(...args)),
+                skillUseScope.run(() =>
+                  runWithHookAuthoredMeta(outcome.requestMeta, () =>
+                    (execute as ForwardedToolExecution)(...args),
+                  ),
+                ),
               );
             });
           result = outcome.ownerDecision

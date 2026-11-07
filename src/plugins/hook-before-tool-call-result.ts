@@ -13,6 +13,17 @@ export type PluginApprovalResolution =
 
 export type PluginHookBeforeToolCallResult = {
   params?: Record<string, unknown>;
+  /**
+   * Hook-authored request metadata merged into the call's `_meta` lane by the
+   * invocation owner. Only this explicit signal is trusted: params `_meta`
+   * content is caller/model-controlled and never establishes authorship.
+   * Shallow-merged per key across hooks in registration order (later hooks win
+   * per key). Not subject to the approval params lock: the operator reviews
+   * params and approval text, and hooks are already privileged code — locking
+   * this lane would silently drop a stamping hook registered after an approval
+   * hook.
+   */
+  requestMeta?: Record<string, unknown>;
   block?: boolean;
   blockReason?: string;
   requireApproval?: {

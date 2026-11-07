@@ -1,4 +1,4 @@
-import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 // Gateway tool invocation engine.
 // Shared implementation behind HTTP and RPC tool invocation adapters.
 import {
@@ -10,6 +10,7 @@ import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/inde
 import { runWithSessionMcpToolCallAuthority } from "../agents/agent-bundle-mcp-request-context.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
+import { runWithHookAuthoredMeta } from "../agents/before-tool-call-request-meta.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 import { readEmbeddedMessageDeliveryFact } from "../agents/embedded-agent-message-delivery.js";
 import { createGatewayToolPolicyAssertion } from "../agents/gateway-tool-policy.js";
@@ -72,29 +73,12 @@ import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 import { resolveToolsWithInvocationMcp } from "./tools-invoke-mcp.js";
+import { isToolUploadRequest } from "./tools-invoke-upload-request.js";
 import {
   areGatewayUploadsEnabled,
   assertGatewayUploadsEnabled,
   GATEWAY_UPLOADS_DISABLED_MESSAGE,
-  isGatewayUploadRequest,
 } from "./upload-policy.js";
-
-/** New client bytes, not a request to deliver a file already owned by the Gateway. */
-function isToolUploadRequest(toolName: string, args: unknown): boolean {
-  if (!isRecord(args)) {
-    return false;
-  }
-  switch (toolName) {
-    case "file_write":
-      return typeof args.contentBase64 === "string";
-    case "workboard_attachment_add":
-      return true;
-    case "message":
-      return isGatewayUploadRequest("message.action", { params: args });
-    default:
-      return false;
-  }
-}
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
@@ -614,7 +598,10 @@ async function invokeGatewayToolWithSignal(
         // MCP requests recheck caller authority at server I/O, after reconnection or catalog waits.
         return await runWithSessionMcpToolCallAuthority(
           getPluginToolMeta(tool)?.mcp ? assertInvocationCurrent : undefined,
-          () => tool.execute?.(toolCallId, hookResult.params, params.signal),
+          () =>
+            runWithHookAuthoredMeta(hookResult.requestMeta, () =>
+              tool.execute?.(toolCallId, hookResult.params, params.signal),
+            ),
         );
       },
     );

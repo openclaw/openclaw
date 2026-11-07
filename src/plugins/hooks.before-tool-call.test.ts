@@ -67,6 +67,44 @@ describe("before_tool_call isolation and approval", () => {
     expect(skipped).not.toHaveBeenCalled();
   });
 
+  it("merges requestMeta across hooks with later hooks winning per key", async () => {
+    const runner = toolRunner([
+      {
+        priority: 100,
+        handler: () => ({ requestMeta: { brayer: { agent: "first" }, shared: 1 } }),
+      },
+      {
+        priority: 50,
+        handler: () => ({ requestMeta: { brayer: { agent: "second" }, shared: 2 } }),
+      },
+    ]);
+    await expect(runner.runBeforeToolCall(event, ctx)).resolves.toMatchObject({
+      requestMeta: { brayer: { agent: "second" }, shared: 2 },
+    });
+  });
+
+  it("still delivers a stamp contributed after an approval request", async () => {
+    const stamp = { brayer: { agent: "main" } };
+    const runner = toolRunner([
+      { priority: 100, handler: () => ({ requireApproval: { ...approval } }) },
+      { priority: 50, handler: () => ({ requestMeta: stamp }) },
+    ]);
+    await expect(runner.runBeforeToolCall(event, ctx)).resolves.toMatchObject({
+      requestMeta: stamp,
+      requireApproval: {
+        title: "Needs approval",
+        description: "Approval needed",
+        pluginId: "policy",
+      },
+    });
+  });
+
+  it("publishes no requestMeta key contribution when no hook returns one", async () => {
+    const runner = toolRunner([{ handler: () => ({ params: { command: "safe" } }) }]);
+    const result = await runner.runBeforeToolCall(event, ctx);
+    expect(result?.requestMeta).toBeUndefined();
+  });
+
   it.each([
     { name: "uncloneable callback", params: { callback: () => undefined } },
     {

@@ -12,6 +12,7 @@ import {
 } from "../plugins/tool-metadata.js";
 import { sanitizeModelSpecialTokens } from "../security/external-content.js";
 import type { McpCatalogTool, McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
+import { createBundleMcpToolExecuteFactory } from "./agent-bundle-mcp-executes.js";
 import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
 import {
   buildSafeToolName,
@@ -29,25 +30,9 @@ import type {
   McpAppRequesterIdentity,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
-import {
-  createMcpClientElicitationHandler,
-  runWithMcpElicitationHandler,
-} from "./mcp-client-elicitation.js";
-import {
-  projectMcpCallToolResult,
-  projectMcpGetPromptResult,
-  setMcpCodeModeGuestResult,
-  setMcpCodeModeGuestResultFromAgentResult,
-} from "./mcp-content.js";
-import { prepareMcpAppFormUpload } from "./mcp-form-resource-upload.js";
-import { captureMcpFormRequester } from "./mcp-form-tool-approval.js";
+import { projectMcpGetPromptResult, setMcpCodeModeGuestResult } from "./mcp-content.js";
 import { isAppOnlyMcpTool } from "./mcp-metadata.js";
 import { createMcpToolFilter, mcpCatalogToolFilterScope } from "./mcp-tool-filter.js";
-import {
-  buildMcpAppCanvasPayload,
-  fetchMcpAppView,
-  type McpAppFormOrigin,
-} from "./mcp-ui-resource.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { neutralizePromptControlMarkers } from "./sanitize-for-prompt.js";
@@ -413,154 +398,20 @@ export async function materializeBundleMcpToolsForRun(params: {
     const tools = buildBundleMcpToolsFromCatalog({
       catalog: materializedCatalog,
       reservedToolNames,
-      createExecute: (tool) => (toolCallId: string, input: unknown, signal?: AbortSignal) =>
-        runWithSessionMcpRequestSignal(signal, async () => {
-          const appRequester =
-            params.appRequester ??
-            runtime.appRequester ??
-            captureMcpFormRequester(runtime.sessionKey);
-          if (!Object.hasOwn(catalog.servers, tool.serverName)) {
-            const connect = runtime.requesterConnect?.createExecute(tool.serverName);
-            if (connect) {
-              return setMcpCodeModeGuestResultFromAgentResult(await connect(toolCallId, input));
-            }
-          }
-          runtime.markUsed();
-          const { serverName, toolName } = tool;
-          const invoke = () => runtime.callTool(serverName, toolName, input);
-          const result = await (runtime.sessionKey
-            ? runWithMcpElicitationHandler(
-                createMcpClientElicitationHandler({
-                  sessionKey: runtime.sessionKey,
-                  agentId: params.agentId,
-                  prepareResourceContext:
-                    runtime.isRequesterScopedServer?.(serverName) && !appRequester
-                      ? undefined
-                      : async (request) => {
-                          if (!params.agentId || !runtime.sessionKey) {
-                            throw new Error("MCP form origin has no session owner");
-                          }
-                          const { createMcpAppFormResourceContext } =
-                            await import("../gateway/mcp-app-form-resources.js");
-                          const assertCurrent = () => {
-                            signal?.throwIfAborted();
-                            request.signal.throwIfAborted();
-                            if (disposal) {
-                              throw new Error("MCP form run has ended");
-                            }
-                          };
-                          assertCurrent();
-                          const origin: McpAppFormOrigin = {
-                            runtime,
-                            serverName,
-                            agentId: params.agentId,
-                            sessionKey: runtime.sessionKey,
-                            requesterId: appRequester?.profileId,
-                            assertCurrent,
-                            /** Model-run forms retain their allowlist, then borrow current App approval for each preview. */
-                            prepareToolCall: async (action) => {
-                              const assertToolCallCurrent = () => {
-                                origin.assertCurrent();
-                                action.assertCurrent();
-                                if (
-                                  !allowedAppToolsByServer?.get(serverName)?.has(action.toolName)
-                                ) {
-                                  throw new Error(
-                                    "MCP form preview tool is not granted by the active run",
-                                  );
-                                }
-                              };
-                              assertToolCallCurrent();
-                              const { prepareModelCreatedAppToolCall } =
-                                await import("../gateway/mcp-app-operations.js");
-                              return await prepareModelCreatedAppToolCall(
-                                {
-                                  runtime: origin.runtime,
-                                  view: {
-                                    serverName: origin.serverName,
-                                    sessionId: origin.runtime.sessionId,
-                                    agentId: origin.agentId,
-                                    requesterId: origin.requesterId,
-                                    allowedAppToolNames: allowedAppToolsByServer?.get(serverName),
-                                  },
-                                },
-                                { ...action, assertCurrent: assertToolCallCurrent },
-                              );
-                            },
-                          };
-                          return await createMcpAppFormResourceContext({
-                            snapshot: request.snapshot,
-                            signal: request.signal,
-                            origin,
-                            uploadResources: await prepareMcpAppFormUpload(origin),
-                          });
-                        },
-                  assertCurrent: () => {
-                    signal?.throwIfAborted();
-                    if (disposal) {
-                      throw new Error("MCP run has ended");
-                    }
-                  },
-                }),
-                invoke,
-              )
-            : invoke());
-          const agentResult = projectMcpCallToolResult(result, {
-            mcpServer: serverName,
-            mcpTool: toolName,
-          });
-          const scopedServer = runtime.isRequesterScopedServer?.(serverName) === true;
-          const requesterId = appRequester?.profileId;
-          // Transport sender ids are not Gateway profiles. Keep private channel
-          // views suppressed until an identity owner supplies a mapped profile.
-          if (runtime.mcpAppsEnabled && tool.uiResourceUri && (!scopedServer || requesterId)) {
-            const allowedAppToolNames = allowedAppToolsByServer
-              ? (allowedAppToolsByServer.get(serverName) ?? new Set<string>())
-              : undefined;
-            const view = await fetchMcpAppView({
-              runtime,
-              agentId: params.agentId,
-              requesterId,
-              uploadResources:
-                params.agentId && runtime.sessionKey
-                  ? await prepareMcpAppFormUpload({
-                      runtime,
-                      serverName,
-                      agentId: params.agentId,
-                      sessionKey: runtime.sessionKey,
-                      requesterId,
-                      assertCurrent: () => {
-                        runtime.assertOwnerCurrent?.();
-                      },
-                    })
-                  : undefined,
-              serverName,
-              toolName,
-              uiResourceUri: tool.uiResourceUri,
-              toolCallId,
-              toolInput: input,
-              toolResult: result,
-              ...(allowedAppToolNames ? { allowedAppToolNames } : {}),
-            });
-            if (view) {
-              (agentResult.details as Record<string, unknown>).mcpAppPreview =
-                buildMcpAppCanvasPayload({
-                  ...view,
-                  ...(runtime.sessionKey ? { originSessionKey: runtime.sessionKey } : {}),
-                  ...(result["_meta"] !== undefined
-                    ? { resultMetaState: "unavailable" as const }
-                    : {}),
-                });
-            }
-          }
-          return agentResult;
-        }),
+      createExecute: createBundleMcpToolExecuteFactory({
+        runtime,
+        catalog,
+        agentId: params.agentId,
+        appRequester: params.appRequester,
+        readAllowedAppToolsByServer: () => allowedAppToolsByServer,
+        readDisposal: () => disposal,
+      }),
       createResourceListExecute: createListExecute("listResources", "resources_list"),
       createResourceReadExecute: runtime.readResource
         ? (serverName) => (_toolCallId: string, input: unknown, signal?: AbortSignal) =>
             runWithSessionMcpRequestSignal(signal, async () => {
-              const uri = requireStringArg(input, "uri");
               runtime.markUsed();
+              const uri = requireStringArg(input, "uri");
               return toJsonAgentToolResult({
                 serverName,
                 operation: "resources_read",

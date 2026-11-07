@@ -49,6 +49,7 @@ It can return:
 ```typescript
 type BeforeToolCallResult = {
   params?: Record<string, unknown>;
+  requestMeta?: Record<string, unknown>;
   block?: boolean;
   blockReason?: string;
   requireApproval?: {
@@ -73,6 +74,12 @@ Guard behavior for typed lifecycle hooks:
 - Return `params` to rewrite host-owned tool parameters. Each handler sees an
   isolated copy of the original event, not prior returned rewrites. The last
   returned `params` wins until an approval is requested.
+- Return `requestMeta` to author transport metadata for this call. The host
+  shallow-merges it per key across hooks (later handlers win per key) and
+  forwards it as MCP request-level `_meta`. Only this declared value is
+  trusted: `_meta` inside `params` is ordinary tool input the model or caller
+  can supply, stays in the arguments, and is never promoted. The approval
+  freeze covers `params`, not `requestMeta`.
 - The first `requireApproval` wins, and its plugin id is stamped by the host.
   It freezes the selected parameter snapshot: later handlers can block but
   cannot change the approved parameters.
