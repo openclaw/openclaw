@@ -46,10 +46,6 @@ const { values } = parseArgs({
 assert(values.output && values.label, "--output and a unique --label are required");
 assert(/^[a-z0-9-]+$/u.test(values.name) && /^[a-z0-9-]+$/u.test(values.label));
 assert(/^synthetic-\d+$/u.test(values.session), "Only synthetic fixture sessions are allowed");
-assert(
-  values.session === "synthetic-0" || values["skip-hydration"],
-  "Only synthetic-0 is finalized for hydration",
-);
 const positive = (value: string) => {
   const number = Number(value);
   assert(Number.isSafeInteger(number) && number >= 0);
@@ -62,9 +58,21 @@ const output = path.resolve(values.output);
 const fixture = path.join(output, `${values.name}.sqlite`);
 const prefix = path.join(output, `${values.name}-${values.label}`);
 const fixtureReport = z
-  .object({ rows: z.number().int().positive(), name: z.string() })
+  .object({
+    rows: z.number().int().positive(),
+    name: z.string(),
+    finalization: z
+      .object({ sessions: z.array(z.object({ session_id: z.string() })).optional() })
+      .optional(),
+  })
   .parse(JSON.parse(fs.readFileSync(path.join(output, `${values.name}-fixture.json`), "utf8")));
 assert.equal(fixtureReport.name, values.name);
+assert(
+  values["skip-hydration"] ||
+    values.session === "synthetic-0" ||
+    fixtureReport.finalization?.sessions?.some((session) => session.session_id === values.session),
+  "The selected path must be finalized for hydration in the fixture report",
+);
 assert(!fs.existsSync(`${prefix}.json`) && !fs.existsSync(`${prefix}.jsonl`));
 fs.writeFileSync(`${prefix}.pid`, `${process.pid}\n`, { flag: "wx" });
 const emit = (value: unknown) => {

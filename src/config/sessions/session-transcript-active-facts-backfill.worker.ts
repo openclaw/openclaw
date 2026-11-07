@@ -48,7 +48,7 @@ const MAX_PAYLOAD_ROWS = 16;
 const MAX_PAYLOAD_BYTES = 128 * 1024;
 const MAX_BATCH_MS = 10;
 
-/** Rank small index-state rows, without touching historical payloads or counting coverage. */
+/** Prioritize recent long paths using only small index-state rows, without counting coverage. */
 export function discoverTranscriptActiveFactsBackfillSessions(
   database: EngineConnection,
 ): TranscriptActiveFactsBackfillSession[] {
@@ -72,6 +72,16 @@ export function discoverTranscriptActiveFactsBackfillSessions(
               .whereRef("cold.session_id", "=", "state.session_id"),
           ),
         ),
+      )
+      .orderBy(
+        (eb) =>
+          eb
+            .case()
+            .when("state.updated_at", ">=", Date.now() - 7 * 86_400_000)
+            .then(1)
+            .else(0)
+            .end(),
+        "desc",
       )
       .orderBy("state.active_event_count", "desc")
       .orderBy("state.updated_at", "desc")
