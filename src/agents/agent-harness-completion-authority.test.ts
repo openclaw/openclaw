@@ -1,7 +1,8 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
@@ -26,6 +27,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { hasSessionControllerQueuedWork } from "../sessions/session-controller.context.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as profileReader from "../state/user-profile-list.js";
@@ -246,13 +248,14 @@ it.each(["release", "revoke", "gateway-close"] as const)(
     }),
 );
 it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as const)(
-  "delivers an owned child result when its spawning caller is %s",
+  "rejects unprocessed child delivery when its spawning caller is %s",
   (callerState) =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       setRuntimeConfigSnapshot({});
       const childSessionKey = "native:child";
       const announceId = "native:parent:child:succeeded";
       const { context, resolver: resolveGatewayContext, scope } = gateway();
+      // A warm result cache is not a private processing receipt and cannot bypass admission.
       context.dedupe.set(`agent:${buildAnnounceIdempotencyKey(announceId)}`, {
         ts: Date.now(),
         ok: true,
@@ -264,6 +267,12 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
       });
       const replaceRequester = requester(state);
       await replaceRequester("parent-session");
+      const requesterTarget = {
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        sessionId: "parent-session",
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+      };
       const ready = createDeferredCore();
       let retired = false;
       let delivery: Promise<AgentHarnessCompletionDelivery> | undefined;
@@ -303,6 +312,8 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
       retired = true;
       if (callerState === "retired-draining") {
         markGatewayRestartDraining();
+        expect(custody?.isCurrent()).toBe(true);
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
       }
       if (callerState === "released") {
         custody?.release();
@@ -322,11 +333,24 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
                   delivered: false,
                   error: expect.stringContaining("authority is no longer active"),
                 }
-              : { delivered: true, path: "direct" },
+              : {
+                  delivered: false,
+                  path: "direct",
+                  disposition: "retryable",
+                  error: "Gateway is restarting. Please try again shortly.",
+                },
           );
         }
+        if (callerState === "retired-draining") {
+          expect(await loadTranscriptEvents(requesterTarget)).toEqual([]);
+          expect((await listSessionPendingInputs(requesterTarget)).total).toBe(0);
+        }
+        expect(
+          hasSessionControllerQueuedWork(requesterTarget.storePath, [requesterSessionKey], "main"),
+        ).toBe(false);
       } finally {
         custody?.release();
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
       }
     }),
 );
