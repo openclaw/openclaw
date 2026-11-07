@@ -705,6 +705,8 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
               <ImageComparisonAction
                 focusableRef={focusableRef}
                 image={currentImage() ?? props}
+                source={props.src}
+                index={galleryState().index}
                 title={title()}
                 disabled={galleryState().busy}
               />

@@ -12,6 +12,8 @@ const ComparisonDialog = lazy(() => import("./image-comparison-dialog.tsx"), {
 export function ImageComparisonAction(props: {
   image: Pick<ImageLightboxItem, "readOriginalBlob">;
   title: string;
+  source: string;
+  index: number;
   focusableRef: () => (element: HTMLElement) => void;
   disabled: boolean;
 }) {
@@ -24,9 +26,15 @@ export function ImageComparisonAction(props: {
       return;
     }
     const title = props.title;
+    const source = props.source;
+    const index = props.index;
     comparing = true;
     try {
       const { showImageComparison } = await ComparisonDialog.preload();
+      // Gallery navigation can retire the selection while the dialog module loads.
+      if (props.source !== source || props.index !== index || props.disabled) {
+        return;
+      }
       await showImageComparison(read, title, lifetime.signal);
     } catch {
       if (!lifetime.signal.aborted) {
