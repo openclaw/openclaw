@@ -7,6 +7,27 @@
 import { isHostRootEscapeError, markHostRootEscape } from "./sandbox-paths.js";
 import { withToolOperatorHint } from "./tool-operator-hint.js";
 
+export const HOST_WORKSPACE_BINDING_HINT =
+  "Keep file paths within the bound root. For an authorized task in another repository, use a worker " +
+  "bound to that repository; when starting one with sessions_spawn, set cwd to that repository. " +
+  "Changing exec workdir does not rebind file tools.";
+
+export function isSandboxRootEscapeError(error: unknown): error is Error {
+  return error instanceof Error && /^Path escapes sandbox root \(/i.test(error.message);
+}
+
+export function withWorkspaceRecoveryHint(error: unknown, hostWorkspace: boolean): unknown {
+  if (!isSandboxRootEscapeError(error)) {
+    return error;
+  }
+  const message = error.message.includes(".openclaw/tmp/")
+    ? error.message
+    : `${error.message}. Use a relative path under \`.openclaw/tmp/\` inside the workspace for scratch/temp/meta files that file tools need to read or write later.`;
+  const bindingHint =
+    hostWorkspace && isHostRootEscapeError(error) ? ` ${HOST_WORKSPACE_BINDING_HINT}` : "";
+  return new Error(`${message}${bindingHint}`, { cause: error });
+}
+
 /** Which layer contained apply_patch, and therefore which operator explanation applies. */
 export type ApplyPatchContainmentSource = "config" | "session" | "required-root";
 
@@ -38,10 +59,7 @@ export function withApplyPatchContainmentHint(
   }
   const failure = hostWorkspace
     ? markHostRootEscape(
-        new Error(
-          `${error.message}. Keep patch paths within the bound root. For an authorized task in another repository, ask the parent to respawn the worker with sessions_spawn and cwd set to that repository. Changing exec workdir does not rebind file tools.`,
-          { cause: error },
-        ),
+        new Error(`${error.message}. ${HOST_WORKSPACE_BINDING_HINT}`, { cause: error }),
       )
     : error;
   return source ? withToolOperatorHint(failure, HINTS[source]) : failure;
