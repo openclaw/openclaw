@@ -124,6 +124,7 @@ function installProbe() {
     finalCommits: 0,
     longestReturnTaskMs: null as number | null,
     expected: "",
+    expectedLiteral: "",
     storageEvents: 0,
     broadcastMessages: 0,
     serviceWorkerMessages: 0,
@@ -141,7 +142,11 @@ function installProbe() {
           content += node.textContent;
         }
       }
-      return content.replace(/\s+/gu, "").includes(state.expected);
+      const normalized = content.replace(/\s+/gu, "");
+      return (
+        normalized.includes(state.expected) ||
+        (state.expectedLiteral.length > 0 && normalized.includes(state.expectedLiteral))
+      );
     });
   Reflect.set(window, "__tabReturnContentCorrect", correct);
   const sample = () => {
@@ -337,6 +342,20 @@ for (const engine of engines) {
               const build = normalizeControlUiBuildInfo(JSON.parse(raw));
               const baseFixture = createScenarioFixture(build.buildId, build.version!, typing);
               const fixture = { ...baseFixture, sessions: baseFixture.sessions.slice(0, 30) };
+              if (mode === "sessions") {
+                Object.assign(
+                  fixture.sessions.find((row) => row.key === "agent:main:interaction-b")!,
+                  {
+                    status: "running",
+                    hasActiveRun: true,
+                    activeRunIds: ["tab-return-secondary-run"],
+                    startedAt: 1_800_000_000_000,
+                    updatedAt: 1_800_000_000_000,
+                    lastReadAt: 1_800_000_000_000,
+                    unread: false,
+                  },
+                );
+              }
               const history = fixture.sessionTranscripts?.[sessionKey]?.messages;
               if (!history) {
                 throw new Error("Missing tab return history fixture");
@@ -373,6 +392,13 @@ for (const engine of engines) {
                 await page.locator(composer).waitFor();
                 await switching.prepare(page, gateway);
                 await frames(page);
+                if (mode === "sessions") {
+                  await page
+                    .locator(
+                      '.sidebar-recent-session[data-session-key="agent:main:interaction-b"] .session-glyph--running',
+                    )
+                    .waitFor();
+                }
               }
               const active = tabs[0]!;
               await active.page.bringToFront();
@@ -435,11 +461,13 @@ for (const engine of engines) {
                       mode: streamMode,
                       history: historyMessages,
                       expectedContent,
+                      expectedLiteral,
                       rosterKeys,
                     }) => {
                       const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
                       const probe = Reflect.get(window, "__tabReturn");
                       probe.expected = expectedContent;
+                      probe.expectedLiteral = expectedLiteral;
                       probe.visibilityAt = 0;
                       let text = initialReply;
                       const toolMessages: unknown[] = [];
@@ -504,6 +532,17 @@ for (const engine of engines) {
                                 ...row,
                                 label: `Hidden session checkpoint ${i}`,
                                 updatedAt: 1_800_000_000_000 + i * 1000,
+                                ...(i === updates
+                                  ? {
+                                      status: "done",
+                                      hasActiveRun: false,
+                                      activeRunIds: [],
+                                      lastRunId: "tab-return-secondary-run",
+                                      endedAt: 1_800_000_000_000 + i * 1000,
+                                      lastActivityAt: 1_800_000_000_000 + i * 1000,
+                                      unread: true,
+                                    }
+                                  : {}),
                               };
                               gateway.setSessionsListResponse({
                                 sessions: rosterKeys.map((key) =>
@@ -514,7 +553,7 @@ for (const engine of engines) {
                                 sessionKey: row.key,
                                 sessionId: row.sessionId,
                                 agentId: "main",
-                                reason: "patch",
+                                reason: "lifecycle",
                                 ts: 1_800_000_000_000 + i * 1000,
                                 session: updatedRow,
                                 ancestorSessions: [],
@@ -572,6 +611,7 @@ for (const engine of engines) {
                       mode,
                       history,
                       expectedContent: normalizeExpectedReply(finalText),
+                      expectedLiteral: finalText.replace(/\s+/gu, ""),
                       rosterKeys: fixture.sessions.map((row) => row.key),
                     },
                   ),
@@ -655,10 +695,16 @@ for (const engine of engines) {
                 throw new Error("Completed reply retained a streaming bubble after return");
               }
               if (mode === "sessions") {
-                await returning.page
-                  .locator('.sidebar-recent-session[data-session-key="agent:main:interaction-b"]')
+                const completedSession = returning.page.locator(
+                  '.sidebar-recent-session[data-session-key="agent:main:interaction-b"]',
+                );
+                await completedSession
                   .getByText(`Hidden session checkpoint ${n}`, { exact: false })
                   .waitFor();
+                await completedSession
+                  .locator(".session-glyph--running")
+                  .waitFor({ state: "detached" });
+                await completedSession.getByRole("img", { name: "Unread", exact: true }).waitFor();
               }
               const timing = await returning.page.evaluate(() => {
                 const state = Reflect.get(window, "__tabReturn");
@@ -816,10 +862,11 @@ for (const engine of engines) {
               const tool = returning.page.locator(`${pane} [data-message-id*="tab-tool-${n}"]`);
               const summary = tool
                 .locator(
-                  '.chat-tool-msg-summary[aria-expanded="false"], .chat-tool-row[aria-expanded="false"]',
+                  "button.chat-tool-msg-summary[aria-expanded], button.chat-tool-row[aria-expanded]",
                 )
                 .first();
-              if (await summary.count()) {
+              await summary.waitFor({ state: "visible" });
+              if ((await summary.getAttribute("aria-expanded")) === "false") {
                 await summary.click();
               }
               await tool
@@ -842,6 +889,10 @@ for (const engine of engines) {
                 peersAfter,
                 peersMetrics,
                 toolProof: { ...toolProof, representativeOutputVisible: true },
+                sessionProof:
+                  mode === "sessions"
+                    ? { runningBeforeHide: true, completedOnReturn: true, unreadOnReturn: true }
+                    : undefined,
                 wallMs: performance.now() - started,
               };
             } catch (error) {

@@ -28,6 +28,11 @@ stream cadence, network throughput, or provider latency. The disconnect case
 explicitly closes the synthetic socket and restores connectivity on return;
 it does not prove silent socket-loss detection.
 
+The sessions case starts another session with an active run, completes it while
+hidden, and verifies its final label, removed running indicator, and unread badge
+before navigating to that session. It preserves every other current fixture row
+when publishing the updated roster.
+
 With one tab the page is hidden throughout delivery. With two to five tabs,
 one page stays active and all receive the same fixture events. The returning
 page then exercises native typing and session navigation while its peers remain
@@ -72,6 +77,8 @@ Visibility mechanisms are recorded explicitly:
 The report retains hidden/reveal resource endpoints, uncollected heap use when
 available, return application latency, three return frames, Long Tasks API
 observations, and native typing/switch timing. Unsupported counters are `null`.
+Complete-content checks accept rendered Markdown or the existing large-message
+literal fallback; both require the entire normalized reply, not just its suffix.
 The Long Tasks API reports only tasks of at least 50 ms. Heap changes without GC
 are allocation/retention observations, not proof of a leak. Screenshots contain
 only the synthetic fixture and are captured on the first pair or failure.
