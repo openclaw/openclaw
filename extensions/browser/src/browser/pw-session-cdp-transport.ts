@@ -15,6 +15,17 @@ const FIRST_INTERNAL_COMMAND_ID = -10_000;
 const MAX_DIAGNOSTIC_TARGETS = 3;
 const MAX_DIAGNOSTIC_TARGET_ID_CHARS = 128;
 
+type CdpPageTarget = { targetId: string; title: string; url: string; type: "page" };
+
+const crashedTargetsByBrowser = new WeakMap<Browser, ReadonlyMap<string, CdpPageTarget>>();
+
+/** Includes crashed targets that Playwright discards during a cold connection. */
+export function getCrashedTargets(
+  browser: Browser,
+): ReadonlyMap<string, CdpPageTarget> | undefined {
+  return crashedTargetsByBrowser.get(browser);
+}
+
 export class UnresponsiveCdpTargetError extends Error {
   constructor(targetIds: string[]) {
     const targets = targetIds.map((targetId) => JSON.stringify(targetId)).join(", ");
@@ -123,7 +134,8 @@ export async function connectOverCdpTransport(
 ): Promise<Browser> {
   const normalizer = resolveBrowserEngine(opts.engine).createCdpNormalizer?.();
   const wire = opts.preparedTransport ?? (await openCdpTransportSocket(connectionUrl, opts));
-  const pageTargetIdsBySession = new Map<string, string>();
+  const pageTargetsBySession = new Map<string, CdpPageTarget>();
+  const crashedTargets = new Map<string, CdpPageTarget>();
   const pendingTargetCommands = new Map<number, string>();
   let trackInitializationCommands = true;
   try {
@@ -141,6 +153,10 @@ export async function connectOverCdpTransport(
         return;
       }
       transportClosed = true;
+      if (!trackInitializationCommands) {
+        pageTargetsBySession.clear();
+      }
+      crashedTargets.clear();
       normalizer?.clear();
       if (onClose) {
         onClose(reason);
@@ -281,25 +297,63 @@ export async function connectOverCdpTransport(
           }
           const method = readStringField(parsed, "method");
           const params = asOptionalRecord(parsed.params);
-          if (trackInitializationCommands && method === "Target.attachedToTarget") {
+          const parentSessionId = readStringField(parsed, "sessionId");
+          if (method === "Target.attachedToTarget" && !parentSessionId) {
             const sessionId = readStringField(params, "sessionId");
             const targetInfo = asOptionalRecord(params?.targetInfo);
             const targetId = readStringField(targetInfo, "targetId");
             if (
               sessionId &&
               targetId &&
-              targetId.length <= MAX_DIAGNOSTIC_TARGET_ID_CHARS &&
+              readStringField(targetInfo, "browserContextId") &&
               readStringField(targetInfo, "type") === "page"
             ) {
-              pageTargetIdsBySession.set(sessionId, targetId);
+              pageTargetsBySession.set(sessionId, {
+                targetId,
+                title: readStringField(targetInfo, "title") ?? "",
+                url: readStringField(targetInfo, "url") ?? "",
+                type: "page",
+              });
             }
-          } else if (trackInitializationCommands && method === "Target.detachedFromTarget") {
+          } else if (method === "Inspector.targetCrashed" && parentSessionId) {
+            const target = pageTargetsBySession.get(parentSessionId);
+            if (target) {
+              // Playwright rejects a crashed session permanently, even if Chrome later reloads it.
+              crashedTargets.set(target.targetId, target);
+            }
+          } else if (method === "Target.targetInfoChanged" && !parentSessionId) {
+            const targetInfo = asOptionalRecord(params?.targetInfo);
+            const targetId = readStringField(targetInfo, "targetId");
+            for (const target of pageTargetsBySession.values()) {
+              if (target.targetId === targetId) {
+                target.title = readStringField(targetInfo, "title") ?? target.title;
+                target.url = readStringField(targetInfo, "url") ?? target.url;
+              }
+            }
+          } else if (method === "Target.detachedFromTarget") {
             const sessionId = readStringField(params, "sessionId");
             if (sessionId) {
-              pageTargetIdsBySession.delete(sessionId);
+              // Temporary CDP sessions cannot retire the root page's crash state.
+              if (!parentSessionId) {
+                const target = pageTargetsBySession.get(sessionId);
+                if (target) {
+                  crashedTargets.delete(target.targetId);
+                }
+                pageTargetsBySession.delete(sessionId);
+              }
               for (const [commandId, pendingSessionId] of pendingTargetCommands) {
                 if (pendingSessionId === sessionId) {
                   pendingTargetCommands.delete(commandId);
+                }
+              }
+            }
+          } else if (method === "Target.targetDestroyed" && !parentSessionId) {
+            const targetId = readStringField(params, "targetId");
+            if (targetId) {
+              crashedTargets.delete(targetId);
+              for (const [sessionId, target] of pageTargetsBySession) {
+                if (target.targetId === targetId) {
+                  pageTargetsBySession.delete(sessionId);
                 }
               }
             }
@@ -320,11 +374,11 @@ export async function connectOverCdpTransport(
     const browser = await getPlaywrightCore().chromium.connectOverCDP(transport, {
       timeout: opts.timeout,
     });
-    // Target-command state diagnoses only the cold attach. Stop retaining
-    // traffic once Playwright owns a usable browser for the cached session.
+    // Only unanswered commands are startup diagnostics. Keep root page identities
+    // for crash observation throughout this connection, including unpublished pages.
     trackInitializationCommands = false;
-    pageTargetIdsBySession.clear();
     pendingTargetCommands.clear();
+    crashedTargetsByBrowser.set(browser, crashedTargets);
     return browser;
   } catch (error) {
     normalizer?.clear();
@@ -336,8 +390,11 @@ export async function connectOverCdpTransport(
       const targetIds = [
         ...new Set(
           [...pendingTargetCommands.values()]
-            .map((sessionId) => pageTargetIdsBySession.get(sessionId))
-            .filter((targetId): targetId is string => Boolean(targetId)),
+            .map((sessionId) => pageTargetsBySession.get(sessionId)?.targetId)
+            .filter(
+              (targetId): targetId is string =>
+                targetId !== undefined && targetId.length <= MAX_DIAGNOSTIC_TARGET_ID_CHARS,
+            ),
         ),
       ].slice(0, MAX_DIAGNOSTIC_TARGETS);
       if (targetIds.length > 0) {

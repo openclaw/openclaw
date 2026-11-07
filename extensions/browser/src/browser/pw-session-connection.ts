@@ -18,14 +18,18 @@ import {
 import { getChromeWebSocketEndpoint } from "./chrome.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
 import type { BrowserEngineId } from "./engines/types.js";
-import { BrowserTabNotFoundError } from "./errors.js";
+import { BrowserTabCrashedError, BrowserTabNotFoundError } from "./errors.js";
 import type { RelayOperationReference } from "./extension-relay/owner-client.js";
 import {
   connectRelayBrowser,
   closeRelayOperationConnection,
 } from "./extension-relay/owner-playwright.js";
 import { getBorrowedRelayCdpAccess } from "./extension-relay/relay-access.js";
-import { connectOverCdpTransport, UnresponsiveCdpTargetError } from "./pw-session-cdp-transport.js";
+import {
+  connectOverCdpTransport,
+  getCrashedTargets,
+  UnresponsiveCdpTargetError,
+} from "./pw-session-cdp-transport.js";
 import {
   blockedPageRefsByCdpUrl,
   blockedTargetsByCdpUrl,
@@ -61,6 +65,11 @@ export { pageTargetInfo } from "./pw-session-page-target.js";
 
 export function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
   return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
+}
+
+export function getCrashedTargetsForCdpUrl(cdpUrl: string) {
+  const connected = cachedByCdpUrl.get(normalizeCdpUrl(cdpUrl));
+  return connected ? getCrashedTargets(connected.browser) : undefined;
 }
 
 export function isRecoverablePlaywrightDisconnectError(err: unknown): boolean {
@@ -565,8 +574,15 @@ async function getPageForTargetIdOnce(opts: {
     opts.ssrfPolicy,
     opts.relayReference,
   );
+  const crashedTargets = getCrashedTargets(browser);
+  if (opts.targetId && crashedTargets?.has(opts.targetId)) {
+    throw new BrowserTabCrashedError();
+  }
   const pages = await getAllPages(browser);
   if (!pages.length) {
+    if (!opts.targetId && crashedTargets?.size) {
+      throw new BrowserTabCrashedError();
+    }
     throw new Error("No pages available in the connected browser.");
   }
 
@@ -579,7 +595,13 @@ async function getPageForTargetIdOnce(opts: {
   }
   const found = opts.targetId
     ? accessible.find((entry) => entry.targetId === opts.targetId)
-    : accessible[0];
+    : accessible.find((entry) => !entry.targetId || !crashedTargets?.has(entry.targetId));
+  if (
+    (found?.targetId && crashedTargets?.has(found.targetId)) ||
+    (!found && !opts.targetId && crashedTargets?.size)
+  ) {
+    throw new BrowserTabCrashedError();
+  }
   if (found) {
     bindRoleRefsTarget(found.page, opts.cdpUrl, found.targetId);
     if (!engine || engine === "chromium") {

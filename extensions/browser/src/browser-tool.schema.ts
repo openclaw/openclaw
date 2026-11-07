@@ -314,6 +314,7 @@ export const BrowserToolOutputSchema = Type.Object(
               "navigation_check_failed",
             ] as const),
             type: Type.Optional(Type.String()),
+            crashed: Type.Optional(Type.Boolean()),
           },
           { additionalProperties: true },
         ),

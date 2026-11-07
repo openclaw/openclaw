@@ -34,7 +34,7 @@ import {
 } from "./navigation-guard.js";
 import { resolveBrowserNavigationPolicy } from "./navigation-policy.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
-import { getPwAiModule } from "./pw-ai-module.js";
+import { getLoadedPwAiModule, getPwAiModule } from "./pw-ai-module.js";
 import {
   MANAGED_BROWSER_PAGE_TAB_LIMIT,
   OPEN_TAB_DISCOVERY_POLL_MS,
@@ -215,6 +215,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             url: p.url,
             type: p.type,
           };
+          if (p.crashed) {
+            tab.crashed = true;
+          }
           if (webExtensionTabId !== undefined) {
             tab.webExtensionTabId = webExtensionTabId;
           }
@@ -230,6 +233,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       getCdpControlPolicy(),
     );
     const cdpControlPolicy = getCdpControlPolicy();
+    const crashedTargets = getLoadedPwAiModule()?.getCrashedTargetsForCdpUrl(profile.cdpUrl);
     const tabs: BrowserTab[] = [];
     for (const t of raw) {
       const tab: BrowserTab = {
@@ -238,6 +242,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         url: t.url ?? "",
         wsUrl: normalizeWsUrl(t.webSocketDebuggerUrl, profile.cdpUrl),
         type: t.type,
+        ...(t.id && crashedTargets?.has(t.id) ? { crashed: true } : {}),
       };
       if (!tab.targetId || !isSelectableCdpBrowserTarget(tab)) {
         continue;

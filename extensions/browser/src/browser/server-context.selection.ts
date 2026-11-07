@@ -5,7 +5,7 @@ import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js"
 import { appendCdpPath } from "./cdp.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { ResolvedBrowserProfile } from "./config.js";
-import { BrowserError, BrowserTabNotFoundError } from "./errors.js";
+import { BrowserError, BrowserTabCrashedError, BrowserTabNotFoundError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
@@ -173,21 +173,26 @@ export function createProfileSelectionOps({
       ? resolveBrowserTabOrThrow(targetId, candidates)
       : stickyTargetId
         ? candidates.find((tab) => tab.targetId === stickyTargetId)
-        : (candidates.find((tab) => (tab.type ?? "page") === "page") ?? candidates.at(0));
+        : (candidates.find((tab) => !tab.crashed && (tab.type ?? "page") === "page") ??
+          candidates.find((tab) => !tab.crashed) ??
+          candidates.at(0));
 
     if (!chosen) {
       throw new BrowserTabNotFoundError({ input: targetId ?? stickyTargetId });
+    }
+    if (chosen.crashed) {
+      throw new BrowserTabCrashedError();
     }
     runtime.lastTargetId = chosen.targetId;
     return chosen;
   };
 
-  const resolveTargetIdOrThrow = async (
+  const resolveTabOrThrow = async (
     targetId: string,
     options?: BrowserTabTargetOptions,
-  ): Promise<string> => {
+  ): Promise<BrowserTab> => {
     const tabs = await listTabs(options);
-    return resolveBrowserTabOrThrow(targetId, tabs, options?.exactTargetId).targetId;
+    return resolveBrowserTabOrThrow(targetId, tabs, options?.exactTargetId);
   };
 
   // /json/close answers 200 "Target is closing" once Chrome has requested the close,
@@ -278,7 +283,11 @@ export function createProfileSelectionOps({
   };
 
   const focusTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<void> => {
-    const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
+    const tab = await resolveTabOrThrow(targetId, options);
+    if (tab.crashed) {
+      throw new BrowserTabCrashedError();
+    }
+    const resolvedTargetId = tab.targetId;
     const focus = await prepareTabOperation("focus", resolvedTargetId, options);
     options?.signal?.throwIfAborted();
     await focus();
@@ -286,7 +295,7 @@ export function createProfileSelectionOps({
   };
 
   const closeTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<string> => {
-    const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
+    const { targetId: resolvedTargetId } = await resolveTabOrThrow(targetId, options);
     const close = await prepareTabOperation("close", resolvedTargetId, options);
     options?.signal?.throwIfAborted();
     await dispatchBrowserTabClose(resolvedTargetId, profile.name, () => {
