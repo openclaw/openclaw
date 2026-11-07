@@ -5,15 +5,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 
 const MAX_SANITIZED_PROJECT_LENGTH = 200;
 
-export function resolveClaudeCliProjectsDir(homeDir?: string): string {
-  // An explicit home scopes offline reads; ordinary runs share Claude's selected config root.
-  const configuredDir = homeDir === undefined ? process.env.CLAUDE_CONFIG_DIR?.trim() : undefined;
-  const configDir = configuredDir
-    ? path.resolve(configuredDir)
-    : path.join(normalizeOptionalString(homeDir) || process.env.HOME || os.homedir(), ".claude");
-  return path.join(configDir.normalize("NFC"), "projects");
-}
-
 // Claude CLI stores project state under a sanitized workspace key. Add a stable
 // hash when the key is truncated so long paths do not collide silently.
 function simpleHash36(input: string): string {
@@ -43,13 +34,94 @@ function canonicalizeWorkspaceDir(workspaceDir: string): string {
   }
 }
 
+type ClaudeCliProjectsRootParams = {
+  /** Explicit home for offline reads; without a child environment it isolates the lookup. */
+  homeDir?: string;
+  /** The Claude child's effective environment. Omitted: the Gateway's own environment. */
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  /** Root already selected from the Claude child's effective environment and cwd. */
+  projectsRoot?: string;
+  assertNativeHistoryAuthorized?: () => Promise<void>;
+};
+
+// A retained root records the environment the child actually ran with, which the
+// Gateway's own environment cannot reproduce.
+function retainedProjectsRoot(params: ClaudeCliProjectsRootParams): string | undefined {
+  return typeof params.projectsRoot === "string" && params.projectsRoot
+    ? params.projectsRoot
+    : undefined;
+}
+
+function resolveClaudeCliProjectsDir(params: ClaudeCliProjectsRootParams): string {
+  const explicitHomeDir = normalizeOptionalString(params.homeDir);
+  // An explicit home without a child environment scopes offline reads to that home;
+  // ordinary lookups share the config root the Claude child selects.
+  if (!params.env && explicitHomeDir) {
+    return path.join(explicitHomeDir.normalize("NFC"), ".claude", "projects");
+  }
+  const env = params.env ?? process.env;
+  const homeDir = explicitHomeDir || env.HOME || os.homedir();
+  // Native Claude uses nullish selection and NFC; empty values and spaces are paths.
+  const configDir = (env.CLAUDE_CONFIG_DIR ?? path.join(homeDir, ".claude")).normalize("NFC");
+  return path.join(configDir, "projects");
+}
+
+function isFullyQualifiedProjectsDir(projectsDir: string): boolean {
+  // Windows \profile is absolute to a drive, but still needs the child's drive.
+  return path.isAbsolute(projectsDir) && path.parse(projectsDir).root !== "\\";
+}
+
 export function resolveClaudeCliProjectDirForWorkspace(params: {
   workspaceDir: string;
   homeDir?: string;
+  env?: NodeJS.ProcessEnv;
+  projectsRoot?: string;
 }): string {
   const canonicalWorkspaceDir = canonicalizeWorkspaceDir(params.workspaceDir);
-  return path.join(
-    resolveClaudeCliProjectsDir(params.homeDir),
+  return path.resolve(
+    canonicalWorkspaceDir,
+    retainedProjectsRoot(params) ?? resolveClaudeCliProjectsDir(params),
     sanitizeClaudeCliProjectKey(canonicalWorkspaceDir),
   );
+}
+
+/** Relative native roots require the child cwd, never an inferred Gateway cwd. */
+export function resolveClaudeCliProjectsRoot(
+  params: ClaudeCliProjectsRootParams,
+): string | undefined {
+  const retained = retainedProjectsRoot(params);
+  if (retained) {
+    return retained;
+  }
+  const projectsDir = resolveClaudeCliProjectsDir(params);
+  if (isFullyQualifiedProjectsDir(projectsDir)) {
+    return projectsDir;
+  }
+  return params.cwd ? path.resolve(canonicalizeWorkspaceDir(params.cwd), projectsDir) : undefined;
+}
+
+/** Keep native history discovery asynchronous, including symlinked child cwds. */
+export async function resolveClaudeCliProjectsRootAsync(
+  params: ClaudeCliProjectsRootParams,
+): Promise<string | undefined> {
+  const retained = retainedProjectsRoot(params);
+  if (retained) {
+    return retained;
+  }
+  const projectsDir = resolveClaudeCliProjectsDir(params);
+  if (isFullyQualifiedProjectsDir(projectsDir)) {
+    return projectsDir;
+  }
+  if (!params.cwd) {
+    return undefined;
+  }
+  let cwd = path.resolve(params.cwd).normalize("NFC");
+  await params.assertNativeHistoryAuthorized?.();
+  try {
+    cwd = (await fs.promises.realpath(cwd)).normalize("NFC");
+  } catch {
+    // Match the synchronous workspace resolver when the original directory is gone.
+  }
+  return path.resolve(cwd, projectsDir);
 }

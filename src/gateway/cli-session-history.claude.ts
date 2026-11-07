@@ -13,7 +13,7 @@ import {
 } from "../agents/cli-image-turn-correlation.js";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import { stripCliSessionDriftNote } from "../agents/cli-session-drift.js";
-import { resolveClaudeCliProjectsDir } from "../agents/command/claude-cli-project-dir.js";
+import { resolveClaudeCliProjectsRootAsync } from "../agents/command/claude-cli-project-dir.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
 import { isToolCallBlock, isToolResultBlock, resolveToolUseId } from "../chat/tool-content.js";
@@ -76,6 +76,14 @@ export function redactClaudeCliHistoryMessage(
     message as unknown as AgentMessage,
   ) as unknown as TranscriptLikeMessage;
 }
+
+type ClaudeCliHistoryLookupParams = {
+  cliSessionId: string;
+  homeDir?: string;
+  cwd?: string;
+  projectsRoot?: string;
+  assertNativeHistoryAuthorized?: () => Promise<void>;
+};
 
 function normalizeClaudeCliSessionId(value: string): string | undefined {
   const sessionId = value.trim();
@@ -460,15 +468,18 @@ export function parseClaudeCliHistoryEntry(
   ) as TranscriptLikeMessage;
 }
 
-export async function resolveClaudeCliSessionFilePathAsync(params: {
-  cliSessionId: string;
-  homeDir?: string;
-}): Promise<string | undefined> {
+export async function resolveClaudeCliSessionFilePathAsync(
+  params: ClaudeCliHistoryLookupParams,
+): Promise<string | undefined> {
   const sessionId = normalizeClaudeCliSessionId(params.cliSessionId);
   if (!sessionId) {
     return undefined;
   }
-  const projectsDir = resolveClaudeCliProjectsDir(params.homeDir);
+  const projectsDir = await resolveClaudeCliProjectsRootAsync(params);
+  if (!projectsDir) {
+    return undefined;
+  }
+  await params.assertNativeHistoryAuthorized?.();
   let projectEntries: fs.Dirent[];
   try {
     projectEntries = await fs.promises.readdir(projectsDir, { withFileTypes: true });
@@ -476,7 +487,6 @@ export async function resolveClaudeCliSessionFilePathAsync(params: {
     return undefined;
   }
 
-  // Bound filesystem work while preserving the first match in directory order.
   const batchSize = 16;
   for (let offset = 0; offset < projectEntries.length; offset += batchSize) {
     const candidates = await Promise.all(
@@ -491,6 +501,7 @@ export async function resolveClaudeCliSessionFilePathAsync(params: {
         if (!candidate) {
           return undefined;
         }
+        await params.assertNativeHistoryAuthorized?.();
         try {
           await fs.promises.access(candidate);
           return candidate;
@@ -512,10 +523,9 @@ export type ClaudeCliFallbackSeed = {
   recentTurns: TranscriptLikeMessage[];
 };
 
-export async function readClaudeCliFallbackSeed(params: {
-  cliSessionId: string;
-  homeDir?: string;
-}): Promise<ClaudeCliFallbackSeed | undefined> {
+export async function readClaudeCliFallbackSeed(
+  params: ClaudeCliHistoryLookupParams,
+): Promise<ClaudeCliFallbackSeed | undefined> {
   const filePath = await resolveClaudeCliSessionFilePathAsync(params);
   if (!filePath) {
     return undefined;
@@ -527,6 +537,8 @@ export async function readClaudeCliFallbackSeed(params: {
   } catch {
     return undefined;
   }
+  // The selection may have changed while the file was read; a revoked root yields no seed.
+  await params.assertNativeHistoryAuthorized?.();
 
   let pendingSummary: string | undefined;
   let lastSummary: string | undefined;

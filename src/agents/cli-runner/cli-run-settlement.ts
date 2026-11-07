@@ -37,6 +37,7 @@ import {
 } from "../reply-completion.js";
 import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
+import { claudeCliBindingLocation } from "./child-env.js";
 import { preserveCliRequiredCleanupStop, runCliCleanup } from "./cleanup.js";
 import { resolveCliSessionId } from "./cli-run-recovery.js";
 import { projectCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
@@ -90,8 +91,10 @@ export function buildCliSessionBinding(
   output: Pick<CliOutput, "resumeCheckpointId" | "terminalInterruption">,
   reseedReceipt?: CliSessionBinding["reseedReceipt"],
 ): CliSessionBinding {
+  const { preparedBackend } = context;
   return {
     sessionId,
+    ...claudeCliBindingLocation(context.params.provider, context),
     ...(context.effectiveAuthProfileId ? { authProfileId: context.effectiveAuthProfileId } : {}),
     ...(output.resumeCheckpointId ? { resumeCheckpointId: output.resumeCheckpointId } : {}),
     ...(context.authEpoch ? { authEpoch: context.authEpoch } : {}),
@@ -104,12 +107,8 @@ export function buildCliSessionBinding(
       : {}),
     ...(context.promptToolNamesHash ? { promptToolNamesHash: context.promptToolNamesHash } : {}),
     ...(context.cwdHash ? { cwdHash: context.cwdHash } : {}),
-    ...(context.preparedBackend.mcpConfigHash
-      ? { mcpConfigHash: context.preparedBackend.mcpConfigHash }
-      : {}),
-    ...(context.preparedBackend.mcpResumeHash
-      ? { mcpResumeHash: context.preparedBackend.mcpResumeHash }
-      : {}),
+    ...(preparedBackend.mcpConfigHash ? { mcpConfigHash: preparedBackend.mcpConfigHash } : {}),
+    ...(preparedBackend.mcpResumeHash ? { mcpResumeHash: preparedBackend.mcpResumeHash } : {}),
     ...(reseedReceipt ? { reseedReceipt } : {}),
     ...(context.transcriptCursor && !output.terminalInterruption
       ? {

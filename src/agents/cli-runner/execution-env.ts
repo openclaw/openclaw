@@ -13,8 +13,11 @@ import type { PreparedCliRunContext } from "./types.js";
 
 type ChildEnvBackend = Pick<
   PreparedCliRunContext["preparedBackend"],
-  "backend" | "env" | "resetEnv" | "secretInput"
->;
+  "env" | "resetEnv" | "secretInput"
+> & {
+  /** Only `env` and `clearEnv` shape the child; history readers compose without a command. */
+  backend: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
+};
 
 // These exclusions reset ambient defaults before the backend applies the turn's settings.
 const CLI_RUNTIME_ENV_KEYS = new Set([
@@ -56,6 +59,8 @@ export function resolveCliChildEnv(
   preparedBackend: ChildEnvBackend,
   params: Pick<ProviderEnvVarLookupParams, "config" | "workspaceDir"> & {
     nativeAuthOnly?: true;
+    /** Skill snapshot overrides projected without mutating the Gateway process environment. */
+    skillEnv?: Readonly<Record<string, string>>;
   } = {},
   overrides?: Record<string, string>,
 ): {
@@ -75,6 +80,12 @@ export function resolveCliChildEnv(
   );
   const backendEnv = { ...configuredBackendEnv, ...preparedBackendEnv };
   const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
+  if (params.skillEnv) {
+    Object.assign(
+      env,
+      sanitizeHostExecEnv({ baseEnv: {}, overrides: params.skillEnv, blockPathOverrides: true }),
+    );
+  }
   const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
   for (const key of clearEnv) {
     if (!preservedEnv.has(key) || selectedClaudeClearEnv?.has(key)) {

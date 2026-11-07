@@ -1,12 +1,10 @@
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
   validateChatHistoryParams,
-  validateChatStartupParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ChatHistoryParams } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
@@ -47,11 +45,9 @@ import { prepareSessionFastModePresentation } from "../session-fast-mode-present
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { getSessionDefaults, resolveSessionModelRef } from "../session-utils.js";
-import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { readChatHistoryDelta } from "./chat-history-delta.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
 import {
@@ -64,15 +60,16 @@ import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { captureQueuedChatInputRunIds, readChatPendingInputs } from "./chat-pending-inputs.js";
 import { withChatStartupDiagnostics } from "./chat-server-timing.js";
+import { handleChatStartupRequest } from "./chat-startup-handler.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 /** Internal callers carry schema-validated fields and their resolved session target. */
 export async function handleChatHistoryRequest({
   params,
-  respond,
+  respond: respondUnchecked,
   client,
   context,
   method,
@@ -91,6 +88,19 @@ export async function handleChatHistoryRequest({
     verifyRetainedState?: () => Promise<boolean>;
   };
 }) {
+  let isNativeHistoryCurrent: (() => boolean) | undefined;
+  // Retained-transcript publication also reaches this frame after its own awaits.
+  const respond: typeof respondUnchecked = (...args) => {
+    if (args[0] && isNativeHistoryCurrent && !isNativeHistoryCurrent()) {
+      respondChatHistoryUnavailable(
+        method,
+        respondUnchecked,
+        "session changed while reading history; reload the conversation",
+      );
+      return;
+    }
+    respondUnchecked(...args);
+  };
   const {
     sessionKey,
     limit,
@@ -267,6 +277,9 @@ export async function handleChatHistoryRequest({
                   },
                   signal,
                   projectMentions,
+                  (isCurrent) => {
+                    isNativeHistoryCurrent = isCurrent;
+                  },
                 ),
               {
                 config: cfg,
@@ -650,79 +663,8 @@ export const chatHistoryHandlers: GatewayRequestHandlers = {
   "chat.history": defineValidatedGatewayHandler("chat.history", validateChatHistoryParams, (opts) =>
     handleChatHistoryRequest({ ...opts, method: "chat.history" }),
   ),
-  "chat.startup": withChatStartupDiagnostics(async (opts) => {
-    if (!assertValidParams(opts.params, validateChatStartupParams, "chat.startup", opts.respond)) {
-      return;
-    }
-    if ("sessionKey" in opts.params) {
-      await handleChatHistoryRequest({ ...opts, params: opts.params, method: "chat.startup" });
-      return;
-    }
-    const connId = opts.client?.connId?.trim();
-    if (connId) {
-      // This snapshot precedes pane mount. Enroll the connection before any read
-      // so a concurrent sessions.subscribe cannot leave a gap in live delivery.
-      opts.context.subscribeSessionEvents(connId);
-      if (!opts.context.getSessionEventSubscriberConnIds().has(connId)) {
-        opts.respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "connection closed before chat startup"),
-        );
-        return;
-      }
-    }
-    const { shortId, slugHint, agentId, limit, maxBytes, toolResultMaxChars } = opts.params;
-    const projection = getSessionRowProjection(opts.context);
-    if (!projection) {
-      respondChatHistoryUnavailable(
-        "chat.startup",
-        opts.respond,
-        "session rows are initializing; reload the conversation",
-      );
-      return;
-    }
-    const resolution = await withPreparedSessionResolve(
-      {
-        projection,
-        client: opts.client,
-        p: { shortId, slugHint, agentId, allowMissing: true },
-        isCurrent: () => getSessionRowProjection(opts.context) === projection,
-      },
-      (resolved) => {
-        opts.sessionMutationAuthorization?.assertCurrent();
-        if (!resolved.ok) {
-          opts.respond(false, undefined, resolved.error);
-          return undefined;
-        }
-        if ("missing" in resolved || "ambiguous" in resolved) {
-          opts.respond(true, {
-            resolution: {
-              ok: false,
-              ...("ambiguous" in resolved ? { candidates: resolved.candidates } : {}),
-            },
-          });
-          return undefined;
-        }
-        return resolved;
-      },
-    );
-    if (!resolution) {
-      return;
-    }
-    await handleChatHistoryRequest({
-      ...opts,
-      params: {
-        sessionKey: resolution.key,
-        agentId: resolution.agentId,
-        limit,
-        maxBytes,
-        toolResultMaxChars,
-      },
-      method: "chat.startup",
-      respond: (ok, payload, error, meta) =>
-        opts.respond(ok, ok ? { ...asOptionalRecord(payload), resolution } : payload, error, meta),
-    });
-  }),
+  "chat.startup": withChatStartupDiagnostics((opts) =>
+    handleChatStartupRequest(opts, handleChatHistoryRequest),
+  ),
   "chat.metadata": handleChatMetadataRequest,
 };

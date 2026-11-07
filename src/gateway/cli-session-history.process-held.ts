@@ -7,6 +7,7 @@ import type {
   ChatHistoryDisplayRequest,
   ChatHistoryDisplayResult,
 } from "../config/sessions/session-history-types.js";
+import { isNativeHistoryAuthorizationRequest } from "../config/sessions/session-history-types.js";
 import { createChatHistoryRecoveryProjection } from "./chat-display-projection.core.js";
 import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
 import type { ProcessHeldCliHistoryRequest } from "./cli-session-history.process-held.worker.js";
@@ -15,13 +16,21 @@ import { createSessionActorTranscriptReader } from "./session-transcript-memory-
 
 type MemoryHistoryRead = NonNullable<ReturnType<typeof captureSessionActorTranscriptRead>>;
 
+type NativeHistoryAuthorityAssertion = () => Promise<void>;
+
 /** Read canonical memory history from its actor while CLI matching stays in a compute worker. */
 export async function readProcessHeldCliHistory(
   params: ChatHistoryPageParams,
   signal?: AbortSignal,
   memory?: MemoryHistoryRead,
+  assertNativeHistoryAuthorized?: NativeHistoryAuthorityAssertion,
 ): Promise<ChatHistoryPage> {
-  const result = await readProcessHeldCliHistoryQuery({ kind: "rpc", params }, signal, memory);
+  const result = await readProcessHeldCliHistoryQuery(
+    { kind: "rpc", params },
+    signal,
+    memory,
+    assertNativeHistoryAuthorized,
+  );
   if (result.kind !== "rpc") {
     throw new Error("Unexpected process-held history page");
   }
@@ -31,11 +40,13 @@ export async function readProcessHeldCliHistory(
 export async function readProcessHeldCliHistoryMessage(
   params: ChatHistoryMessageParams,
   memory?: MemoryHistoryRead,
+  assertNativeHistoryAuthorized?: NativeHistoryAuthorityAssertion,
 ) {
   const result = await readProcessHeldCliHistoryQuery(
     { kind: "rpc-message", params },
     undefined,
     memory,
+    assertNativeHistoryAuthorized,
   );
   if (result.kind !== "rpc-message") {
     throw new Error("Unexpected process-held history message");
@@ -47,6 +58,7 @@ async function readProcessHeldCliHistoryQuery(
   input: ChatHistoryDisplayRequest,
   signal?: AbortSignal,
   memory?: MemoryHistoryRead,
+  assertNativeHistoryAuthorized?: NativeHistoryAuthorityAssertion,
 ): Promise<ChatHistoryDisplayResult> {
   const history = structuredClone(input);
   const params = history.params;
@@ -76,8 +88,15 @@ async function readProcessHeldCliHistoryQuery(
     async (value, { signal: requestSignal }) => {
       requestSignal.throwIfAborted();
       assertCurrent();
-      // SAFETY: The paired worker constructs this closed protocol; the host fixes and validates the source target.
-      const request = value as ProcessHeldCliHistoryRequest;
+      if (isNativeHistoryAuthorizationRequest(value)) {
+        if (!assertNativeHistoryAuthorized) {
+          throw new Error("Process-held native history requires Gateway authorization");
+        }
+        await assertNativeHistoryAuthorized();
+        assertCurrent();
+        return { input: null, timeoutMs: 60_000 };
+      }
+      const request = decodeProcessHeldHistoryRequest(value);
       const readResult =
         request.kind === "page"
           ? await readers.readSessionMessagesPageWithStatsAsync(
@@ -147,4 +166,22 @@ async function readProcessHeldCliHistoryQuery(
   );
   assertCurrent();
   return { kind: "rpc", page };
+}
+
+/** The host fixes the source target; the worker only chooses one of the closed read variants. */
+function decodeProcessHeldHistoryRequest(value: unknown): ProcessHeldCliHistoryRequest {
+  const record = asOptionalRecord(value);
+  if (
+    !record ||
+    !asOptionalRecord(record.options) ||
+    !(
+      record.kind === "page" ||
+      record.kind === "around" ||
+      (record.kind === "by-id" && typeof record.messageId === "string")
+    )
+  ) {
+    throw new Error("Unsupported process-held history request");
+  }
+  // SAFETY: The closed variant tag, required id and options record were validated above.
+  return record as ProcessHeldCliHistoryRequest;
 }

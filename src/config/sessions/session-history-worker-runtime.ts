@@ -23,6 +23,7 @@ import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import type {
   SessionHistoryDelta,
   SessionHistorySubagentFacts,
+  SessionHistoryWorkerHostRequestHandler,
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
 } from "./session-history-types.js";
@@ -113,6 +114,7 @@ function readQueuedHistory(
   key: string,
   owner: SessionHistoryWorkerDatabase,
   signal?: AbortSignal,
+  onRequest?: SessionHistoryWorkerHostRequestHandler,
 ): Promise<ForegroundHistoryResult> {
   signal?.throwIfAborted();
   const existing = queuedHistoryReads.get(key);
@@ -130,11 +132,15 @@ function readQueuedHistory(
   const operation =
     input.kind === "cold-metadata"
       ? owner.readColdMetadata({ sessionId: input.sessionId, env: input.env })
-      : owner.run(() => {
-          // Page callers cannot join a SQLite snapshot that has already started.
-          forget();
-          return input;
-        }, key.length * 2);
+      : owner.run(
+          () => {
+            // Page callers cannot join a SQLite snapshot that has already started.
+            forget();
+            return input;
+          },
+          key.length * 2,
+          onRequest,
+        );
   // Initial metadata probes share only in-flight work; queued restores bypass this map.
   void operation.then(
     (result) => {
@@ -178,6 +184,7 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         sessionId: entry.sessionId,
         updatedAt: entry.updatedAt,
         sessionStartedAt: entry.sessionStartedAt,
+        ...(entry.execHost ? { execHost: entry.execHost } : {}),
         ...(cliBinding ? { cliSessionBindings: { "claude-cli": cliBinding } } : {}),
       }
     : undefined;
@@ -235,10 +242,12 @@ type SessionHistoryPageValues = {
 export function readSessionHistoryPageInWorker<Request extends SessionHistoryWorkerRequest>(
   request: Request,
   signal?: AbortSignal,
+  onRequest?: SessionHistoryWorkerHostRequestHandler,
 ): Promise<SessionHistoryPageValues[Request["kind"]]>;
 export async function readSessionHistoryPageInWorker(
   request: SessionHistoryWorkerRequest,
   signal?: AbortSignal,
+  onRequest?: SessionHistoryWorkerHostRequestHandler,
 ) {
   signal?.throwIfAborted();
   const capturedRequest = captureHistoryRequest(request);
@@ -389,7 +398,7 @@ export async function readSessionHistoryPageInWorker(
                 ? capturedRequest.params.options.readOnly
                 : false;
       let retriedProjection = false;
-      const readPage = () => readQueuedHistory(input, key, owner, signal);
+      const readPage = () => readQueuedHistory(input, key, owner, signal, onRequest);
       try {
         if (exactArchiveRead) {
           const page = await readPage();
@@ -466,7 +475,13 @@ export async function readSessionHistoryPageInWorker(
                 readMetadata: async (phase) => {
                   const metadata =
                     phase === "initial"
-                      ? await readQueuedHistory(metadataInput, metadataKey, owner, signal)
+                      ? await readQueuedHistory(
+                          metadataInput,
+                          metadataKey,
+                          owner,
+                          signal,
+                          onRequest,
+                        )
                       : await owner.readColdMetadata({
                           sessionId: metadataInput.sessionId,
                           env,

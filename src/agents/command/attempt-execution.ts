@@ -25,7 +25,6 @@ import {
 } from "../cli-execution-auth.js";
 import { isClaudeCliProvider } from "../cli-output-records.js";
 import { runCliAgent } from "../cli-runner.js";
-import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import {
@@ -70,11 +69,12 @@ import {
   resolveHarnessAuthProfileSelection,
 } from "./attempt-auth-selection.js";
 import {
-  buildClaudeCliFallbackContextPrelude,
+  prepareCliSessionBinding,
+  prepareFallbackPrompts,
+} from "./attempt-execution.cli-session.js";
+import {
   resolveCompletionToolPolicy,
-  claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
-  rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
 import { buildCommonCommandRunParams } from "./attempt-run-params.js";
@@ -162,28 +162,10 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     completionToolPolicies !== undefined &&
     isToolAllowedByPolicies("message", Object.values(completionToolPolicies)) &&
     isRuntimeToolAllowed("message", params.opts.toolsAllow);
-  const claudeCliFallbackPrelude =
-    !isRawModelRun &&
-    params.isFallbackRetry &&
-    isClaudeCliProvider(params.originalProvider) &&
-    !isClaudeCliProvider(params.providerOverride)
-      ? await buildClaudeCliFallbackContextPrelude({
-          cliSessionId: getCliSessionBinding(params.sessionEntry, "claude-cli")?.sessionId,
-        })
-      : "";
-  const resolvedPrompt = resolveFallbackRetryPrompt({
-    body: params.body,
-    isFallbackRetry: params.isFallbackRetry,
-    sessionHasHistory: params.sessionHasHistory,
-    priorContextPrelude: claudeCliFallbackPrelude,
-  });
-  const effectivePrompt = isRawModelRun
-    ? resolvedPrompt
-    : annotateInterSessionPromptText(resolvedPrompt, params.opts.inputProvenance);
-  const embeddedExecApprovalContinuationPromptRange = rebaseExecApprovalContinuationPromptRange({
-    body: params.body,
-    prompt: effectivePrompt,
-    range: params.opts.execApprovalContinuationPromptRange,
+  const currentPrompts = await prepareFallbackPrompts({
+    run: params,
+    isRawModelRun,
+    childCwd: params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir,
   });
   const continuationTranscriptBody = params.opts.execApprovalContinuationPromptRange
     ? (params.transcriptBody ?? params.body)
@@ -375,17 +357,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
               maxOutputUtf16Units: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
             })
           : params.body;
-        const cliResolvedPrompt = params.opts.execApprovalContinuationPromptRange
-          ? resolveFallbackRetryPrompt({
-              body: cliContinuationBody,
-              isFallbackRetry: params.isFallbackRetry,
-              sessionHasHistory: params.sessionHasHistory,
-              priorContextPrelude: claudeCliFallbackPrelude,
-            })
-          : resolvedPrompt;
-        const cliEffectivePrompt = params.opts.execApprovalContinuationPromptRange
-          ? annotateInterSessionPromptText(cliResolvedPrompt, params.opts.inputProvenance)
-          : effectivePrompt;
         const cliTranscriptPrompt =
           continuationTranscriptBody === undefined || !continuationTranscriptPromptRange
             ? continuationTranscriptBody
@@ -397,10 +368,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         params.userTurnTranscriptRecorder?.replaceTextBeforePersistence?.(
           cliTranscriptPrompt ?? cliContinuationBody,
         );
-        const cliPrompt =
-          params.opts.inputProvenance?.kind === "inter_session"
-            ? cliEffectivePrompt
-            : injectTimestamp(cliEffectivePrompt, timestampOptsFromConfig(params.cfg));
         const mutableCliSessionStore =
           params.sessionKey && params.sessionStore && params.storePath
             ? {
@@ -424,31 +391,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
           params.sessionEntry = cleared ?? params.sessionEntry;
           return Boolean(cleared);
         };
-        const prepareCliSessionBinding = async () => {
-          if (!isClaudeCliProvider(cliExecutionProvider) || !cliSessionBinding?.sessionId) {
-            return;
-          }
-          if (
-            hasCliLiveSession({
-              backendId: cliExecutionProvider,
-              agentId: params.sessionAgentId,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-            }) ||
-            (await claudeCliSessionTranscriptHasContent({
-              sessionId: cliSessionBinding.sessionId,
-              workspaceDir: cliProcessCwd,
-            }))
-          ) {
-            return;
-          }
-
-          log.warn(
-            `cli session reset: provider=${sanitizeForLog(cliExecutionProvider)} reason=transcript-missing sessionKey=${params.sessionKey ?? params.sessionId}`,
-          );
-
-          await clearCliBinding();
-        };
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(
           params.sessionKey,
           params.sessionAgentId,
@@ -459,8 +401,39 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             mediaTaskIdsBefore,
             params.sessionAgentId,
           );
-        await prepareCliSessionBinding();
+        params.sessionEntry = await prepareCliSessionBinding({
+          provider: cliExecutionProvider,
+          sessionEntry: params.sessionEntry,
+          config: params.cfg,
+          agentId: params.sessionAgentId,
+          skillsSnapshot: params.skillsSnapshot,
+          cwd: cliProcessCwd,
+          cliSessionBinding,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          mutableCliSessionStore,
+          warn: (message) => log.warn(message),
+        });
         const { internalEvents, runtimeContextFragments: supplementalContext } = params.opts;
+        // Compose the prompt after the last await before the runner handoff so a native prelude
+        // revoked during binding preparation is dropped. The runner still awaits its own
+        // preparation before the provider request; that window is not rechecked here.
+        const cliPrompts = currentPrompts();
+        const cliResolvedPrompt = params.opts.execApprovalContinuationPromptRange
+          ? resolveFallbackRetryPrompt({
+              body: cliContinuationBody,
+              isFallbackRetry: params.isFallbackRetry,
+              sessionHasHistory: params.sessionHasHistory,
+              priorContextPrelude: cliPrompts.priorContextPrelude,
+            })
+          : cliPrompts.resolvedPrompt;
+        const cliEffectivePrompt = params.opts.execApprovalContinuationPromptRange
+          ? annotateInterSessionPromptText(cliResolvedPrompt, params.opts.inputProvenance)
+          : cliPrompts.effectivePrompt;
+        const cliPrompt =
+          params.opts.inputProvenance?.kind === "inter_session"
+            ? cliEffectivePrompt
+            : injectTimestamp(cliEffectivePrompt, timestampOptsFromConfig(params.cfg));
         // Retain the cleared binding as the preparation candidate so missing-transcript
         // recovery can reseed history without resuming the stale CLI session.
         let result: EmbeddedAgentRunResult;
@@ -630,6 +603,8 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     );
   }
 
+  // Selection may have changed during the awaited preparation above: re-derive at the runner handoff.
+  const embeddedPrompts = currentPrompts();
   const embeddedRunParams: RunEmbeddedAgentInternalParams = {
     ...buildCommonCommandRunParams(params, { disableTools, bootstrapPromptWarningSignaturesSeen }),
     sandboxSessionKey: params.sessionKey,
@@ -647,7 +622,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     agentHarnessRuntimePreparationHint:
       agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
-    prompt: effectivePrompt,
+    prompt: embeddedPrompts.effectivePrompt,
     transcriptPrompt: continuationTranscriptBody,
     // CLI retries cannot replay a persisted turn after orphan-user repair removes it.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
@@ -665,7 +640,8 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     verboseLevel: params.resolvedVerboseLevel,
     execSession: params.sessionEntry,
     sessionPromptDelivery: params.sessionEntry?.delivery,
-    execApprovalContinuationPromptRange: embeddedExecApprovalContinuationPromptRange,
+    execApprovalContinuationPromptRange:
+      embeddedPrompts.embeddedExecApprovalContinuationPromptRange,
     execApprovalContinuationTranscriptPromptRange: continuationTranscriptPromptRange,
     // Hidden internal runs lack an event consumer; visible lanes still feed UI and parent relays.
     suppressLiveStreamOutput:

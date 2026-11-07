@@ -133,6 +133,7 @@ function claudeCliSessionTranscriptPath(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
   homeDir?: string;
+  projectsRoot?: string;
 }): string | null {
   const sessionId = normalizeClaudeCliSessionId(params.sessionId);
   if (!sessionId) {
@@ -146,6 +147,7 @@ function claudeCliSessionTranscriptPath(params: {
     resolveClaudeCliProjectDirForWorkspace({
       workspaceDir,
       homeDir: params.homeDir,
+      projectsRoot: params.projectsRoot,
     }),
     `${sessionId}.jsonl`,
   );
@@ -346,6 +348,10 @@ function formatFallbackTurns(
 export async function buildClaudeCliFallbackContextPrelude(params: {
   cliSessionId: string | undefined;
   homeDir?: string;
+  cwd?: string;
+  projectsRoot?: string;
+  /** Live native-root authority; rechecked after every awaited discovery or read step. */
+  assertNativeHistoryAuthorized?: () => Promise<void>;
 }): Promise<string> {
   const sessionId = params.cliSessionId?.trim();
   if (!sessionId) {
@@ -354,10 +360,14 @@ export async function buildClaudeCliFallbackContextPrelude(params: {
   const seed = await readClaudeCliFallbackSeed({
     cliSessionId: sessionId,
     homeDir: params.homeDir,
+    cwd: params.cwd,
+    projectsRoot: params.projectsRoot,
+    assertNativeHistoryAuthorized: params.assertNativeHistoryAuthorized,
   });
   if (!seed) {
     return "";
   }
+  await params.assertNativeHistoryAuthorized?.();
   const heading = "## Prior session context (from claude-cli)";
   const sections: string[] = [heading];
   let remaining = CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET - heading.length;

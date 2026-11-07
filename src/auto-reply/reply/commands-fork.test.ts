@@ -9,6 +9,7 @@ import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import * as chatHistoryPages from "../../gateway/server-methods/chat-history-pages.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
 import {
   getSessionBindingService,
@@ -446,6 +447,32 @@ it("forks an active source only through its completed prefix", async () => {
       }
     } finally {
       operation.complete();
+    }
+  });
+});
+
+it("does not publish native fork history revoked during thread creation", async () => {
+  await withOpenClawTestState({ label: "fork-native-history-authority" }, async (state) => {
+    const { cfg } = await createForkSource(state);
+    let current = true;
+    const read = vi
+      .spyOn(chatHistoryPages, "readChatHistoryPage")
+      .mockImplementation(async (_params, _signal, _displayProjector, retainAuthorization) => {
+        retainAuthorization?.(() => current);
+        return { messages: [{ role: "user", content: "Revoked native context" }] };
+      });
+    inspectNativeCreate = async () => {
+      current = false;
+    };
+    try {
+      const request = params();
+      request.cfg = cfg;
+      const outcome = await handleForkCommand(request, true);
+      expect(records).toHaveLength(1);
+      expect(outcome?.reply?.text).toContain("recap was not delivered");
+      expect(sends).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
     }
   });
 });

@@ -22,6 +22,7 @@ import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
   getActiveSkillEnvKeysCore,
+  resolveSkillEnvOverridesFromSnapshot,
 } from "../runtime/env-overrides.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { SkillEntry, SkillSnapshot } from "../types.js";
@@ -334,6 +335,12 @@ describe("applySkillEnvOverrides", () => {
       const restoreSecond = applySkillEnvOverrides({ skills: entries, config });
 
       try {
+        expect(
+          resolveSkillEnvOverridesFromSnapshot({
+            snapshot: { prompt: "", skills: [{ name: "env-skill", primaryEnv: "ENV_KEY" }] },
+            config: { skills: { entries: { "env-skill": { [apiKeyField]: "later-value" } } } },
+          }),
+        ).toEqual({ ENV_KEY: "injected" });
         expect(process.env.ENV_KEY).toBe("injected");
         expect(getActiveSkillEnvKeysCore().has("ENV_KEY")).toBe(true);
 

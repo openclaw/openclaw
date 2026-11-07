@@ -618,7 +618,7 @@ changes continue to reuse the native session when the backend can resend the pro
 
 ## Fallback prelude from claude-cli sessions
 
-A `claude-cli` attempt can fail over to a non-CLI candidate in [`agents.defaults.model.fallbacks`](/concepts/model-failover). OpenClaw then seeds the next attempt with a context prelude harvested from Claude Code's local JSONL transcript. That transcript lives under `~/.claude/projects/`, keyed per workspace. This supplies CLI-owned context that may not be present in OpenClaw's SQLite session transcript.
+A `claude-cli` attempt can fail over to a non-CLI candidate in [`agents.defaults.model.fallbacks`](/concepts/model-failover). OpenClaw then seeds the next attempt with a context prelude harvested from Claude Code's local JSONL transcript. That transcript lives under `$CLAUDE_CONFIG_DIR/projects/` when `CLAUDE_CONFIG_DIR` is set, or `~/.claude/projects/` otherwise, keyed per workspace. This supplies CLI-owned context that may not be present in OpenClaw's SQLite session transcript.
 
 - The prelude prefers the latest `/compact` summary or `compact_boundary` marker, then appends the most recent post-boundary turns up to a char budget. Pre-boundary turns are dropped because the summary already represents them.
 - Tool blocks are coalesced to compact `(tool call: name)` and `(tool result: …)` hints to keep the prompt budget honest. An oversized summary is truncated and labeled `(truncated)`.
@@ -917,6 +917,35 @@ Set `CLAUDE_CONFIG_DIR` in the Gateway's environment to give its local `claude-c
 runs a dedicated Claude configuration directory. OpenClaw passes this variable
 through to the installed `claude` process. Use absolute paths and restart the
 Gateway after changing its environment.
+
+Transcript checks, fallback context, and imported chat history use the effective
+child environment, including backend and skill overrides. Doctor diagnostics use
+the environment of the Doctor process; run Doctor with the same configuration
+directory selected. Neither path searches the default `~/.claude` directory when
+another directory is selected.
+
+Prefer an absolute path. Claude Code resolves relative values against its own
+working directory, which can differ from the Gateway's working directory.
+Empty values and spaces are preserved: an empty value selects the working
+directory, and spaces are part of the path. Unset the variable to restore the
+`~/.claude` default.
+
+After a successful Claude CLI turn, OpenClaw retains the absolute transcript root
+with the native session binding so fallback and chat history can locate it after
+a restart. The stored working directory does not authorize a former relative root.
+Existing bindings without a transcript root use the current session or agent
+configuration; a subsequent successful turn records the selected root.
+
+Retained Claude native history is readable only while the retained transcript root
+remains authorized by the currently effective Claude profile/root. A changed profile
+is rejected before native-history I/O. The check uses the current backend and skill
+environment selection, including cleared variables; a past per-turn override alone
+does not authorize a later read. Canonical OpenClaw history remains available.
+For relative or empty configuration directories, the current child working directory
+also determines the authorized root. A changed working directory cannot keep the
+former relative root authorized through the binding's historical directory.
+For paired-node sessions, the node owns native history: Gateway history imports,
+fallbacks, and resume checks do not read Gateway-local Claude files for that binding.
 
 For a separate login, run these commands as the Gateway's OS user, then set the
 same `CLAUDE_CONFIG_DIR` on the Gateway:

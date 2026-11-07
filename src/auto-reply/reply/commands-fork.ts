@@ -298,6 +298,7 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
       const { readChatHistoryPage } =
         await import("../../gateway/server-methods/chat-history-pages.js");
       // Use the committed child snapshot, including a busy source's completed-prefix selection.
+      let isNativeHistoryCurrent: (() => boolean) | undefined;
       const history = await readChatHistoryPage(
         {
           entry: created.entry,
@@ -313,6 +314,10 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
           messageId: undefined,
         },
         params.opts?.abortSignal,
+        undefined,
+        (isCurrent) => {
+          isNativeHistoryCurrent = isCurrent;
+        },
       );
       assertCurrent();
       const destination = await prepared.create(childKey);
@@ -355,7 +360,14 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
         // model-visible copy of the inherited excerpts.
         mirror: true,
         replyKind: "final",
-        assertCurrent,
+        assertCurrent: composeSessionSourceAssertion([
+          assertCurrent,
+          captureExternalSessionCommitGuard(() => {
+            if (isNativeHistoryCurrent && !isNativeHistoryCurrent()) {
+              throw new Error("Native history selection changed; request a fresh fork recap.");
+            }
+          }),
+        ]),
         abortSignal: params.opts?.abortSignal,
       });
       const location = destination.url ?? binding.conversation.conversationId;

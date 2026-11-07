@@ -28,7 +28,7 @@ import { bindAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
-import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
+import { resolveSkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import {
   getAdmittedRunDelegatedAuthority,
   resolveAdmittedRunActiveAssertion,
@@ -56,26 +56,22 @@ class CliHistoryOwnerChangedError extends Error {
 }
 
 /**
- * Execution layers the run's skill env overrides onto the process environment right before it
- * builds the child environment. Apply the same snapshot here, synchronously, so preparation
- * resolves the login the child will actually run under.
+ * Project the run's skill environment through the child environment owner without changing
+ * Gateway process state while preparation resolves the child's native login.
  */
 function resolvePreparedChildEnv(
   params: PreparedCliRunContext["params"],
   preparedBackend: Parameters<typeof resolveCliChildEnv>[0],
 ): Record<string, string> {
-  const restoreSkillEnv =
-    params.skillsSnapshot && !params.controlOperation
-      ? applySkillEnvOverridesFromSnapshot({
+  return resolveCliChildEnv(preparedBackend, {
+    ...params,
+    skillEnv: !params.controlOperation
+      ? resolveSkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
           config: params.config,
         })
-      : undefined;
-  try {
-    return resolveCliChildEnv(preparedBackend, params).env;
-  } finally {
-    restoreSkillEnv?.();
-  }
+      : undefined,
+  }).env;
 }
 
 /** The transcript a turn may read saved inputs from: none when it runs without saved history. */

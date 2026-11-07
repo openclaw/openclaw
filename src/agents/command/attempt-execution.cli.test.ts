@@ -48,9 +48,7 @@ import {
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
-import { buildCliRunResult } from "../cli-runner/cli-run-settlement.js";
 import { buildCliMcpGrantContext } from "../cli-runner/mcp-grant-context.js";
-import { prepareCliRunTerminalReply } from "../cli-runner/terminal-reply.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
 import { createCronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
@@ -71,7 +69,15 @@ import {
   SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES,
 } from "./attempt-execution.announce.test-support.js";
 import {
+  makeClaudeCliSessionEntry,
+  registerClaudeConfigDirAttemptTests,
+} from "./attempt-execution.claude-config-dir.test-support.js";
+import { registerClaudeCliHistoryHandoffTests } from "./attempt-execution.cli-history-handoff.test-support.js";
+import {
   cliRuntimeConfig,
+  cliRetry,
+  persistFork,
+  settledCliResult,
   CLI_BINDING_SETTLEMENT_OUTCOMES,
   createCliBindingSettlementCase,
   registerCommandCliAdmissionTests,
@@ -187,37 +193,6 @@ function firstRunCliAgentArg(callIndex = 0) {
 
 function firstEmbeddedAgentArg(callIndex = 0) {
   return requireMockArg(runEmbeddedAgentMock, callIndex, "embedded OpenClaw agent argument");
-}
-
-function cliRetry(run: RunCliAgentParams, sessionId: string, fork = false) {
-  return expectDefined(
-    fork ? run.onBeforeForkedCliSessionRetry : run.onBeforeFreshCliSessionRetry,
-    fork ? "fork recovery" : "fresh recovery",
-  )({ provider: "claude-cli", reason: "timeout", sessionId });
-}
-
-async function persistFork(run: RunCliAgentParams, sessionId: string) {
-  await expectDefined(run.claimCliSessionFork, "fork claim")();
-  await expectDefined(run.persistCliSessionForkSuccessor, "fork persistence")(sessionId);
-}
-
-function settledCliResult(
-  context: Parameters<typeof buildCliRunResult>[0]["context"],
-  output: Parameters<typeof buildCliRunResult>[0]["output"],
-  effectiveCliSessionId: string,
-  bindingFlushOk = true,
-) {
-  return buildCliRunResult({
-    context,
-    output,
-    preparedReply: prepareCliRunTerminalReply(context, output),
-    effectiveCliSessionId,
-    bindingFlushOk,
-    usedHistoryPrompt: false,
-    userTurnHandled: true,
-    sessionBindingDisabled: false,
-    preparedContextAgentMeta: {},
-  });
 }
 
 describe("CLI attempt execution", () => {
@@ -1015,23 +990,38 @@ describe("CLI attempt execution", () => {
     }
   });
 
-  function makeClaudeCliSessionEntry(
-    openclawSessionId: string,
-    cliSessionId: string,
-  ): SessionEntry {
+  function getClaudeConfigDirAttemptFixture() {
     return {
-      sessionId: openclawSessionId,
-      updatedAt: Date.now(),
-      cliSessionBindings: {
-        "claude-cli": {
-          sessionId: cliSessionId,
-          authProfileId: "anthropic:claude-cli",
-        },
-      },
-      cliSessionIds: { "claude-cli": cliSessionId },
-      claudeCliSessionId: cliSessionId,
+      getTmpDir: () => tmpDir,
+      readSessionStore,
+      createCliSession,
+      runFallbackAttempt: runOpenClawEmbeddedAttemptForTest,
+      setRunCliAgentImplementation: runCliAgentMock.mockImplementationOnce.bind(runCliAgentMock),
+      firstRunCliAgentArg,
     };
   }
+
+  registerClaudeCliHistoryHandoffTests({
+    getRoot: () => tmpDir,
+    runFallback: async (cwd, sessionEntry) => {
+      const sessionKey = "agent:main:cli-history-handoff";
+      const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("fallback complete"));
+      await runStoredAttempt({
+        cwd,
+        sessionEntry,
+        sessionKey,
+        sessionStore,
+        originalProvider: "claude-cli",
+        providerOverride: "google",
+        modelOverride: "gemini-3.1-pro-preview",
+        cfg: cliRuntimeConfig("google/gemini-3.1-pro-preview", "google-gemini-cli"),
+        isFallbackRetry: true,
+        body: "Continue at handoff",
+      });
+      return firstRunCliAgentArg().prompt;
+    },
+  });
 
   it("preserves and resumes a valid Claude CLI binding after format failover", async () => {
     const sessionKey = "agent:main:subagent:cli-format";
@@ -1326,6 +1316,8 @@ describe("CLI attempt execution", () => {
     expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
     expect(claudeBinding(readSessionStore()[sessionKey])?.sessionId).toBe(cliSessionId);
   });
+
+  registerClaudeConfigDirAttemptTests(getClaudeConfigDirAttemptFixture);
 
   it("clears the persisted Claude CLI binding but still forwards the candidate when the stored transcript is missing", async () => {
     const sessionKey = "agent:main:direct:claude-missing-transcript";

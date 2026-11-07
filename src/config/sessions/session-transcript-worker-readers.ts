@@ -1,9 +1,9 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { CombinedSessionStoreTopologyRequest } from "./combined-store.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
+import type { SessionHistoryWorkerHostRequestHandler } from "./session-history-types.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import {
   measureSessionStoreTargetInventoryInputBytes,
@@ -34,7 +34,7 @@ export type SessionHistoryWorkerRequestRunner = <
   inputBytes: number,
   receive: (value: SessionTranscriptWorkerValues[Request["kind"]]) => TResult,
   signal?: AbortSignal,
-  onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
+  onRequest?: SessionHistoryWorkerHostRequestHandler,
   timeoutMs?: number,
 ) => Promise<TResult>;
 
@@ -311,8 +311,8 @@ const readers: Readers & ThisType<ReaderContext> = {
     (input) => ({ kind: "session-activity-summary-source", ...input }),
     (value) => value.source,
   ),
-  async run(prepare, inputBytes) {
-    return this.runRequest(prepare, inputBytes, (value) => value);
+  async run(prepare, inputBytes, onRequest) {
+    return this.runRequest(prepare, inputBytes, (value) => value, undefined, onRequest);
   },
   async readTranscript(input, signal) {
     const caller = input.caller ?? getSessionTranscriptHydrationCaller();

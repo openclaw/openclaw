@@ -3,6 +3,7 @@ import type {
   ChatHistoryDisplayResult,
   SessionHistorySubagentFacts,
 } from "../config/sessions/session-history-types.js";
+import { NATIVE_HISTORY_AUTHORIZATION_REQUEST } from "../config/sessions/session-history-types.js";
 import type { WorkerTaskChannel } from "../infra/worker-task-server.js";
 import type { CliHistoryReaders } from "./cli-session-history.js";
 import { createPreparedSessionHistorySubagentProjection } from "./session-history-delta-visibility.js";
@@ -46,6 +47,10 @@ export async function readProcessHeldCliHistoryInWorker(
     }
   };
   const readers: CliHistoryReaders = {
+    assertNativeHistoryAuthorized: async () => {
+      const response = await channel.request(NATIVE_HISTORY_AUTHORIZATION_REQUEST);
+      response.consumed();
+    },
     subagentCoordination: {
       isSubagentSession: (key) => subagents.isSubagentSession(key),
       isSubagentRunMessage: (runId, seq) => subagents.isSubagentRunMessage(runId, seq),
