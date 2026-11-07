@@ -352,11 +352,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   line-height: 1.45;
 }
 
-.oc-banner-action {
-  margin-left: auto;
-  flex: 0 0 auto;
-}
-
 .oc-empty {
   display: grid;
   min-height: 12rem;
@@ -573,6 +568,11 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 .settings-page.oc-app-surface .btn.oc-action.primary:hover:not(:disabled, [aria-disabled="true"]) {
   border-color: var(--primary-hover);
   background: var(--primary-hover);
+  color: var(--primary-foreground);
+}
+
+.settings-page.oc-app-surface .btn.oc-action.primary:active:not(:disabled, [aria-disabled="true"]) {
+  background: var(--primary-active);
   color: var(--primary-foreground);
 }
 

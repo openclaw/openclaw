@@ -305,6 +305,59 @@ export const iconData = {
     ["path", { d: "M12 7v4" }],
     ["path", { d: "M16 7v9" }],
   ]),
+  // Preserve the approved artwork’s viewBox and optical stroke weights.
+  blobster: {
+    attributes: {
+      viewBox: "0 0 46 45",
+      fill: "none",
+      stroke: "currentColor",
+    },
+    children: [
+      [
+        "path",
+        {
+          d: "m39.6 18.4c-0.61 0-1.2 0.11-1.68 0.29-0.03 0.01-0.07-0.01-0.08-0.05-1.33-7.67-7.65-13.08-14.84-13.08s-13.51 5.41-14.84 13.08c-0.01 0.04-0.05 0.06-0.08 0.05-0.48-0.18-1.07-0.29-1.64-0.29-1.95 0-3.37 1.45-3.37 3.48s1.24 4.03 3.44 4.03c0.56 0 1.1-0.1 1.49-0.22 0.07-0.02 0.14 0.02 0.15 0.09 0.98 5.59 4.66 10.04 8.89 11.84 0.04 0.02 0.06 0.06 0.06 0.1v2.89c0 0.28 0.21 0.48 0.48 0.48h2.64c0.27 0 0.47-0.2 0.47-0.48v-2.17c0-0.06 0.05-0.1 0.11-0.09 0.73 0.07 1.46 0.1 2.2 0.1 0.75 0 1.5-0.04 2.16-0.1 0.07-0.01 0.13 0.04 0.13 0.1v2.16c0 0.28 0.24 0.48 0.51 0.48h2.6c0.29 0 0.49-0.2 0.49-0.48v-2.89c0-0.04 0.03-0.08 0.07-0.1 4.49-2.09 8-6.48 8.85-11.83 0.01-0.07 0.08-0.11 0.15-0.09 0.45 0.13 0.99 0.21 1.58 0.21 2.22 0 3.38-2.11 3.38-4.03 0-2.11-1.54-3.48-3.32-3.48z",
+          "stroke-width": "1.2",
+        },
+      ],
+      [
+        "circle",
+        {
+          cx: "17.48",
+          cy: "14.51",
+          r: "1.819",
+          fill: "currentColor",
+          stroke: "none",
+        },
+      ],
+      [
+        "circle",
+        {
+          cx: "28.49",
+          cy: "14.51",
+          r: "1.819",
+          fill: "currentColor",
+          stroke: "none",
+        },
+      ],
+      [
+        "path",
+        {
+          d: "m17.09 6.63c-1.14-2.5-3.68-3.29-5.21-2.67",
+          "stroke-width": "1.423",
+          "stroke-linecap": "round",
+        },
+      ],
+      [
+        "path",
+        {
+          d: "m28.91 6.63c1.21-2.5 3.68-3.29 5.18-2.67",
+          "stroke-width": "1.423",
+          "stroke-linecap": "round",
+        },
+      ],
+    ],
+  },
   bot: strokeIconData([
     ["path", { d: "M12 8V4H8" }],
     ["rect", { width: "16", height: "12", x: "4", y: "8", rx: "2" }],
@@ -396,6 +449,17 @@ export const iconData = {
     ["path", { d: "M12 16v-4" }],
     ["path", { d: "M12 8h.01" }],
   ]),
+  // Lucide circle-check, circle-alert and loader-circle (ISC).
+  circleCheck: strokeIconData([
+    ["circle", { cx: "12", cy: "12", r: "10" }],
+    ["path", { d: "m9 12 2 2 4-4" }],
+  ]),
+  circleAlert: strokeIconData([
+    ["circle", { cx: "12", cy: "12", r: "10" }],
+    ["line", { x1: "12", x2: "12", y1: "8", y2: "12" }],
+    ["line", { x1: "12", x2: "12.01", y1: "16", y2: "16" }],
+  ]),
+  loaderCircle: strokePathData("M21 12a9 9 0 1 1-6.219-8.56"),
   square: strokeIconData([["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }]]),
   play: strokeIconData([["polygon", { points: "6 3 20 12 6 21 6 3" }]]),
   pause: strokeIconData([

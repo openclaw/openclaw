@@ -22,6 +22,7 @@ suite.define(() =>
     "locks and restores bindings during Reload (read failure: %s)",
     (failFirstRead) =>
       suite.withPage({ viewport: { width: 1280, height: 1000 } }, async ({ page }) => {
+        await page.clock.install();
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "config.get": snapshot,
@@ -42,10 +43,8 @@ suite.define(() =>
         const agentBinding = section.getByRole("combobox", { name: "Binding", exact: true });
         const expectEditor = async (node: string, disabled: boolean) => {
           await expect.poll(() => binding.isDisabled()).toBe(disabled);
-          expect(await Promise.all([binding.inputValue(), agentBinding.isDisabled()])).toEqual([
-            node,
-            disabled,
-          ]);
+          expect(await binding.inputValue()).toBe(node);
+          expect(await agentBinding.isDisabled()).toBe(disabled);
         };
         await expect.poll(() => binding.inputValue()).toBe("disk-node");
         await gateway.deferNext("config.set");
@@ -84,16 +83,17 @@ suite.define(() =>
 
         await gateway.deferNext("config.set");
         await binding.selectOption("new-node");
-        const saved = requireRecord(
-          (await gateway.waitForRequest("config.set", { after: 1 })).params,
-        );
+        const savedRequest = await gateway.waitForRequest("config.set", { after: 1 });
+        const saved = requireRecord(savedRequest.params);
         expect(saved.baseHash).toBe("persisted-revision");
         expect(JSON.parse(String(saved.raw))).toEqual({
           ...config,
           tools: { exec: { node: "new-node" } },
         });
         await gateway.resolveDeferred("config.set");
-        await expect.poll(() => indicator.textContent()).toContain("Apply changes");
+        await expect
+          .poll(() => page.clock.runFor(1_000).then(() => indicator.textContent()))
+          .toContain("Apply changes");
         await expectEditor("new-node", false);
       }),
   ),

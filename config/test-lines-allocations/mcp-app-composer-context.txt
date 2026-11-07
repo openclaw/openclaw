@@ -1,0 +1,2 @@
+# Covers MCP App route ownership and composer rebinding after pane identity changes.
+13

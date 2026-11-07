@@ -1,3 +1,4 @@
+import { url as inspectorUrl } from "node:inspector";
 import { performance } from "node:perf_hooks";
 import { isMainThread, MessageChannel, receiveMessageOnPort, Worker } from "node:worker_threads";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
@@ -5,6 +6,7 @@ import {
   resolveRuntimeWorkerThreadExecArgv,
   resolveRuntimeWorkerUrl,
 } from "../infra/runtime-worker-url.js";
+import { hasProfilerConflict } from "./diagnostic-profile.js";
 
 type KernelSample = {
   at: number;
@@ -27,8 +29,12 @@ export function createStallKernelRecorder(
   if (!isMainThread) {
     return undefined;
   }
-  const heartbeat = new BigInt64Array(new SharedArrayBuffer(8));
-  const beat = () => Atomics.store(heartbeat, 0, BigInt(Math.floor(performance.now())));
+  const heartbeat = new BigInt64Array(new SharedArrayBuffer(16));
+  const profiling = hasProfilerConflict();
+  const beat = () => {
+    Atomics.store(heartbeat, 1, profiling || inspectorUrl() ? 1n : 0n);
+    Atomics.store(heartbeat, 0, BigInt(Math.floor(performance.now())));
+  };
   beat();
   const { port1, port2 } = new MessageChannel();
   let worker: Worker | undefined;
@@ -43,7 +49,12 @@ export function createStallKernelRecorder(
     const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.stallObserver);
     worker = new Worker(workerUrl, {
       execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
-      workerData: { heartbeat: heartbeat.buffer, port: port2, packageRoot },
+      workerData: {
+        heartbeat: heartbeat.buffer,
+        port: port2,
+        packageRoot,
+        timeOrigin: performance.timeOrigin,
+      },
       transferList: [port2],
     });
     worker.on("error", () => {

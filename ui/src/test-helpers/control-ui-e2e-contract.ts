@@ -88,6 +88,8 @@ type GatewayMethods = {
   setOperatorScopes: (scopes: string[]) => void;
   setHistoryMessages: (messages: unknown[]) => void;
   setMethodResponse: (method: string, payload: unknown) => void;
+  /** Applies to subsequent requests; clearing a forever delay also releases its held handlers. */
+  setMethodDelay: (method: string, delayMs: number | "forever" | null) => void;
   setSessionsListResponse: (payload: MockSessionsListResponse) => void;
   setSessionSharingPolicy: (policy: {
     allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
@@ -99,6 +101,11 @@ export type ControlUiMockGateway = GatewayMethods & {
   /** Commit one fixture-owned visibility change without replacing the canonical roster. */
   setSessionVisibility: ReturnType<typeof createControlUiSessionFixtures>["setVisibility"];
   readonly online: boolean;
+  readonly sessionListResponseFacts: {
+    replies: readonly { child: boolean; rows: number }[];
+    truncated: boolean;
+    unavailableReplies: number;
+  };
   requests: MockGatewayRequest[];
   emit: (event: string, payload?: unknown) => void;
   findRequests: (

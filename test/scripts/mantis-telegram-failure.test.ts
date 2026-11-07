@@ -6,9 +6,11 @@ import { afterEach, expect, it } from "vitest";
 import {
   createRequestReceipt,
   createTelegramFailureDiagnostic,
+  type TelegramFailureDiagnostic,
 } from "../../scripts/mantis/request-proof.ts";
+import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { identity, makeIngress } from "./mantis-telegram.test-support.js";
+import { identity } from "./mantis-telegram.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -89,56 +91,45 @@ it("isolates diagnostic-only archives", async () => {
   }
 });
 
-it.each([
+it.for([
   "scope_rejected",
   "malformed_request",
   "upstream_failure",
   "network_failure",
   "authority_unavailable",
-] as const)("redacts and bounds %s diagnostics through ingress", async (expected) => {
-  const root = tempDirs.make("sock-");
-  const fixture = await makeIngress(root, {
-    lease: {
-      assertHealthy() {
-        if (expected === "authority_unavailable") {
-          throw new Error("private expired lease");
-        }
+] as const)(
+  "records %s through the real ingress without raw error or request data",
+  async (expected, { signal }) => {
+    const root = tempDirs.make(`ingress-${"nested-".repeat(20)}`);
+    const result = await runNodeScript(
+      [path.resolve("test/scripts/fixtures/mantis-telegram-failure.mts"), expected],
+      process.env,
+      undefined,
+      {
+        cwd: root,
+        signal,
+        maxBuffer: 64 * 1024,
+        requireProcessTreeExit: process.platform !== "win32",
       },
-      whenUnhealthy: new Promise<Error>(() => {}),
-    },
-    fetchImpl: async () => {
-      if (expected === "network_failure") {
-        throw new Error("private network secret");
-      }
-      return new Response("private upstream secret", { status: 500 });
-    },
-  });
-  try {
-    const { ingress } = fixture;
-    const request = () =>
-      fixture.request(
-        "getMe",
-        expected === "malformed_request" ? "private-not-json" : {},
-        expected === "scope_rejected" ? "/private-wrong-capability" : undefined,
-      );
-    expect(await request()).toBe(403);
-    expect(ingress.getDiagnostics().some((entry) => entry.category === expected)).toBe(true);
-    expect(JSON.stringify(ingress.getDiagnostics())).not.toMatch(/private|token|secret/);
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    const observations: {
+      statuses: number[];
+      initialDiagnostics: TelegramFailureDiagnostic[];
+      diagnostics: TelegramFailureDiagnostic[];
+      retainedCount: number;
+    } = JSON.parse(result.stdout);
+    expect(observations.statuses).toEqual(Array<number>(21).fill(403));
+    expect(observations.initialDiagnostics.some((entry) => entry.category === expected)).toBe(true);
     if (expected === "authority_unavailable") {
-      expect(ingress.getDiagnostics()).toEqual([
+      expect(observations.initialDiagnostics).toEqual([
         { sequence: 1, category: "authority_unavailable" },
       ]);
-      for (let i = 0; i < 20; i++) {
-        await request();
-      }
-      const diagnostic = createTelegramFailureDiagnostic(identity, ingress.getDiagnostics());
-      expect(diagnostic.diagnostics).toHaveLength(16);
-      expect(JSON.stringify(diagnostic)).not.toMatch(/private|token|secret/);
-      const copy = ingress.getDiagnostics();
-      copy.splice(0);
-      expect(ingress.getDiagnostics()).toHaveLength(16);
     }
-  } finally {
-    await fixture.close();
-  }
-});
+    const diagnostic = createTelegramFailureDiagnostic(identity, observations.diagnostics);
+    expect(diagnostic.diagnostics).toHaveLength(16);
+    expect(JSON.stringify(diagnostic)).not.toMatch(/private|token|secret/);
+    expect(observations.retainedCount).toBe(16);
+  },
+);

@@ -141,6 +141,8 @@ describe("production lint suppressions", () => {
         "extensions/browser/src/browser/pw-tools-core.activity.ts|unicorn/prefer-dom-node-text-content|1",
         "extensions/codex/session-history-worker-runtime.ts|no-warning-comments|1",
         "extensions/codex/src/app-server/run-attempt-turn-request.ts|preserve-caught-error|1",
+        // Persisted research receipts omit undefined fields exactly as JSON encoding does.
+        "extensions/deep-research/src/job-state.ts|unicorn/prefer-structured-clone|1",
         "extensions/diffs/src/viewer-client.ts|eslint/no-underscore-dangle|1",
         // Markdown rendering sorts fresh private arrays without copying them again.
         "extensions/discord/src/markdown.ts|unicorn/no-array-sort|2",
@@ -162,6 +164,8 @@ describe("production lint suppressions", () => {
         "extensions/x/src/thread.ts|unicorn/no-array-sort|2",
         // The memory census attributes RSS only to the pinned Playwright browser's child tree.
         "scripts/bench-control-ui-engines.ts|no-underscore-dangle|1",
+        // Read rendered content so parked Chat panes cannot satisfy readiness evidence.
+        "scripts/bench-control-ui-rpc-hostage.ts|unicorn/prefer-dom-node-text-content|1",
         // The Talk readiness probe calls the saved media method with its original receiver.
         "scripts/bench-control-ui-talk.ts|typescript/unbound-method|1",
         // The fault observer preserves methods for restoration and supplies each database receiver through .call.
@@ -172,8 +176,14 @@ describe("production lint suppressions", () => {
         // Pinned Playwright exposes WebKit Inspector only through its private connection/session fields.
         "scripts/lib/control-ui-engine-memory.ts|no-underscore-dangle|3",
         "scripts/lib/control-ui-engine-metrics.ts|no-underscore-dangle|3",
+        // The Terminal output probe forwards native fillText with its original canvas receiver.
+        "scripts/lib/control-ui-engine-page-scenarios.ts|typescript/unbound-method|1",
         // The streaming probe forwards native methods with their original receivers.
         "scripts/lib/control-ui-engine-streaming-scenarios.ts|typescript/unbound-method|2",
+        // The heavy-row probe forwards native image decoding with its original image receiver.
+        "scripts/lib/control-ui-heavy-window-scenarios.ts|typescript/unbound-method|1",
+        // The diagnostic observer restores native methods and forwards their original receiver.
+        "scripts/lib/control-ui-mutation-audit.ts|typescript/unbound-method|2",
         // The scheduling probe forwards native methods with the original call receiver through Reflect.apply.
         "scripts/lib/control-ui-resource-counts.ts|typescript/unbound-method|8",
         // The Talk probe forwards native playback, analyser, processor, start, and stop methods with their original receivers.
@@ -195,6 +205,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/command-capture-pool-retention.ts|typescript/unbound-method|2",
         // The diagnostics probe restores Session.post and invokes it with its live receiver.
         "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
+        // Node BroadcastChannel.postMessage has no target-origin parameter.
+        "scripts/perf/gateway-runtime-exit-listeners-preload.mjs|unicorn/require-post-message-target-origin|1",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
         // The stack probe compares V8's formatter callback identity without invoking it.
@@ -426,6 +438,8 @@ describe("production lint suppressions", () => {
         "ui/src/pages/logs/view.tsx|solid/no-react-specific-props|1",
         // Session commands relay the owner's original error so the display boundary can format it.
         "ui/src/pages/sessions/view.tsx|typescript/only-throw-error|1",
+        // Pinned WebKit Inspector is the only API that includes detached CSS animations.
+        "ui/src/test-helpers/control-ui-webkit-animations.ts|no-underscore-dangle|1",
       ].filter((entry) => fs.existsSync(path.join(repoRoot, entry.split("|", 1)[0]!))),
     );
   });

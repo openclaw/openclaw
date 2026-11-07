@@ -137,6 +137,7 @@ function classifyProcessArtifactCustody(
     pid,
     cwd: cwd ?? "",
     serviceMarker: command.serviceMarker,
+    serviceMarkerUnavailable: command.serviceMarkerUnavailable,
     additionalEntrypoints: workerEntrypoints,
     inspectPackage: true,
   };
@@ -416,10 +417,11 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
       }
       ancestors.add(parentPid);
       if ("argv" in parent.command) {
-        const { argv, serviceMarker } = parent.command;
+        const { argv, serviceMarker, serviceMarkerUnavailable } = parent.command;
         const identity = classifyOpenClawArgv(argv, {
           pid: parentPid,
           serviceMarker,
+          serviceMarkerUnavailable,
           cwd: directories.get(parentPid) ?? "",
           additionalEntrypoints: workerEntrypoints,
         });

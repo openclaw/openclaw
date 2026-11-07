@@ -43,6 +43,7 @@ import { beginSessionPermissionChange } from "./session-permission-change.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { shareSidebarSessionRows } from "./session-row-presentation.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { serializeSessionRow } from "./session-row-serialization.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
@@ -162,6 +163,13 @@ it("reuses packed row bytes across sibling changes without retaining another vie
   expect(JSON.stringify(first.sessions)).toBe(
     '[{"key":"a","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"A","sharedFacts":[0]},{"key":"b","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"B🦞","sharedFacts":[0]},{"key":"c","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"C","sharedFacts":[0]}]',
   );
+  // Aliased source rows must not repack an earlier response through their new shared layout.
+  const previousBytes = first.sessions.map(serializeSessionRow);
+  const duplicates = shareSidebarSessionRows([ownerRows[0]!, ownerRows[0]!]);
+  expect(duplicates.sessions.map(serializeSessionRow)).toEqual(
+    duplicates.sessions.map((value) => JSON.stringify(value)),
+  );
+  expect(first.sessions.map(serializeSessionRow)).toEqual(previousBytes);
   expect(first.sharedFacts).toEqual([{ visibility: "shared", sharingRole: "owner" }]);
   expect(viewer.sharedFacts).toEqual([{ visibility: "shared", sharingRole: "viewer" }]);
   using stringify = vi.spyOn(JSON, "stringify");
@@ -389,6 +397,7 @@ it.each(["sidebar", "dashboard"] as const)(
 
 it("keeps a sidebar page revision across off-page facts and replaces it for selected facts", () =>
   withListReader("page-reader", async ({ context, client }) => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     const keys = ["agent:main:off-page", "agent:main:selected-page"];
     for (const [index, sessionKey] of keys.entries()) {
       writeListEntry(sessionKey, {
@@ -402,8 +411,15 @@ it("keeps a sidebar page revision across off-page facts and replaces it for sele
       readList(context, client, { rowMode: "sidebar", limit: 1, ifRowsRevision });
     const first = await read();
     expect(first.sessions.map((row) => row.key)).toEqual([keys[1]]);
-    sessionChanges.emit({ sessionKey: keys[0]!, scope: "runtime" });
+    const before = wire(await read(first.rowsRevision));
+    writeListEntry(keys[0]!, {
+      sessionId: keys[0]!,
+      updatedAt: 1,
+      visibility: "shared",
+      label: "Off-page metadata change",
+    });
     const unchanged = await read(first.rowsRevision);
+    expect(wire(unchanged)).toBe(before);
     expect(unchanged).toMatchObject({
       rowsRevision: first.rowsRevision,
       rowsUnchanged: true,
@@ -432,6 +448,7 @@ it("coalesces cold sidebar selection across row slices only for the same princip
     using _ = retainList(context);
     await initializeSessionReadContext(context);
     const projection = getSessionRowProjection(context)!;
+    const membership = vi.spyOn(projection, "hasMembership");
     await projection.withSelectionPreparation(async () => {
       await projection.prepareSelection();
       const read = (client: typeof alice, limit = 100) =>
@@ -453,6 +470,7 @@ it("coalesces cold sidebar selection across row slices only for the same princip
       expect(other.sessions[0]!.sessionId).toBe("cold-128");
       expect(other.owners).not.toBe(results[0]!.owners);
       expect((await read(alice, 1)).sessions).toHaveLength(1);
+      expect(membership).not.toHaveBeenCalled();
     });
   }));
 

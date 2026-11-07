@@ -16,6 +16,7 @@ import {
   classifyChildRuntimeFailure,
   observeChildRuntime,
 } from "./child-runtime-viability.js";
+import type { BackupEngine } from "./database-engine/types.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
@@ -313,6 +314,7 @@ export function runSqliteReadOnlyWorker(
     mode: "sync" | "async" | "file-generation";
     stagingRoot?: string;
     signal?: AbortSignal;
+    expectedSourceIdentity?: DatabaseFileIdentity;
   },
 ): Promise<string>;
 export function runSqliteReadOnlyWorker(
@@ -370,6 +372,15 @@ export function closeSqliteReadOnlyWorkersForBroker(broker: SpawnBrokerHost): Pr
   return sqliteReadOnlyWorkerPool.closeBroker(broker);
 }
 
+export function runSqliteReadOnlyWorkerOnce(
+  pathname: string,
+  options: { mode: "staging-sweep"; signal?: AbortSignal },
+): Promise<import("./sqlite-snapshot-reclamation.js").SqliteSnapshotReclamation>;
+export function runSqliteReadOnlyWorkerOnce(
+  pathname: string,
+  options: SqliteReadOnlyWorkerOptions,
+  launch?: Pick<SqliteReadOnlyWorkerLaunch, "env" | "cwd"> & { deadlineOwnedByCaller?: boolean },
+): Promise<SqliteReadOnlyWorkerValue>;
 export function runSqliteReadOnlyWorkerOnce(
   pathname: string,
   options: SqliteReadOnlyWorkerOptions,
@@ -496,10 +507,33 @@ export function runOneShotSqliteInspection<T>(params: {
 
 export function runSqliteReadOnlyWorkerSync(
   pathname: string,
+  stagingRoot: undefined,
+  mode: "state-sqlite-populated",
+): boolean;
+export function runSqliteReadOnlyWorkerSync(
+  pathname: string,
+  stagingRoot: undefined,
+  mode: "backup-engine" | "backup-engine-preserving",
+): BackupEngine;
+export function runSqliteReadOnlyWorkerSync(
+  pathname: string,
   stagingRoot: string | undefined,
-  mode: "sync" | "content-version" | "file-generation" | "update-generation" = "sync",
+  mode?: "sync" | "content-version" | "file-generation" | "update-generation",
   expectedSourceIdentity?: DatabaseFileIdentity,
-): string {
+): string;
+export function runSqliteReadOnlyWorkerSync(
+  pathname: string,
+  stagingRoot: string | undefined,
+  mode:
+    | "sync"
+    | "content-version"
+    | "file-generation"
+    | "update-generation"
+    | "backup-engine-preserving"
+    | "state-sqlite-populated"
+    | "backup-engine" = "sync",
+  expectedSourceIdentity?: DatabaseFileIdentity,
+): string | BackupEngine | boolean {
   assertChildRuntimeAvailable();
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
   const result = spawnSync(
@@ -545,5 +579,11 @@ export function runSqliteReadOnlyWorkerSync(
             ? undefined
             : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`,
       };
+  if (mode === "backup-engine" || mode === "backup-engine-preserving") {
+    return readSqliteReadOnlyWorkerValue(output, mode);
+  }
+  if (mode === "state-sqlite-populated") {
+    return readSqliteReadOnlyWorkerValue(output, mode);
+  }
   return readSqliteReadOnlyWorkerValue(output, mode);
 }

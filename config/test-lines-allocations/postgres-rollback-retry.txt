@@ -1,0 +1,2 @@
+# Existing real PostgreSQL backup fixture now checks refused publication followed by same-run retry.
+12

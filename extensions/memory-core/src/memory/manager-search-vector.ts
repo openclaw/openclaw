@@ -9,6 +9,7 @@ import {
   type MemorySearchRow,
   type SearchRowResult,
 } from "./manager-search-shared.js";
+import type { MemoryVectorWorkerQuery } from "./manager-search-types.js";
 import { buildSqliteMemorySourceFilter, type MemorySourceFilter } from "./source-filter.js";
 
 // Bound scan batches so worker cancellation can interrupt large vectorless indexes.
@@ -61,17 +62,9 @@ export async function searchVector(params: {
   return await params.runFallback();
 }
 
-export async function searchChunksByEmbedding(params: {
-  db: DatabaseSync;
-  providerModel: string;
-  providerModelAliases?: string[];
-  sourceFilter: MemorySourceFilter;
-  queryVec: number[];
-  limit: number;
-  snippetMaxChars: number;
-  candidateIds?: string[];
-  signal?: AbortSignal;
-}): Promise<SearchRowResult[]> {
+export async function searchChunksByEmbedding(
+  params: MemoryVectorWorkerQuery & { db: DatabaseSync; signal?: AbortSignal },
+): Promise<SearchRowResult[]> {
   if (params.limit <= 0 || params.candidateIds?.length === 0) {
     return [];
   }

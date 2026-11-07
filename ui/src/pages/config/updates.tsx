@@ -24,6 +24,7 @@ import {
   isUpdateActionable,
 } from "../../app/update-schedule-projection.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   RetryAction,
   SettingsPage,
@@ -42,6 +43,7 @@ import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { RecordedAttempt } from "./updates-recorded-attempt.tsx";
+import { UpdatesSchedule } from "./updates-schedule.tsx";
 import { UpdatesStatus } from "./updates-status.tsx";
 import {
   UPDATES_CHANNELS,
@@ -145,7 +147,6 @@ function DeviceUpdates(props: {
                 title={t("updates.device.automatic")}
                 checked={checked()}
                 saving={saving()}
-                description={saving() ? t("common.saving") : undefined}
                 onChange={(value) => void changeAutomatic(value)}
               />
             </Loading>
@@ -369,6 +370,7 @@ function GatewayUpdates(props: UpdatesViewProps) {
       channel,
       autoEnabled:
         typeof auto?.enabled === "boolean" ? auto.enabled : (schedule?.autoEnabled ?? false),
+      expression: typeof auto?.schedule === "string" ? auto.schedule : undefined,
       extendedStable: channel === "extended-stable",
     };
   };
@@ -426,9 +428,9 @@ function GatewayUpdates(props: UpdatesViewProps) {
   return (
     <>
       <Show when={!props.canAdmin}>
-        <div class="callout warning" role="note">
+        <InlineAlert tone="warning" role="note">
           {t("updates.adminRequired")}
-        </div>
+        </InlineAlert>
       </Show>
       <BuildFacts {...props} />
       <RecordedAttempt
@@ -476,6 +478,13 @@ function GatewayUpdates(props: UpdatesViewProps) {
           }
           onChange={props.onAutomaticUpdatesChange}
         />
+        <Show when={!settings().extendedStable && !devPackageInstall()}>
+          <UpdatesSchedule
+            expression={settings().expression}
+            disabled={props.configBusy || checksDisabled() || !settings().autoEnabled}
+            onChange={(expression) => props.onAutomaticScheduleChange(expression)}
+          />
+        </Show>
       </SettingsSection>
       <SettingsSection title={t("updates.page.statusTitle")}>
         <SettingsRow
@@ -648,7 +657,7 @@ function GatewayUpdates(props: UpdatesViewProps) {
       </p>
       <Errored
         fallback={(error, reset) => (
-          <div class="callout danger" role="alert">
+          <InlineAlert tone="danger" role="alert">
             {formatUiError(error())}
             <RetryAction
               type="button"
@@ -657,7 +666,7 @@ function GatewayUpdates(props: UpdatesViewProps) {
                 void updateNow();
               }}
             />
-          </div>
+          </InlineAlert>
         )}
       >
         <Loading>{latest(confirmationOutcome) ?? null}</Loading>

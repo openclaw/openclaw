@@ -13,6 +13,7 @@ const en = {
       searchButton: "Search",
       idle: "Search for a person, project, decision, or anything else this agent remembers.",
       searching: "Searching memories…",
+      resultOne: "{count} result",
       results: "{count} results",
       empty: "No memories matched “{query}”.",
       error: "Memory search failed: {message}",

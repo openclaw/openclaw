@@ -38,7 +38,7 @@ describe("resolveSessionDisplayName", () => {
 
   it("uses the same friendly main-thread name for every agent", () => {
     for (const key of ["main", "agent:main:main", "agent:research:main", "agent:ops-team:main"]) {
-      expect(resolveSessionDisplayName(key)).toBe("Main Session");
+      expect(resolveSessionDisplayName(key)).toBe("Main session");
     }
 
     expect(resolveSessionDisplayName("agent:research:main", { displayName: "Research desk" })).toBe(

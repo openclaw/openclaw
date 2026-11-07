@@ -38,7 +38,7 @@ it("does not advertise hidden Lobsterdex choices while retaining the rest of tab
   setCurrentThemeBranding(resolveThemeBranding({ lobsterdex: true }));
   expect(search("Lobsterdex")).toContainEqual(expect.objectContaining({ routeId: "appearance" }));
 });
-it.each(["permission", "subscription", "browser support", "gateway access", "blocked"])(
+it.each(["permission", "subscription", "browser support", "notification access", "blocked"])(
   "finds Notifications by %s",
   (query) => {
     expect(search(query)).toContainEqual(expect.objectContaining({ routeId: "notifications" }));
@@ -60,7 +60,7 @@ it("keeps target metadata cold and loads Settings English when search opens", as
     "configView.autoSaveSaving",
     "configPage.themeImported",
     "configView.chatPrefs.title",
-    "updates.page.intro",
+    "updates.page.buildTitle",
     "modelProviders.title",
   ];
   try {
@@ -262,4 +262,30 @@ it("only offers personal instructions search on a multi-user Gateway", () => {
   expect(
     personal(true).some((block) => block.hash === "#settings-profile-personal-instructions"),
   ).toBe(true);
+});
+
+it("keeps the ID schema out of ordinary settings and search until enabled", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      gateway: {
+        type: "object",
+        properties: {
+          openclawId: {
+            type: "object",
+            title: "OpenClaw ID",
+            properties: { enabled: { type: "boolean", title: "OpenClaw ID remote access" } },
+          },
+          port: { type: "number", title: "Gateway Port" },
+        },
+      },
+    },
+  };
+  const params = { query: "OpenClaw ID", schema, value: {}, uiHints: {} };
+  expect(findSettingsSearchBlocks(params)).toEqual([]);
+  expect(findSettingsSearchBlocks({ ...params, openclawIdEnabled: true }).length).toBeGreaterThan(
+    0,
+  );
+  expect(findSettingsSearchBlocks({ ...params, openclawIdEnabled: false })).toEqual([]);
+  expect(schema.properties.gateway.properties).toHaveProperty("openclawId");
 });

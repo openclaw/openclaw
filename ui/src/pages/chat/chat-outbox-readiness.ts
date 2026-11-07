@@ -25,7 +25,7 @@ import {
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
   chatSendHoldReason,
-  OFFLINE_QUEUE_STORAGE_ERROR,
+  chatOfflineQueueStorageError,
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -137,7 +137,7 @@ export async function reconcileStoredChatOutboxHead(
         host,
         outbox.sessionKey,
         outbox.agentId,
-        OFFLINE_QUEUE_STORAGE_ERROR,
+        chatOfflineQueueStorageError(),
       );
       return "blocked";
     }
@@ -203,7 +203,7 @@ export async function reconcileStoredChatOutboxHead(
         host,
         outbox.sessionKey,
         outbox.agentId,
-        retained ? message : OFFLINE_QUEUE_STORAGE_ERROR,
+        retained ? message : chatOfflineQueueStorageError(),
       );
       return retained ? "continue" : "blocked";
     }

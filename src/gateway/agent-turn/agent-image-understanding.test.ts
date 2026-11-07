@@ -6,7 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { OpenClawConfig } from "../../config/types.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import type { MediaExecutionContext } from "../../media-understanding/provider-execution.js";
-import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
+import type { MediaUnderstandingProvider } from "../../media-understanding/provider-types.js";
 // Include the shared runtime in the compiled fixture instead of compiling its lazy import mid-test.
 import "../../media-understanding/apply.runtime.js";
 import { prepareAgentImageUnderstanding } from "./agent-image-understanding.js";
@@ -166,9 +166,7 @@ it.each(["preparation", "adapter"] as const)(
       });
     }
 
-    await expect(prepare(configuredVision, execution)).rejects.toThrow(
-      "Image attachments could not be analyzed.",
-    );
+    await expect(prepare(configuredVision, execution)).rejects.toThrow("Request authority expired");
     expect(describeImage).toHaveBeenCalledTimes(phase === "adapter" ? 1 : 0);
     expect(sendPixels).not.toHaveBeenCalled();
     if (phase === "adapter") {
