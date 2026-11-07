@@ -144,8 +144,52 @@ it("clears a stale-generation quarantine only after a full integrity check", asy
 
   await expectNoMigration(env);
 
-  expect(checks.some((sql) => /^PRAGMA\s+integrity_check/iu.test(sql))).toBe(true);
   expect(readPersistedQuarantineRow(databasePath, { env })).toBeUndefined();
+  expect(checks.some((sql) => /^PRAGMA\s+integrity_check/iu.test(sql))).toBe(true);
+});
+
+it("keeps a stale quarantine when full integrity verification fails", async () => {
+  const { env, databasePath } = fixture({}, OPENCLAW_AGENT_SCHEMA_VERSION);
+  const generation = readStableSqliteFileGeneration(databasePath);
+  seedOpenClawDatabaseQuarantine({
+    env,
+    generation,
+    kind: "agent",
+    path: databasePath,
+    reason: "historical corruption",
+  });
+  let fragmentCountOffset: number;
+  {
+    using database = openDatabase(databasePath);
+    database.exec("CREATE TABLE generation_changed (id INTEGER PRIMARY KEY) STRICT;");
+    database.exec("INSERT INTO generation_changed (id) VALUES (1);");
+    const rootpage = database
+      .prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'generation_changed'")
+      .get()?.rootpage;
+    const pageSize = database.prepare("PRAGMA page_size").get()?.page_size;
+    if (typeof rootpage !== "number" || typeof pageSize !== "number") {
+      throw new Error("generation_changed rootpage is unavailable");
+    }
+    // Misreport free-byte fragmentation so integrity_check fails while the file still opens.
+    fragmentCountOffset = (rootpage - 1) * pageSize + 7;
+  }
+  {
+    const fd = fs.openSync(databasePath, "r+");
+    try {
+      fs.writeSync(fd, Buffer.from([1]), 0, 1, fragmentCountOffset);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+  const quarantined = readPersistedQuarantineRow(databasePath, { env });
+  const checks: string[] = [];
+  using _ = interceptStatements((_database, sql) => checks.push(sql));
+
+  const result = await migrate({ env });
+
+  expect(checks.some((sql) => /^PRAGMA\s+integrity_check/iu.test(sql))).toBe(true);
+  expect(result.warnings.join("\n")).toMatch(/integrity/iu);
+  expect(readPersistedQuarantineRow(databasePath, { env })).toEqual(quarantined);
 });
 
 it.each([undefined, "full"] as const)("honors %s during pre-v17 media migration", async (mode) => {
