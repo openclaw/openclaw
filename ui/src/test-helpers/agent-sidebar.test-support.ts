@@ -2,6 +2,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { storeSidebarSessionOwnerFilter } from "../components/app-sidebar-session-types.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -40,10 +41,14 @@ export async function withOwnerSidebar(
     sidebar: Awaited<ReturnType<typeof createSidebarElement>>;
     context: ReturnType<typeof createContext>;
     requests: Record<string, unknown>[];
+    inventoryRequests: Record<string, unknown>[];
     settle: () => Promise<void>;
+    gateway: ReturnType<typeof createGatewayHarness>;
   }) => Promise<void>,
+  savedOwnerId?: string,
 ) {
   const requests: Record<string, unknown>[] = [];
+  const inventoryRequests: Record<string, unknown>[] = [];
   const overflow = createDeferred<SessionsListResult>();
   const gateway = createGatewayHarness(
     createTestGatewayClient(async (method, raw) => {
@@ -60,13 +65,16 @@ export async function withOwnerSidebar(
       if (method !== "sessions.list") {
         return {};
       }
-      if (mode === "query" && params?.source === "sidebar") {
+      if (params?.source === "sidebar") {
         requests.push(params);
         // Bound the regression's render loop without changing personal-scope transport.
-        if (requests.length > 8) {
+        if (mode === "query" && requests.length > 8) {
           queueMicrotask(() => stop());
           return overflow.promise;
         }
+      }
+      if (params?.source === "agent-roster") {
+        inventoryRequests.push(params);
       }
       const selected = rows.filter(
         (row) =>
@@ -77,6 +85,12 @@ export async function withOwnerSidebar(
     }),
   );
   gateway.publish({ selfUser: { id: viewer.id, name: viewer.label } });
+  if (savedOwnerId !== undefined) {
+    storeSidebarSessionOwnerFilter(gateway.gateway.connection.gatewayUrl, viewer.id, {
+      ownerId: savedOwnerId,
+      involvingMe: false,
+    });
+  }
   if (mode === "query") {
     const hello = gateway.gateway.snapshot.hello!;
     gateway.publish({
@@ -109,7 +123,7 @@ export async function withOwnerSidebar(
   };
   try {
     sidebar.connected = true;
-    await check({ sidebar, context, requests, settle });
+    await check({ sidebar, context, requests, inventoryRequests, settle, gateway });
   } finally {
     stop();
     if (mode === "query") {

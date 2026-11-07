@@ -290,8 +290,7 @@ export function renderSidebarSessionSortMenuForMenus(
       host.sessionsShowSystem ||
       host.sessionsShowPreview ||
       host.effectiveSessionSortMode() !== "created" ||
-      (!rosterMode() &&
-        (grouping() !== "category" || host.sessionsEmptyGroupsMode !== "filtering")),
+      (!rosterMode() && (grouping() !== "category" || host.sessionsEmptyGroupsMode !== "never")),
   );
   // The mobile sheet has no hover or room for flyouts: choices open as sheet pages.
   const sheet = () => isMobileNavLayout();
@@ -355,7 +354,7 @@ export function renderSidebarSessionSortMenuForMenus(
                         if (grouping() !== "category") {
                           setSessionsGrouping(host.sessionOrganizer, "category");
                         }
-                        host.setSessionsEmptyGroupsMode("filtering");
+                        host.setSessionsEmptyGroupsMode("never");
                       }
                     }}
                   >

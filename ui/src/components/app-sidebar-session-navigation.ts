@@ -37,6 +37,7 @@ import {
   createSidebarPinnedSessions,
   personalSidebarOwnerProjection,
   personalSidebarOwnerFilterId,
+  personalSidebarAgentNavigationResult,
   projectUnpinnedSessionRows,
   sidebarVisibleRowsInOrder,
 } from "./app-sidebar-personal-navigation.ts";
@@ -604,20 +605,21 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   private agentResumeKey(agentId: string): string {
     const latest = resolveLatestSidebarAgentSession({
       agentId,
-      result: this.selectedAgentSessionResult(agentId),
+      result: this.agentNavigationResult(agentId),
       context: this.context,
     });
     return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey: this.sessionMainKey() });
   }
 
   switchChipAgent(agentId: string) {
+    const resumeKey = this.agentResumeKey(agentId);
     this.sidebarMenus.closeAgentMenu();
     this.expandAgent(agentId);
     // Skills uses the shared agent selection in place; opening chat would
     // discard the discovery page instead of updating its workspace scope.
     if (this.activeRouteId !== "skills") {
       if (this.connected) {
-        this.selectSession(this.agentResumeKey(agentId));
+        this.selectSession(resumeKey);
       } else {
         this.onNavigate?.("appearance");
       }
@@ -716,6 +718,18 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     return roster ? roster.result : this.sessionData.resultForAgent(agentId);
   }
 
+  private agentNavigationResult(agentId: string): SessionsListResult | null {
+    // The visible agent picker owns an all-agent inventory independently of the
+    // selected sidebar window. Its navigation still honors the chosen owner.
+    return (
+      personalSidebarAgentNavigationResult(
+        this,
+        agentId,
+        rosterActivityStore(this.context).snapshot.result,
+      ) ?? this.selectedAgentSessionResult(agentId)
+    );
+  }
+
   selectedAgentMainSessionKey(agentId?: string): string {
     return resolveSidebarMainSessionKey({
       agentId: agentId ?? this.expandedAgentId(),
@@ -791,7 +805,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   agentUnreadCount(agentId: string): number {
     const normalized = normalizeAgentId(agentId);
-    const rows = this.selectedAgentSessionResult(normalized)?.sessions ?? [];
+    const rows = this.agentNavigationResult(normalized)?.sessions ?? [];
     return this.sessionProjection.agentUnreadCount(normalized, rows, this);
   }
 

@@ -23,10 +23,23 @@ function fixture() {
   return { controller, gateway, reconcile };
 }
 
+it("shows authorized folders by default without persisting an implicit choice", () => {
+  expect(fixture().controller.mode).toBe("never");
+  expect(localStorage.length).toBe(0);
+});
+
+it.each(["filtering", "always", "never"] as const)(
+  "preserves explicit %s on a new controller",
+  (mode) => {
+    fixture().controller.set(mode);
+    expect(fixture().controller.mode).toBe(mode);
+  },
+);
+
 it("keeps anonymous browser choices separate from signed-in users", () => {
   const { controller, reconcile } = fixture();
   controller.set("always");
-  reconcile({ selfUser: null }, "filtering");
+  reconcile({ selfUser: null }, "never");
   controller.set("never");
   reconcile({ selfUser: { id: "ada" } }, "always");
   reconcile({ selfUser: null }, "never");
@@ -40,7 +53,7 @@ it.each([
   const { controller, reconcile } = fixture();
   expect(controller.mode).toBe(expected);
   expect(localStorage.getItem("openclaw:sidebar:sessions:hide-empty-groups")).toBeNull();
-  reconcile({ selfUser: { id: "lin" } }, "filtering");
+  reconcile({ selfUser: { id: "lin" } }, "never");
   reconcile({ selfUser: { id: "ada" } }, expected);
 });
 
@@ -58,13 +71,13 @@ it("retires stopped or replaced connections and rejects an old menu action", () 
   controller.set("never");
   gateway.snapshot.selfUser = { id: "lin" };
   controller.set("always");
-  expect(controller.mode).toBe("filtering");
+  expect(controller.mode).toBe("never");
   controller.set("always");
   expect(controller.mode).toBe("always");
   gateway.connectionRevision += 1;
-  expect(reconcile({ phase: "reconnecting", selfUser: null }, "filtering")).toBe(true);
+  expect(reconcile({ phase: "reconnecting", selfUser: null }, "never")).toBe(true);
   reconcile({ phase: "connected", selfUser: { id: "ada" } }, "never");
-  reconcile({ phase: "stopped", selfUser: null }, "filtering");
+  reconcile({ phase: "stopped", selfUser: null }, "never");
 });
 
 it("keeps the view usable when browser persistence is denied", () => {
@@ -74,7 +87,7 @@ it("keeps the view usable when browser persistence is denied", () => {
   vi.spyOn(localStorage, "getItem").mockImplementation(denied);
   vi.spyOn(localStorage, "setItem").mockImplementation(denied);
   const { controller } = fixture();
-  expect(controller.mode).toBe("filtering");
+  expect(controller.mode).toBe("never");
   controller.set("never");
   controller.reconcile();
   expect(controller.mode).toBe("never");
