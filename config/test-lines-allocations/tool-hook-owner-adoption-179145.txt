@@ -1,0 +1,2 @@
+# Stateful registry adoption covers tool/hook ownership, donor extras, selected multiplicity and retired hook callbacks.
+252
