@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
+import path from "node:path";
+import { createRequiredExecRuntimeContract } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
+import { isCodexAppServerLiveThreadProtected } from "./client-runtime.js";
+import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { prepareCodexNativeExecutionPolicy } from "./native-execution-policy.js";
 import { fixture } from "./native-subagent-inventory.test-support.js";
 import { captureCodexNativeCompletionCatalog } from "./native-subagent-monitor-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
@@ -14,7 +21,15 @@ import {
   createClient,
   nativeCompletionNotification,
 } from "./native-subagent-monitor.test-support.js";
-import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
+import { loadCodexAttemptNativeToolCatalog } from "./native-tool-catalog.js";
+import { buildCodexAppServerRuntimeFingerprint } from "./plugin-app-cache-key.js";
+import { setupRunAttemptTestHooks, tempDir } from "./run-attempt-test-harness.js";
+import * as sharedClientLifecycle from "./shared-client-lifecycle.js";
+import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
+import {
+  createAppServerOptions,
+  writeNativeCatalogFixture,
+} from "./thread-lifecycle.test-fixtures.js";
 
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
@@ -244,6 +259,148 @@ describe("native completion settlement", () => {
         await parent.unregister();
         client.close();
         vi.useRealTimers();
+      }
+    },
+  );
+});
+
+describe("native completion catalog execution authority", () => {
+  setupRunAttemptTestHooks();
+  it.each(["unavailable executor", "session reassigned"] as const)(
+    "rejects a native exec call after recovering declarations: %s",
+    async (change) => {
+      const f = await fixture();
+      const client = createClient();
+      const command = createRequiredExecRuntimeContract();
+      const signal = new AbortController().signal;
+      const declarations = createCodexDynamicToolBridge({
+        tools: [command.tool],
+        signal,
+        loading: "direct",
+      }).specs;
+      const agentDir = path.join(tempDir, "catalog-execution");
+      const codexHome = resolveCodexAppServerHomeDir(agentDir);
+      const rolloutPath = path.join(codexHome, "sessions", "parent.jsonl");
+      await writeNativeCatalogFixture(rolloutPath, "parent-thread", declarations);
+      const appServer = createAppServerOptions();
+      const serverVersion = client.client.getServerVersion();
+      assert(serverVersion, "The native fixture must report its server version");
+      const runtimeIdentity = { serverVersion, codexHome };
+      vi.spyOn(client.client, "getRuntimeIdentity").mockReturnValue(runtimeIdentity);
+      vi.spyOn(
+        sharedClientLifecycle,
+        "retainSharedCodexAppServerClientByInstanceId",
+      ).mockResolvedValue({ client: client.client, release: vi.fn() });
+      const policy = await prepareCodexNativeExecutionPolicy({
+        agentId: f.identity.agentId,
+        sessionKey: f.identity.sessionKey,
+        config: {},
+        readRuntimeSessionEntry: true,
+        sandboxAvailable: false,
+      });
+      const parent = await f.register(client);
+      let checked = false;
+      let recoveredCatalog: Awaited<ReturnType<typeof loadCodexAttemptNativeToolCatalog>>;
+      f.deliver.mockImplementationOnce(async (request) => {
+        assert(request.completionCustody?.isCurrent());
+        expect(isCodexAppServerLiveThreadProtected(client.client, "parent-thread")).toBe(false);
+        const recovered = await loadCodexAttemptNativeToolCatalog({
+          binding: {
+            threadId: "parent-thread",
+            cwd: tempDir,
+            rolloutPath,
+            clientId: client.client.getInstanceId(),
+            dynamicToolsFingerprint: codexDynamicToolsFingerprint(declarations),
+            appServerRuntimeFingerprint: buildCodexAppServerRuntimeFingerprint({
+              appServer,
+              appServerVersion: client.client.getServerVersion(),
+              runtimeIdentity,
+            }),
+          },
+          completion: {
+            requesterSessionKey: f.identity.sessionKey,
+            sourceSessionKey: request.childSessionKey,
+            runId: `announce:${request.announceId}`,
+          },
+          appServer,
+          agentDir,
+          signal,
+          authority: parent.bindingAuthority,
+          assertCurrent: () => {},
+          acquireClient: async () => client.client,
+          releaseClient: () => {},
+        });
+        recoveredCatalog = recovered;
+        expect(recovered).toEqual(declarations);
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        const bridge = createCodexDynamicToolBridge({
+          tools: change === "unavailable executor" ? [] : [command.tool],
+          registeredSpecs: recovered,
+          requireExactRegisteredDefinitions: true,
+          signal,
+          loading: "direct",
+          assertCurrentAsync: async () => {
+            entered.resolve();
+            await release.promise;
+            await policy.assertCurrent();
+          },
+        });
+        const response = bridge.handleToolCall({
+          threadId: "parent-thread",
+          turnId: "completion-turn",
+          callId: "native-exec",
+          namespace: null,
+          tool: "exec",
+          arguments: { command: "echo forbidden", workdir: tempDir, awaitResults: true },
+        });
+        try {
+          if (change === "session reassigned") {
+            await entered.promise;
+            expect(command.spawn).not.toHaveBeenCalled();
+            await patchSessionEntry({
+              agentId: f.identity.agentId,
+              sessionKey: f.identity.sessionKey,
+              storePath: resolveStorePath(undefined, { agentId: f.identity.agentId }),
+              update: () => ({ sessionId: "replacement" }),
+              skipMaintenance: true,
+            });
+            expect(request.completionCustody?.isCurrent()).toBe(false);
+          }
+        } finally {
+          release.resolve();
+        }
+        expect(await response).toMatchObject({
+          success: false,
+          contentItems: [
+            {
+              type: "inputText",
+              text: expect.stringContaining(
+                change === "unavailable executor"
+                  ? "not available for this turn"
+                  : "execution policy changed",
+              ),
+            },
+          ],
+        });
+        expect(command.spawn).not.toHaveBeenCalled();
+        checked = true;
+        return { delivered: true, path: "direct" };
+      });
+      try {
+        await parent.ready;
+        parent.bindTurn("parent-turn");
+        await f.spawn(client);
+        await parent.unregister();
+        await client.notify(completedChild());
+        expect(f.deliver).toHaveBeenCalledOnce();
+        expect(recoveredCatalog).toEqual(declarations);
+        expect(checked).toBe(true);
+      } finally {
+        policy.release();
+        command.close();
+        client.close();
+        await parent.unregister();
       }
     },
   );

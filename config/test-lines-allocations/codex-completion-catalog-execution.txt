@@ -1,0 +1,3 @@
+# Compose real completion custody and native metadata recovery with current exec
+# denial and a SQLite session reassignment across awaited execution admission.
+157
