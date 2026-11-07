@@ -76,6 +76,30 @@ it.each([false, true])("collapses a replacement diagnostic (mobile=%s)", async (
     expect(container.querySelector("details")?.open).toBe(false);
   });
 });
+it("keeps default-model recovery help in the flexible content column", async () => {
+  const switchModel = vi.fn(async () => true);
+  const { container } = publishedComposer({
+    runError: { runId: "failed-run", summary: "Model unavailable" },
+    defaultModelRecovery: () => ({ modelLabel: "Default model", switchModel }),
+  });
+  await waitForSolid(() => expect(container.querySelector(".chat-model-recovery")).not.toBeNull());
+  const notice = requireElement(container, ".chat-model-recovery", "model recovery notice");
+  expect(Array.from(notice.children, (child) => child.className)).toEqual([
+    "chat-composer-neighbor-card__icon",
+    "chat-composer-neighbor-card__copy",
+    "btn btn--sm chat-error__refresh",
+  ]);
+  expect(notice.children[0]?.getAttribute("aria-hidden")).toBe("true");
+  expect(notice.children[1]?.textContent).toBe(t("chat.modelControls.switchOnlyHelp"));
+  const action = requireElement(notice, "button", "switch action");
+  expect(action.textContent).toContain("Default model");
+  if (!(action instanceof HTMLButtonElement)) {
+    throw new Error("Expected a switch button");
+  }
+  action.click();
+  expect(switchModel).toHaveBeenCalledOnce();
+});
+
 it("preserves caller-owned recovery instructions in request notices", async () => {
   const error = "Session is busy; wait for the current run to finish.";
   const { container } = publishedNotices<TopbarProps>(renderChatTopbarNotices, { error });

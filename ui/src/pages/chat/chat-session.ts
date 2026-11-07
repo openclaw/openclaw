@@ -350,8 +350,9 @@ export async function switchChatModel(
   targetSessionKey = host.sessionKey,
   agentRuntime?: string | null,
   agentDefaultModel?: string,
+  canSwitch: () => boolean = () => true,
 ): Promise<boolean> {
-  if (!host.client || !host.connected) {
+  if (!host.client || !host.connected || !canSwitch()) {
     return false;
   }
   const activeRow = readChatSettingsTargetRow(host, targetSessionKey);
@@ -392,6 +393,8 @@ export async function switchChatModel(
   };
   const canDispatch = () =>
     ownsSelection() &&
+    readChatSettingsTargetRow(host, targetSessionKey)?.modelSelectionLocked !== true &&
+    canSwitch() &&
     readSessionMethodScopeAccess(host.hello?.auth, {
       method: "sessions.patch",
       params: { key: targetSessionKey, ...patch },
@@ -466,6 +469,7 @@ export async function switchChatModel(
           nextModel,
           runtimeSelection,
           selection,
+          canSwitch,
         );
       } catch (error) {
         if (ownsSelection()) {

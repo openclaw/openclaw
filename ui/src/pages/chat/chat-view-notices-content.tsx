@@ -14,12 +14,14 @@ import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-session-optional.ts";
+import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { formatUiErrorDetails } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ToastNotice } from "../../lib/toast-notice.tsx";
+import { createChatDefaultModelRecovery } from "./chat-default-model-recovery.ts";
 import { isChatSendReconnecting } from "./chat-send-presentation.ts";
 import type { ChatComposerNoticesProps, ChatViewNoticesProps } from "./chat-view-notices.tsx";
 import { ChatGPTUsageLimit } from "./chatgpt-usage-limit.tsx";
@@ -35,6 +37,7 @@ import {
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
 registerEnglishCatalog(registerChatComposerEnglish);
+registerEnglishCatalog(registerModelControlsEnglish);
 
 registerNewSessionRuntimeEnglish();
 
@@ -403,6 +406,26 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
   );
   return (
     <>
+      <Show when={props.defaultModelRecovery?.(createChatDefaultModelRecovery)}>
+        {(recovery) => (
+          <div class="chat-composer-neighbor-card chat-error chat-model-recovery" role="status">
+            <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
+              <Icon name="info" />
+            </span>
+            <div class="chat-composer-neighbor-card__copy">
+              {t("chat.modelControls.switchOnlyHelp")}
+            </div>
+            <button
+              class="btn btn--sm chat-error__refresh"
+              type="button"
+              data-chat-default-model-recovery
+              onClick={() => void recovery().switchModel()}
+            >
+              {t("chat.modelControls.switchToDefault", { model: recovery().modelLabel })}
+            </button>
+          </div>
+        )}
+      </Show>
       <Show when={props.providerPolicyNotice}>
         {(notice) => <ProviderPolicyNoticeView notice={notice()} />}
       </Show>

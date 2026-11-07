@@ -16,6 +16,7 @@ import {
 } from "../../lib/sessions/navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
+import type { ChatDefaultModelRecoveryReader } from "./chat-default-model-recovery.types.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { getAcceptedChatHistorySession } from "./chat-history-state.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
@@ -148,6 +149,7 @@ export function renderChatPaneComposerControls(params: {
     component: typeof ChatPaneModelControl;
   };
   permissionPicker: ChatPermissionPickerProps;
+  defaultModelRecovery?: ChatDefaultModelRecoveryReader;
 } {
   const {
     state,
@@ -255,6 +257,14 @@ export function renderChatPaneComposerControls(params: {
   const permissionSnapshot = cachedSessionStatePending ? savedComposer : undefined;
   const snapshotReason = snapshot ? t("chat.modelControls.refreshingSettings") : undefined;
   return {
+    defaultModelRecovery:
+      state.connected && selectedSession && !cachedSessionStatePending && !historyLoading
+        ? (createRecovery) =>
+            createRecovery(state, {
+              readAgentDefaultModel: () => agentDefaultModel,
+              canDispatch: () => ownsSelection() && canPatch({ model: null }),
+            })
+        : undefined,
     composerControls: {
       component: ChatPaneModelControl,
       model: {
