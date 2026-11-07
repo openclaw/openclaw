@@ -1,0 +1,2 @@
+29
+# Typed transcript inset resolves before lazy composer code loads; exact regression test growth.

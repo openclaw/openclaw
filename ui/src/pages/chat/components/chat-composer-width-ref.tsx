@@ -8,18 +8,6 @@ export type ComposerWidthOptions = {
   getTranscriptElement?: () => HTMLElement | null;
 };
 
-try {
-  // Width geometry reads the transcript's reading inset in pixels.
-  CSS.registerProperty({
-    name: "--chat-thread-inline-inset",
-    syntax: "<length>",
-    inherits: true,
-    initialValue: "0px",
-  });
-} catch {
-  // A module reload finds it already registered.
-}
-
 /** The transcript's reading column: no Details track, scrollbar gutters, or reading inset. */
 export function transcriptColumnWidth(transcript: HTMLElement) {
   const style = getComputedStyle(transcript);

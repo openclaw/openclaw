@@ -1199,6 +1199,13 @@ textarea,
   border-radius: var(--radius-full);
 }
 
+/* Register before lazy composer code needs the reading inset in pixels. */
+@property --chat-thread-inline-inset {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
 @property --scrollbar-hover {
   syntax: "<integer>";
   inherits: false;
