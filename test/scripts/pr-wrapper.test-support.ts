@@ -120,6 +120,7 @@ export function linkPrWrapperDependencies(destination: string): void {
     "acorn",
     "chalk",
     "commander",
+    "croner",
     "dotenv",
     "execa",
     "hosted-git-info",

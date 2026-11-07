@@ -50,8 +50,9 @@ export function ChatAccessProgramControl(props: ChatAccessProgramControlProps) {
         }}
       >
         <div class="chat-controls__access-head">
-          <span class="chat-controls__effort-heading">{t("chat.modelControls.daybreak")}</span>
+          <span class="oc-menu-heading__label">{t("chat.modelControls.daybreak")}</span>
           <SettingsToggle
+            size="sm"
             ariaLabel={t("chat.modelControls.daybreak")}
             checked={enabled()}
             disabled={disabled()}

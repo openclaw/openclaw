@@ -547,9 +547,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
     >
       {modelSelectionLocked() ? (
         <div class="chat-controls__locked-model" aria-label={t("chat.selectors.modelLockedLabel")}>
-          <span class="chat-controls__inline-select-section-label">
-            {t("chat.selectors.modelSection")}
-          </span>
+          <span class="oc-menu-heading__label">{t("chat.selectors.modelSection")}</span>
           <span class="chat-controls__locked-model-value">{panel.params.triggerModelLabel}</span>
           <span class="chat-controls__locked-model-badge">{t("chat.selectors.modelLocked")}</span>
         </div>

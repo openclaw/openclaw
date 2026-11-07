@@ -185,7 +185,7 @@ export function createPositionRail(props: PositionRailParams) {
       markerIds.length,
       markerIndexes,
       viewportOffset,
-      viewportHeight ?? window.innerHeight,
+      viewportHeight ?? 0,
       currentActiveId ?? markerIds[0],
       interactionState.focusedId,
       interactionState.hoveredId,

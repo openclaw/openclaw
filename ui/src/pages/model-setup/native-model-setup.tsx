@@ -13,6 +13,7 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { chatModelUnavailableMessage } from "../../lib/chat/model-select-state.ts";
 import {
@@ -323,7 +324,7 @@ function NativeCatalogError(props: { owner: NativeModelSetup; message: string | 
   return (
     <>
       {props.message ? (
-        <div class="callout danger" role="alert">
+        <InlineAlert tone="danger" role="alert">
           {props.message}
           <button
             class="btn btn--sm"
@@ -333,7 +334,7 @@ function NativeCatalogError(props: { owner: NativeModelSetup; message: string | 
           >
             {t("common.retry")}
           </button>
-        </div>
+        </InlineAlert>
       ) : undefined}
     </>
   );
@@ -344,9 +345,9 @@ function NativeModelMutationStatus(props: { completion: Promise<null> }) {
   return (
     <Errored
       fallback={(error) => (
-        <div class="callout danger" role="alert">
+        <InlineAlert tone="danger" role="alert">
           {formatModelSetupError(error())}
-        </div>
+        </InlineAlert>
       )}
     >
       <Loading>{completion()}</Loading>

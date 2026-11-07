@@ -14,6 +14,7 @@ import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import { isProviderRefusalNoticeText } from "../shared/assistant-error-format.js";
+import { readRunFailureCause } from "../shared/run-failure-notice.js";
 import { sanitizeSessionRunError, truncateSessionRunError } from "./session-run-error-format.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
 
@@ -27,6 +28,8 @@ type GatewaySessionRunFailure = {
   suppressErrorNotice?: boolean;
   /** Host-authored copy already shown to the requester; wins over error-derived copy. */
   notice?: string;
+  /** Provider error observation; only its bounded provider and failover reason are kept. */
+  errorObservation?: unknown;
   assertCommitAllowed?: () => void;
   sessionEntryCurrent?: SessionEntryCurrentCheck;
 };
@@ -38,6 +41,7 @@ export async function recordGatewaySessionRunFailure(
   const storageFailure = classifyGatewayStorageFailure(params.error);
   const sanitized = sanitizeSessionRunError(params.error) || "unknown error";
   const error = truncateSessionRunError(sanitized, 512);
+  const cause = readRunFailureCause(params.errorObservation);
   const report: CustomMessageReportAppend = {
     customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
     content:
@@ -57,7 +61,12 @@ export async function recordGatewaySessionRunFailure(
           "Your request couldn't be completed."),
     display: params.suppressErrorNotice !== true,
     excludeFromContext: true,
-    details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
+    details: {
+      runId,
+      error,
+      ...(params.errorKind ? { errorKind: params.errorKind } : {}),
+      ...(cause ? { cause } : {}),
+    },
   };
   const result = await withSessionTranscriptWriteAssertion(
     params.target,

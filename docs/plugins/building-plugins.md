@@ -409,6 +409,14 @@ operator, installed plugin code, or a modified OpenClaw runtime. Sensitive
 local tools should still require an explicit plugin or operator opt-in and
 refuse to run when active-model metadata is missing or unsuitable.
 
+`ctx.hasAuthForProvider(providerId)` and `ctx.resolveApiKeyForProvider(providerId)`
+report and resolve the agent's provider credentials. Pass
+`{ credentialType: "oauth" }` (or `"api_key"`, `"token"`) as the second argument
+to consider only ordered stored profiles of that type; a typed resolve never
+falls back to environment variables or another credential type. The bundled xAI
+plugin uses this to run `x_search` on a Grok OAuth subscription without
+borrowing a billed API key.
+
 The manifest declares ownership and discovery; execution still calls the live
 registered tool implementation. Keep `toolMetadata.<tool>.optional: true`
 aligned with `api.registerTool(..., { optional: true })` so OpenClaw can avoid

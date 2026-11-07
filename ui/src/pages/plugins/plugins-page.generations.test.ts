@@ -147,7 +147,7 @@ it("retains installed rows through a failed refresh and its retry", async () => 
   await waitForSolid(() => expect(page.textContent).toContain("Synthetic inventory unavailable"));
   expect(find(selector)).toBe(row);
   response = retry.promise;
-  find<HTMLButtonElement>(".plugins-settings-error button")!.click();
+  find<HTMLButtonElement>(".callout.danger button")!.click();
   await waitForSolid(() => expect(harness.calls("plugins.list")).toHaveLength(2));
   expect(find(selector)).toBe(row);
   retry.resolve(createResult(createPlugin({ name: "Updated Workboard" })));
@@ -430,7 +430,7 @@ it("retains same-plugin inspection after a failed refresh", async () => {
   fresh.reject(new Error("Inspection unavailable"));
   await waitForSolid(() => expect(page.textContent).toContain("Inspection unavailable"));
   expect(page.textContent).toContain("Known skill");
-  page.querySelector<HTMLButtonElement>(".plugins-settings-error button")!.click();
+  page.querySelector<HTMLButtonElement>(".callout.danger button")!.click();
   await waitForSolid(() => expect(inspections).toBe(3));
   await waitForSolid(() => expect(page.textContent).not.toContain("Inspection unavailable"));
   expect(page.textContent).toContain("Known skill");

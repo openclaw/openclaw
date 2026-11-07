@@ -160,6 +160,11 @@ cached transcript opens at its latest messages without an initial scroll animati
 It retains participant and completed-work timing information and the last task
 progress card for display while connecting; live Gateway results replace those
 cached facts in place. Cached progress does not authorize offline actions. The
+Details panel also retains its last child-activity preview while reconnecting.
+The default desktop preview shows up to three ordinary child sessions in both
+the saved and live presentation. **Show more** reveals the remaining live rows.
+Child navigation becomes available only after the complete live child query returns;
+an empty or unavailable result removes the saved preview. The
 header also retains its last three viewer avatars and overflow count for that
 conversation while connecting. The reconnect indicator describes connection
 state; the full live presence roster replaces these last-known viewers when it

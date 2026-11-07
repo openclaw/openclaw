@@ -1,6 +1,7 @@
 import { createMemo, Show, useContext } from "solid-js";
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import type { ProviderPresentation } from "../../../components/provider-icon-data.ts";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
@@ -251,12 +252,15 @@ function ModelOptionButton(
         </span>
       </button>
       <Show when={props.favorite}>
-        <button
-          type="button"
+        <IconButton
+          size={28}
+          glyph="row"
+          icon="heart"
+          tooltip={false}
           class="chat-controls__model-favorite"
           data-chat-model-favorite={modelPickerOptionKey(props.entry)}
-          aria-pressed={props.favorite?.selected ? "true" : "false"}
-          aria-label={t(
+          pressed={props.favorite?.selected}
+          label={t(
             props.favorite?.selected
               ? "chat.modelControls.removeFavorite"
               : "chat.modelControls.addFavorite",
@@ -277,9 +281,7 @@ function ModelOptionButton(
             event.stopPropagation();
             props.favorite?.onToggle(event);
           }}
-        >
-          <Icon name="heart" />
-        </button>
+        />
       </Show>
     </div>
   );
