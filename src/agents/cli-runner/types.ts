@@ -12,6 +12,7 @@ import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-ac
 import type {
   CliBackendExecute,
   CliBackendExecutionMode,
+  CliBackendPreparedExecution,
   CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
 import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types.js";
@@ -63,6 +64,8 @@ export type RunCliAgentParams = Pick<
   | "bashElevated"
   | "toolsAllow"
   | "skillLibraryAuthoring"
+  | "toolDiscoveryCapture"
+  | "toolDiscovery"
   | "disableTrajectory"
 > & {
   preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
@@ -171,6 +174,11 @@ export type RunCliAgentParams = Pick<
 export type CliSecretInput = SpawnSecretInput & {
   /** Process-local non-secret generation used only to invalidate a warm child. */
   fingerprint: string;
+};
+
+export type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
+  isolatedCompletionEnforced?: true;
+  secretInput?: CliSecretInput;
 };
 
 type CliPreparedBackend = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> & {

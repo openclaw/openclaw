@@ -66,6 +66,7 @@ import {
   CRON_TOOL_LIST_MAX_LIMIT,
 } from "./cron-tool-schema.js";
 import { listCronSelfJob } from "./cron-tool-self-list.js";
+import { assertCronSelfRemoveScope, readCronSelfRemoveOnlyJobId } from "./cron-tool-self-scope.js";
 import {
   assertCronCreatorAuthorityResolutionAvailable,
   assertNoCronShellExecution,
@@ -102,33 +103,6 @@ function requireCronJobIdParam(params: Record<string, unknown>): string {
 const CRON_RUN_MAX_WAIT_MS = 10 * 60_000;
 const CRON_RUN_ENQUEUE_TIMEOUT_MS = 60_000;
 
-const CRON_SELF_REMOVE_SCOPE_ERROR = "Automations tool is restricted to the current automation.";
-
-function readCronSelfRemoveOnlyJobId(opts: CronToolOptions | undefined) {
-  return opts?.selfRemoveOnlyJobId?.trim() || undefined;
-}
-
-function assertCronSelfRemoveScope(
-  opts: CronToolOptions | undefined,
-  action: string,
-  params: Record<string, unknown>,
-) {
-  const selfRemoveOnlyJobId = readCronSelfRemoveOnlyJobId(opts);
-  if (!selfRemoveOnlyJobId || action === "status" || action === "list") {
-    return;
-  }
-  const invocationAction = ["next_check", "scratch_get", "scratch_set", "record_result"].includes(
-    action,
-  );
-  if (invocationAction || ["get", "remove", "runs"].includes(action)) {
-    const id = readToolStringParam(params, "jobId") ?? readToolStringParam(params, "id");
-    if (id === selfRemoveOnlyJobId || (invocationAction && !id)) {
-      return;
-    }
-  }
-  throw new Error(CRON_SELF_REMOVE_SCOPE_ERROR);
-}
-
 function isOlderGatewayRejectingParam(error: unknown, method: string, param: string): boolean {
   return (
     error instanceof GatewayClientRequestError &&
@@ -152,6 +126,15 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const selfRemoveOnly =
     Boolean(readCronSelfRemoveOnlyJobId(opts)) &&
     (!opts?.agentSessionKey?.trim() || isCronSessionKey(opts.agentSessionKey));
+  // A recorded conversation audience selects declarations, never the executing grant.
+  // Standalone scheduled sessions retain their existing self-scoped surface.
+  const discovery = selfRemoveOnly ? undefined : opts?.discovery;
+  const management =
+    discovery !== undefined
+      ? discovery === "management"
+        ? "also"
+        : undefined
+      : managementAuthority && (managementAuthority.managementOnly ? "only" : "also");
   const tool: AnyAgentTool = {
     label: "Automations",
     name: AUTOMATIONS_TOOL_NAME,
@@ -162,7 +145,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       selfRemoveOnly,
       activeRun,
       nextCheckEnabled,
-      managementOnly: managementAuthority?.managementOnly,
+      managementOnly: management === "only",
       allowCommandJobs,
     }),
     outputSchema: CronToolOutputSchema,
@@ -173,7 +156,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       selfRemoveOnly,
       activeRun,
       nextCheckEnabled,
-      management: managementAuthority && (managementAuthority.managementOnly ? "only" : "also"),
+      management,
     }),
     prepareArguments: prepareCronToolArguments,
     execute: async (_toolCallId, args, operationSignal) => {

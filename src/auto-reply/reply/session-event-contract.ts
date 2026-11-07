@@ -127,7 +127,10 @@ export type SessionEventOptions = {
 };
 
 export type SessionEventSourcePolicy = Readonly<
-  Pick<SessionEventTarget, "toolsAllow" | "settings">
+  Pick<SessionEventTarget, "toolsAllow" | "settings"> & {
+    /** Host-proven conversation projection, never an inbound execution grant or cap. */
+    conversationScope?: Readonly<{ agentId: string; sessionKey: string; sessionId: string }>;
+  }
 >;
 
 /** Cron-owned snapshot and live occurrence fence shared with ordinary reply admission. */

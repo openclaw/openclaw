@@ -198,6 +198,7 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   /** Original CLI policy, rebound only to this stored row's exact lifetime. */
   bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+  toolDiscovery?: import("../config/sessions/tool-discovery.types.js").SessionToolDiscoveryPresentation;
   /** Configured MCP tools owned by the minting CLI run; disposed with that run. */
   bundledTools?: readonly AnyAgentTool[];
   activeCaptureKey?: string;
@@ -337,6 +338,7 @@ export function mintMcpLoopbackClientGrant(
     assertCurrent: params.assertCurrent,
     bindQuestionAnswerAuthority: params.bindQuestionAnswerAuthority,
     skillLibraryAuthoring: params.skillLibraryAuthoring,
+    toolDiscovery: params.toolDiscovery,
     ...(params.bundledTools?.length ? { bundledTools: params.bundledTools } : {}),
     ...(params.toolAuth ? { toolAuth: structuredClone(params.toolAuth) } : {}),
   };
@@ -538,6 +540,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       withCronManagementToolConstruction?: <T>(run: () => T) => T;
       questionAnswerAuthority?: PreparedQuestionAnswerAuthority;
       skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+      toolDiscovery?: import("../config/sessions/tool-discovery.types.js").SessionToolDiscoveryPresentation;
       bundledTools?: readonly AnyAgentTool[];
       isCurrent: () => boolean;
       toolAuth?: McpLoopbackToolAuth;
@@ -601,6 +604,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       : undefined,
     questionAnswerAuthority,
     skillLibraryAuthoring: grant.skillLibraryAuthoring,
+    toolDiscovery: grant.toolDiscovery,
     ...(grant.bundledTools ? { bundledTools: grant.bundledTools } : {}),
     isCurrent,
 

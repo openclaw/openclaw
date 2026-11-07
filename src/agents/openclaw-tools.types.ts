@@ -29,6 +29,8 @@ import type {
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
+  /** Passive session presentation; current executors retain their own authority. */
+  toolDiscovery?: import("../config/sessions/tool-discovery.types.js").SessionToolDiscoveryPresentation;
   /** Session-owned declaration used only for tool listing, never invocation authority. */
   listingClientCaps?: string[];
   /** Creator policy retained by the scheduled session owner. */

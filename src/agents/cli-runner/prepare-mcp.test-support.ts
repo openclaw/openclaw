@@ -485,6 +485,8 @@ export function registerCliMcpPreparationTests({
       },
       runtimeOwnerToken,
       admittedRunContext: params.admittedRunContext,
+      assertCurrent: expect.any(Function),
+      toolDiscovery: undefined,
       toolPolicyConfig: {},
       sessionEventSourcePolicy: { toolsAllow: undefined, settings },
       messageActionTurnCapability,

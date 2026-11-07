@@ -75,6 +75,49 @@ async function withAdminTool(
 }
 
 const command = { kind: "command", argv: ["printf", "proof"] };
+it.for(["ordinary", "management"] as const)(
+  "retains the %s declaration through management expiry without retaining authority",
+  async (discovery) => {
+    const runId = "stable-management-discovery";
+    const options = { runId, agentSessionKey: "agent:main:control-ui", discovery };
+    const admitted = await withCronManagementCaller(runId, async () => {
+      const tool = createCronTool(options);
+      // A visible creation action cannot bypass a management-only continuation's execution cap.
+      await expect(tool.execute("create", { action: "add", job: {} })).rejects.toThrow(
+        "can only list, get, update, run, remove, or bind automations",
+      );
+      return tool;
+    });
+    const resumed = createCronTool(options);
+    expect(resumed.parameters).toEqual(admitted.parameters);
+    expect(resumed.description).toBe(admitted.description);
+    const ordinary = createCronTool({ agentSessionKey: options.agentSessionKey });
+    if (discovery === "ordinary") {
+      expect(resumed.parameters).toEqual(ordinary.parameters);
+    } else {
+      expect(resumed.parameters).not.toEqual(ordinary.parameters);
+    }
+    using gateway = vi.spyOn(gatewayModule, "callGatewayTool");
+    await expect(admitted.execute("late-get", { action: "get", jobId })).rejects.toThrow();
+    expect(gateway).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps legacy and standalone scheduled discovery scoped to their existing owner", async () => {
+  await withCronManagementCaller("legacy-discovery", async () => {
+    const legacy = createCronTool({ runId: "legacy-discovery" });
+    const scoped = {
+      runId: "legacy-discovery",
+      agentSessionKey: "agent:main:cron:job",
+      selfRemoveOnlyJobId: jobId,
+    };
+    expect(createCronTool({ ...scoped, discovery: "management" }).parameters).toEqual(
+      createCronTool(scoped).parameters,
+    );
+    expect(legacy.parameters).not.toEqual(createCronTool().parameters);
+  });
+});
+
 it.each([
   { origin: "channel-owner", input: { ...command, timeoutSeconds: 30 }, stored: undefined },
   { origin: "unknown", input: { timeoutSeconds: null }, stored: command },

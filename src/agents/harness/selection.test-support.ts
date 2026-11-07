@@ -14,6 +14,8 @@ import type {
 import { retainPreparedPluginRegistry } from "../prepared-model-runtime.plugin-lifetime.js";
 import { maybeCompactAgentHarnessSession as compactSession } from "./compaction.js";
 import * as lifecycle from "./lifecycle.test-support.js";
+import { registerAgentHarness } from "./registry.js";
+import type { AgentHarness } from "./types.js";
 
 export function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
   const { diagnosticTrace: _trace, ...result } = lifecycle.createAttemptResult();
@@ -86,6 +88,11 @@ export async function withOwnedHarnessGeneration<Registered, Result>(
 }
 
 export const privateHarnessParamCases = [
+  { field: "toolDiscoveryCapture", value: { kind: "clear", assertCurrent: () => undefined } },
+  {
+    field: "toolDiscoveryPreparation",
+    value: { assertCurrent: () => undefined, completePreparation: () => undefined },
+  },
   { field: "thinkingExplicit", value: false },
   {
     field: "runtimePluginToolGrant",
@@ -100,3 +107,16 @@ export const privateHarnessParamCases = [
   { field: "onCompactionRequestBudget", value: () => undefined },
   { field: "prepareContinuationRetryCount", value: () => undefined },
 ] as const;
+
+export function registerHarness(overrides: Partial<AgentHarness> = {}) {
+  const id = overrides.id ?? "codex";
+  const harness: AgentHarness = {
+    id,
+    label: id,
+    supports: () => ({ supported: true, priority: 100 }),
+    runAttempt: async () => createAttemptResult(id),
+    ...overrides,
+  };
+  registerAgentHarness(harness, { ownerPluginId: id });
+  return harness;
+}

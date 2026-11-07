@@ -8,6 +8,7 @@ import {
 import { SessionStoreMigrationRequiredError } from "./migration-required.js";
 import { hasLegacySessionEntryState } from "./session-entry-state-format.js";
 import { assertSupportedSessionStoreEntry } from "./supported-session-store.js";
+import { normalizeSessionToolDiscovery } from "./tool-discovery.types.js";
 import type { PendingTranscriptRepairState, SessionEntry } from "./types.js";
 
 function normalizeSessionEntryArchiveReason(
@@ -39,6 +40,7 @@ export function projectCanonicalSessionEntryShape(
       | "titleRefinement"
       | "owner"
       | "participants"
+      | "toolDiscovery"
       | "participantCount",
       unknown
     >
@@ -90,6 +92,14 @@ export function projectCanonicalSessionEntryShape(
       delete canonicalValue[key];
     }
   };
+  if ("toolDiscovery" in canonicalValue) {
+    const discovery = normalizeSessionToolDiscovery(canonicalValue.toolDiscovery);
+    if (discovery?.sessionId === canonicalValue.sessionId) {
+      canonicalValue.toolDiscovery = discovery;
+    } else {
+      delete canonicalValue.toolDiscovery;
+    }
+  }
   setOptionalField(
     "clientCapabilities",
     Array.isArray(canonicalValue.clientCapabilities)

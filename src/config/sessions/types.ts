@@ -642,6 +642,8 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Incarnation- and audience-bound presentation, never a retained tool grant. */
+  toolDiscovery?: import("./tool-discovery.types.js").SessionToolDiscovery;
   /** Atomic history-cut receipt for the exact settled local projection, cleared after adoption. */
   localWorkspaceHandoff?: {
     worktreeId: string;

@@ -210,6 +210,7 @@ export type AgentCommandOpts = {
   /** Gateway-owned exact operational instance shared with its abort controller. */
   operationalRunInstance?: import("../admitted-run-context.js").OperationalRunInstanceRef;
   skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
+  toolDiscoveryCapture?: import("../../config/sessions/tool-discovery.types.js").SessionToolDiscoveryCapture;
   /** Gateway-minted exact-run capability for late Codex creator-authority capture. */
   cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   /** Private exact-instance binding hook invoked after delegated authority admission. */
@@ -271,6 +272,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   extraSystemPromptTurnContext: undefined,
   replyExpectation: undefined,
   skillLibraryAuthoring: undefined,
+  toolDiscoveryCapture: undefined,
   cronCreatorAuthorityCapability: undefined,
   onAdmittedRunContext: undefined,
   onPostAdmittedRunContext: undefined,

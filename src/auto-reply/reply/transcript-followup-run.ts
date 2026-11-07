@@ -46,6 +46,7 @@ export function buildTranscriptFollowupRun(
       ...base.run,
       inputProvenance: { kind: "internal_system", sourceTool: params.sourceTool },
       suppressNextUserMessagePersistence: true,
+      toolDiscoveryCapture: undefined,
       skillLibraryAuthoring: expireSkillLibraryAuthoring(
         base.run.skillLibraryAuthoring,
         params.expiredSkillAuthoringMessage,

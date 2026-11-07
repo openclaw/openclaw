@@ -8,6 +8,44 @@ import type { RunCliAgentParams } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+it.each([
+  { original: undefined, hook: undefined, scoped: true },
+  { original: ["read"], hook: undefined, scoped: false },
+  { original: undefined, hook: ["read"], scoped: false },
+])(
+  "keeps original and prompt-hook event caps separate from projection: %j",
+  ({ original, hook, scoped }) => {
+    const params: RunCliAgentParams = {
+      sessionId: "cli-event",
+      sessionKey: "agent:main:cli-event",
+      sessionFile: "/workspace/session.jsonl",
+      workspaceDir: "/workspace",
+      provider: "claude-cli",
+      prompt: "question",
+      runId: "cli-event-run",
+      timeoutMs: 1_000,
+      toolsAllow: original,
+    };
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:cli-event",
+      sessionId: params.sessionId,
+    };
+    using authority = captureCliRunToolAuthority(params, {
+      agentId: "main",
+      workspaceDir: "/workspace",
+      cwd: "/workspace",
+    });
+    const policy = authority.finalizeSessionEventSourcePolicy(
+      { ...params, cliToolAvailability: { native: [], openClaw: ["read", "write"] } },
+      hook,
+      scope,
+    );
+    expect(policy.toolsAllow).toEqual(scoped ? ["read", "write"] : ["read"]);
+    expect(policy.conversationScope).toEqual(scoped ? scope : undefined);
+  },
+);
+
 type AuthorityRead = { key: PropertyKey; present: boolean; value: unknown };
 function observeReads<T extends object>(target: T, reads: AuthorityRead[]): T {
   return new Proxy(target, {

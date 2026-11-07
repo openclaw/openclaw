@@ -28,10 +28,7 @@ import {
 } from "../../gateway/mcp-http.runtime.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
-import type {
-  CliBackendPreparedExecution,
-  CliBackendPromptContext,
-} from "../../plugins/cli-backend.types.js";
+import type { CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
@@ -66,7 +63,6 @@ import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
 } from "../bootstrap-files.js";
-import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "../bootstrap-routing.js";
 import {
   CLI_AUTH_EPOCH_VERSION,
   resolveCliAuthBindingFingerprint,
@@ -109,16 +105,17 @@ import {
   resolveRunBootstrapWorkspaceDir,
   resolveRunWorkspaceDir,
 } from "../workspace-run.js";
-import {
-  DEFAULT_BOOTSTRAP_FILENAME,
-  isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
-} from "../workspace.js";
+import { DEFAULT_BOOTSTRAP_FILENAME } from "../workspace.js";
 import {
   CliAuthProfilePreparationError,
   createCliCredentialUseCheck,
   createCliProfileResolutionError,
 } from "./auth-profile-preparation-error.js";
-import { canTransportSystemPrompt, resolveCliBootstrapPromptHash } from "./bootstrap-transport.js";
+import {
+  canTransportSystemPrompt,
+  resolveCliBootstrapPromptHash,
+  resolveCliBootstrapRouting,
+} from "./bootstrap-transport.js";
 import {
   applyClaudeManagedMcpTimeout,
   CLAUDE_MANAGED_MCP_TIMEOUT_MS,
@@ -142,13 +139,12 @@ import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
+import { prepareCliDiscoverySurface } from "./prepare-discovery-surface.js";
 import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
 import {
   capCliToolAvailability,
   keptManagedNativeTools,
-  withCliToolSearch,
-  resolveCliBootstrapFileAccess,
   resolveCliRuntimeToolPolicy,
   resolveCliToolAvailabilityHash,
 } from "./prepare-tool-policy.js";
@@ -169,13 +165,13 @@ import {
   loadCliSessionPromptContext,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
-import { resolveStableCliSkillAuthoring } from "./stable-skill-authoring.js";
+import { resolveCliToolDiscovery } from "./stable-skill-authoring.js";
 import { captureCliRunToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
   type CliReusableSession,
-  type CliSecretInput,
   type PreparedCliRunContext,
+  type PrivateCliBackendPreparedExecution,
   type RunCliAgentParams,
 } from "./types.js";
 
@@ -186,11 +182,6 @@ const CALLER_SURFACE_TOOL_NAMES = new Set([
   "dismiss_task",
 ]);
 
-type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
-  isolatedCompletionEnforced?: true;
-  secretInput?: CliSecretInput;
-};
-
 type RunCliAgentPrepareParams = RunCliAgentParams & {
   /** Ring-zero tool transport supplied only by the OpenClaw orchestrator. */
   systemAgentTool?: import("../tools/system-agent-tool.js").SystemAgentToolOptions;
@@ -199,9 +190,7 @@ type RunCliAgentPrepareParams = RunCliAgentParams & {
 export async function prepareCliRunContext(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
-  return runWithCliPreparationSource(inputParams, () =>
-    prepareCliRunContextWithinReadFence(inputParams),
-  );
+  return runWithCliPreparationSource(inputParams, prepareCliRunContextWithinReadFence);
 }
 
 async function prepareCliRunContextWithinReadFence(
@@ -735,12 +724,10 @@ async function prepareCliRunContextWithinReadFence(
   const shouldMaterializeRuntimePolicy =
     runtimeToolsAllowPolicy !== undefined && canUseGatewayTools && params.disableTools !== true;
   const skillLibraryAuthoring: RunCliAgentParams["skillLibraryAuthoring"] =
-    resolveStableCliSkillAuthoring(
-      params.sessionKey,
-      nodeWorkshopEnabled && params.skillLibraryAuthoring
-        ? { ...params.skillLibraryAuthoring, defaultTarget: "personal" }
-        : params.skillLibraryAuthoring,
-    );
+    nodeWorkshopEnabled && params.skillLibraryAuthoring
+      ? { ...params.skillLibraryAuthoring, defaultTarget: "personal" }
+      : params.skillLibraryAuthoring;
+  const toolDiscovery = resolveCliToolDiscovery(params.toolDiscovery, nodeWorkshopEnabled);
   const mcpContextBase =
     mcpLoopbackRuntime || shouldMaterializeRuntimePolicy || nodeWorkshopEnabled
       ? buildCliMcpGrantContext({
@@ -803,6 +790,7 @@ async function prepareCliRunContextWithinReadFence(
         scope: {
           cfg: runConfig,
           ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
+          toolDiscovery,
           ...(loopbackBundleMcp ? { bundledTools: loopbackBundleMcp.tools } : {}),
           ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
           ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
@@ -851,31 +839,23 @@ async function prepareCliRunContextWithinReadFence(
     hookFilteredProjectedTools,
     params.cliToolAvailability?.openClaw,
   );
-  // Mirror the embedded runner's bootstrap routing for backends that transport
-  // OpenClaw's system prompt, using the final native or mediated file access.
-  params = withCliToolSearch(params, backendResolved.nativeToolSearch);
-  const hasBootstrapFileAccess = resolveCliBootstrapFileAccess({
-    backend: backendResolved,
+  const discoverySurface = prepareCliDiscoverySurface({
     params,
+    backend: backendResolved,
+    projectedTools,
     managedNativeTools,
-    projectedToolNames: projectedTools.map((tool) => tool.name),
   });
-  const bootstrapRouting =
-    skipsTurnPreparation || !canTransportSystemPrompt(backendResolved.config)
-      ? undefined
-      : await resolveWorkspaceBootstrapRouting({
-          isWorkspaceBootstrapPending: isWorkspaceBootstrapPendingImpl,
-          bootstrapFiles,
-          bootstrapFilesProvideAccess: false,
-          bootstrapContextRunKind: params.bootstrapContextRunKind,
-          trigger: params.trigger,
-          sessionKey: params.sessionKey,
-          isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
-          isCanonicalWorkspace: canonicalWorkspace === workspaceDir,
-          effectiveWorkspace: workspaceDir,
-          resolvedWorkspace: workspaceDir,
-          hasBootstrapFileAccess,
-        });
+  params = discoverySurface.params;
+  const { hasBootstrapFileAccess } = discoverySurface;
+  const bootstrapRouting = await resolveCliBootstrapRouting({
+    backend: backendResolved.config,
+    params,
+    skipsTurnPreparation,
+    bootstrapFiles,
+    canonicalWorkspace,
+    workspaceDir,
+    hasBootstrapFileAccess,
+  });
   const bootstrapMode = bootstrapRouting?.bootstrapMode ?? "none";
   const includeBootstrapInSystemContext = bootstrapRouting?.includeBootstrapInSystemContext ?? true;
   const contextFiles = includeBootstrapInSystemContext
@@ -949,6 +929,7 @@ async function prepareCliRunContextWithinReadFence(
   const sessionEventSourcePolicy = callerToolAuthority.finalizeSessionEventSourcePolicy(
     params,
     promptBuildToolsAllow,
+    toolPolicy.conversationSourceScope,
   );
   const { mcpGrant, projectNativeToolAuthority, exclusiveTools } = mcp.prepareCliMcpGrant(params, {
     context: mcpContextBase,
@@ -976,6 +957,7 @@ async function prepareCliRunContextWithinReadFence(
             bindQuestionAnswerAuthority: (assertActive) =>
               bindQuestionAnswerAuthorityForSession(mcpGrant.context.sessionKey, assertActive),
             ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
+            toolDiscovery,
             ...(loopbackBundleMcp ? { bundledTools: loopbackBundleMcp.tools } : {}),
             ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
           })

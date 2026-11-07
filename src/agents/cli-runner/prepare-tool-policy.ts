@@ -1,10 +1,15 @@
+import type { SessionEventSourcePolicy } from "../../auto-reply/reply/session-event-contract.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { applyEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { resolveExecConfigState } from "../exec-defaults.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../tool-fs-policy.js";
-import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
+import {
+  expandToolGroups,
+  normalizeToolPolicyName,
+  toolPolicyRestrictsTools,
+} from "../tool-policy.js";
 import { resolveToolSearchConfig } from "../tool-search-config.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -32,6 +37,7 @@ export async function resolveCliRuntimeToolPolicy(input: {
   params: RunCliAgentParams;
   runtimeToolsAllowPolicy: string[] | undefined;
   managedNativeTools: readonly string[];
+  conversationSourceScope?: SessionEventSourcePolicy["conversationScope"];
 }> {
   let { params } = input;
   let runtimeToolsAllowPolicy: string[] | undefined;
@@ -171,7 +177,38 @@ export async function resolveCliRuntimeToolPolicy(input: {
       cliToolAvailability: { native: managedNativeTools, openClaw: exactWorkspaceTools ?? [] },
     };
   }
-  return { params, runtimeToolsAllowPolicy, managedNativeTools };
+  // Only an ordinary host-derived projection can be re-derived by this same conversation.
+  // Preserve all explicit selections and transient caller/delegation restrictions as caps.
+  const conversationSourceScope =
+    ordinaryClaudeMediation &&
+    input.params.toolsAllow === undefined &&
+    input.params.cliToolAvailability === undefined &&
+    !input.params.disableTools &&
+    !input.params.controlOperation &&
+    !input.params.isolatedCompletion &&
+    !input.params.trustedInternalHandoff &&
+    !input.params.inputProvenance &&
+    !input.params.scheduledToolPolicy &&
+    !input.params.spawnedBy &&
+    !input.params.runtimePolicySessionKey &&
+    !senderRestricted &&
+    !delegatedExecution &&
+    requesterPolicy !== undefined &&
+    !requesterPolicy.runtimePluginToolGrant &&
+    ![
+      requesterPolicy.senderPolicy,
+      requesterPolicy.groupPolicy,
+      requesterPolicy.runtimeToolPolicyForInheritance,
+    ].some(toolPolicyRestrictsTools) &&
+    input.params.sessionKey?.trim() &&
+    input.params.sessionEntry?.sessionId === input.params.sessionId
+      ? Object.freeze({
+          agentId: input.policyAgentId,
+          sessionKey: input.params.sessionKey,
+          sessionId: input.params.sessionId,
+        })
+      : undefined;
+  return { params, runtimeToolsAllowPolicy, managedNativeTools, conversationSourceScope };
 }
 
 /**

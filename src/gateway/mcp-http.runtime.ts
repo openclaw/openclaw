@@ -69,6 +69,7 @@ type McpLoopbackScopeParams = {
   authProfileStore?: AuthProfileStore;
   authProfileStoreAgentDir?: string;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+  toolDiscovery?: import("../config/sessions/tool-discovery.types.js").SessionToolDiscoveryPresentation;
   /** Run-owned configured MCP tools; only an exclusive CLI run supplies them. */
   bundledTools?: readonly AnyAgentTool[];
   /** Host-selected coding owners for pre-grant projection only. */
@@ -345,6 +346,7 @@ async function constructMcpLoopbackTools(
     authProfileStore: params.authProfileStore,
     onYield: params.onYield,
     skillLibraryAuthoring: params.skillLibraryAuthoring,
+    toolDiscovery: params.toolDiscovery,
     bundledTools: params.bundledTools,
     nativeCronCreatorToolAllowlist: context.nativeCronCreatorToolAllowlist ?? undefined,
     agentDir: params.authProfileStoreAgentDir,

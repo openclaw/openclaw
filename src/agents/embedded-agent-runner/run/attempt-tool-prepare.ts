@@ -361,6 +361,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             resolveWebSearchRoute().kind === "managed";
         },
         githubPublicationAvailable: attempt.githubPublicationAvailable,
+        toolDiscovery: attempt.toolDiscovery,
         abortSignal,
         skillLibraryAuthoring: attempt.skillLibraryAuthoring,
         modelCompat: extractModelCompat(attempt.model),
