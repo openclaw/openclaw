@@ -201,6 +201,7 @@ async function ensureSandboxWorkspaceLayout(
 type ResolveSandboxContextParams = {
   config?: OpenClawConfig;
   agentId?: string;
+  disableTools?: boolean;
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   assertCurrent?: () => void;
@@ -497,13 +498,15 @@ async function resolveSandboxContextWithAuthority(
           ownedParams.assertCurrent?.();
 
           phases.mark("attempt.setup.sandbox.browser");
-          const resolvedBrowserConfig = resolvedCfg.browser.enabled
+          // Tool-free inference scopes do not activate the optional browser runtime.
+          const browserEnabled = resolvedCfg.browser.enabled && ownedParams.disableTools !== true;
+          const resolvedBrowserConfig = browserEnabled
             ? resolveBrowserConfig(ownedParams.config?.browser, ownedParams.config)
             : undefined;
           const evaluateEnabled =
             resolvedBrowserConfig?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
 
-          const bridgeAuth = cfg.browser.enabled
+          const bridgeAuth = browserEnabled
             ? await (async () => {
                 // Sandbox browser bridge server runs on a loopback TCP port; always wire up
                 // the same auth that loopback browser clients will send (token/password).
@@ -523,13 +526,13 @@ async function resolveSandboxContextWithAuthority(
                 return browserAuth;
               })()
             : undefined;
-          if (resolvedCfg.browser.enabled && backend.capabilities?.browser !== true) {
+          if (browserEnabled && backend.capabilities?.browser !== true) {
             throw new Error(
               `Sandbox backend "${backend.id}" does not support browser sandboxes yet.`,
             );
           }
           const browser =
-            resolvedCfg.browser.enabled && backend.capabilities?.browser === true
+            browserEnabled && backend.capabilities?.browser === true
               ? await ensureSandboxBrowser({
                   scopeKey,
                   workspaceDir,
