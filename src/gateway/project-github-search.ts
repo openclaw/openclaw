@@ -3,6 +3,7 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   RemoteProject,
   ProjectsSearchRemoteResult,
@@ -34,7 +35,8 @@ const searchCaches = new WeakMap<
 >();
 
 function boundedString(value: unknown, maxLength: number): string | undefined {
-  return normalizeOptionalString(value)?.slice(0, maxLength);
+  const text = normalizeOptionalString(value);
+  return text == null ? undefined : truncateUtf16Safe(text, maxLength);
 }
 
 function parseRepository(value: unknown): RemoteProject | null {
@@ -54,8 +56,8 @@ function parseRepository(value: unknown): RemoteProject | null {
   const description = boundedString(value.description, 500);
   const defaultBranch = boundedString(value.default_branch, 255);
   return {
-    name: name.slice(0, 100),
-    fullName: fullName.slice(0, 200),
+    name: truncateUtf16Safe(name, 100),
+    fullName: truncateUtf16Safe(fullName, 200),
     cloneUrl: clone.url,
     webUrl,
     private: value.private === true,
