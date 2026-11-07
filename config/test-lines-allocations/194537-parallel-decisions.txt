@@ -1,3 +1,3 @@
-575
+565
 # Parallel Decisions native/OpenRouter protocol, refusal/estimate, catalog and real socket authority regressions.
-# Exact measured growth: 565 net test LF lines plus 10 inherited base-overage lines; no unused ceiling credit.
+# Exact measured net test LF growth; shared scalar unchanged and no spare ceiling credit.
