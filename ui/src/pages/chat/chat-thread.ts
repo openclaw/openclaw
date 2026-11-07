@@ -7,7 +7,10 @@ import {
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
-import { isStandaloneToolMessageForDisplay } from "../../lib/chat/message-normalizer.ts";
+import {
+  isStandaloneToolMessageForDisplay,
+  readMediaHostGuardLoaded,
+} from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
@@ -28,6 +31,8 @@ import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-ca
 type CachedChatItems = {
   generation: number;
   input: BuildChatItemsProps | null;
+  /** Whether items were built after media hosts deferred on the IP guard could be re-checked. */
+  mediaHostGuardLoaded?: boolean;
   items: ReturnType<typeof buildChatItems>;
   liveStream: {
     index: number;
@@ -462,6 +467,9 @@ export function buildCachedChatItems(
     items: [],
     liveStream: null,
   });
+  // A message whose media host waited on the IP guard can gain or lose a row
+  // once the guard loads, so readiness is part of the structural identity.
+  const mediaHostGuardLoaded = readMediaHostGuardLoaded();
   // Keep stream-only updates off the loaded-history path; structural changes
   // still use the full builder.
   const previousInput = cached.input;
@@ -473,7 +481,11 @@ export function buildCachedChatItems(
     input.runFinalizing === true &&
     input.runActive === true &&
     previousInput.stream !== input.stream;
-  if (previousInput && sameChatItemsStructuralInput(previousInput, input, finalizingOnset)) {
+  if (
+    previousInput &&
+    cached.mediaHostGuardLoaded === mediaHostGuardLoaded &&
+    sameChatItemsStructuralInput(previousInput, input, finalizingOnset)
+  ) {
     if (
       previousInput.stream === input.stream &&
       activeChatReasoning(previousInput.reasoning)?.text ===
@@ -491,6 +503,7 @@ export function buildCachedChatItems(
   // Only a page in front of retained history loads the reuse runtime.
   const prepended =
     previous &&
+    cached.mediaHostGuardLoaded === mediaHostGuardLoaded &&
     cached.facts &&
     added > 0 &&
     added < input.messages.length &&
@@ -518,6 +531,7 @@ export function buildCachedChatItems(
   // observe the structural pass; text-only slot replacements do not advance it.
   chatItemsGenerations.set(items, ++cached.generation);
   cached.input = input;
+  cached.mediaHostGuardLoaded = mediaHostGuardLoaded;
   cached.items = items;
   const onset = cached.facts.streamOnset;
   const liveStreamIndex = onset
