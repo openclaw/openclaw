@@ -116,9 +116,9 @@ suite.define(() => {
         await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("high");
         await expect.poll(() => permission.getAttribute("data-chat-select-value")).toBe("");
         await expect.poll(() => permission.textContent()).toContain("Full access");
-        await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
         await openChatDetails(page);
         await flushSnapshot();
+        await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
 
         const appearance = () =>
           pane
