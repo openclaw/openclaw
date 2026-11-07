@@ -1132,7 +1132,6 @@
 ["src/agents/agent-tools.memory-flush-writer.test.ts","../config/sessions/session-delivery-generation.js","3935f0adf91f058c987d267cd0bc064e7662dd7776d71e6aad627ff4a33380e4",1]
 ["src/agents/agent-tools.memory-flush-writer.test.ts","../config/sessions/session-entry-read-runtime.js","772b423a940db146a3ff1e0ac3466039a010011ba54bdba9999483d999cd02d6",1]
 ["src/agents/agent-tools.model-provider-collision.test.ts","./openclaw-plugin-tools.js","919397ca3de2f478718218309773ec350ac302161cf4a685f7974c6209450806",1]
-["src/agents/agent-tools.policy.test.ts","../channels/plugins/index.js","1d295b61723ff6bcb6579f03c6acc424b1b3fa23a6fe01faa5ba01647b7784d8",1]
 ["src/agents/agent-tools.policy.test.ts","../channels/plugins/session-conversation.js","2495891d9250cc2f0880c0a6db85195c17f96b813d827acc0687ca8401de7bac",1]
 ["src/agents/agent-tools.runtime.test.ts","./channel-tools.js","e53ca08aa9500f1654d4b6d6f88c24a3f039b393f387a7ef3ea112418e7fb37b",1]
 ["src/agents/agent-tools.safe-bins.test.ts","../process/supervisor/index.js","a67e925e92e8538f7f153b855399c578301edd3f639bca9bad9ce5e54d878976",1]

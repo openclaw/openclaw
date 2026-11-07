@@ -1,11 +1,14 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { WhatsAppConfig } from "../config/types.whatsapp.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -21,16 +24,6 @@ vi.mock("../channels/plugins/session-conversation.js", () => ({
     threadId: undefined,
     baseConversationId: rawId,
     parentConversationCandidates: [],
-  }),
-}));
-vi.mock("../channels/plugins/index.js", () => ({
-  getLoadedChannelPlugin: () => ({
-    config: {
-      listAccountIds: (config: OpenClawConfig) => [
-        "default",
-        ...Object.keys(config.channels?.whatsapp?.accounts ?? {}),
-      ],
-    },
   }),
 }));
 
@@ -72,6 +65,29 @@ function expectAllowed(
 }
 
 describe("resolveGroupToolPolicy group context validation", () => {
+  function channelRegistry(accounts: (config: OpenClawConfig) => string[]) {
+    return createTestRegistry([
+      {
+        pluginId: "whatsapp",
+        plugin: createChannelTestPluginBase({
+          id: "whatsapp",
+          config: { listAccountIds: accounts },
+        }),
+        source: "test",
+      },
+    ]);
+  }
+
+  beforeEach(() => {
+    setActivePluginRegistry(
+      channelRegistry((config) => [
+        "default",
+        ...Object.keys(config.channels?.whatsapp?.accounts ?? {}),
+      ]),
+    );
+  });
+  afterEach(() => resetPluginRuntimeStateForTest());
+
   const whatsapp = (groups: WhatsAppConfig["groups"], accounts?: WhatsAppConfig["accounts"]) => ({
     channels: { whatsapp: { groups, accounts } },
   });
@@ -147,6 +163,41 @@ describe("resolveGroupToolPolicy group context validation", () => {
         requireConfiguredAccount: true,
       }),
     ).toEqual({ deny: ["*"] });
+  });
+
+  it("uses the scoped channel's account roster and group policy", () => {
+    setActivePluginRegistry(createTestRegistry());
+    const registry = channelRegistry(() => ["work"]);
+    registry.channels[0]!.plugin.groups = { resolveToolPolicy: () => ({ deny: ["exec"] }) };
+
+    withPluginRuntimeRegistryScope(registry, () => {
+      expect(
+        resolveGroupToolPolicy({
+          config,
+          sessionKey: "agent:main:whatsapp:group:safe-room",
+          accountId: "work",
+          requireConfiguredAccount: true,
+        }),
+      ).toEqual({ deny: ["exec"] });
+    });
+  });
+
+  it("does not borrow a root account removed from the scoped channel", () => {
+    setActivePluginRegistry(channelRegistry(() => ["work"]));
+
+    withPluginRuntimeRegistryScope(
+      channelRegistry(() => ["default"]),
+      () => {
+        expect(() =>
+          resolveGroupToolPolicy({
+            config,
+            sessionKey: "agent:main:whatsapp:group:safe-room",
+            accountId: "work",
+            requireConfiguredAccount: true,
+          }),
+        ).toThrow('Scheduled account "work" is unavailable');
+      },
+    );
   });
 });
 
