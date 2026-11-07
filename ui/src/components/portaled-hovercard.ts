@@ -212,6 +212,21 @@ export function createPortaledHovercardOwner(
       portal.scheduleClose();
     },
 
+    // Document-level Escape: close, and return focus to the trigger when it was in the card.
+    handleEscape: (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const trigger = triggerElement;
+      const restore = portal.card?.contains(document.activeElement);
+      close();
+      if (restore) {
+        portal.returnFocus(trigger);
+      }
+    },
+
     handleTriggerKeyDown: (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         dismiss();
