@@ -74,7 +74,7 @@ mkdir -p "$(dirname "$out")"
 
 # Reject predictable output failures before making a paid request.
 if [[ -d "$out" || ( -e "$out" && ! -w "$out" ) || ( ! -e "$out" && ! -w "$(dirname "$out")" ) ]]; then
-  echo "Output is not writable: $out" >&2
+  echo "Cannot write output to $out. Choose a writable file with --out." >&2
   exit 1
 fi
 
