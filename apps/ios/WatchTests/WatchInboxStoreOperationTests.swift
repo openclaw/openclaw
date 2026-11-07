@@ -400,15 +400,6 @@ struct WatchInboxStoreOperationTests {
         #expect(store.lastExecApprovalOutcome?.code == .allowedAlways)
     }
 
-    private static func receive(_ payload: [String: Any], store: WatchInboxStore) async -> Bool {
-        let receiver = WatchConnectivityReceiver(store: store, directNodeSetupHandler: { _, _ in })
-        return await withCheckedContinuation { continuation in
-            receiver.session(WCSession.default, didReceiveMessage: payload) { reply in
-                continuation.resume(returning: reply["ok"] as? Bool == true)
-            }
-        }
-    }
-
     @Test func `switching chat sessions retires voice replies and the previous preview`() throws {
         try Self.withStore { store, defaults in
             var original = Self.snapshot(id: "original-session")
@@ -1262,5 +1253,287 @@ struct WatchInboxStoreOperationTests {
             expiresAtMs: nil,
             risk: nil,
             actions: [action])
+    }
+}
+
+@MainActor
+extension WatchInboxStoreOperationTests {
+    @Test func `retry reset matches the exact active attempt`() throws {
+        try Self.withStore { store, _ in
+            let approval = Self.approval(id: "retry-approval")
+            store.consume(execApprovalPrompt: .init(approval: approval, sentAtMs: 100), transport: "test")
+            let staleAttempt = try #require(Self.beginAllow(approval, store: store))
+            Self.completeAllow(approval, attemptID: staleAttempt, .notSent, store: store)
+            let activeAttempt = try #require(Self.beginAllow(approval, store: store))
+            Self.completeAllow(approval, attemptID: activeAttempt, .queued, store: store)
+
+            store.consume(
+                execApprovalPrompt: .init(approval: approval, sentAtMs: 200, resetResolutionAttemptId: staleAttempt),
+                transport: "test")
+            var record = try #require(store.execApprovals.first)
+            #expect(record.isResolving)
+            #expect(record.activeResolutionAttemptID == activeAttempt)
+            #expect(record.status?.code == .queued)
+            #expect(Self.beginAllow(approval, store: store) == nil)
+
+            store.consume(
+                execApprovalPrompt: .init(approval: approval, sentAtMs: 300, resetResolutionAttemptId: activeAttempt),
+                transport: "test")
+            record = try #require(store.execApprovals.first)
+            #expect(!record.isResolving)
+            #expect(record.activeResolutionAttemptID == nil)
+            #expect(record.status == nil)
+            #expect(Self.beginAllow(approval, store: store) != nil)
+        }
+    }
+
+    @Test(arguments: [WatchReplyDeliveryState.delivered, .queued])
+    func `watch distinguishes unsent approval from uncertain delivery`(uncertain: WatchReplyDeliveryState) throws {
+        try Self.withStore { store, _ in
+            let approval = Self.approval(id: "decision-approval")
+            store.consume(execApprovalPrompt: .init(approval: approval, sentAtMs: 100), transport: "test")
+            #expect(store.beginExecApprovalDecision(
+                approvalId: approval.id,
+                gatewayStableID: approval.gatewayStableID,
+                decision: .deny) == nil)
+
+            let unsent = try #require(Self.beginAllow(approval, store: store))
+            #expect(Self.beginAllow(approval, store: store) == nil)
+            Self.completeAllow(approval, attemptID: unsent, .notSent, store: store)
+            var record = try #require(store.execApprovals.first)
+            #expect(!record.isResolving)
+            #expect(record.pendingDecision == nil)
+            #expect(record.status?.code == .retry)
+            #expect(store.execApprovalSnapshotRequestItems(gatewayStableID: approval.gatewayStableID) == [
+                WatchExecApprovalSnapshotRequestItem(approvalId: approval.id),
+            ])
+
+            let sent = try #require(Self.beginAllow(approval, store: store))
+            Self.completeAllow(approval, attemptID: sent, uncertain, store: store)
+            // A late result for the retired attempt cannot unlock the uncertain one.
+            Self.completeAllow(approval, attemptID: unsent, .notSent, store: store)
+            record = try #require(store.execApprovals.first)
+            #expect(record.isResolving)
+            #expect(record.pendingDecision == .allowOnce)
+            #expect(record.status?.code == (uncertain == .delivered ? .sent : .queued))
+            #expect(Self.beginAllow(approval, store: store) == nil)
+            #expect(store.execApprovalSnapshotRequestItems(gatewayStableID: approval.gatewayStableID) == [
+                WatchExecApprovalSnapshotRequestItem(approvalId: approval.id, activeResolutionAttemptId: sent),
+            ])
+        }
+    }
+
+    @Test func `approval refresh reads back only the exact owner's held approvals`() throws {
+        try Self.withStore { store, _ in
+            let owner = "gateway-caf\u{00E9}"
+            let otherOwner = "gateway-cafe\u{0301}"
+            let held = Self.approval(id: "held", gatewayStableID: owner)
+            let resolving = Self.approval(id: "resolving", gatewayStableID: owner)
+            let foreign = Self.approval(id: "resolving", gatewayStableID: otherOwner)
+            for approval in [resolving, held, foreign] {
+                store.consume(execApprovalPrompt: .init(approval: approval, sentAtMs: 100), transport: "test")
+            }
+            let attempt = try #require(Self.beginAllow(resolving, store: store))
+            _ = try #require(Self.beginAllow(foreign, store: store))
+
+            #expect(store.execApprovalSnapshotRequestItems(gatewayStableID: owner) == [
+                WatchExecApprovalSnapshotRequestItem(approvalId: "held"),
+                WatchExecApprovalSnapshotRequestItem(approvalId: "resolving", activeResolutionAttemptId: attempt),
+            ])
+            #expect(store.execApprovalSnapshotRequestItems(gatewayStableID: nil).isEmpty)
+        }
+    }
+
+    @Test func `approval refresh completion belongs to the current gateway owner`() throws {
+        try Self.withStore { store, _ in
+            store.consume(appSnapshot: Self.snapshot(id: "owner", sentAtMs: 100))
+            #expect(store.consume(
+                execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
+                    approvals: [],
+                    gatewayStableID: "watch-test-gateway",
+                    sentAtMs: 100,
+                    snapshotId: "owner-approvals"),
+                transport: "test"))
+            store.consume(appSnapshot: Self.snapshot(id: "same-owner", sentAtMs: 200))
+            #expect(store.hasCompletedExecApprovalSnapshotRefresh)
+
+            store.consume(appSnapshot: Self.snapshot(
+                id: "replacement-owner",
+                gatewayStableID: "replacement-gateway",
+                sentAtMs: 300))
+            #expect(!store.hasCompletedExecApprovalSnapshotRefresh)
+        }
+    }
+
+    @Test func `watch rejects partial or missing approval snapshot arrays`() async throws {
+        try await Self.withJournalStore { store, _, _ in
+            #expect(store.consume(
+                execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
+                    approvals: [Self.approval(id: "held")],
+                    gatewayStableID: "watch-test-gateway",
+                    sentAtMs: 100,
+                    snapshotId: "initial"),
+                transport: "test"))
+            // Either payload, parsed leniently, would be a correlated snapshot that closes "held".
+            var missing = Self.approvalSnapshotPayload(requestId: "missing", sentAtMs: 200, approvals: [])
+            missing["approvals"] = nil
+            let partial = Self.approvalSnapshotPayload(requestId: "partial", sentAtMs: 300, approvals: [
+                Self.approvalPayload(id: "listed"),
+                ["id": "malformed", "gatewayStableID": "watch-test-gateway"],
+            ])
+
+            for payload in [missing, partial] {
+                #expect(await Self.receive(payload, store: store) == false)
+                #expect(store.sortedExecApprovals.map(\.approvalID) == ["held"])
+            }
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `snapshot acknowledgment follows store acceptance`(contextEnvelope: Bool) async throws {
+        try await Self.withJournalStore { store, _, _ in
+            let owner = "watch-test-gateway"
+            let nextOwner = "next-gateway"
+            let receiver = WatchConnectivityReceiver(store: store, directNodeSetupHandler: { _, _ in })
+            @MainActor func deliver(_ payload: [String: Any]) async {
+                let type = payload["type"] as? String ?? ""
+                _ = await Self.reply(to: contextEnvelope ? [type: payload] : payload, receiver: receiver)
+            }
+            func acknowledged(_ requestId: String, _ gatewayStableID: String) -> Bool {
+                WatchExecApprovalSnapshotRequestToken(requestId: requestId, gatewayStableID: gatewayStableID)
+                    .map(receiver.consumeExecApprovalSnapshotAcknowledgment(for:)) == true
+            }
+            store.consume(appSnapshot: Self.snapshot(id: "owner"))
+
+            // One item from another gateway makes the store reject the whole correlated snapshot.
+            await deliver(Self.approvalSnapshotPayload(
+                requestId: "rejected",
+                sentAtMs: 100,
+                approvals: [Self.approvalPayload(id: "foreign", gatewayStableID: nextOwner)]))
+            #expect(!acknowledged("rejected", owner))
+
+            for (requestId, sentAtMs) in [("accepted", Int64(200)), ("superseded", 300)] {
+                await deliver(Self.approvalSnapshotPayload(
+                    requestId: requestId,
+                    sentAtMs: sentAtMs,
+                    approvals: [Self.approvalPayload(id: requestId)]))
+            }
+            #expect(acknowledged("accepted", owner))
+            #expect(!acknowledged("accepted", owner))
+
+            // Another owner's snapshot is deferred, then acknowledged once its owner snapshot lands.
+            await deliver(Self.approvalSnapshotPayload(
+                requestId: "next",
+                gatewayStableID: nextOwner,
+                sentAtMs: 400,
+                approvals: [Self.approvalPayload(id: "next", gatewayStableID: nextOwner)]))
+            #expect(!acknowledged("next", nextOwner))
+            await deliver([
+                "type": WatchPayloadType.appSnapshot.rawValue,
+                "gatewayStableID": nextOwner,
+                "snapshotId": "next-owner",
+            ])
+            #expect(acknowledged("next", nextOwner))
+            #expect(!acknowledged("superseded", owner))
+        }
+    }
+
+    @Test func `receiver acknowledges only payloads it can consume`() async throws {
+        try await Self.withJournalStore { store, _, _ in
+            let receiver = WatchConnectivityReceiver(store: store, directNodeSetupHandler: { _, _ in })
+            for payload: [String: Any] in [
+                [:],
+                ["type": "watch.unknown"],
+                ["type": WatchPayloadType.execApprovalPrompt.rawValue, "sentAtMs": NSNumber(value: 100)],
+            ] {
+                let reply = await Self.reply(to: payload, receiver: receiver)
+                #expect(!reply.ok)
+                #expect(reply.error == "unsupported_payload")
+            }
+            #expect(!store.hasMessagePrompt)
+            #expect(store.execApprovals.isEmpty)
+
+            let accepted = await Self.reply(to: [
+                "type": WatchPayloadType.notify.rawValue,
+                "title": "Accepted",
+                "body": "Consumed before acknowledgment",
+                "gatewayStableID": "watch-test-gateway",
+            ], receiver: receiver)
+            #expect(accepted.ok)
+            #expect(store.title == "Accepted")
+        }
+    }
+
+    private static func receive(_ payload: [String: Any], store: WatchInboxStore) async -> Bool {
+        await self.reply(
+            to: payload,
+            receiver: WatchConnectivityReceiver(store: store, directNodeSetupHandler: { _, _ in })).ok
+    }
+
+    private static func reply(
+        to payload: [String: Any],
+        receiver: WatchConnectivityReceiver) async -> (ok: Bool, error: String?)
+    {
+        await withCheckedContinuation { continuation in
+            receiver.session(WCSession.default, didReceiveMessage: payload) { reply in
+                continuation.resume(returning: (reply["ok"] as? Bool == true, reply["error"] as? String))
+            }
+        }
+    }
+
+    private static func approval(
+        id: String,
+        gatewayStableID: String = "watch-test-gateway") -> WatchExecApprovalItem
+    {
+        WatchExecApprovalItem(
+            id: id,
+            gatewayStableID: gatewayStableID,
+            commandText: "echo \(id)",
+            allowedDecisions: [.allowOnce])
+    }
+
+    private static func approvalPayload(
+        id: String,
+        gatewayStableID: String = "watch-test-gateway") -> [String: Any]
+    {
+        ["id": id, "gatewayStableID": gatewayStableID, "commandText": "echo \(id)"]
+    }
+
+    private static func approvalSnapshotPayload(
+        requestId: String,
+        gatewayStableID: String = "watch-test-gateway",
+        sentAtMs: Int64,
+        approvals: [[String: Any]]) -> [String: Any]
+    {
+        [
+            "type": WatchPayloadType.execApprovalSnapshot.rawValue,
+            "approvals": approvals,
+            "gatewayStableID": gatewayStableID,
+            "sentAtMs": NSNumber(value: sentAtMs),
+            "snapshotId": requestId,
+            "requestId": requestId,
+            "requestGatewayStableID": gatewayStableID,
+        ]
+    }
+
+    private static func beginAllow(_ approval: WatchExecApprovalItem, store: WatchInboxStore) -> String? {
+        store.beginExecApprovalDecision(
+            approvalId: approval.id,
+            gatewayStableID: approval.gatewayStableID,
+            decision: .allowOnce)
+    }
+
+    private static func completeAllow(
+        _ approval: WatchExecApprovalItem,
+        attemptID: String,
+        _ delivery: WatchReplyDeliveryState,
+        store: WatchInboxStore)
+    {
+        store.completeExecApprovalDecision(
+            approvalId: approval.id,
+            gatewayStableID: approval.gatewayStableID,
+            attemptID: attemptID,
+            decision: .allowOnce,
+            result: self.result(delivery))
     }
 }

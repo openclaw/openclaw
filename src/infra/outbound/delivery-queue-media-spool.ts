@@ -19,6 +19,7 @@ import {
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
 import { ignoreMissingPath } from "../errno.js";
+import { allowDrvfsRenameRecovery } from "../fs-safe-drvfs.js";
 import { FsSafeError } from "../fs-safe.js";
 import { generateSecureUuid } from "../secure-random.js";
 import { getOrLoadSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
@@ -40,8 +41,10 @@ const ORPHAN_GRACE_MS = 24 * 60 * 60_000;
 const log = createSubsystemLogger("outbound/deliver");
 
 function openSpoolStore(stateDir: string | undefined, maxBytes?: number) {
+  const rootDir = resolveDeliveryQueueMediaDir(stateDir);
   return fileStore({
-    rootDir: resolveDeliveryQueueMediaDir(stateDir),
+    allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(rootDir),
+    rootDir,
     dirMode: 0o700,
     mode: 0o600,
     maxBytes,

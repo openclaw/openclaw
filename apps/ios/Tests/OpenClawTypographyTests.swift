@@ -46,82 +46,45 @@ struct OpenClawTypographyTests {
         #expect(weightValue?.doubleValue == 900)
     }
 
-    @Test func `app extensions register bundled branded fonts`() throws {
+    @Test func `activity widget registers bundled branded fonts`() throws {
+        // The widget has no test host; the Watch loads these fonts in OpenClawWatchTests.
         let project = try String(contentsOf: Self.projectYmlURL(), encoding: .utf8)
-        let activityPlist = try String(contentsOf: Self.activityWidgetInfoPlistURL(), encoding: .utf8)
-        let watchPlist = try String(contentsOf: Self.watchInfoPlistURL(), encoding: .utf8)
+        let plist = try String(contentsOf: Self.activityWidgetInfoPlistURL(), encoding: .utf8)
+        let target = try Self.extract(project, from: "  OpenClawActivityWidget:", to: "  OpenClawWatchApp:")
 
-        for targetName in ["OpenClawActivityWidget", "OpenClawWatchApp"] {
-            let target = try Self.extract(
-                project,
-                from: "  \(targetName):",
-                to: targetName == "OpenClawActivityWidget" ? "  OpenClawWatchApp:" : "  OpenClawTests:")
-            #expect(target.contains("- path: Sources/Fonts"))
-            #expect(target.contains("UIAppFonts:"))
-            for font in Self.bundledFontFiles {
-                #expect(target.contains("- \(font)"))
-            }
-        }
-
-        for plist in [activityPlist, watchPlist] {
-            #expect(plist.contains("<key>UIAppFonts</key>"))
-            for font in Self.bundledFontFiles {
-                #expect(plist.contains("<string>\(font)</string>"))
-            }
+        #expect(target.contains("- path: Sources/Fonts"))
+        #expect(target.contains("UIAppFonts:"))
+        #expect(plist.contains("<key>UIAppFonts</key>"))
+        for font in Self.bundledFontFiles {
+            #expect(target.contains("- \(font)"))
+            #expect(plist.contains("<string>\(font)</string>"))
         }
     }
 
-    @Test func `extension text surfaces use branded typography helpers`() throws {
-        let activityTypeSource = try String(contentsOf: Self.activityWidgetTypographySourceURL(), encoding: .utf8)
-        let activitySource = try String(contentsOf: Self.activityWidgetSourceURL(), encoding: .utf8)
-        let watchTypeSource = try String(contentsOf: Self.watchTypographySourceURL(), encoding: .utf8)
-        let watchSource = try String(contentsOf: Self.watchInboxSourceURL(), encoding: .utf8)
-
-        #expect(activityTypeSource.contains("relativeTo: .subheadline"))
-        #expect(activityTypeSource.contains("relativeTo: .caption"))
-        #expect(!activityTypeSource.contains(".custom(\"RedHatDisplay-Regular\", size: size).weight"))
-        #expect(!activityTypeSource.contains(".custom(\"Inter-Regular\", size: size)"))
-        #expect(activitySource.contains("OpenClawActivityType.subheadSemiBold"))
-        #expect(activitySource.contains("OpenClawActivityType.subheadBold"))
-        #expect(activitySource.contains("OpenClawActivityType.caption"))
-        #expect(!activitySource.contains(".font(.subheadline"))
-        #expect(!activitySource.contains(".font(.caption"))
-
-        #expect(watchTypeSource.contains("relativeTo textStyle: Font.TextStyle"))
-        #expect(watchTypeSource.contains("body(size: 12, weight: .semibold, relativeTo: .caption)"))
-        #expect(watchTypeSource.contains("body(size: 12, weight: .bold, relativeTo: .caption)"))
-        #expect(watchTypeSource.contains("body(size: 11, relativeTo: .caption2)"))
-        #expect(watchTypeSource.contains("relativeTo: .caption2"))
-        #expect(watchTypeSource.contains("relativeTo: .headline"))
-        #expect(!watchTypeSource.contains(".custom(\"RedHatDisplay-Regular\", size: size).weight"))
-        #expect(!watchTypeSource.contains(".custom(\"Inter-Regular\", size: size).weight"))
-        #expect(watchSource.contains("WatchClawType.title"))
-        #expect(watchSource.contains("WatchClawType.body"))
-        #expect(watchSource.contains("WatchClawType.caption"))
-        #expect(!watchSource.contains(".font(.system"))
-        #expect(!watchSource.contains(".font(.caption"))
-        #expect(!watchSource.contains(".font(.title"))
+    @Test func `activity widget fonts scale relative to Dynamic Type text styles`() throws {
+        // The widget has no test host, so its scaling helpers stay source-audited.
+        let source = try String(contentsOf: Self.activityWidgetTypographySourceURL(), encoding: .utf8)
+        #expect(source.contains("relativeTo: .subheadline"))
+        #expect(source.contains("relativeTo: .caption"))
+        #expect(!source.contains(".custom(\"RedHatDisplay-Regular\", size: size).weight"))
+        #expect(!source.contains(".custom(\"Inter-Regular\", size: size)"))
     }
 
-    @Test func `UIKit typography refreshes when Dynamic Type changes`() throws {
-        let appSource = try String(contentsOf: Self.appSourceURL(), encoding: .utf8)
-        let typographySource = try String(
-            contentsOf: Self.sourceURL("Design/OpenClawTypography.swift"),
-            encoding: .utf8)
+    @MainActor
+    @Test func `Dynamic Type refresh applies the clamped branded font to search fields`() throws {
+        defer { OpenClawType.installUIKitAppearance() }
+        let window = UIWindow()
+        let searchField = UISearchTextField()
+        window.addSubview(searchField)
+        searchField.font = .systemFont(ofSize: 17)
 
-        #expect(appSource.contains("UIContentSizeCategory.didChangeNotification"))
-        #expect(appSource.contains("OpenClawType.refreshUIKitAppearance(in: Self.connectedWindows())"))
-        #expect(typographySource.contains("static func refreshUIKitAppearance(in windows: [UIWindow])"))
-        #expect(typographySource.contains("applyUIKitTypography(fonts, to: window)"))
-        #expect(typographySource.contains("maximumPointSize: 13"))
-        #expect(typographySource.contains("maximumPointSize: 16"))
-        #expect(typographySource.contains("maximumPointSize: 22"))
-        #expect(typographySource.contains("maximumPointSize: 44"))
-        #expect(typographySource
-            .contains("for: base, maximumPointSize: maximumPointSize, compatibleWith: UITraitCollection.current"))
-        #expect(typographySource.contains("case let searchTextField as UISearchTextField"))
-        #expect(!typographySource.contains("case let textField as UITextField"))
-        #expect(!typographySource.contains("case let textView as UITextView"))
+        UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge).performAsCurrent {
+            OpenClawType.refreshUIKitAppearance(in: [window])
+        }
+
+        let font = try #require(searchField.font)
+        #expect(font.familyName == "Inter")
+        #expect(font.pointSize == 22)
     }
 
     @Test func `iOS app text and control calls keep branded font boundaries`() throws {
@@ -258,28 +221,8 @@ struct OpenClawTypographyTests {
         self.iosRootURL().appendingPathComponent("ActivityWidget/Info.plist")
     }
 
-    private static func watchInfoPlistURL() -> URL {
-        self.iosRootURL().appendingPathComponent("WatchApp/Info.plist")
-    }
-
-    private static func activityWidgetSourceURL() -> URL {
-        self.iosRootURL().appendingPathComponent("ActivityWidget/OpenClawLiveActivity.swift")
-    }
-
     private static func activityWidgetTypographySourceURL() -> URL {
         self.iosRootURL().appendingPathComponent("ActivityWidget/OpenClawActivityTypography.swift")
-    }
-
-    private static func watchInboxSourceURL() -> URL {
-        self.iosRootURL().appendingPathComponent("WatchApp/Sources/WatchInboxView.swift")
-    }
-
-    private static func watchTypographySourceURL() -> URL {
-        self.iosRootURL().appendingPathComponent("WatchApp/Sources/WatchClawTypography.swift")
-    }
-
-    private static func appSourceURL() -> URL {
-        self.sourceURL("OpenClawApp.swift")
     }
 
     private static func sourceURL(_ relativePath: String) -> URL {
@@ -289,6 +232,7 @@ struct OpenClawTypographyTests {
     private static func swiftSourcesForTypographyAudit() throws -> [URL] {
         let roots = [
             self.sourceURL(""),
+            self.iosRootURL().appendingPathComponent("ActivityWidget"),
             self.iosRootURL().appendingPathComponent("WatchApp/Sources"),
             self.iosRootURL()
                 .deletingLastPathComponent()
@@ -315,7 +259,13 @@ struct OpenClawTypographyTests {
     }
 
     private static func unbrandedTextCallOffenders(in source: String, relativePath: String) -> [String] {
-        let fontTokens = ["OpenClawType", "OpenClawChatTypography", "WatchClawType", "typography."]
+        let fontTokens = [
+            "OpenClawType",
+            "OpenClawActivityType",
+            "OpenClawChatTypography",
+            "WatchClawType",
+            "typography.",
+        ]
         let sourceBytes = Array(source.utf8)
         let code = self.maskedSwiftCode(source)
         guard !self.isCompleteMacOSSourceEnvelope(code) else { return [] }

@@ -763,6 +763,9 @@ try {
                   deviceScaleFactor: configuration.deviceScaleFactor,
                   mobile: viewport.name === "mobile",
                 });
+                if (viewport.name === "mobile") {
+                  await throttle.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+                }
                 await throttle.send("Emulation.setLocaleOverride", {
                   locale: configuration.locale,
                 });
@@ -898,6 +901,7 @@ try {
                     page,
                     { ...fixture, awaitInitialRoster: false },
                     {
+                      nativeAssetLatencyMs: networkProfile.httpLatencyMs,
                       requestHandlers: {
                         ...defaults,
                         ...scenario.createRequestHandlers?.(defaults),
