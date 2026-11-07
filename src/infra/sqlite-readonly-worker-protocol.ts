@@ -55,7 +55,7 @@ export type SqliteReadOnlyWorkerResult =
   | { ok: true; contentVersion: string }
   | { ok: true; generation: string }
   | { ok: true; taskDeliveryRecovery: PreservedOrphanTaskDelivery }
-  | { ok: false; message: string };
+  | { ok: false; message: string; errcode?: number };
 
 export class SqliteReadOnlyInspectionContentionError extends Error {}
 
@@ -167,6 +167,22 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
+  if (
+    "ok" in value &&
+    value.ok === false &&
+    "message" in value &&
+    typeof value.message === "string"
+  ) {
+    return (
+      Object.keys(value).length === 2 ||
+      (Object.keys(value).length === 3 &&
+        "errcode" in value &&
+        typeof value.errcode === "number" &&
+        Number.isInteger(value.errcode) &&
+        value.errcode >= 0 &&
+        value.errcode <= 0x7fff_ffff)
+    );
+  }
   if (Object.keys(value).length !== 2 || !("ok" in value)) {
     return false;
   }
@@ -198,8 +214,7 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
       Number.isSafeInteger(value.taskDeliveryRecovery.count) &&
       value.taskDeliveryRecovery.count > 0 &&
       typeof value.taskDeliveryRecovery.payloadSha256 === "string" &&
-      /^[a-f0-9]{64}$/u.test(value.taskDeliveryRecovery.payloadSha256)) ||
-    (value.ok === false && "message" in value && typeof value.message === "string")
+      /^[a-f0-9]{64}$/u.test(value.taskDeliveryRecovery.payloadSha256))
   );
 }
 
@@ -301,6 +316,14 @@ export function readSqliteReadOnlyWorkerValue(
       params.stderr,
       { cause: params.cause },
     );
+    if (
+      !result.ok &&
+      result.errcode !== undefined &&
+      (mode === "backup-engine" || mode === "backup-engine-preserving") &&
+      (params.status === 0 || params.status === 1)
+    ) {
+      Object.assign(error, { errcode: result.errcode });
+    }
     if (capacity) {
       throw new SqliteSnapshotCapacityError(error.message, { cause: params.cause });
     }
