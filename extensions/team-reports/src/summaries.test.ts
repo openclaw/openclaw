@@ -134,3 +134,21 @@ it("bounds member evidence and excludes raw comment bodies from model input", as
   expect(digest).toContain("Public summary 99");
   expect(digest).not.toContain('"title":"Public summary 19"');
 });
+
+it("keeps an emoji whole when a GitHub title hits the evidence cap", async () => {
+  const title = `${"T".repeat(511)}😀tail`;
+  const input = report();
+  input.members[0]!.github.items = [
+    githubItem({
+      title,
+      actor: "alex",
+    }),
+  ];
+  const complete = vi.fn<Complete>().mockResolvedValue(modelCompletion());
+  await summarize(complete, { report: input });
+  const digest = String(complete.mock.calls[0]?.[0].messages[1]?.content ?? "");
+  expect(digest).toContain(`"title":"${"T".repeat(511)}"`);
+  expect(digest).not.toContain("😀");
+  expect(digest).not.toContain("tail");
+  expect(digest).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+});
