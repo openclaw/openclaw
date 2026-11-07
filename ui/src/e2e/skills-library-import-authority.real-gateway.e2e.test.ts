@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../../../src/config/types.ts";
 import { isGatewayProtocolResponseError, type GatewayClient } from "../../../src/gateway/client.ts";
 import { buildGatewayReloadPlan } from "../../../src/gateway/config-reload-plan.ts";
 import { startGatewayServer } from "../../../src/gateway/server.ts";
+import { readUserProfileVersion } from "../../../src/state/user-profile-events.ts";
 import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileDisplayName,
@@ -63,6 +64,16 @@ const emails = {
   publication: randomUUID() + "@example.test",
 };
 
+type OwnedConnectionFacts = {
+  received: boolean;
+  identityPrepared: boolean;
+  closeCode: number | null;
+  closePhase: string | null;
+  socketOpened: boolean | null;
+  connectRequestSent: boolean | null;
+  reasonCategory: string | null;
+};
+const connectionFacts = new WeakMap<GatewayClient, OwnedConnectionFacts>();
 type Actor = "writer" | "reader" | "redirect" | "publication";
 type Source = Awaited<ReturnType<typeof createProofSource>>;
 type Policy = Awaited<ReturnType<typeof createProofPolicy>>;
@@ -227,15 +238,7 @@ async function connect(
   requestedScopes: string[] = scopes,
   continuity?: { hellos: number; closes: number },
 ) {
-  const hello: {
-    received: boolean;
-    identityPrepared: boolean;
-    closeCode: number | null;
-    closePhase: string | null;
-    socketOpened: boolean | null;
-    connectRequestSent: boolean | null;
-    reasonCategory: string | null;
-  } = {
+  const hello: OwnedConnectionFacts = {
     received: false,
     identityPrepared: false,
     closeCode: null,
@@ -253,7 +256,7 @@ async function connect(
       requestedScopes,
     );
     hello.identityPrepared = Boolean(options.deviceIdentity);
-    return await acquireGatewayTestClient(
+    const client = await acquireGatewayTestClient(
       {
         ...options,
         onHelloOk: () => {
@@ -267,15 +270,18 @@ async function connect(
           hello.closePhase = info?.phase ?? null;
           hello.socketOpened = info?.socketOpened ?? null;
           hello.connectRequestSent = info?.connectRequestSent ?? null;
-          hello.reasonCategory = /pair/iu.test(reason)
-            ? "pairing"
-            : /origin/iu.test(reason)
-              ? "origin"
-              : /auth|token|credential|identity/iu.test(reason)
-                ? "authentication"
-                : /protocol|invalid/iu.test(reason)
-                  ? "protocol"
-                  : "other";
+          hello.reasonCategory =
+            reason === "gateway policy changed"
+              ? "gateway-policy-changed"
+              : /pair/iu.test(reason)
+                ? "pairing"
+                : /origin/iu.test(reason)
+                  ? "origin"
+                  : /auth|token|credential|identity/iu.test(reason)
+                    ? "authentication"
+                    : /protocol|invalid/iu.test(reason)
+                      ? "protocol"
+                      : "other";
           if (continuity) {
             continuity.closes += 1;
           }
@@ -287,6 +293,8 @@ async function connect(
         closeMessage: "Owned profile connection closed before hello",
       },
     );
+    connectionFacts.set(client, hello);
+    return client;
   } catch (error) {
     console.error("Owned operator HELLO facts: " + JSON.stringify({ actor: name, ...hello }));
     throw error;
@@ -728,16 +736,33 @@ suite.define(() => {
                     await expect.poll(() => fixture.policy.entered()).toBe(true);
                     progress("publication-revocation-fetched-once");
                     expect(source.count("/publication.zip")).toBe(1);
-                    progress("publication-revocation-live-role");
-                    await revoke(fixture, "publication");
+                    progress("publication-revocation-canonical-retirement");
+                    const roleVersion = readUserProfileVersion();
+                    await setCanonicalUserProfileRole(fixture.profiles.publication, "reader");
+                    expect(readUserProfileVersion() > roleVersion).toBe(true);
+                    await expect
+                      .poll(() => connectionFacts.get(fixture.clients.publication)?.closeCode)
+                      .toBe(4001);
+                    expect(connectionFacts.get(fixture.clients.publication)).toMatchObject({
+                      received: true,
+                      closeCode: 4001,
+                      closePhase: "post-hello",
+                      socketOpened: true,
+                      connectRequestSent: true,
+                      reasonCategory: "gateway-policy-changed",
+                    });
                     await fixture.policy.release();
-                    progress("publication-revocation-server-rejection");
                     expect(await publication).toBe(false);
-                    if (!isGatewayProtocolResponseError(publicationRejection)) {
-                      throw new Error(
-                        "Publication revocation requires a server rejection, not transport failure",
-                        { cause: publicationRejection },
-                      );
+                    // The policy owner retires an over-granted source; this is not an RPC denial.
+                    if (
+                      !(publicationRejection instanceof Error) ||
+                      publicationRejection.message !==
+                        "gateway closed (4001): gateway policy changed" ||
+                      isGatewayProtocolResponseError(publicationRejection)
+                    ) {
+                      throw new Error("Expected the canonical policy-retirement close", {
+                        cause: publicationRejection,
+                      });
                     }
                     progress("publication-revocation-settled-no-artifacts");
                     // A cancelled RPC can answer before the owned policy process and staging cleanup settle.
@@ -747,9 +772,17 @@ suite.define(() => {
                       fixture.gatewayUrls.publication,
                       fixture.state,
                       "publication-after",
-                      ["operator.read"],
+                      scopes,
                     );
                     try {
+                      progress("publication-revocation-fresh-reader-server-rejection");
+                      await denied(
+                        readOnly,
+                        fixture.state,
+                        "publication-reader-denied",
+                        source.origin + "/publication-reader-denied.zip",
+                      );
+                      expect(source.count("/publication-reader-denied.zip")).toBe(0);
                       expect(
                         (await list(readOnly)).entries.some(
                           (entry) => entry.slug === "publication-revoked",
@@ -759,9 +792,10 @@ suite.define(() => {
                       await readOnly.stopAndWait();
                     }
                     report.assertions.push({
-                      id: "real-role-revocation-after-policy-before-publication",
+                      id: "real-role-revocation-retired-source-and-no-publication",
                       passed: true,
                       receivedRequests: source.count("/publication.zip"),
+                      nextRequests: source.count("/publication-reader-denied.zip"),
                     });
                     progress("origin-grant-revocation");
                     const originArtifacts = await artifacts(fixture.state);
