@@ -187,6 +187,9 @@ target.
 verified against the full objective with no required work remaining. It should
 mark a goal `blocked` only after the same blocking condition recurs for at least
 three consecutive goal turns, not for ordinary difficulty or missing polish.
+A missing scope or other authorization limit that this session cannot change
+is a blocker on the first turn. Do not wait for three turns, and do not keep
+searching for a tool the grant does not include.
 Resuming a blocked goal starts a fresh count of three consecutive turns. Earlier
 blocked turns do not count toward it.
 A nearly exhausted budget does not justify marking unfinished work complete.
@@ -198,7 +201,7 @@ the user's requested final response.
 Every user/chat turn with an active goal includes this user-role context line:
 
 ```text
-Active goal: <objective> — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.
+Active goal: <objective> — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns, or on the first turn for an authorization limit this session cannot change; after update_goal, provide the requested visible final.
 ```
 
 OpenClaw keeps the line compact by truncating long objectives. Paused,
