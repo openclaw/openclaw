@@ -102,7 +102,7 @@ pub struct HomeRelayWatcher(Mutex<watch::Receiver<Vec<HomeRelayStatus>>>);
 #[napi]
 impl HomeRelayWatcher {
     /// Resolves with the status: at once on the first call, then after each change.
-    /// Resolves null once the endpoint is gone.
+    /// Resolves null once the endpoint is closed.
     #[napi]
     pub async fn next(&self) -> Option<Vec<HomeRelayStatus>> {
         let mut rx = self.0.lock().await;
@@ -151,13 +151,13 @@ impl Endpoint {
         let mut source = self.0.home_relay_status();
         let (tx, mut rx) = watch::channel(home_relay_statuses(source.get()));
         rx.mark_changed();
-        tokio::spawn(async move {
+        tokio::spawn(self.0.closed().run_until(async move {
             while let Ok(list) = source.updated().await {
                 if tx.send(home_relay_statuses(list)).is_err() {
                     break;
                 }
             }
-        });
+        }));
         HomeRelayWatcher(Mutex::new(rx))
     }
 

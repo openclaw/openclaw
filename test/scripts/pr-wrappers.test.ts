@@ -293,10 +293,23 @@ function createMismatchedWrapperTemplate({
   git(canonical, ["add", "."]);
   git(canonical, ["commit", "-m", "test: canonical wrapper"]);
   git(canonical, ["push", "-u", "origin", "main"]);
+  expect(git(canonical, ["rev-parse", "refs/remotes/origin/main"]).stdout.trim()).toBe(
+    git(canonical, ["rev-parse", "main"]).stdout.trim(),
+  );
+  // Prepare both histories once; worktree back-links belong to each private copy.
+  git(canonical, ["checkout", "-b", "feature"]);
+  writeFileSync(
+    join(canonical, "scripts", "pr-lib", "gates.sh"),
+    'ci_dispatch() { echo "local wrapper executed"; }\n',
+  );
+  git(canonical, ["add", "scripts/pr-lib/gates.sh"]);
+  git(canonical, ["commit", "-m", "test: local wrapper"]);
+  const localRevision = git(canonical, ["rev-parse", "HEAD"]).stdout.trim();
+  git(canonical, ["checkout", "main"]);
   // Pack once so private fixture copies do not repeat thousands of loose files.
   git(canonical, ["repack", "-ad"]);
   git(origin, ["repack", "-ad"]);
-  return { canonical, origin, bin };
+  return { canonical, origin, bin, localRevision };
 }
 
 function makeMismatchedWrapperRepo({
@@ -325,22 +338,9 @@ function makeMismatchedWrapperRepo({
   copyTreeCloseOnExec(template.canonical, canonical);
   cpSync(template.origin, origin, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
   git(canonical, ["remote", "set-url", "origin", origin]);
-  git(canonical, ["worktree", "add", "-b", "feature", linkedPath, "main"]);
+  git(canonical, ["worktree", "add", linkedPath, "feature"]);
 
   const linked = realpathSync(linkedPath);
-  git(linked, ["config", "commit.gpgSign", "false"]);
-  expect(git(linked, ["rev-parse", "refs/remotes/origin/main"]).stdout.trim()).toBe(
-    git(canonical, ["rev-parse", "main"]).stdout.trim(),
-  );
-
-  writeFileSync(
-    join(linked, "scripts", "pr-lib", "gates.sh"),
-    'ci_dispatch() { echo "local wrapper executed"; }\n',
-  );
-  git(linked, ["add", "scripts/pr-lib/gates.sh"]);
-  git(linked, ["commit", "-m", "test: local wrapper"]);
-  const localRevision = git(linked, ["rev-parse", "HEAD"]).stdout.trim();
-
   linkPrWrapperDependencies(canonical);
 
   return {
@@ -349,7 +349,7 @@ function makeMismatchedWrapperRepo({
     env: fixtureEnv,
     git,
     linked,
-    localRevision,
+    localRevision: template.localRevision,
     root,
     gitText(args: string[], cwd = canonical) {
       return git(cwd, args).stdout.trim();
@@ -435,11 +435,6 @@ describe("scripts/pr wrappers", () => {
 
   function reviewRecoveryFixture() {
     const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
-    // The real salvage owner additionally loads review-artifacts' record helper.
-    const recordHelper = "scripts/lib/record-shared.mjs";
-    cpSync(recordHelper, join(fixture.canonical, recordHelper));
-    const inventory = join(fixture.canonical, "scripts/pr-lib/wrapper-components.txt");
-    writeFileSync(inventory, readScript(inventory) + recordHelper + "\n");
     const bindingRef = "refs/openclaw/pr-workflow-bindings/123";
     const origin = join(fixture.root, "origin.git");
     const currentWrapper = readScript("scripts/pr");
@@ -463,16 +458,7 @@ describe("scripts/pr wrappers", () => {
       "scripts/pr",
       currentWrapper.replaceAll("review-transition-recover", "unavailable-review-recovery"),
     );
-    fixture.commit(
-      [
-        "scripts/pr",
-        "scripts/pr-lib/review.sh",
-        "scripts/pr-lib/wrapper-components.txt",
-        recordHelper,
-        "recovery-tracked.txt",
-      ],
-      true,
-    );
+    fixture.commit(["scripts/pr", "scripts/pr-lib/review.sh", "recovery-tracked.txt"], true);
     const oldSource = fixture.gitText(["rev-parse", "HEAD"]);
     fixture.git(fixture.canonical, [
       "config",
@@ -1383,7 +1369,7 @@ exec "$anchor/scripts/pr" "$@"
   ])(
     "routes mismatched $command through the trusted wrapper (parked=$parked)",
     ({ command, parked }) => {
-      const fixture = makeMismatchedWrapperRepo();
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
       seedReadyReview(fixture);
       if (parked) {
         parkCanonicalOffAnchor(fixture);
@@ -2332,6 +2318,17 @@ closeSync(fd);
     },
   );
 
+  itPosix("settles dependency holds when a closed reader signals the creator", () => {
+    const fixture = makeFrozenDependencyFixture();
+    const wrapper = join(fixture.linked, "scripts/pr");
+    const shell = `"$0" unknown-command 2>&1 | true; echo "\${PIPESTATUS[0]}"`;
+    const result = runCommand("/bin/bash", ["-c", shell, wrapper], fixture.env, fixture.linked);
+    expect(result.stdout.trim()).toBe("141");
+    const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
+    const state = readPrCacheState(join(cache, prCacheEntries(cache)[0]!));
+    expect(state).toMatchObject({ anchors: [], settled: true });
+  });
+
   itPosix(
     "materializes and reuses an older anchor without changing the installed tooling root",
     () => {
@@ -3048,9 +3045,7 @@ fi
     "missing",
   ])("refuses anchor extraction on %s", (failure) => {
     const sourceFault = failure === "tampered" || failure === "missing";
-    const fixture = makeMismatchedWrapperRepo(
-      sourceFault ? { realModules: true } : { toolingOnly: true },
-    );
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true, realModules: sourceFault });
     if (sourceFault) {
       advanceAnchorReviewDependency(fixture);
     }
@@ -3132,7 +3127,7 @@ throw new Error("untrusted caller helper executed");
   });
 
   itPosix("executes extracted helpers through a symlinked temporary root", () => {
-    const fixture = makeMismatchedWrapperRepo({ realModules: true });
+    const fixture = makeMismatchedWrapperRepo({ realModules: true, toolingOnly: true });
     // Exercise the wrapper's own helper path, not a physical path reconstructed by the test.
     fixture.write(
       "scripts/pr-lib/gates.sh",
@@ -3156,7 +3151,7 @@ throw new Error("untrusted caller helper executed");
   itPosix(
     "executes review artifacts from the extracted anchor dependency closure with canonical dirty added dependency",
     () => {
-      const fixture = makeMismatchedWrapperRepo({ realModules: true });
+      const fixture = makeMismatchedWrapperRepo({ realModules: true, toolingOnly: true });
       advanceAnchorReviewDependency(fixture);
       fixture.write(
         "scripts/lib/anchor-review-record.mjs",

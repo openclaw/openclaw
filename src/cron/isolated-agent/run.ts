@@ -410,9 +410,11 @@ async function runCronIsolatedAgentTurnInTrace(
                       await cronOperatorSourceLoader.load()
                     ).restoreCronOperatorSource({
                       job: params.job,
-                      agentId: prepared.context.agentId,
-                      sessionKey: prepared.context.runSessionKey,
-                      entry: prepared.context.cronSession.sessionEntry,
+                      target: {
+                        agentId: prepared.context.agentId,
+                        sessionKey: prepared.context.runSessionKey,
+                        entry: prepared.context.cronSession.sessionEntry,
+                      },
                       signal: abortSignal,
                       deliveryAttemptFence: params.deliveryAttemptFence,
                     })

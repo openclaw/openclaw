@@ -11,7 +11,10 @@ import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pair
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { getCanonicalGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
-import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
+import {
+  operatorScopeSatisfied,
+  intersectOperatorScopes,
+} from "../shared/operator-scope-compat.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { profileCatalogPath } from "../state/user-profile-identity.read.js";
 import {
@@ -28,6 +31,12 @@ import {
   captureGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
 } from "./device-revocation.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  onOpenClawIdTunnelPrincipalsChanged,
+  openclawIdTunnelRolePolicy,
+  prepareOpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 import {
   GatewayOperatorAccessDeniedError,
   resumeGatewayOperatorAccessGrant,
@@ -137,6 +146,13 @@ async function restoreGatewayOperatorSnapshot(params: {
       ingress.signal.addEventListener("abort", revoke, { once: true });
       subscriptions.push(() => ingress.signal.removeEventListener("abort", revoke));
     }
+    const principal = snapshot.openclawIdPrincipal;
+    const membershipPolicy = openclawIdTunnelRolePolicy(principal);
+    if (principal) {
+      await prepareOpenClawIdTunnelPrincipal(principal);
+    }
+    assertLifetime();
+    assertCurrent();
     const generationOwner = context.sharedGatewaySessionGenerationState;
     if (snapshot.sharedGeneration !== undefined) {
       if (!generationOwner || generationOwner.requiredGeneration !== snapshot.sharedGeneration) {
@@ -171,6 +187,7 @@ async function restoreGatewayOperatorSnapshot(params: {
       const revision = readOperatorRoleConfigRevision(gatewayOwner);
       const publication = runtimeConfigPublication.current?.revision;
       if (
+        (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) ||
         !device.isCurrent() ||
         (snapshot.sharedGeneration !== undefined &&
           context.sharedGatewaySessionGenerationState !== generationOwner)
@@ -184,16 +201,17 @@ async function restoreGatewayOperatorSnapshot(params: {
           !isOperatorRoleSourcePolicyCurrent(
             snapshot.rolePolicy,
             sourceRolePolicy(
-              resolveOperatorRolePolicyForAssignment(
-                snapshot.profileId,
-                snapshot.assignedRole,
-                cfg,
-                snapshot.githubLogin,
-              ),
+              membershipPolicy ??
+                resolveOperatorRolePolicyForAssignment(
+                  snapshot.profileId,
+                  snapshot.assignedRole,
+                  cfg,
+                  snapshot.githubLogin,
+                ),
             ),
             snapshot.scopes,
           )) ||
-        (authPolicy !== undefined && !isGatewayAuthGrantCurrent(authPolicy, cfg))
+        (authPolicy !== undefined && !principal && !isGatewayAuthGrantCurrent(authPolicy, cfg))
       ) {
         throw new GatewayOperatorRecoveryAuthorizationError(
           "Restart recovery operator source policy changed.",
@@ -235,6 +253,9 @@ async function restoreGatewayOperatorSnapshot(params: {
         }
       }),
     );
+    if (principal) {
+      subscriptions.push(onOpenClawIdTunnelPrincipalsChanged(recheck));
+    }
     assertRecoveryCurrent();
     identity = await prepareUserProfileIdentity(snapshot.profileId);
     const profileIdentity = identity;
@@ -327,6 +348,7 @@ async function restoreGatewayOperatorSnapshot(params: {
     assertRecoveryCurrent();
     const live = captureChannelOperatorRunAuthority({
       profileId: snapshot.profileId,
+      openclawIdPrincipal: principal,
       assignedRole: snapshot.assignedRole,
       githubLogin: snapshot.githubLogin,
       scopes: snapshot.scopes,
@@ -376,7 +398,8 @@ async function restoreGatewayOperatorSnapshot(params: {
         assertPolicy();
       },
       authenticatedUserProfile: { profileId: id, ...display, updatedAt: profile.updated_at },
-      controlUiAdmin: snapshot.controlUiAdmin,
+      controlUiAdmin:
+        snapshot.controlUiAdmin && operatorScopeSatisfied("operator.admin", authority.scopes),
       release,
     };
   } catch (error) {
@@ -388,25 +411,27 @@ async function restoreGatewayOperatorSnapshot(params: {
 /** Restore owner-held continuation evidence through the shared authentication owner. */
 export async function restoreGatewayOperatorSource(params: {
   snapshot: OperatorRunRecoverySnapshot;
-  target: { agentId: string; sessionKey: string; sessionId: string };
+  target?: { agentId: string; sessionKey: string; sessionId: string };
   context: GatewayRequestContext;
   assertCurrent: () => void;
   prepareCurrent?: () => Promise<void>;
 }): Promise<RestoredGatewayOperatorAuthority> {
-  const target = { ...params.target };
+  const target = params.target ? { ...params.target } : undefined;
   const restored = await restoreGatewayOperatorSnapshot({
     context: params.context,
     assertCurrent: params.assertCurrent,
-    subscribeToClaim: (revoke) =>
-      onSessionIdentityMutation((mutation) => {
-        if (
-          mutation.agentId === target.agentId &&
-          (mutation.previous.sessionId === target.sessionId ||
-            mutation.previous.sessionKeys.includes(target.sessionKey))
-        ) {
-          revoke();
-        }
-      }),
+    subscribeToClaim: target
+      ? (revoke) =>
+          onSessionIdentityMutation((mutation) => {
+            if (
+              mutation.agentId === target.agentId &&
+              (mutation.previous.sessionId === target.sessionId ||
+                mutation.previous.sessionKeys.includes(target.sessionKey))
+            ) {
+              revoke();
+            }
+          })
+      : undefined,
     prepareSource: async () => ({
       snapshot: params.snapshot,
       revalidate: async () => {

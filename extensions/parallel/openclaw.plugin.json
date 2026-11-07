@@ -1,6 +1,9 @@
 {
   "id": "parallel",
-  "categories": ["web"],
+  "categories": [
+    "web",
+    "models"
+  ],
   "activation": {
     "onStartup": false
   },
@@ -8,7 +11,9 @@
     "providers": [
       {
         "id": "parallel",
-        "envVars": ["PARALLEL_API_KEY"]
+        "envVars": [
+          "PARALLEL_API_KEY"
+        ]
       }
     ]
   },
@@ -25,14 +30,22 @@
     }
   },
   "contracts": {
-    "webSearchProviders": ["parallel", "parallel-free"]
+    "webSearchProviders": [
+      "parallel",
+      "parallel-free"
+    ],
+    "decisionProviders": [
+      "parallel"
+    ]
   },
   "configGroups": [
     {
       "id": "web-search",
       "title": "Web search",
       "order": 10,
-      "properties": ["webSearch"]
+      "properties": [
+        "webSearch"
+      ]
     }
   ],
   "configSchema": {
@@ -44,7 +57,10 @@
         "additionalProperties": false,
         "properties": {
           "apiKey": {
-            "type": ["string", "object"]
+            "type": [
+              "string",
+              "object"
+            ]
           },
           "baseUrl": {
             "type": "string"
@@ -52,5 +68,87 @@
         }
       }
     }
-  }
+  },
+  "providers": [
+    "parallel"
+  ],
+  "providerEndpoints": [
+    {
+      "endpointClass": "parallel-native",
+      "hosts": [
+        "api.parallel.ai"
+      ]
+    }
+  ],
+  "modelCatalog": {
+    "providers": {
+      "parallel": {
+        "baseUrl": "https://api.parallel.ai/v1",
+        "models": [
+          {
+            "id": "decisions-fast",
+            "name": "Parallel: Decisions Fast",
+            "input": [
+              "text"
+            ],
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "parallel-decisions",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "grounding": {
+                  "webSearch": true
+                },
+                "limits": {
+                  "maxQuestions": 100,
+                  "maxStateAndQuestionTokens": 32000
+                },
+                "billing": {
+                  "unit": "requests",
+                  "source": "provider-docs"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "parallel",
+      "method": "api-key",
+      "choiceId": "parallel-api-key",
+      "appGuidedSecret": true,
+      "credentialOnly": true,
+      "choiceLabel": "Parallel API key",
+      "groupId": "parallel",
+      "groupLabel": "Parallel",
+      "groupHint": "Web-grounded Decisions",
+      "optionKey": "parallelApiKey",
+      "cliFlag": "--parallel-api-key",
+      "cliOption": "--parallel-api-key <key>",
+      "cliDescription": "Parallel API key"
+    }
+  ]
 }

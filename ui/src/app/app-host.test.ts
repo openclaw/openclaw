@@ -171,6 +171,8 @@ describe("OpenClaw shell context lifecycle", () => {
     }));
     const restoreDialog = installDialogPolyfill();
     const runtime = bootstrapApplication();
+    // Hold route readiness after connection so this still exercises a late-mounted shell.
+    runtime.context.gateway.snapshot.phase = "connected";
     const shell = createShellOwner();
     shell.runtime = runtime;
     document.body.append(shell.element);
@@ -729,6 +731,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     const shell = testShell({
       navigation: { snapshot: { navCollapsed: false }, update: vi.fn() },
     });
+    shell.routeState = { routeId: "chat" };
     Object.defineProperty(shell.elements, "commandPalette", {
       configurable: true,
       value: { isConnected: true, isOpen: false, openPalette, togglePalette: vi.fn() },

@@ -287,11 +287,8 @@ describe("AppSidebar session mutation feedback", () => {
       hello: gatewayHelloForMethods(["sessions.assignOwner"], ["operator.write"]),
     });
     sidebar.setSessionOwnerFilter(null);
-    const result = harness.sessions.state.result;
-    const row = result?.sessions.find((session) => session.key === "agent:main:a");
-    if (!result || !row) {
-      throw new Error("expected session owner fixture");
-    }
+    const result = harness.result;
+    const row = harness.row("agent:main:a");
     row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     row.owner = { actor: row.createdActor };
     result.owners = [

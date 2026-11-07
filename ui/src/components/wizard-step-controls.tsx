@@ -10,9 +10,10 @@ import { handleCopyButton } from "./copy-button-state.ts";
 import { Picker, type PickerParams } from "./select-picker.ts";
 import { SensitiveInput } from "./sensitive-input.tsx";
 import { ChannelPicker, type ChannelPickerOption } from "./solid/channel-picker.tsx";
+import { Checkbox } from "./solid/checkbox.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { ModelSetupSignIn } from "./wizard-sign-in.tsx";
 import "../styles/wizard-step-controls.css";
+import { ModelSetupSignIn } from "./wizard-sign-in.tsx";
 
 registerEnglishCatalog(registerModelSetupEnglish);
 
@@ -471,8 +472,7 @@ function MultipleChoice(props: WizardStepControlsProps & { options: WizardStepOp
               when={props.presentation === "channels"}
               fallback={
                 <label class="wizard-step__option">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={selected().some((value) => Object.is(value, option().value))}
                     disabled={props.busy}
                     aria-invalid={props.validationErrorId ? "true" : undefined}

@@ -108,9 +108,10 @@
   > .chat-details-processes__envelope
   > .chat-details-processes__motion-content
   > .chat-details-desktop-section,
+.chat-details-desktop-body__content > openclaw-chat-summary-automations > .chat-details__group,
 .chat-details-desktop-body__content
   > openclaw-chat-summary-automations
-  > :is(.chat-details__group, .chat-details-desktop-section) {
+  > .chat-details-desktop-section {
   margin: 0;
   padding: var(--details-section-padding) 0;
   border-top: 1px solid var(--details-separator);
@@ -477,12 +478,6 @@
   flex-basis: var(--details-row-icon-slot);
   width: var(--details-row-icon-slot);
   height: var(--details-row-line-height);
-}
-
-.chat-details .chat-details-desktop-body .session-progress-card__step-marker svg {
-  width: var(--details-row-icon-size);
-  height: var(--details-row-icon-size);
-  stroke-width: 2px;
 }
 
 .chat-details .chat-details-desktop-body .session-progress-card__step-text {

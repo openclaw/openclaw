@@ -2079,7 +2079,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("selects provisioning and closure guards without replacing source test owners", () => {
+  it("limits provisioning to copied inputs while retaining source closure guards", () => {
     const guards = [
       // Provisioning inspects templates through the fork-owned SQLite broker.
       ["test/scripts/pr-worktree-provision.test.ts", configPath("infra")],
@@ -2101,9 +2101,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const newModule = "src/plugins/unrelated-new-plugin.ts";
     const newModuleTargets = resolvePolicyTestTargets([newModule]);
     const testOnlyTargets = resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.test.ts"]);
+    expect(newModuleTargets).not.toContain(guards[0][0]);
+    expect(newModuleTargets).toContain(guards[1][0]);
+    expect(newModuleTargets).toContain("test/scripts/pr-wrapper-source-closure.test.ts");
     for (const [guard] of guards) {
-      expect(newModuleTargets).toContain(guard);
       expect(testOnlyTargets).not.toContain(guard);
+    }
+    for (const changedPath of ["test/setup.ts", "test/vitest/vitest.tooling.config.ts"]) {
+      expect(resolvePolicyTestTargets([changedPath]), changedPath).toContain(guards[0][0]);
     }
     expect(isPolicyTestOwnedPath(newModule)).toBe(false);
     expect(isPolicyTestOwnedPath(manifest)).toBe(true);
@@ -2894,6 +2899,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }
     }
   });
+
+  it.each([undefined, "blacksmith", "hybrid"])(
+    "prices fully measured tooling selections without discarded siblings on %s",
+    (runnerBackend) => {
+      const target = "test/scripts/update-restart-module-outcome.test.ts";
+      const timings = vi
+        .spyOn(testTimings, "readToolingFileTimings")
+        .mockReturnValue({ [target]: 1 });
+      const measured = required(selectTests([target], { runnerBackend }));
+      expectPlanFiles(measured, [target]);
+      expect(sumSeconds(measured)).toBe(25);
+      expectEvery(measured, (job) => job.planConcurrency === 1);
+      expectEvery(measured.flatMap(jobGroups), (group) => workers(group) === "2");
+
+      timings.mockReturnValue({});
+      const unknown = required(selectTests([target], { runnerBackend }));
+      expectPlanFiles(unknown, [target]);
+      expect(sumSeconds(unknown)).toBeGreaterThan(25);
+    },
+  );
 
   it("keeps precise tooling selection through hosted overflow refusal", () => {
     const tooling = defaultShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));

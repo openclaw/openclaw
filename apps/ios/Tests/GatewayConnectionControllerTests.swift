@@ -339,6 +339,55 @@ private func pendingHandoffDiagnostic(
         #expect(!controller._test_hasOperatorFleetReconcileTask())
     }
 
+    enum LocalNetworkUserAction: String, CaseIterable {
+        case explicitRequest
+        case manualConnect
+        case discoveredGatewayConnect
+    }
+
+    @Test(arguments: LocalNetworkUserAction.allCases)
+    @MainActor func `deferred discovery starts only from user actions`(action: LocalNetworkUserAction) async {
+        await withUserDefaults(["gateway.discovery.debugLogs": true, "gateway.autoconnect": false]) {
+            let discovery = GatewayDiscoveryModel()
+            defer { discovery.stop() }
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                discovery: discovery,
+                deferDiscoveryUntilLocalNetworkRequest: true,
+                serviceEndpointResolver: { _ in nil },
+                ingress: makeOrdinaryIngress())
+
+            controller.setScenePhase(.active)
+            #expect(!discovery.debugLog.contains { $0.message == "start()" })
+
+            switch action {
+            case .explicitRequest:
+                controller.requestLocalNetworkAccess(reason: "test")
+            case .manualConnect:
+                // The out-of-range port ends the attempt before any network work.
+                await controller.connectManual(host: "gateway.example.test", port: 70000, useTLS: true)
+            case .discoveredGatewayConnect:
+                let gateway = GatewayDiscoveryModel.DiscoveredGateway(
+                    name: "Nearby",
+                    endpoint: .service(name: "Nearby", type: "_openclaw-gw._tcp", domain: "local.", interface: nil),
+                    stableID: "test|\(UUID().uuidString)",
+                    debugID: "nearby",
+                    lanHost: nil,
+                    tailnetDns: nil,
+                    gatewayPort: nil,
+                    tlsEnabled: true,
+                    tlsFingerprintSha256: nil,
+                    cliPath: nil)
+                // The endpoint resolver returns nil, so the attempt ends before any network work.
+                #expect(await controller.connectWithDiagnostics(gateway) != nil)
+            }
+
+            #expect(discovery.debugLog.contains { $0.message == "start()" })
+        }
+    }
+
     @Test @MainActor func `chat owner survives reconnect while session refresh identity changes`() {
         let appModel = NodeAppModel()
         let disconnectedOwner = appModel.chatViewModelOwnerID
