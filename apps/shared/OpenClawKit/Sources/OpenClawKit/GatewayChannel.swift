@@ -68,11 +68,15 @@ public actor GatewayChannelActor {
     var testRecoverySleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     var testNetworkPathObserved: (@Sendable (GatewayNetworkPath) -> Void)?
     var testNetworkPathRecoveryFinished: (@Sendable () -> Void)?
+    var testKeepaliveSleep: (@Sendable (Duration) async throws -> Void)?
     #endif
     private let connectChallengeTimeoutSeconds: Double = 6.0
     // Some networks will silently drop idle TCP/TLS flows around ~30s. The gateway tick is server->client,
     // but NATs/proxies often require outbound traffic to keep the connection alive.
     private let keepaliveIntervalSeconds: Double = 15.0
+    // A single lost pong can be a transient stall on a weak link. Two in a row retire the socket
+    // well before the tick watchdog (2x tickIntervalMs) would.
+    private static let keepaliveMissLimit = 2
     private let networkPathUpdates: (@Sendable () -> AsyncStream<GatewayNetworkPath>)?
     private var networkPathTask: Task<Void, Never>?
     private var networkPathSettleTask: Task<Void, Never>?
@@ -82,6 +86,8 @@ public actor GatewayChannelActor {
     var networkPathProbeTimeout: Duration = .seconds(5)
     private var tickTask: Task<Void, Never>?
     private var keepaliveTask: Task<Void, Never>?
+    /// Frames admitted by the receive loop; the keepalive treats any inbound frame as liveness.
+    private var inboundFrameCount: UInt64 = 0
     private var pendingDeviceTokenRetry = false
     private var deviceTokenRetryBudgetUsed = false
     private var receivedDeviceAuthRoles = Set<String>()
@@ -519,19 +525,50 @@ public actor GatewayChannelActor {
     }
 
     private func keepaliveLoop(connectionGeneration: UInt64) async {
+        var misses = 0
+        var inboundBeforePing = self.inboundFrameCount
         while self.shouldReconnect {
-            guard await self.sleepUnlessCancelled(
-                nanoseconds: UInt64(self.keepaliveIntervalSeconds * 1_000_000_000))
-            else { return }
+            guard await self.sleepBeforeKeepalive() else { return }
             guard self.shouldReconnect, self.isConnected(connectionGeneration: connectionGeneration) else { return }
             guard let task = self.task else { continue }
-            // Best-effort ping keeps NAT/proxy state alive without generating RPC load.
+            // The ping keeps NAT/proxy state alive without RPC load and doubles as a liveness probe.
+            // Traffic between probes resets earlier misses; this ping still has its own deadline.
+            if self.inboundFrameCount != inboundBeforePing { misses = 0 }
+            inboundBeforePing = self.inboundFrameCount
             do {
                 try await task.sendPing()
+                misses = 0
             } catch {
-                // Avoid spamming logs; the reconnect paths will surface meaningful errors.
+                // On a busy slow link the pong can queue behind inbound data; frames prove the socket alive.
+                guard self.inboundFrameCount == inboundBeforePing else {
+                    misses = 0
+                    continue
+                }
+                misses += 1
+                guard misses >= Self.keepaliveMissLimit else { continue }
+                guard self.shouldReconnect, !self.reconnectPausedForAuthFailure,
+                      self.isConnected(connectionGeneration: connectionGeneration)
+                else { return }
+                let failure = Self.failure(10, "gateway socket unresponsive to keepalive pings")
+                self.logger.error("gateway socket unresponsive to keepalive pings; reconnecting")
+                await self.transitionToDisconnected(
+                    reason: failure.localizedDescription,
+                    error: failure,
+                    connectionGeneration: connectionGeneration,
+                    shouldReconnect: true)
+                return
             }
         }
+    }
+
+    private func sleepBeforeKeepalive() async -> Bool {
+        #if DEBUG
+        if let testKeepaliveSleep {
+            do { try await testKeepaliveSleep(.seconds(self.keepaliveIntervalSeconds)) } catch { return false }
+            return !Task.isCancelled
+        }
+        #endif
+        return await self.sleepUnlessCancelled(nanoseconds: UInt64(self.keepaliveIntervalSeconds * 1_000_000_000))
     }
 
     static func loadDeviceIdentityForConnect(
@@ -1122,6 +1159,7 @@ extension GatewayChannelActor {
         connectionGeneration: UInt64) async
     {
         guard self.isConnected(connectionGeneration: connectionGeneration) else { return }
+        self.inboundFrameCount &+= 1
         guard let data = self.decodeMessageData(msg) else { return }
         guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else {
             self.logger.error("gateway decode failed")

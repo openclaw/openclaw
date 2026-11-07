@@ -143,6 +143,23 @@ extension GatewayChannelActor {
     fileprivate func hasPathRecoveryConnectBackoff() -> Bool {
         self.connectFailureBackoff.deadline != nil
     }
+
+    fileprivate func setKeepaliveSleep(_ sleep: PathRecoverySleep) {
+        self.testKeepaliveSleep = { try await sleep.sleep($0) }
+    }
+}
+
+/// Runs one keepalive round on `socket`: wakes the loop, waits for its ping, answers it.
+private func answerKeepalive(
+    round: Int,
+    sleep: PathRecoverySleep,
+    socket: FakeGatewayWebSocketTask,
+    error: Error?) async
+{
+    await sleep.started.wait(forCount: round)
+    sleep.release()
+    await socket.waitForPings(count: round)
+    socket.finishPongs(error: error)
 }
 
 private func withPathRecoveryFixture(
@@ -361,6 +378,107 @@ struct GatewayNetworkPathRecoveryTests {
             #expect(fixture.settle.started.values.count == 2)
             #expect(socket.snapshotPingCount() == 0)
             #expect(fixture.session.snapshotMakeCount() == 1)
+        }
+    }
+
+    @Test
+    func `consecutive keepalive misses reconnect before the tick watchdog`() async throws {
+        let keepalive = PathRecoverySleep()
+        try await withPathRecoveryFixture { fixture in
+            await fixture.channel.setKeepaliveSleep(keepalive)
+            try await fixture.channel.connect()
+            let oldSocket = try #require(fixture.session.latestTask())
+            oldSocket.holdPongs()
+
+            await answerKeepalive(round: 1, sleep: keepalive, socket: oldSocket, error: URLError(.timedOut))
+            await keepalive.started.wait(forCount: 2)
+            // One lost pong alone keeps the socket.
+            try #require(fixture.session.snapshotMakeCount() == 1)
+            await answerKeepalive(round: 2, sleep: keepalive, socket: oldSocket, error: URLError(.timedOut))
+            // Either the old loop sleeps again or the replacement socket starts its own loop.
+            await keepalive.started.wait(forCount: 3)
+
+            #expect(oldSocket.snapshotPingCount() == 2)
+            #expect(oldSocket.state == .canceling)
+            #expect(fixture.session.snapshotMakeCount() == 2)
+            try await fixture.channel.connect()
+            #expect(fixture.session.latestTask()?.sentRequestCount(method: "connect") == 1)
+        }
+    }
+
+    @Test
+    func `a keepalive miss between healthy pongs keeps the socket`() async throws {
+        let keepalive = PathRecoverySleep()
+        try await withPathRecoveryFixture { fixture in
+            await fixture.channel.setKeepaliveSleep(keepalive)
+            try await fixture.channel.connect()
+            let socket = try #require(fixture.session.latestTask())
+            let generation = await fixture.channel.currentConnectionGeneration()
+            socket.holdPongs()
+
+            await answerKeepalive(round: 1, sleep: keepalive, socket: socket, error: URLError(.timedOut))
+            await keepalive.started.wait(forCount: 2)
+            // A replacement socket would never see the remaining pings, so stop here instead of hanging.
+            try #require(fixture.session.snapshotMakeCount() == 1)
+            await answerKeepalive(round: 2, sleep: keepalive, socket: socket, error: nil)
+            await answerKeepalive(round: 3, sleep: keepalive, socket: socket, error: URLError(.timedOut))
+            await keepalive.started.wait(forCount: 4)
+
+            #expect(socket.snapshotPingCount() == 3)
+            #expect(fixture.session.snapshotMakeCount() == 1)
+            #expect(await fixture.channel.currentConnectionGeneration() == generation)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `inbound frames between or during missed pongs keep a busy socket`(duringPing: Bool) async throws {
+        let keepalive = PathRecoverySleep()
+        try await withPathRecoveryFixture { fixture in
+            await fixture.channel.setKeepaliveSleep(keepalive)
+            try await fixture.channel.connect()
+            let socket = try #require(fixture.session.latestTask())
+            let generation = await fixture.channel.currentConnectionGeneration()
+            socket.holdPongs()
+
+            for round in 1...3 {
+                await keepalive.started.wait(forCount: round)
+                if duringPing {
+                    keepalive.release()
+                    await socket.waitForPings(count: round)
+                }
+                // Complete traffic proves liveness both between probes and while a pong is outstanding.
+                let response = Task {
+                    try await fixture.channel.request(method: "health", params: nil, timeoutMs: 0)
+                }
+                await socket.waitForSentRequests(method: "health", count: round)
+                let id = try #require(socket.sentRequests(method: "health").last?["id"] as? String)
+                socket.emitResponse(id: id, payload: [:])
+                _ = try await response.value
+                if !duringPing {
+                    keepalive.release()
+                    await socket.waitForPings(count: round)
+                }
+                socket.finishPongs(error: URLError(.timedOut))
+                await keepalive.started.wait(forCount: round + 1)
+                // A replacement socket would never see the next ping, so stop here instead of hanging.
+                try #require(fixture.session.snapshotMakeCount() == 1)
+            }
+
+            #expect(socket.snapshotPingCount() == 3)
+            #expect(fixture.session.snapshotMakeCount() == 1)
+            #expect(await fixture.channel.currentConnectionGeneration() == generation)
+
+            // A pre-ping response resets earlier misses, but must not forgive that ping's silence.
+            if duringPing {
+                await answerKeepalive(round: 4, sleep: keepalive, socket: socket, error: URLError(.timedOut))
+                await keepalive.started.wait(forCount: 5)
+                try #require(fixture.session.snapshotMakeCount() == 1)
+            }
+            let finalRound = duringPing ? 5 : 4
+            await answerKeepalive(round: finalRound, sleep: keepalive, socket: socket, error: URLError(.timedOut))
+            await keepalive.started.wait(forCount: finalRound + 1)
+            #expect(socket.state == .canceling)
+            #expect(fixture.session.snapshotMakeCount() == 2)
         }
     }
 
