@@ -117,10 +117,37 @@ describe("deterministic test port blocks", () => {
     async (os) => {
       host.platform.mockReturnValue(os);
       host.range = "32768\t60999\n";
+      // Simulating Darwin does not change the host kernel. On Linux, keep the
+      // real listener handoff outside its client-port range so outbound sockets
+      // cannot claim a successfully probed port before bindPort uses it.
+      const actualOs = await vi.importActual<typeof import("node:os")>("node:os");
+      let clientRange: [number, number] | undefined;
+      let safeWorkerId: string | undefined;
+      if (os === "darwin" && actualOs.platform() === "linux") {
+        const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+        clientRange = actualFs
+          .readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8")
+          .trim()
+          .split(/\s+/u)
+          .map(Number) as [number, number];
+        const [low, high] = clientRange;
+        const safeShard = Array.from({ length: 35 }, (_, index) => index).find((index) => {
+          const start = 30_000 + index * 1_000;
+          return start + 999 < low || start > high;
+        });
+        expect(safeShard).toBeDefined();
+        safeWorkerId = String((safeShard! - (process.pid % 35) + 35) % 35);
+        host.rejectPort.mockImplementation((port) =>
+          port >= low && port <= high ? "EADDRINUSE" : undefined,
+        );
+      }
       const { getDeterministicFreePortBlock } = await import("./ports.js");
       const bound = new Set<number>();
       for (let block = 0; block < 2; block += 1) {
-        const port = await getDeterministicFreePortBlock();
+        const port = await withEnvAsync(
+          { VITEST_WORKER_ID: safeWorkerId ?? process.env.VITEST_WORKER_ID },
+          () => getDeterministicFreePortBlock(),
+        );
         if (os === "darwin") {
           expect(port).toBeGreaterThanOrEqual(30000);
           expect(port + 4).toBeLessThanOrEqual(64999);
@@ -128,6 +155,10 @@ describe("deterministic test port blocks", () => {
         }
         for (const offset of [0, 1, 2, 3, 4]) {
           expect(bound.has(port + offset)).toBe(false);
+          if (clientRange) {
+            const [low, high] = clientRange;
+            expect(port + offset < low || port + offset > high).toBe(true);
+          }
           await bindPort(port + offset);
           bound.add(port + offset);
         }
