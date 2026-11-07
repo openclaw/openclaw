@@ -14,6 +14,7 @@ import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawn
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
+import { resolveUserStoppedAt } from "../../config/sessions/terminal-status.js";
 import { resolveCronSessionWorkspaceOwnershipError } from "../../cron/run-authority.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
@@ -665,9 +666,14 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   };
 
   const promptEnvelopeBase = buildReplyPromptEnvelopeBase();
+  // A recorded Stop is stated, and claimed, only once the turn is admitted
+  // (prepareReplyRunAdmission); until then it is never an interruption to continue.
+  const recordedStop = resolveUserStoppedAt(sessionEntry) !== undefined;
   const prefixedBodyBase = applySessionHints({
     baseBody: promptEnvelopeBase.effectiveBaseBody,
-    abortedLastRun,
+    abortedLastRun: abortedLastRun && !recordedStop,
+    // Without a row, abortedLastRun comes from the abort memory only a Stop sets.
+    stoppedByUser: !sessionEntry && abortedLastRun,
     abortKey: command.abortKey,
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";

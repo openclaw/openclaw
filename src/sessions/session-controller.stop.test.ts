@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { expect, it, onTestFinished, vi } from "vitest";
+import path from "node:path";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   createAgentRunDirectAbortError,
   isAgentRunDirectAbortReason,
 } from "../agents/run-termination.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   registerInternalHook,
   unregisterInternalHook,
@@ -11,7 +14,9 @@ import {
 } from "../hooks/internal-hooks.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { withSessionTurn } from "./session-controller.admission.js";
+import { ReplyRunSuccessorAdmissionBlockedError } from "./session-controller.contracts.js";
 import { captureSessionControllerEffects } from "./session-controller.lifecycle-work.js";
 import { beginSessionEffect, captureSessionTarget } from "./session-controller.lifecycle.js";
 import {
@@ -22,12 +27,14 @@ import {
   trackSessionControllerSourceWork,
 } from "./session-controller.mailbox.js";
 import { createReplyOperation } from "./session-controller.operation.js";
+import type { SessionStopSource } from "./session-controller.stop-source.types.js";
 import {
   captureSessionControllerStop,
   captureSessionControllerStopCandidates,
   stopSession,
-  type SessionStopSource,
 } from "./session-controller.stop.js";
+import { waitForReplyRunSuccessorAdmission } from "./session-controller.wait.js";
+import { trackUserStop } from "./session-run-stopped.js";
 
 function stopHook() {
   const hook = vi.fn<(event: InternalHookEvent) => void>();
@@ -36,11 +43,18 @@ function stopHook() {
   return hook;
 }
 
-function fixture() {
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    cleanup();
+  }),
+);
+
+function fixture(storeScope?: string) {
   const sessionKey = "agent:main:stop-boundary";
   const sessionId = randomUUID();
   const target = captureSessionTarget({
-    storeScope: "/synthetic/stop/" + sessionId,
+    storeScope: storeScope ?? "/synthetic/stop/" + sessionId,
     sessionKey,
     incarnation: sessionId,
     agentId: "main",
@@ -126,6 +140,20 @@ function fixture() {
     };
   };
   return { sessionKey, sessionId, target, reserve, operation, start, stop, effect, gateway };
+}
+
+/** A fixture on a real store whose row `owner` runs, the receipt a user's Stop of it returns, and its stored Stop. */
+async function storedFixture(owner: string) {
+  const storePath = path.join(tempDirs.make("openclaw-stop-record-"), "sessions.json");
+  const f = fixture(storePath);
+  const scope = { agentId: "main", storePath, sessionKey: f.sessionKey };
+  await replaceSessionEntry(scope, {
+    sessionId: f.sessionId,
+    updatedAt: 1,
+    activeWriterRunId: owner,
+  });
+  const receipt = () => ({ stoppedAt: 5, sessions: [{ ...scope, sessionId: f.sessionId }] });
+  return { f, receipt, storedStop: () => loadSessionEntry(scope)?.userStoppedAt };
 }
 
 const policyCases = [
@@ -579,3 +607,150 @@ it.each(["reject", "continue"] as const)(
     expect(outcome.failures).toEqual([{ target: queued, error: cleanupError }]);
   },
 );
+
+it.each([
+  { name: "adapter fails after the commit", user: true, fail: "callback", records: 1 },
+  { name: "authority revoked after the commit", user: true, fail: "revoked", records: 1 },
+  { name: "non-user cancellation", user: false, fail: "none", records: 0 },
+  { name: "rejected before any commit", user: true, fail: "rejected", records: 0 },
+] as const)("records a user Stop once its cancellation commits: $name", async (c) => {
+  const { f, receipt, storedStop } = await storedFixture("run");
+  const source = f.reserve("run");
+  const { release, execution } = await f.start(source, true);
+  let committed = false;
+  const stop = stopSession({
+    source: "client-run",
+    capture: captureSessionControllerStop({ inputs: [source] }),
+    hookContext: { sessionKey: f.sessionKey },
+    reason: createAgentRunDirectAbortError(c.user),
+    userStop: receipt,
+    assertCurrent: () => {
+      if (c.fail === "rejected" || (c.fail === "revoked" && committed)) {
+        throw new Error("Stop authority revoked");
+      }
+    },
+    onCancelled: () => {
+      committed = true;
+      if (c.fail === "callback") {
+        throw new Error("adapter failed after the commit");
+      }
+    },
+  });
+  if (c.fail === "none") {
+    await stop.completed;
+  } else {
+    await expect(stop.completed).rejects.toThrow();
+  }
+  // The stopped turn's successor is admitted only once the record settles, and reads it.
+  release.resolve();
+  await execution.catch(() => undefined);
+  await waitForReplyRunSuccessorAdmission(f.sessionKey, null);
+  expect(storedStop()).toBe(c.records ? 5 : undefined);
+});
+
+it("fences a user-stopped turn's successor until its record settles", async () => {
+  const f = fixture();
+  const stopped = f.operation();
+  const userStop = trackUserStop({
+    reason: createAgentRunDirectAbortError(true),
+    receipt: () => undefined,
+  });
+  userStop.fence([stopped]);
+  stopped.complete();
+  expect(() => f.operation()).toThrow(ReplyRunSuccessorAdmissionBlockedError);
+  await userStop.record();
+  await expect(waitForReplyRunSuccessorAdmission(f.sessionKey, null)).resolves.toMatchObject({
+    settled: true,
+  });
+  // A non-user Stop never fences: its successor is admitted at once.
+  const next = f.operation();
+  trackUserStop({ reason: createAgentRunDirectAbortError(), receipt: () => undefined }).fence([
+    next,
+  ]);
+  next.complete();
+  f.operation();
+});
+
+it.each([
+  { name: "the parent commits", revokeAfterCommit: false },
+  // The queued input commits; the active one's authority check then throws uncommitted.
+  { name: "a later target throws uncommitted", revokeAfterCommit: true },
+])("records a committed user Stop before its children finish: $name", async (c) => {
+  // The queued run owns the row and commits in both cases.
+  const { f, receipt, storedStop } = await storedFixture("queued-run");
+  const active = f.reserve("active-run");
+  const { release, execution } = await f.start(active, true);
+  const queued = f.reserve("queued-run");
+  const children = createDeferredCore<{ stopped: number; failed: number }>();
+  let committed = false;
+  const stop = stopSession({
+    source: "client-run",
+    capture: captureSessionControllerStop({ inputs: [queued, active] }),
+    hookContext: { sessionKey: f.sessionKey },
+    reason: createAgentRunDirectAbortError(true),
+    userStop: receipt,
+    assertCurrent: () => {
+      if (c.revokeAfterCommit && committed) {
+        throw new Error("Stop authority revoked");
+      }
+    },
+    onCancelled: () => {
+      committed = true;
+    },
+    // Descendant cleanup still runs after a failed parent phase.
+    stopChildren: async (applyParentStop) => {
+      await applyParentStop().catch(() => false);
+      return await children.promise;
+    },
+  });
+  // The parent phase has exited: the successor reads the record while children still run.
+  release.resolve();
+  await execution.catch(() => undefined);
+  await waitForReplyRunSuccessorAdmission(f.sessionKey, null);
+  expect(storedStop()).toBe(5);
+  children.resolve({ stopped: 0, failed: 0 });
+  await (c.revokeAfterCommit ? expect(stop.completed).rejects.toThrow() : stop.completed);
+});
+
+it("credits an operation's backend run after cancellation detached its backend", async () => {
+  const { f, receipt, storedStop } = await storedFixture("backend-run");
+  const operation = f.operation();
+  operation.attachBackend({
+    kind: "embedded",
+    runId: "backend-run",
+    toolAuthorityFingerprint: "policy",
+    cancel: () => {},
+    isCompacting: () => false,
+  } as Parameters<typeof operation.attachBackend>[0]);
+  operation.complete();
+  const userStop = trackUserStop({ reason: createAgentRunDirectAbortError(true), receipt });
+  userStop.cancelled(operation);
+  await userStop.record();
+  expect(storedStop()).toBe(5);
+});
+
+it("releases a user Stop's successor fence when it is rejected before committing", async () => {
+  const f = fixture();
+  const source = f.reserve("run");
+  const { release, execution } = await f.start(source, true);
+  let checks = 0;
+  const stop = stopSession({
+    source: "client-run",
+    capture: captureSessionControllerStop({ inputs: [source] }),
+    hookContext: { sessionKey: f.sessionKey },
+    reason: createAgentRunDirectAbortError(true),
+    userStop: () => undefined,
+    // Authority holds while the fence goes up, then fails before any target commits.
+    assertCurrent: () => {
+      if (++checks > 1) {
+        throw new Error("Stop authority revoked");
+      }
+    },
+  });
+  await expect(stop.completed).rejects.toThrow("Stop authority revoked");
+  release.resolve();
+  await execution;
+  await expect(waitForReplyRunSuccessorAdmission(f.sessionKey, 100)).resolves.toMatchObject({
+    settled: true,
+  });
+});

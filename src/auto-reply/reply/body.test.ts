@@ -11,4 +11,13 @@ describe("applySessionHints", () => {
     );
     expect(getAbortMemory(abortKey)).toBeUndefined();
   });
+
+  it.each([true, false])(
+    "tells the model a user's Stop ended the last run (abortedLastRun: %s)",
+    (abortedLastRun) => {
+      const body = applySessionHints({ baseBody: "next", abortedLastRun, stoppedByUser: true });
+      expect(body).toContain("The user stopped the previous agent run");
+      expect(body).not.toContain("continue the unfinished work");
+    },
+  );
 });

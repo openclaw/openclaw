@@ -102,29 +102,35 @@ export class GatewayChatRequests {
     }
   }
 
-  async abortChat(opts: TuiRequestScope) {
+  async abortChat(opts: TuiRequestScope & { userInitiated?: true }) {
     this.cancelPending(opts);
     const params = {
       sessionKey: opts.sessionKey,
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
       ...(opts.runId ? { runId: opts.runId } : {}),
     };
-    try {
-      return await this.client.request<{
-        ok: boolean;
-        aborted: boolean;
-        runIds?: string[];
-      }>("chat.abort", opts.runId ? params : { ...params, preserveSideRuns: true });
-    } catch (err) {
+    const shipped = opts.runId ? params : { ...params, preserveSideRuns: true };
+    const request = (body: Record<string, unknown>) =>
+      this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>("chat.abort", body);
+    const legacy = async (err: unknown) => {
       // Protocol v4 peers reject unknown fields. Keep their shipped abort shape.
       if (opts.runId || !isLegacyParameterError(err, "chat.abort", "preservesideruns")) {
         throw err;
       }
-      return await this.client.request<{
-        ok: boolean;
-        aborted: boolean;
-        runIds?: string[];
-      }>("chat.abort", params);
+      return await request(params);
+    };
+    try {
+      return await request(opts.userInitiated ? { ...shipped, userInitiated: true } : shipped);
+    } catch (err) {
+      // A peer older than the Stop flag rejects it; the Stop itself still goes through.
+      if (!opts.userInitiated || !isLegacyParameterError(err, "chat.abort", "userinitiated")) {
+        return await legacy(err);
+      }
+      try {
+        return await request(shipped);
+      } catch (retryError) {
+        return await legacy(retryError);
+      }
     }
   }
 

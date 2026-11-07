@@ -1,0 +1,2 @@
+# Tell the next turn after a user's Stop that the user stopped it.
+655

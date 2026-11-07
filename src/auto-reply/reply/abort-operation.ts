@@ -5,6 +5,7 @@ import {
 } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { captureExecRequestCancellation } from "../../agents/bash-process-control.js";
+import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import { captureExecRequestSubagentSelection } from "../../agents/subagents/registry/subagent-control-scope.js";
 import { killAllControlledSubagentRuns } from "../../agents/subagents/registry/subagent-control.js";
 import type { SubagentRequestSessionOrigin } from "../../agents/subagents/registry/subagent-exec-request-ownership.js";
@@ -44,7 +45,11 @@ import {
   type SessionStopHookContext,
   type SessionStopRequest,
 } from "../../sessions/session-controller.stop.js";
-import { notifySessionRunStopped } from "../../sessions/session-run-stopped.js";
+import {
+  captureAbortTargetMark,
+  notifySessionRunStopped,
+  type SessionRunStopReceipt,
+} from "../../sessions/session-run-stopped.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
 import { resolveAbortCutoffFromContext, shouldPersistAbortCutoff } from "./abort-cutoff.js";
@@ -56,7 +61,12 @@ import { resolveSessionConversationBindingContext } from "./session-conversation
 
 type ChannelStopTarget = SessionControllerInput | ReplyOperation;
 /** Agent/session pair this Stop announces through the explicit run-stopped notification. */
-type ChannelStopSession = { agentId?: string; sessionKey?: string };
+type ChannelStopSession = {
+  agentId?: string;
+  sessionKey?: string;
+  storePath?: string;
+  sessionId?: string;
+};
 export type ChannelStopCapture = {
   controller: SessionControllerStopCapture;
   sessionId?: string;
@@ -131,17 +141,19 @@ export function captureChannelSessionStop(params: {
     operations: candidates.flatMap((candidate) => candidate.capture.operations),
     resolveGatewayContext: params.resolveGatewayContext,
   });
-  return captureChannelStopResources(controller, params.sessionId, {
-    sessionKey: key,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-  });
+  return captureChannelStopResources(
+    controller,
+    params.sessionId,
+    { sessionKey: key, sessionId: params.sessionId, agentId: params.agentId },
+    params.storePath,
+  );
 }
 
 function captureChannelStopResources(
   controller: SessionControllerStopCapture,
   capturedSessionId?: string,
   commandTarget?: ExecRequestIdentity,
+  storePath?: string,
 ): ChannelStopCapture {
   const selectedSessionId =
     controller.activeInputs[0]?.claim?.operation?.sessionId ??
@@ -194,7 +206,14 @@ function captureChannelStopResources(
     controller,
     sessionId: selectedSessionId,
     stoppedSessions: commandTarget
-      ? [{ agentId: commandTarget.agentId, sessionKey: commandTarget.sessionKey }]
+      ? [
+          {
+            agentId: commandTarget.agentId,
+            sessionKey: commandTarget.sessionKey,
+            storePath,
+            sessionId: selectedSessionId,
+          },
+        ]
       : [],
     mcpSessionIds,
     idleMcpRetirements: idleMcpRetirement ? [idleMcpRetirement] : [],
@@ -215,7 +234,10 @@ function combineChannelStopCaptures(captures: readonly ChannelStopCapture[]): Ch
       effects: captures.flatMap((capture) => [...capture.controller.effects]),
       pendingCaptures: captures.map((capture) => capture.controller),
     }),
-    stoppedSessions: captures.flatMap((capture) => capture.stoppedSessions),
+    // A stopped session is its own capture's incarnation; an idle Stop's is confirmed by now.
+    stoppedSessions: captures.flatMap((capture) =>
+      capture.stoppedSessions.map((session) => ({ ...session, sessionId: capture.sessionId })),
+    ),
     mcpSessionIds: new Map(captures.flatMap((capture) => [...capture.mcpSessionIds])),
     idleMcpRetirements: captures.flatMap((capture) =>
       capture.idleMcpRetirements.filter((retirement) => retirement.sessionId === capture.sessionId),
@@ -263,10 +285,13 @@ export function abortSessionRunTargetWithOutcome(params: {
       });
     }
   };
+  let userStop: SessionRunStopReceipt | undefined;
   return stopSession({
     source: "channel-user",
     capture: () => resolveCapture().controller,
     assertCurrent: params.assertCurrent,
+    // The default direct abort, marked as a person's /stop: provenance only, never authority.
+    reason: createAgentRunDirectAbortError(true),
     hookContext: params.hookContext,
     messageIdentity: params.messageIdentity,
     recordAbortTarget: params.recordAbortTarget,
@@ -288,11 +313,12 @@ export function abortSessionRunTargetWithOutcome(params: {
         return settlement;
       },
     },
+    userStop: () => userStop,
     afterQueued: () => {
       const capture = resolveCapture();
       // The Stop kernel calls afterQueued only after revalidating the captured Stop's live
       // target, so the notification cannot outrun a rejected foreground cancellation.
-      notifySessionRunStopped({
+      userStop = notifySessionRunStopped({
         source: "channel-user",
         sessions: capture.stoppedSessions,
         runIds: capture.requestRunIds,
@@ -559,6 +585,7 @@ export async function executeFastAbortRequest(
                     withChannelStopSession(candidate.channel, {
                       agentId: candidate.agentId ?? boundAgentId,
                       sessionKey: boundKey,
+                      storePath: boundStorePath,
                     }),
                   ),
               );
@@ -610,12 +637,16 @@ export async function executeFastAbortRequest(
                   (writerRunId && !mainCapture.requestRunIds.has(writerRunId))
                 ) {
                   logVerbose(`abort: skipped metadata for a replacement writer on ${targetKey}`);
-                  return;
+                  return undefined;
                 }
+                const expected = selection.target?.entry;
+                const mark =
+                  expected &&
+                  captureAbortTargetMark({ storePath, sessionKey: resolvedTargetKey }, expected);
                 try {
                   const persisted = await markSessionAbortTarget({
                     isCurrent: params.isCommandTargetCurrent,
-                    expectedTarget: selection.target?.entry ?? null,
+                    expectedTarget: expected ?? null,
                     scope: { agentId, sessionKey: targetKey, storePath },
                     resolveAbortCutoff: recordCutoff ? () => abortCutoff : undefined,
                   });
@@ -624,10 +655,12 @@ export async function executeFastAbortRequest(
                       `abort: failed to persist abort metadata for ${targetKey}: ${persisted.persistenceError ?? "unknown error"}`,
                     );
                   }
+                  return persisted?.persisted === true ? mark : undefined;
                 } catch (error) {
                   logVerbose(
                     `abort: failed to persist abort metadata for ${targetKey}: ${formatErrorMessage(error)}`,
                   );
+                  return undefined;
                 }
               },
             });
