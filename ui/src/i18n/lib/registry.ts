@@ -7,6 +7,7 @@ const LAZY_LOCALE_REGISTRY = {
   "zh-CN": () => import("../locales/zh-CN.ts"),
   "zh-TW": () => import("../locales/zh-TW.ts"),
   "pt-BR": () => import("../locales/pt-BR.ts"),
+  "pt-PT": () => import("../locales/pt-PT.ts"),
   de: () => import("../locales/de.ts"),
   es: () => import("../locales/es.ts"),
   "ja-JP": () => import("../locales/ja-JP.ts"),
