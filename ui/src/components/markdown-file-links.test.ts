@@ -39,20 +39,6 @@ it("does not turn ambiguous repository names into file links in prose or code sp
   expect(fragment.textContent?.trim()).toBe(source.replaceAll("`", ""));
 });
 
-it("preserves explicit uncommon-extension paths and authored file links", () => {
-  const fragment = render(
-    "src/index.TS ./assets/logo.ai `../assets/logo.ai` /tmp/logo.ai " +
-      "[website repository](openclaw/openclaw.ai)",
-  );
-  expect(fileLinks(fragment).map((link) => link.dataset.filePath)).toEqual([
-    "src/index.TS",
-    "./assets/logo.ai",
-    "../assets/logo.ai",
-    "/tmp/logo.ai",
-    "openclaw/openclaw.ai",
-  ]);
-});
-
 it.each([
   ["see src/lib/foo.ts for details", "src/lib/foo.ts"],
   ["[x](/Users/a/b.ts)", "/Users/a/b.ts"],
@@ -62,6 +48,16 @@ it.each([
 });
 
 it.each<[string, string[], string[]?]>([
+  [
+    "src/index.TS ./assets/logo.ai `../assets/logo.ai` /tmp/logo.ai [website repository](openclaw/openclaw.ai)",
+    [
+      "src/index.TS",
+      "./assets/logo.ai",
+      "../assets/logo.ai",
+      "/tmp/logo.ai",
+      "openclaw/openclaw.ai",
+    ],
+  ],
   ["~/n.md ./x.ts ../y.ts f.ts i.csv", ["~/n.md", "./x.ts", "../y.ts"], ["f.ts", "i.csv"]],
   ["rotated logs/app.log.1 but see src/lib/foo.ts.", ["src/lib/foo.ts"], ["logs/app.log.1"]],
   [
