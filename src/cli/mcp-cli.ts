@@ -306,7 +306,7 @@ function resolveConfiguredPath(filePath: string, cwd: unknown): string {
   if (path.isAbsolute(filePath)) {
     return filePath;
   }
-  const base = typeof cwd === "string" && cwd.trim() ? cwd.trim() : process.cwd();
+  const base = readNonBlankString(cwd) ?? process.cwd();
   return path.resolve(base, filePath);
 }
 
@@ -336,9 +336,7 @@ async function commandExists(
   }
   const configuredPath =
     process.platform === "win32" ? resolveEnvironmentValue(env, "PATH") : env?.PATH;
-  const pathEntries = (configuredPath ?? process.env.PATH ?? "")
-    .split(path.delimiter)
-    .map((entry) => entry.trim() || ".");
+  const pathEntries = (configuredPath ?? process.env.PATH ?? "").split(path.delimiter);
   for (const pathEntry of pathEntries) {
     const resolvedPathEntry = path.isAbsolute(pathEntry)
       ? pathEntry

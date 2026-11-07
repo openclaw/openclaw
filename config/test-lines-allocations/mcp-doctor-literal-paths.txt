@@ -1,0 +1,2 @@
+# Extend the existing real CLI filesystem regression to cover literal cwd/PATH whitespace.
+8
