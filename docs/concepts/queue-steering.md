@@ -33,7 +33,8 @@ without aborting the run. Each interrupted tool records that the user interrupte
 it; the steer then reaches the next model decision after those results. Repeated
 clicks do not reinject the message or interrupt later work. When a running tool
 cannot safely stop, or the runtime does not support tool-only interruption, the
-UI explains the wait instead of offering the link.
+UI shows the steer as **Steering…** instead of offering the link, and its hover
+text explains the wait.
 
 Foreground local `exec` waits for process cleanup before delivery. Interrupting a
 `process` poll only stops that wait; its independently owned background command

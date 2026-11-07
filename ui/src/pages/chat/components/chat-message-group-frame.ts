@@ -265,6 +265,10 @@ export function prepareMessageGroupFrame(
     footerActionDetails,
     footerActionMessageKey,
     hasUserFooterActions,
+    // An undelivered steer shows only its steer row; identity, time and actions follow delivery.
+    hidesFooter:
+      isTurnBlock ||
+      (normalizedRole === "user" && Boolean(opts.pendingSteer?.(group.messages.at(-1)?.message))),
     sendStatus,
     inlineUserAvatar,
     hasAvatar,

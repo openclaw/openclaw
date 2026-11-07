@@ -390,11 +390,14 @@ While steering waits for a running tool, the message appears as an ordinary user
 bubble with a small **Send now** link underneath. Session writers can click it to
 interrupt supported running tools and deliver the waiting steer sooner, keeping
 the same agent run alive. The model receives a tool result explaining the user
-interruption. The link disappears when the steer is injected. Tools that cannot
-be interrupted safely, and runtimes without tool interruption, show a quiet
-waiting explanation instead of an action.
-This includes Code Mode aggregate tools and native or remote backends, which
-do not support tool-only interruption.
+interruption. The link disappears when the steer is injected, and the message's
+normal footer actions appear once it is delivered. Viewers without steer access,
+tools that cannot be interrupted safely, and runtimes without tool interruption
+show a muted **Steering…** label instead of the link, once on the newest waiting
+message; hovering it explains what the steer is waiting for. A refused **Send now** returns the row to
+**Steering…** without a separate error.
+Tools that cannot be interrupted safely include Code Mode aggregate tools and
+native or remote backends, which do not support tool-only interruption.
 
 Accepted steering messages keep their saved transcript positions. Earlier saved
 output stays above the message; later answers and live output appear below it,

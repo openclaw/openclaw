@@ -1,8 +1,8 @@
 import { Show } from "solid-js";
-import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import type { PendingSteer } from "../chat-pending-inputs.ts";
 import { describePendingSteerWait, isChatSendReconnecting } from "../chat-send-presentation.ts";
 import type { readPendingSendStatus } from "../chat-thread-items.ts";
 
@@ -106,17 +106,14 @@ export function ChatSendStatus(props: { status: SendStatus; actions: ChatSendSta
   );
 }
 
-export function ChatSteerNow(props: {
-  input?: ChatPendingInputsPage["items"][number];
-  onSend?: (runId: string) => void;
-}) {
+export function ChatSteerNow(props: { input?: PendingSteer; onSend?: (runId: string) => void }) {
+  const sendable = () => props.input?.steerNow?.status === "available" && Boolean(props.onSend);
+  // Steers waiting together share one label on the newest; each keeps its own Send now.
   return (
-    <Show
-      when={(props.onSend || props.input?.steerNow?.status === "blocked") && props.input?.steerNow}
-    >
+    <Show when={(sendable() || props.input?.latest) && props.input?.steerNow}>
       {(steerNow) => (
         <div class="chat-steer-now chat-message-source">
-          {steerNow().status === "available" ? (
+          {sendable() ? (
             <button
               class="chat-send-status__action"
               type="button"
@@ -125,7 +122,14 @@ export function ChatSteerNow(props: {
               {t("chat.pendingInputs.sendNow")}
             </button>
           ) : (
-            <span>{describePendingSteerWait(steerNow().tools)}</span>
+            <span
+              class="chat-steer-now__waiting"
+              role="status"
+              title={describePendingSteerWait(steerNow())}
+              aria-label={describePendingSteerWait(steerNow())}
+            >
+              {t("chat.pendingInputs.steering")}
+            </span>
           )}
         </div>
       )}
