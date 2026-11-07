@@ -15,6 +15,7 @@ import { mapThinkingLevel } from "../../agents/embedded-agent-runner/utils.js";
 import { resolveFastModeForElapsed, resolveFastModeState } from "../../agents/fast-mode.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
+import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { normalizeUsage, hasObservedModelUsage, toDiagnosticUsage } from "../../agents/usage.js";
 import { emitAgentEventForRunContext } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -214,39 +215,42 @@ export const executePreparedWorkerInference = async (
       runContext?.lifecycleStartedAt ??
       runContext?.registeredAt ??
       Date.now();
-    applyExtraParamsToAgent(
-      streamAgent,
-      config,
-      approved.provider,
-      approved.model,
-      {
-        ...structuredClone(streamPolicyOptions),
-        fastMode:
-          fastModeSetting === "auto"
-            ? () =>
-                resolveFastModeForElapsed({
-                  mode: "auto",
-                  startedAtMs: fastModeStartedAtMs,
-                  fastAutoOnSeconds:
-                    promptCacheContext.fastModeAutoOnSeconds ?? fastMode.fastAutoOnSeconds,
-                }).enabled
-            : fastModeSetting,
-      },
-      streamPolicyOptions.reasoning,
-      target.agentId,
-      approved.workspaceDir,
-      providerModel,
-      agentDir,
-      undefined,
-      {
-        nativeWebSearchPolicyContext: {
-          sessionKey: target.sessionKey,
-          webSearchEnabled:
-            (await getWorkerTurnToolSurface(identity)?.getSurface(identity))?.tools.some(
-              ({ definition }) => definition.name === "web_search",
-            ) === true,
+    const webSearchEnabled =
+      (await getWorkerTurnToolSurface(identity)?.getSurface(identity))?.tools.some(
+        ({ definition }) => definition.name === "web_search",
+      ) === true;
+    await withPreparedSessionCapabilityRead(() =>
+      applyExtraParamsToAgent(
+        streamAgent,
+        config,
+        approved.provider,
+        approved.model,
+        {
+          ...structuredClone(streamPolicyOptions),
+          fastMode:
+            fastModeSetting === "auto"
+              ? () =>
+                  resolveFastModeForElapsed({
+                    mode: "auto",
+                    startedAtMs: fastModeStartedAtMs,
+                    fastAutoOnSeconds:
+                      promptCacheContext.fastModeAutoOnSeconds ?? fastMode.fastAutoOnSeconds,
+                  }).enabled
+              : fastModeSetting,
         },
-      },
+        streamPolicyOptions.reasoning,
+        target.agentId,
+        approved.workspaceDir,
+        providerModel,
+        agentDir,
+        undefined,
+        {
+          nativeWebSearchPolicyContext: {
+            sessionKey: target.sessionKey,
+            webSearchEnabled,
+          },
+        },
+      ),
     );
     const recordServiceTierObservation = prepared.recordServiceTierObservation;
     const scopedStream = recordServiceTierObservation
