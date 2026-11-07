@@ -210,7 +210,7 @@ it("retains a protected parent through private completion and owner reentry", as
   }
 });
 
-it("fails closed without a relay, then applies changed context through an idle native handoff", async () => {
+it("continues unchanged context without a relay, then applies changed context through an idle native handoff", async () => {
   const sessionFile = path.join(tempDir, "no-relay-parent.jsonl");
   let starts = 0;
   const agentDir = path.join(tempDir, "wire-agent");
@@ -248,32 +248,26 @@ it("fails closed without a relay, then applies changed context through an idle n
   try {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await first;
-    const initialBinding = await readCodexAppServerBinding(sessionFile);
     const request = harness.requests.find(({ method }) => method === "thread/start")?.params;
     expect(request).toMatchObject({
       developerInstructions: expect.stringContaining("First conversation context."),
     });
     const beforeUnchanged = harness.requests.length;
-    await expect(
-      runCodexAppServerAttempt({ ...params, runId: "unchanged-no-relay" }),
-    ).rejects.toThrow("requires a current parent-local inference relay");
-    expect(
-      harness.requests
-        .slice(beforeUnchanged)
-        .some(({ method }) =>
-          [
-            "thread/start",
-            "thread/resume",
-            "turn/start",
-            "turn/interrupt",
-            "thread/unsubscribe",
-          ].includes(method),
-        ),
-    ).toBe(false);
-    expect(await readCodexAppServerBinding(sessionFile)).toEqual(initialBinding);
+    const unchanged = runCodexAppServerAttempt({ ...params, runId: "unchanged-no-relay" });
+    await unchanged.waitForTurnAccepted().catch((error: unknown) => {
+      throw new Error("Unchanged no-relay continuation failed before acceptance", { cause: error });
+    });
+    const unchangedMethods = harness.requests.slice(beforeUnchanged).map(({ method }) => method);
+    expect(unchangedMethods).toContain("turn/start");
+    for (const method of ["thread/start", "turn/interrupt", "thread/unsubscribe"]) {
+      expect(unchangedMethods).not.toContain(method);
+    }
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await unchanged;
     expect(clientRuntime.isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(
       true,
     );
+    const protectedBinding = await readCodexAppServerBinding(sessionFile);
     const changed = {
       ...params,
       runId: "changed-context",
@@ -281,7 +275,9 @@ it("fails closed without a relay, then applies changed context through an idle n
       extraSystemPromptTurnContext: { start: 0, text: "Second conversation context." },
     };
     const before = harness.requests.length;
-    await expect(runCodexAppServerAttempt(changed)).rejects.toThrow(/claimed by active work/);
+    await expect(runCodexAppServerAttempt(changed)).rejects.toThrow(
+      "still has background work after waiting for cleanup; stop its running work and retry.",
+    );
     expect(
       harness.requests
         .slice(before)
@@ -289,7 +285,7 @@ it("fails closed without a relay, then applies changed context through an idle n
           ["thread/start", "thread/resume", "turn/start", "thread/unsubscribe"].includes(method),
         ),
     ).toBe(false);
-    expect(await readCodexAppServerBinding(sessionFile)).toEqual(initialBinding);
+    expect(await readCodexAppServerBinding(sessionFile)).toEqual(protectedBinding);
     release();
     const successor = runCodexAppServerAttempt({ ...changed, runId: "idle-successor" });
     await successor.waitForTurnAccepted().catch((error: unknown) => {

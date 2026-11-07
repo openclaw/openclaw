@@ -23,7 +23,6 @@ import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { getCodexInferenceThread } from "./inference-routing.js";
 import { readCodexRuntimeModelId } from "./model-runtime.js";
-import { assertCodexProtectedContextCarrier } from "./protected-context-carrier.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
 import type { CodexTurnStartResponse } from "./protocol.js";
 import { prepareCodexProviderReviewContinuation } from "./provider-review-continuation.js";
@@ -34,10 +33,7 @@ import {
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import {
-  buildCodexConversationTurnInstructions,
-  splitCodexExtraSystemPrompt,
-} from "./thread-prompt.js";
+import { buildCodexConversationTurnInstructions } from "./thread-prompt.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexParentLocalInstructions, buildTurnStartParams } from "./turn-params.js";
 import type { CodexThreadRouteReservation } from "./turn-router.js";
@@ -170,12 +166,6 @@ export async function prepareCodexAttemptTurnRequest(
     const inferenceRoute = getCodexInferenceThread(
       resourceState.client,
       resourceState.thread.threadId,
-    );
-    assertCodexProtectedContextCarrier(
-      turnClient,
-      threadId,
-      Boolean(inferenceRoute),
-      splitCodexExtraSystemPrompt(runtimeParams).turn,
     );
     const turnStartParams = await buildTurnStartParams(runtimeParams, {
       threadId: resourceState.thread.threadId,
@@ -324,12 +314,6 @@ export async function prepareCodexAttemptTurnRequest(
           withCurrent: connection.withCurrent,
           assertCurrent: () => {
             assertTurnCurrent();
-            assertCodexProtectedContextCarrier(
-              turnClient,
-              threadId,
-              Boolean(getCodexInferenceThread(turnClient, threadId)),
-              splitCodexExtraSystemPrompt(runtimeParams).turn,
-            );
             continuation?.dispatch();
           },
         }),
