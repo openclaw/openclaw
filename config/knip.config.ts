@@ -31,6 +31,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/perf/agent-deletion-cancellation-measure.ts",
   "scripts/perf/template-retirement-measure.mts",
   "scripts/windows-release-promotion.mjs!",
   // Offline composition is documented; Docker executes the staged finalizer by path.
@@ -55,6 +56,7 @@ const repositoryScriptEntries = [
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
+  "scripts/perf/gateway-crash-record-measure.mts!",
   "scripts/perf/native-pr-bootstrap-measure.mjs!",
   "scripts/perf/backup-verify-fixture.mjs!",
   "scripts/perf/backup-verify-measure.mjs!",
@@ -219,6 +221,7 @@ const repositoryScriptEntries = [
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/github-publication-snapshot-measure.ts!",
+  "scripts/perf/workspace-reconciliation-measure.ts!",
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",
   // Maintained source headers invoke these standalone analysis commands by exact path.
@@ -437,6 +440,8 @@ const repositoryScriptEntries = [
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
   "scripts/preflight-frozen-target-contracts.mjs!",
+  // The documented stable-to-candidate Goal upgrade proof runs as a standalone CLI.
+  "scripts/proof-control-ui-goal-upgrade.ts!",
   // #175328 invokes this real agent-exec streaming proof by path.
   "scripts/proof-final-answer-stream.mts!",
   // Generates the checked-in native protocol models from core descriptor metadata.
@@ -1203,14 +1208,16 @@ const config = {
     "src/agents/model-auth-runtime.ts": ["nsExports"],
     "src/agents/model-auth-runtime-shared.ts": ["nsExports"],
     "src/agents/prepared-model-runtime.ts": ["nsExports"],
-    // OpenClaw ID focused tests drive retry timers, mailbox handling, connection custody and
-    // tunnel supervision through these exports; the full-tree scan still audits those tests.
+    // OpenClaw ID focused tests drive retry timers, mailbox handling, tunnel supervision and
+    // browser key seams through these exports; the full-tree scan still audits those tests.
     "src/gateway/openclaw-id/mailbox-reader.ts": ["exports"],
     "src/gateway/openclaw-id/publication-retry.ts": ["exports"],
     "src/gateway/openclaw-id/tunnel-connections.ts": ["exports"],
     "src/gateway/openclaw-id/tunnel-principal.ts": ["types"],
     "src/gateway/openclaw-id/tunnel-runtime.ts": ["exports"],
     "src/gateway/openclaw-id/tunnel-supervisor.ts": ["exports", "types"],
+    "extensions/openclaw-id-access/browser/owner-signing.ts": ["exports"],
+    "extensions/openclaw-id-access/browser/people-format.ts": ["exports"],
   },
   workspaces: {
     ".": {

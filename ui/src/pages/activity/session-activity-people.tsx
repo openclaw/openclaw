@@ -1,6 +1,7 @@
 import { createMemo, For, Show } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import {
@@ -223,9 +224,7 @@ export function PeopleControl(props: {
           {unresolved().length > 0 ? (
             <>
               <div class="session-menu__separator" role="separator" />
-              <div class="activity-feed__people-group-label">
-                {t("activityFeed.unresolvedIdentities")}
-              </div>
+              <MenuHeading label={t("activityFeed.unresolvedIdentities")} />
               <div data-activity-unresolved>
                 <For each={unresolved()} keyed={(person) => person.id}>
                   {(person) => (

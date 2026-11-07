@@ -185,14 +185,6 @@
 
 .palette-session-settings__remember input {
   justify-self: center;
-  appearance: auto;
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  padding: 0;
-  accent-color: var(--accent);
-  color-scheme: inherit;
-  box-shadow: none;
 }
 
 .palette-session-settings__heading {
@@ -215,7 +207,6 @@
   max-height: 230px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
 }
 
 .palette-session-settings__choices > section + section {

@@ -12,41 +12,27 @@
   font-size: 26px;
 }
 
-.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs {
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
-  padding: 0;
-  color: var(--muted);
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
-
-.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs:hover {
-  color: var(--text-strong);
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
-
-.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs:focus-visible {
-  box-shadow: var(--focus-ring);
-}
-
-.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs svg {
-  width: 18px;
-  height: 18px;
-}
-
+/* Applied filters tint the trigger; it is a status, not a pressed toggle. */
 .settings-section__actions .sessions-filter-popover__trigger.active {
   color: var(--accent);
 }
 
+/* The primary action keeps its fill but shares the toolbar icons' box and glyph. */
 .settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  box-shadow: none;
   color: var(--primary-foreground);
   background: var(--primary);
   border-color: transparent;
+}
+
+.settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs svg {
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs:hover {
@@ -106,9 +92,7 @@
 }
 
 .sessions-transcript-search__clear:focus-visible,
-.sessions-transcript-search__result:focus-visible,
-.session-actions .icon-btn:focus-visible,
-.session-details-toggle:focus-visible {
+.sessions-transcript-search__result:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -513,7 +497,7 @@
 }
 
 /* The row loses :hover once the pointer moves into the menu; keep its kebab lit. */
-.session-data-row--menu-open .session-actions .icon-btn {
+.session-data-row--menu-open .session-row-menu-trigger {
   opacity: 1;
 }
 
@@ -543,12 +527,6 @@
 
 .session-agent-col openclaw-agent-row-chip {
   width: 100%;
-}
-
-.session-actions .icon-btn .session-css-icon,
-.session-details-toggle .session-css-icon {
-  width: 14px;
-  height: 14px;
 }
 
 .session-key-cell__text {
@@ -688,53 +666,15 @@
   gap: 2px;
 }
 
-.session-actions .icon-btn,
-.session-details-toggle {
-  display: inline-flex;
-  align-items: center;
-  height: 28px;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-}
-
-.session-actions .icon-btn {
-  justify-content: center;
-  width: 28px;
-  padding: 0;
+/* The row menu stays quiet until its row is hovered or it takes focus. */
+.session-row-menu-trigger:where(:not(:disabled)) {
   opacity: 0.65;
-  transition:
-    color var(--duration-fast) ease,
-    background-color var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
-    opacity var(--duration-fast) ease;
+  transition: opacity var(--duration-fast) ease;
 }
 
-.sessions-table tr:hover .session-actions .icon-btn,
-.session-actions .icon-btn:focus-visible {
+.sessions-table tr:hover .session-row-menu-trigger,
+.session-row-menu-trigger:focus-visible {
   opacity: 1;
-}
-
-.session-actions .icon-btn:hover:not(:disabled),
-.session-details-toggle:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-  border-color: var(--border);
-}
-
-.session-actions .icon-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.3;
-}
-
-.session-details-toggle {
-  gap: 5px;
-  padding: 0 7px;
-  transition:
-    color var(--duration-fast) ease,
-    background-color var(--duration-fast) ease,
-    border-color var(--duration-fast) ease;
 }
 
 .session-details-toggle .session-css-icon {
@@ -1034,25 +974,33 @@ select.session-group-select {
 
   openclaw-sessions-page
     .settings-section__actions
-    .sessions-filter-popover__trigger.btn--icon.btn--xs,
+    .sessions-filter-popover__trigger.oc-icon-button,
   openclaw-sessions-page
     .settings-section__actions
-    .sessions-filter-popover__trigger.btn--icon.btn--xs:hover {
+    .sessions-filter-popover__trigger.oc-icon-button:hover {
     width: var(--settings-control-height);
     min-width: var(--settings-control-height);
     height: var(--settings-control-height);
     color: var(--text);
     background: var(--field-bg);
-    border-color: var(--field-border);
+    border: 1px solid var(--field-border);
     border-radius: var(--field-radius);
+  }
+
+  /* Beside the search field the trigger wears the field's contour, lift included. */
+  :root[data-theme-mode="light"]
+    openclaw-sessions-page
+    .settings-section__actions
+    .sessions-filter-popover__trigger.oc-icon-button {
+    box-shadow: var(--shadow-sm);
   }
 
   openclaw-sessions-page
     .settings-section__actions
-    .sessions-filter-popover__trigger.btn--icon.btn--xs.active,
+    .sessions-filter-popover__trigger.oc-icon-button.active,
   openclaw-sessions-page
     .settings-section__actions
-    .sessions-filter-popover__trigger.btn--icon.btn--xs.active:hover {
+    .sessions-filter-popover__trigger.oc-icon-button.active:hover {
     color: var(--accent);
   }
 
@@ -1135,7 +1083,7 @@ select.session-group-select {
     margin-block-start: 2px;
   }
 
-  openclaw-sessions-page .session-actions .icon-btn {
+  openclaw-sessions-page .session-row-menu-trigger {
     opacity: 1;
   }
 

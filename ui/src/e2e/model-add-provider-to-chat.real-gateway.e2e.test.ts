@@ -119,12 +119,12 @@ suite.define(() => {
         clicks++;
         const picker = page.getByRole("dialog", { name: "Add an account" });
         await picker.getByRole("searchbox", { name: "Search providers…" }).fill("Tencent");
-        await picker.getByRole("button", { name: "Tencent Tokenhub" }).click();
+        await picker.getByRole("button", { name: "Tencent TokenHub" }).click();
         clicks++;
         const form = page.getByRole("dialog", { name: "Add provider" });
         // A provider with config still shows its display name, not its config id.
         expect((await form.locator(".oc-dialog__title").textContent())?.trim()).toBe(
-          "Tencent Tokenhub",
+          "Tencent TokenHub",
         );
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-first-provider");
         await form.getByRole("button", { name: "Save provider", exact: true }).click();
