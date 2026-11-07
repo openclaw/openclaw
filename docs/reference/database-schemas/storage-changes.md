@@ -3250,7 +3250,9 @@ limits average writer duty, not the duration of an individual foreground wait.
 
 Each transaction reads the current active rows and derives facts with the same
 helpers as ordinary writers. Cold, rebuilding, and malformed rows retain their
-fallback. Progress comes from the companion primary key: restart scans bounded
+fallback. Derived-only fills preserve session snapshot tokens while advancing
+database-wide write tracking; actual transcript mutations retain their normal
+session invalidation. Progress comes from the companion primary key: restart scans bounded
 active identity ranges but does not reread covered payloads. No progress table,
 schema change, or new setting is introduced. Progress logs report filled and
 skipped rows, visited sessions, payload bytes, maximum native batch and admitted

@@ -3,14 +3,10 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
-  iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
-import {
-  sqliteSessionIdWriteScope,
-  withSqliteDatabaseWriteScope,
-} from "../../infra/sqlite-database-admission.js";
+import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
@@ -119,7 +115,9 @@ export function backfillTranscriptActiveFactsBatchInTransaction(
   }
   // Limit identities before checking coverage: an already covered long session must
   // not turn one writer reservation into an unbounded anti-join scan on restart.
-  const identities = iterateSqliteQuerySync(
+  // Close the bounded identity cursor before writing: writes under a live native
+  // iterator conservatively invalidate every session, even with a certified scope.
+  const identities = executeSqliteQuerySync(
     database,
     db
       .selectFrom("session_transcript_active_events as active")
@@ -133,7 +131,7 @@ export function backfillTranscriptActiveFactsBatchInTransaction(
       .where("active.active_position", ">", cursor.afterPosition)
       .orderBy("active.active_position")
       .limit(MAX_IDENTITY_ROWS),
-  );
+  ).rows;
   let payloadRows = 0;
   let exhausted = true;
   for (const identity of identities) {
@@ -184,7 +182,8 @@ export function backfillTranscriptActiveFactsBatchInTransaction(
       continue;
     }
     const { bytes, navigation } = facts;
-    withSqliteDatabaseWriteScope(database, [sqliteSessionIdWriteScope(cursor.sessionId)], () =>
+    // These facts equal the readers' fallback values; filling them preserves session snapshots.
+    withSqliteDatabaseWriteScope(database, [], () =>
       executeSqliteQuerySync(
         database,
         db.insertInto("session_transcript_active_event_facts").values({

@@ -1,5 +1,10 @@
 import { expect, it, vi } from "vitest";
 import {
+  readSqliteDatabaseScopedWriteToken,
+  readSqliteDatabaseWriteTokenForPath,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
+import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -31,6 +36,10 @@ import { createTranscriptPayloadUpdater, prepareTranscriptPayload } from "./tran
 function fixture(env: NodeJS.ProcessEnv) {
   const scope = { agentId: "main", env, sessionId: "backfill", sessionKey: "agent:main:backfill" };
   const db = () => requireNativeSqliteDatabase(openOpenClawAgentDatabase(scope).db);
+  const sessionToken = () =>
+    readSqliteDatabaseScopedWriteToken(db(), [sqliteSessionIdWriteScope(scope.sessionId)]);
+  const databaseToken = () =>
+    readSqliteDatabaseWriteTokenForPath(openOpenClawAgentDatabase(scope).path);
   const write = <T>(run: Parameters<typeof runOpenClawAgentWriteTransaction<T>>[0]) =>
     runOpenClawAgentWriteTransaction(run, scope);
   const batch = (afterPosition = -1) =>
@@ -66,7 +75,18 @@ function fixture(env: NodeJS.ProcessEnv) {
       content: `message ${index}`,
     }),
   );
-  return { scope, db, write, batch, drain, facts, forgetFacts, events };
+  return {
+    scope,
+    db,
+    write,
+    batch,
+    drain,
+    facts,
+    forgetFacts,
+    events,
+    sessionToken,
+    databaseToken,
+  };
 }
 
 it("fills historical active facts exactly and resumes without rereading covered payloads", ({
@@ -81,7 +101,13 @@ it("fills historical active facts exactly and resumes without rereading covered 
     expect(discover(f.db())).toEqual([
       expect.objectContaining({ sessionId: f.scope.sessionId, activeEventCount: 40 }),
     ]);
+    const sessionToken = f.sessionToken();
+    const databaseToken = f.databaseToken();
+    expect(sessionToken).toBeDefined();
+    expect(databaseToken).toBeDefined();
     const first = f.batch();
+    expect(f.sessionToken()).toBe(sessionToken);
+    expect(f.databaseToken()).not.toBe(databaseToken);
     expect(first.rowsFilled).toBeGreaterThan(0);
     expect(first.rowsFilled).toBeLessThanOrEqual(16);
     expect(first.done).toBe(false);
@@ -110,6 +136,7 @@ it("fills historical active facts exactly and resumes without rereading covered 
         signal.throwIfAborted();
       }
       expect(open).toHaveBeenCalledOnce();
+      expect(f.sessionToken()).toBe(sessionToken);
     } finally {
       await resume.close();
       open.mockRestore();
@@ -210,6 +237,8 @@ it("uses current payloads after interleaved rewrites and appends and never resur
     });
     // A later rewrite of an already visited position clears its fact; a fresh pass
     // must fill the replacement, without trusting the old in-memory cursor.
+    const sessionToken = f.sessionToken();
+    expect(sessionToken).toBeDefined();
     f.write((database) =>
       updateSqliteTranscriptEventJsonInTransaction(
         database,
@@ -227,6 +256,7 @@ it("uses current payloads after interleaved rewrites and appends and never resur
       ),
     );
     expect(f.facts()).toHaveLength(40);
+    expect(f.sessionToken()).not.toBe(sessionToken);
     f.drain();
     expect(f.facts()).toHaveLength(41);
     f.write((database) =>
