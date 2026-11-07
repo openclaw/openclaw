@@ -1210,7 +1210,7 @@ export async function handleFeishuMessage(params: {
     //   root so the bot stays in the same thread.
     // - Groups with explicit replyInThread config: reply to the root so the bot
     //   stays in the thread the user expects.
-    // - Normal groups (auto-detected threadReply from root_id): reply to the
+    // - Normal groups: reply to the
     //   triggering message itself. Using rootId here would silently push the
     //   reply into a topic thread invisible in the main chat view (#32980).
     const configReplyInThread =
