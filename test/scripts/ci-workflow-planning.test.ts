@@ -11708,6 +11708,8 @@ describe("ci workflow guards", () => {
           expect(
             evaluateWorkflowExpression(runStep.env.OPENCLAW_CI_TEST_RUNTIME_POLICY, {
               eventName,
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
               matrix: row,
             }),
           ).toBe("node");
