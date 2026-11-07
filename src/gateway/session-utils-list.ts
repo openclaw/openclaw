@@ -491,16 +491,16 @@ export function prepareProjectedSessionList(params: {
             const storeKey = row.storeKey ?? key;
             let visible = visibility?.get(entry);
             if (visible === undefined) {
-              const selected = getTarget(key)!;
               visible =
                 client === undefined ||
                 (presentation.sharing.entryFilter?.(
                   storeKey,
                   entry,
                   Boolean(
+                    presentation.sharing.sessionCap === "invited" &&
                     presentation.sharing.identity &&
                     projection.hasMembership(
-                      selected.storeTarget.storePath,
+                      getTarget(key)!.storeTarget.storePath,
                       storeKey,
                       presentation.sharing.identity.id,
                     ),
