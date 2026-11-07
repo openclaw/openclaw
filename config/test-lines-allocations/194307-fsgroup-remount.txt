@@ -1,5 +1,9 @@
-172
+253
 # fsGroup PVC remount regressions for restorePrivateStateStoreModes: broadened
-# directories, files and SQLite sidecars, world-bit and symlink refusals, the
-# already-private no-op, canonical path coverage, and credential-owner admission
-# on a remounted installation (#192959).
+# directories, files and SQLite sidecars, the world-bit and symlinked-store
+# refusals, the already-private no-op, canonical path coverage, and credential
+# owner admission on a remounted installation (#192959). Also the alias
+# refusals added for the clawsweeper review of #194307: a store file reached
+# through a symlinked store directory, a store file carrying a second name
+# outside the installation, and a store path that is not a regular file --
+# each red on the base, where the repair mutated the aliased object.
