@@ -38,21 +38,6 @@ class TestPackageSkillSecurity(TestCase):
         (skill_dir / "script.py").write_text("print('ok')\n")
         return skill_dir
 
-    def test_packages_normal_files(self):
-        skill_dir = self.create_skill("normal-skill")
-        out_dir = self.temp_dir / "out"
-        out_dir.mkdir()
-
-        result = package_skill(str(skill_dir), str(out_dir))
-
-        self.assertIsNotNone(result)
-        skill_file = out_dir / "normal-skill.skill"
-        self.assertTrue(skill_file.exists())
-        with zipfile.ZipFile(skill_file, "r") as archive:
-            names = set(archive.namelist())
-        self.assertIn("normal-skill/SKILL.md", names)
-        self.assertIn("normal-skill/script.py", names)
-
     def test_failed_write_preserves_output_and_cleans_staging(self):
         skill_dir = self.create_skill("failed-skill")
         for existing in (False, True):
@@ -71,12 +56,16 @@ class TestPackageSkillSecurity(TestCase):
                 if existing:
                     self.assertEqual(archive.read_bytes(), original)
 
-    def test_packages_resource_timestamps_outside_zip_range(self):
+    def test_packages_normal_and_out_of_range_timestamps(self):
         skill_dir = self.create_skill()
+        nested = skill_dir / "lib" / "helpers"
+        nested.mkdir(parents=True)
+        (nested / "util.py").write_text("def run():\n    return 1\n")
         resource = skill_dir / "script.py"
         original = resource.read_bytes()
         for timestamp, expected in (
             (0, (1980, 1, 1, 0, 0, 0)),
+            (1704067200, (2024, 1, 1, 0, 0, 0)),
             (4354905600, (2107, 12, 31, 23, 59, 58)),  # January 2108, beyond ZIP's range.
         ):
             with self.subTest(timestamp=timestamp):
@@ -84,9 +73,12 @@ class TestPackageSkillSecurity(TestCase):
                 result = package_skill(str(skill_dir), str(self.temp_dir / "out"))
 
                 self.assertIsNotNone(result)
+                self.assertTrue(result.exists())
                 with zipfile.ZipFile(result) as archive:
                     self.assertEqual(archive.read("test-skill/script.py"), original)
-                    self.assertIn("test-skill/SKILL.md", archive.namelist())
+                    self.assertEqual(set(archive.namelist()), {
+                        "test-skill/SKILL.md", "test-skill/script.py", "test-skill/lib/helpers/util.py"
+                    })
                     self.assertEqual(archive.getinfo("test-skill/script.py").date_time, expected)
                 self.assertEqual(resource.read_bytes(), original)
                 self.assertEqual(resource.stat().st_mtime, timestamp)
@@ -133,22 +125,6 @@ class TestPackageSkillSecurity(TestCase):
             result = package_skill(str(skill_dir), str(out_dir))
 
         self.assertIsNone(result)
-
-    def test_allows_nested_regular_files(self):
-        skill_dir = self.create_skill("nested-skill")
-        nested = skill_dir / "lib" / "helpers"
-        nested.mkdir(parents=True, exist_ok=True)
-        (nested / "util.py").write_text("def run():\n    return 1\n")
-        out_dir = self.temp_dir / "out"
-        out_dir.mkdir()
-
-        result = package_skill(str(skill_dir), str(out_dir))
-
-        self.assertIsNotNone(result)
-        skill_file = out_dir / "nested-skill.skill"
-        with zipfile.ZipFile(skill_file, "r") as archive:
-            names = set(archive.namelist())
-        self.assertIn("nested-skill/lib/helpers/util.py", names)
 
     def test_skips_output_archive_when_output_dir_is_skill_dir(self):
         skill_dir = self.create_skill("self-output-skill")
