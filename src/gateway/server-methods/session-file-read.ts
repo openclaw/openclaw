@@ -49,14 +49,24 @@ export async function prepareSessionFileReadPath(
   if (params.worktreeId && params.root && !params.historical) {
     const { checkpointLocalWorkspacePath, withSettledLocalWorkspacePath } =
       await import("../worker-environments/local-workspace-projection.js");
+    const { LocalWorkspaceConflictError } =
+      await import("../worker-environments/local-workspace-conflict-error.js");
     const request = { cwd: params.root, assertCurrent: params.assertCurrent };
     if (mapped) {
-      runtimeWorkspaceDir = await withSettledLocalWorkspacePath(request, async (custody) =>
-        custody && custody.worktreeId === params.worktreeId ? custody.projectionPath : undefined,
+      runtimeWorkspaceDir = await withSettledLocalWorkspacePath(
+        { ...request, allowConflict: true },
+        async (custody) =>
+          custody && custody.worktreeId === params.worktreeId ? custody.projectionPath : undefined,
       );
       backingRoot = runtimeWorkspaceDir;
     } else {
-      await checkpointLocalWorkspacePath(request);
+      try {
+        await checkpointLocalWorkspacePath(request);
+      } catch (error) {
+        if (!(error instanceof LocalWorkspaceConflictError)) {
+          throw error;
+        }
+      }
     }
     params.assertCurrent();
   }

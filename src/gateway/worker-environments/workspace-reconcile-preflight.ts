@@ -23,6 +23,20 @@ import {
 
 const MAX_RECONCILIATION_PATH_BYTES = 64 * 1024 * 1024;
 
+async function fileHasConflictMarkers(root: string, entryPath: string): Promise<boolean> {
+  try {
+    const content = await fs.readFile(localPath(root, entryPath), "utf8");
+    return (
+      content.includes("\n<<<<<<< ") ||
+      content.startsWith("<<<<<<< ") ||
+      content.includes("\n=======\n") ||
+      content.includes("\n>>>>>>> ")
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function localWorkspaceDescendantPaths(
   root: string,
   entryPaths: readonly string[],
@@ -196,13 +210,42 @@ export async function preflightWorkspaceApplyImpl(
         applyPaths.add(entryPath);
       }
     } else if (!sameEntry(local, currentNodes.get(entryPath))) {
-      conflicts.add(entryPath);
-      const current = currentNodes.get(entryPath);
+      const priorCollision = params.priorConflicts?.[entryPath];
+      const isAcknowledged = params.acknowledgedPaths?.includes(entryPath);
+      let isResolved = false;
+      if (isAcknowledged) {
+        isResolved = true;
+      } else if (priorCollision !== undefined) {
+        if (priorCollision.type === "missing") {
+          isResolved = local !== undefined;
+        } else if (local === undefined) {
+          isResolved = true;
+        } else if (local.type !== priorCollision.type) {
+          isResolved = true;
+        } else if (local.type === "file") {
+          if (local.sha256 !== priorCollision.sha256 || local.size !== priorCollision.size) {
+            isResolved = true;
+          }
+        } else if (local.type === "symlink") {
+          isResolved = local.target !== priorCollision.target;
+        }
+      }
       if (
-        (current?.type === "directory" && local !== undefined && local.type !== "directory") ||
-        (current !== undefined && current.type !== "directory" && local?.type === "directory")
+        isResolved &&
+        local?.type === "file" &&
+        (await fileHasConflictMarkers(params.root, entryPath))
       ) {
-        blockingConflicts.add(entryPath);
+        isResolved = false;
+      }
+      if (!isResolved) {
+        conflicts.add(entryPath);
+        const current = currentNodes.get(entryPath);
+        if (
+          (current?.type === "directory" && local !== undefined && local.type !== "directory") ||
+          (current !== undefined && current.type !== "directory" && local?.type === "directory")
+        ) {
+          blockingConflicts.add(entryPath);
+        }
       }
     }
   }

@@ -520,6 +520,15 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        if (!repository && loaded.root) {
+          const { acknowledgeLocalWorkspaceConflict } =
+            await import("../worker-environments/local-workspace-projection.js");
+          await acknowledgeLocalWorkspaceConflict({
+            cwd: loaded.root,
+            path: params.path,
+            assertCurrent: authorize,
+          });
+        }
         const workspaceDir = repository ? undefined : resolveAgentWorkspaceDir(loaded.cfg, agentId);
         if (
           workspaceDir &&

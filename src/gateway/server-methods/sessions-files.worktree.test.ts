@@ -356,4 +356,38 @@ describe("sessions.files for managed-worktree sessions", () => {
       });
     });
   });
+
+  it("allows inspecting canonical files when the managed workspace has a preserved conflict", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await seedWorktreeSession(state.workspaceDir);
+      const { LocalWorkspaceConflictError } =
+        await import("../worker-environments/local-workspace-conflict-error.js");
+      hooks.duringSettlement = async () => {
+        throw new LocalWorkspaceConflictError();
+      };
+      const response = await dispatch("sessions.files.get", "preview.html");
+      expect(successful(response)).toMatchObject({ file: { content: preview } });
+    });
+  });
+
+  it("acknowledges and saves a reconciled version via sessions.files.set during conflict", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const entry = await seedWorktreeSession(state.workspaceDir);
+      const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
+      const source = {
+        workspaceId: entry.worktree.id,
+        root: entry.spawnedCwd,
+        fileRoot: entry.spawnedCwd,
+      };
+      const result = await invoke("sessions.files.set", {
+        sessionKey: key,
+        path: "preview.html",
+        content: "reconciled administrator content\n",
+        expectedHash,
+        expectedSource: source,
+      });
+      expect(result).toMatchObject([{ ok: true }]);
+      expect(readPreview(entry.spawnedCwd)).toBe("reconciled administrator content\n");
+    });
+  });
 });

@@ -46,6 +46,11 @@ export async function applyStagedWorkerWorkspace(params: {
   additionalPaths?: ReadonlySet<string>;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
   assertCurrent?: () => void;
+  priorConflicts?: Record<
+    string,
+    { sha256?: string; size?: number; type?: string; target?: string }
+  >;
+  acknowledgedPaths?: ReadonlySet<string>;
   acceptance:
     | {
         kind: "reconcile";
@@ -53,6 +58,7 @@ export async function applyStagedWorkerWorkspace(params: {
           manifestRef: string;
           manifest: WorkerWorkspaceManifest;
           conflictPaths: string[];
+          resolvedCanonicalPaths?: string[];
         }) => Promise<void>;
       }
     | { kind: "exact-target"; verify: () => Promise<void> };
@@ -126,7 +132,13 @@ export async function applyStagedWorkerWorkspace(params: {
       preparedPaths && params.additionalPaths?.size
         ? new Set([...preparedPaths, ...params.additionalPaths])
         : preparedPaths;
-    const inspectPaths = () => preflightWorkspaceApply({ root, ...preflightInput });
+    const inspectPaths = () =>
+      preflightWorkspaceApply({
+        root,
+        ...preflightInput,
+        priorConflicts: params.priorConflicts,
+        acknowledgedPaths: params.acknowledgedPaths ? [...params.acknowledgedPaths] : undefined,
+      });
     const preflight = await inspectPaths();
     const acceptReconciled = async (
       reconcile: Extract<typeof acceptance, { kind: "reconcile" }>,
@@ -150,8 +162,15 @@ export async function applyStagedWorkerWorkspace(params: {
       });
       await verifyLocalStable();
       const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
+      const candidatePaths = new Set<string>([
+        ...(params.priorConflicts ? Object.keys(params.priorConflicts) : []),
+        ...(params.acknowledgedPaths ? params.acknowledgedPaths : []),
+      ]);
+      const resolvedCanonicalPaths = [...candidatePaths].filter(
+        (p) => !conflictPaths.includes(p) && !preflight.applyPaths.has(p),
+      );
       params.assertCurrent?.();
-      await reconcile.publish?.({ ...actual, conflictPaths });
+      await reconcile.publish?.({ ...actual, conflictPaths, resolvedCanonicalPaths });
       params.assertCurrent?.();
       await params.journal.commit(actual.manifestRef);
       return {

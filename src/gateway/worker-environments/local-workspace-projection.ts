@@ -24,6 +24,7 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { localWorkspaceProjectionPath } from "./local-workspace-checkout.js";
+import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
 import { finishLocalWorkspaceHandoff } from "./local-workspace-handoff.js";
 import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
 import { projectionOperations } from "./local-workspace-state.js";
@@ -160,6 +161,7 @@ export async function withSettledLocalWorkspace<T>(
       LocalWorkspaceOwner,
       "agentId" | "sessionKey" | "sessionId" | "lifecycleRevision"
     >;
+    allowConflict?: boolean;
   },
   operation: (custody?: LocalWorkspaceCustody) => Promise<T>,
 ): Promise<T> {
@@ -278,10 +280,16 @@ async function settleLocalWorkspace<T>(
         } else if (params.restoreSnapshot) {
           await state.restoreSnapshot();
         } else if (state.current().baseline_ref) {
-          await state.synchronize("canonical");
-          // Archive one accepted namespace, including canonical edits and deletions.
-          if (params.retireRuntime) {
-            await state.synchronize("projection");
+          try {
+            await state.synchronize("canonical");
+            // Archive one accepted namespace, including canonical edits and deletions.
+            if (params.retireRuntime) {
+              await state.synchronize("projection");
+            }
+          } catch (error) {
+            if (!params.allowConflict || !(error instanceof LocalWorkspaceConflictError)) {
+              throw error;
+            }
           }
         }
         if (params.retireRuntime) {
@@ -343,7 +351,7 @@ export async function checkpointLocalWorkspacePath(params: {
 }
 
 export async function withSettledLocalWorkspacePath<T>(
-  params: { cwd: string; assertCurrent?: () => void },
+  params: { cwd: string; assertCurrent?: () => void; allowConflict?: boolean },
   operation: (custody?: LocalWorkspaceCustody) => Promise<T>,
 ): Promise<T> {
   const context = captureWorktreeRunEndContext(process.env);
@@ -352,11 +360,18 @@ export async function withSettledLocalWorkspacePath<T>(
   params.assertCurrent?.();
   return record
     ? await withSettledLocalWorkspace(
-        { worktree: record, env, assertCurrent: params.assertCurrent },
+        {
+          worktree: record,
+          env,
+          assertCurrent: params.assertCurrent,
+          allowConflict: params.allowConflict,
+        },
         operation,
       )
     : await operation();
 }
+
+export { acknowledgeLocalWorkspaceConflict } from "./local-workspace-conflict-acknowledgement.js";
 
 /** An unchanged turn needs no filesystem effects and can leave its runtimes running. */
 export function reuseLocalWorkspaceProjection(
