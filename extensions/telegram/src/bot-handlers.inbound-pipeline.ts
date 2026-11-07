@@ -5,6 +5,7 @@ import {
   isBtwRequestText,
 } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveNativeCommandsEnabled } from "openclaw/plugin-sdk/native-command-config-runtime";
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { createSubsystemLogger, danger } from "openclaw/plugin-sdk/runtime-env";
@@ -43,6 +44,7 @@ import {
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import {
   buildTelegramGroupPeerId,
+  buildTelegramThreadParams,
   getTelegramTextParts,
   resolveTelegramBotHasTopicsEnabled,
   resolveTelegramForumFlag,
@@ -51,6 +53,8 @@ import {
   TelegramPairingStoreReadError,
 } from "./bot/helpers.js";
 import type { TelegramGetChat } from "./bot/types.js";
+import { normalizeTelegramCommandName } from "./command-config.js";
+import { resolveTelegramIgnoreDisposition, TELEGRAM_IGNORE_HELP_TEXT } from "./ignore-command.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import { emitTelegramLiveLocationMessageHook } from "./location-message-hook.js";
 import { isTelegramControlLaneText } from "./sequential-key.js";
@@ -179,6 +183,38 @@ export function createTelegramInboundPipeline({
         effectiveGroupAllow,
         threadSpec,
       } = gate.context;
+
+      // Consume one authorized, fresh group text before session, cache, media, or agent work.
+      // Registered plugin commands already take precedence in earlier grammY middleware.
+      const nativeCommandsEnabled = resolveNativeCommandsEnabled({
+        providerId: "telegram",
+        providerSetting: gate.context.telegramCfg.commands?.native,
+        globalSetting: gate.context.cfg.commands?.native,
+      });
+      const customIgnoreConfigured = gate.context.telegramCfg.customCommands?.some(
+        ({ command }) => normalizeTelegramCommandName(command) === "ignore",
+      );
+      const ignoreDisposition =
+        !isChannelPost && isGroup && nativeCommandsEnabled && !customIgnoreConfigured
+          ? resolveTelegramIgnoreDisposition(normalizedMsg, syntheticContext.me?.username)
+          : "keep";
+      if (ignoreDisposition !== "keep") {
+        if (ignoreDisposition === "help") {
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            runtime,
+            fn: () =>
+              bot.api.sendMessage(chatId, TELEGRAM_IGNORE_HELP_TEXT, {
+                ...buildTelegramThreadParams(threadSpec),
+                reply_parameters: {
+                  message_id: normalizedMsg.message_id,
+                  allow_sending_without_reply: true,
+                },
+              }),
+          });
+        }
+        return { kind: "processed" };
+      }
 
       const sessionState = await resolveTelegramSessionState({
         chatId,

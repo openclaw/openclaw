@@ -17,6 +17,7 @@ import {
   from,
   harness,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
+import { TELEGRAM_IGNORE_HELP_TEXT } from "./ignore-command.js";
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import { createTelegramMessageCache } from "./message-cache.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
@@ -198,6 +199,84 @@ it("attaches photos the sender posted just before a separate mention", async () 
     { message_id: String(other.message_id), media_ref: "telegram:file/other-photo" },
   );
 });
+
+it("excludes one authorized /ignore text update before retained history and dispatch", async () => {
+  cfg.commands!.native = true;
+  const bot = await createBot(true, true, cfg);
+  const kept = message("KEEP_CONTEXT", { chat: group });
+  const ignored = { ...commandMessage("/ignore@openclaw_bot HIDE_CONTEXT"), chat: group };
+
+  await receive(bot, { message: kept });
+  await receive(bot, { message: ignored });
+  expect(harness.replySpy).not.toHaveBeenCalled();
+  expect(
+    await reopenedCache().get({
+      accountId: "default",
+      chatId: group.id,
+      messageId: String(ignored.message_id),
+    }),
+  ).toBeNull();
+
+  await receive(bot, {
+    edited_message: {
+      ...ignored,
+      text: "EDITED_CONTEXT",
+      entities: [],
+      edit_date: ignored.date + 1,
+    },
+  });
+  expect(
+    await reopenedCache().get({
+      accountId: "default",
+      chatId: group.id,
+      messageId: String(ignored.message_id),
+    }),
+  ).toMatchObject({ body: "EDITED_CONTEXT" });
+
+  await receive(bot, { message: mention() });
+  const context = JSON.stringify(lastInput().ChannelStructuredContext);
+  expect(context).toContain("KEEP_CONTEXT");
+  expect(context).toContain("EDITED_CONTEXT");
+  expect(context).not.toContain("HIDE_CONTEXT");
+
+  apiCalls.mockClear();
+  const bare = { ...commandMessage("/ignore"), chat: group };
+  await receive(bot, { message: bare });
+  expect(harness.replySpy).toHaveBeenCalledOnce();
+  expect(apiCalls).toHaveBeenCalledWith(
+    "sendMessage",
+    expect.objectContaining({ text: TELEGRAM_IGNORE_HELP_TEXT }),
+  );
+  expect(
+    await reopenedCache().get({
+      accountId: "default",
+      chatId: group.id,
+      messageId: String(bare.message_id),
+    }),
+  ).toBeNull();
+});
+
+it.each([
+  ["native commands are disabled", false, undefined],
+  ["a custom command owns /ignore", true, [{ command: "ignore", description: "Custom" }]],
+] as const)(
+  "preserves ordinary /ignore handling when %s",
+  async (_label, native, customCommands) => {
+    cfg.commands!.native = native;
+    cfg.channels!.telegram!.customCommands = customCommands ? [...customCommands] : undefined;
+    const bot = await createBot(native, true, cfg);
+    const ordinary = { ...commandMessage("/ignore KEEP_ORDINARY"), chat: group };
+
+    await receive(bot, { message: ordinary });
+    expect(
+      await reopenedCache().get({
+        accountId: "default",
+        chatId: group.id,
+        messageId: String(ordinary.message_id),
+      }),
+    ).toMatchObject({ body: "/ignore KEEP_ORDINARY" });
+  },
+);
 
 it.each([false, true])("retains a username-free channel (%s)", async (senderChat) => {
   const channel = { id: -100777111222, type: "channel", title: "Private Channel" } as const;
