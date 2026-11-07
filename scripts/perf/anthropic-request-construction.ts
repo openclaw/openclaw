@@ -15,8 +15,11 @@
  * --restored replays 199 restored messages with 40 KiB tool results through attempt
  * preparation and the real transport, appending a tool turn per iteration (use 20).
  * In restored mode --baseline-dir overlays the owner, including the real serializer.
- * Acceptance: identical wireSha256, lower allocation/CPU per request, no controlled
- * material GC regression. Gate CPU/GC on untraced passes, allocation separately.
+ * Acceptance: identical wireSha256 and lower warm CPU/allocation. For restored mode,
+ * the one-time preparation + first-request CPU increase must be less than one warm
+ * request CPU saving (or within control noise). Report GC/tails separately; p95Ms
+ * is the floor(n * .95) order statistic, hence the maximum with 20 iterations.
+ * Other modes retain their no-material-GC-regression rule. Measure allocation separately.
  * Restored mode includes transport/SSE replay; other modes measure preparation only.
  * No mode measures live provider calls or whole-Gateway latency.
  */
