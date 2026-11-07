@@ -1,10 +1,12 @@
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { z } from "zod";
+import { MAX_API_RESPONSE_LABEL } from "../../limits.js";
 import type { GithubSourceConfig, SourceStatus } from "../../types.js";
 import {
   ApiResponseReadError,
   createResponseParser,
+  describeResponseOverflow,
   parseApiBase,
   readApiResponse,
 } from "../http.js";
@@ -20,6 +22,17 @@ export class GithubHttpError extends GithubSourceError {
 export const parse = createResponseParser(
   () => new GithubSourceError("Invalid API response; check API compatibility"),
 );
+
+/** One message per read failure, keyed so a new kind cannot compile without wording. */
+const API_READ_FAILURE_MESSAGES: Record<
+  ApiResponseReadError["kind"],
+  (error: ApiResponseReadError) => string
+> = {
+  "too-large": (error) =>
+    `API response exceeded the ${MAX_API_RESPONSE_LABEL} limit${describeResponseOverflow(error)}; check the API base URL or proxy for oversized output, then regenerate the affected days`,
+  timeout: () => "API request timed out",
+  release: () => "Could not release API response",
+};
 
 export function pathWithQuery(path: string, query: Record<string, string>): string {
   return `${path}?${new URLSearchParams({ per_page: "100", ...query })}`;
@@ -100,9 +113,7 @@ export class GithubClient {
         }
         throw new GithubSourceError(
           error instanceof ApiResponseReadError
-            ? error.kind === "timeout"
-              ? "API request timed out"
-              : "Could not release API response"
+            ? API_READ_FAILURE_MESSAGES[error.kind](error)
             : "Request failed; check API access and connectivity",
         );
       }

@@ -1,3 +1,4 @@
+import { MAX_API_RESPONSE_BYTES } from "../../limits.js";
 import type { GithubSourceConfig, Person, Roster, SourceRuntime } from "../../types.js";
 
 export const config: GithubSourceConfig = {
@@ -73,6 +74,9 @@ export const advisory = {
 };
 export function json(body: unknown, headers?: HeadersInit, status = 200) {
   return new Response(JSON.stringify(body), { status, headers });
+}
+export function oversizedRoster() {
+  return JSON.stringify([{ login: "b".repeat(MAX_API_RESPONSE_BYTES + 64 * 1024) }]);
 }
 export function emptyRoute(url: URL): Response {
   if (url.pathname === "/orgs/example/repos") {

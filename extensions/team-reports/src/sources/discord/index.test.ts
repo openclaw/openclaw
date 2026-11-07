@@ -1,7 +1,18 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { MAX_API_RESPONSE_BYTES } from "../../limits.js";
 import { bindReportFetch } from "../../report-network.test-support.js";
-import type { DiscordMessage, SourceStatus } from "../../types.js";
-import { config, json, message, runtime, thread, window } from "./discord.fixtures.js";
+import type { DiscordMessage } from "../../types.js";
+import {
+  archives,
+  config,
+  expectStatus,
+  json,
+  message,
+  oversizedPage,
+  runtime,
+  thread,
+  window,
+} from "./discord.fixtures.js";
 import { createDiscordSource } from "./index.js";
 
 const { sinceMs, untilMs } = window;
@@ -18,19 +29,6 @@ async function collect(routes: Record<string, (url: URL) => Response>, channels 
   });
   messages.sort((a, b) => a.atMs - b.atMs || a.channelId.localeCompare(b.channelId));
   return { messages, status, requests: context.requests, logs: context.logs };
-}
-
-function expectStatus(status: SourceStatus, warnings: unknown[], skipped = 0) {
-  expect(status).toMatchObject({
-    ok: warnings.length === 0,
-    warnings,
-    stats: { privateArchivesSkipped: skipped },
-  });
-  expect(status.stale === true).toBe(warnings.length > 0);
-}
-
-function archives(threads: ReturnType<typeof thread>[], has_more = true) {
-  return json({ threads, has_more });
 }
 
 afterEach(() => vi.useRealTimers());
@@ -109,11 +107,8 @@ it.each([403, 404])("handles private archive HTTP %s", async (code) => {
     "/channels/20/messages": () => json([message(sinceMs + 1)]),
   });
   expect(result.messages).toHaveLength(1);
-  expectStatus(
-    result.status,
-    code === 403 ? [] : [expect.stringMatching(/20.*404/)],
-    code === 403 ? 1 : 0,
-  );
+  const warnings = code === 404 ? [expect.stringMatching(/20.*404/)] : [];
+  expectStatus(result.status, warnings, code === 403 ? 1 : 0);
 });
 
 it("waits 60 seconds for Discord retry_after before retrying", async () => {
@@ -131,6 +126,15 @@ it("waits 60 seconds for Discord retry_after before retrying", async () => {
   const result = await pending;
   expect(result.messages).toHaveLength(1);
   expect(result.status.stats.apiCalls).toBe(result.requests.length);
+});
+
+it("reports an oversized message page once instead of retrying it", async () => {
+  const result = await collect({ "/messages": () => oversizedPage() });
+  expectStatus(result.status, [expect.stringMatching(/channel 20.*32 MiB limit.*regenerate/)]);
+  // The warning names the bytes read, so an operator sees where the cutoff tripped.
+  const read = /\(read ([\d,]+) bytes before the cutoff\)/u.exec(result.status.warnings[0] ?? "");
+  expect(Number(read?.[1]?.replaceAll(",", ""))).toBeGreaterThan(MAX_API_RESPONSE_BYTES);
+  expect(result.requests.filter((url) => url.pathname.endsWith("/messages"))).toHaveLength(1);
 });
 
 it("warns on missing channel access and collects accessible sibling channels without exposing tokens", async () => {
