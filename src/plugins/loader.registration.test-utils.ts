@@ -10,6 +10,7 @@ import {
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
+import { emitChannelGroupMembershipChanged } from "../plugin-sdk/channel-activity-runtime.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
 import { registerEmbeddingProvider } from "./embedding-providers.js";
@@ -1335,6 +1336,81 @@ describe("loadOpenClawPlugins", () => {
     const globalHookRunner = expectGlobalHookRunner(getGlobalHookRunner());
     expect(globalHookRunner.hasHooks("message_sent")).toBe(true);
     expect(globalHookRunner.hasHooks("subagent_ended")).toBe(false);
+  });
+
+  it("dispatches membership observations only while the active plugin has conversation access", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "membership-observer-permission",
+      filename: "membership-observer-permission.cjs",
+      registration: `api.logger.info("membership-fixture-loaded");
+      api.on("channel_group_membership_changed", () => {
+        api.logger.info("membership-hook-fired");
+      });`,
+    });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const load = (allowConversationAccess?: boolean) =>
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: plugin.dir,
+        logger,
+        config: {
+          plugins: {
+            load: { paths: [plugin.file] },
+            allow: [plugin.id],
+            entries: {
+              [plugin.id]: {
+                enabled: true,
+                ...(allowConversationAccess === true
+                  ? { hooks: { allowConversationAccess: true } }
+                  : {}),
+              },
+            },
+          },
+        },
+      });
+    const event = {
+      kind: "group_observed" as const,
+      actorId: "456@lid",
+      actorPhoneNumberId: "15551234567@s.whatsapp.net",
+      participants: [{ id: "789@lid", phoneNumberId: "123@s.whatsapp.net" }],
+      selfIds: ["123@s.whatsapp.net"],
+    };
+    const context = {
+      channelId: "whatsapp",
+      accountId: "default",
+      conversationId: "123@g.us",
+      signal: new AbortController().signal,
+    };
+
+    const denied = load();
+    expect(denied.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
+    expect(denied.typedHooks).toEqual([]);
+    expect(logger.info).toHaveBeenCalledWith("membership-fixture-loaded");
+    logger.info.mockClear();
+    await emitChannelGroupMembershipChanged(event, context);
+    expect(logger.info).not.toHaveBeenCalled();
+
+    const authorized = load(true);
+    expect(authorized.typedHooks.map((hook) => hook.hookName)).toEqual([
+      "channel_group_membership_changed",
+    ]);
+    expect(logger.info).toHaveBeenCalledWith("membership-fixture-loaded");
+    logger.info.mockClear();
+    await emitChannelGroupMembershipChanged(event, context);
+    expect(logger.info).toHaveBeenCalledExactlyOnceWith("membership-hook-fired");
+
+    const retainedRunner = expectGlobalHookRunner(getGlobalHookRunner());
+    const replacement = load();
+    expect(replacement.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
+    expect(replacement.typedHooks).toEqual([]);
+    expect(logger.info).toHaveBeenCalledWith("membership-fixture-loaded");
+    logger.info.mockClear();
+
+    expect(context.signal.aborted).toBe(false);
+    await emitChannelGroupMembershipChanged(event, context);
+    await retainedRunner.runChannelGroupMembershipChanged(event, context);
+    expect(logger.info).not.toHaveBeenCalled();
   });
 
   it.each([
