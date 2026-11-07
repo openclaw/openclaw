@@ -299,6 +299,11 @@ preserves its listing seq and inactivity clock. `isAdmitted` includes node keys;
 distinguishes node-only principals. `snapshotBody` includes sorted `node_peer_keys` in the
 K_gw-signed snapshot, never in owner/member lists.
 
+When loading a claw persisted before node enrollment, the Gateway initializes the missing
+unsigned `nodes` and `node_invites` maps before exposing its authority. Existing membership,
+listing sequences and signed statements remain unchanged. The upgrade schedules a newly
+signed snapshot with `node_peer_keys`; it never inserts fields into an old signed envelope.
+
 `remove_node { peer_key }` and `Revocation { target_kind: "peer_key" }` remove nodes.
 Revocation obeys the existing listing-seq rule, so replay cannot remove a fresh reapproval.
 Removal emits `disconnect`, `invalidate_tokens`, `remove_node_pairings` (all naming W),
