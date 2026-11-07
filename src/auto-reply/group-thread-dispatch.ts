@@ -5,9 +5,9 @@ import {
 } from "../channels/turn/agent-run-terminal-outcome.js";
 import { buildAgentSessionKey } from "../routing/resolve-route.js";
 import {
-  DEFAULT_ACCOUNT_ID,
   isAcpSessionKey,
   normalizeAccountId,
+  resolveGroupAccountIsolationThreadId,
   resolveThreadSessionKeys,
   toAgentRequestSessionKey,
   toAgentStoreSessionKey,
@@ -278,10 +278,10 @@ export async function dispatchGroupThread(
             dmScope: ctx.DmScope ?? cfg.session?.dmScope,
             identityLinks: cfg.session?.identityLinks,
           });
-      if (kind !== "direct" && accountId !== DEFAULT_ACCOUNT_ID) {
+      if (kind !== "direct") {
         sessionKey = resolveThreadSessionKeys({
           baseSessionKey: sessionKey,
-          threadId: `${channel}-account-${accountId}`,
+          threadId: resolveGroupAccountIsolationThreadId({ channel, accountId }),
         }).sessionKey;
       }
       if (!resolvedDirectKey) {
