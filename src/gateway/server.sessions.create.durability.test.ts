@@ -124,7 +124,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-test("persists and dispatches concurrent Gateway inputs while participant writes queue", async ({ signal }) => {
+test("persists and dispatches concurrent Gateway inputs while participant writes queue", async ({
+  signal,
+}) => {
   let sequence = 0;
   let events = 0;
   let heartbeats = 0;
@@ -269,15 +271,17 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
           () => durabilityTrace?.("accept.error", undefined, operation),
         );
         // This independent writer must wait behind the complete input admission.
-        competingWrites.push(runOutsideStoreWriterContext(() => {
-          durabilityTrace?.("participant2.begin", undefined, operation);
-          const pendingWriter = recordParticipant(2);
-          void pendingWriter.then(
-            () => durabilityTrace?.("participant2.end", undefined, operation),
-            () => durabilityTrace?.("participant2.error", undefined, operation),
-          );
-          return pendingWriter;
-        }));
+        competingWrites.push(
+          runOutsideStoreWriterContext(() => {
+            durabilityTrace?.("participant2.begin", undefined, operation);
+            const pendingWriter = recordParticipant(2);
+            void pendingWriter.then(
+              () => durabilityTrace?.("participant2.end", undefined, operation),
+              () => durabilityTrace?.("participant2.error", undefined, operation),
+            );
+            return pendingWriter;
+          }),
+        );
         return pending;
       });
     }
