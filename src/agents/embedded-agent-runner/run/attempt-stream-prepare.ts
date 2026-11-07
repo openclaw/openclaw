@@ -6,6 +6,7 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../../../infra/agent-run-registry.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import type { MessagePresentation } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { closeDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -89,6 +90,9 @@ function prepareStream(
   let stalledModelRecoveryAccepted = false;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
+  let finalPresentationCandidate:
+    | { assistant: AssistantMessage; presentation: MessagePresentation }
+    | undefined;
   let activeQueueAdmissions = 0;
   const isSteeringAdmissionOpen = () => {
     const state = input.getRunState();
@@ -115,6 +119,7 @@ function prepareStream(
       ? async (
           event,
         ): Promise<void | { continueCurrentTurn: true } | { suppressTerminalDelivery: true }> => {
+          finalPresentationCandidate = undefined;
           if (
             beforeAgentFinalizeRevisionReason ||
             event.willRetry ||
@@ -186,6 +191,7 @@ function prepareStream(
                 event: bindAgentHarnessHookMessages(
                   {
                     runId: attempt.runId,
+                    supportsFinalPresentation: true,
                     sessionId: attempt.sessionId,
                     ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
                     provider: reportedModelRef.provider,
@@ -226,7 +232,30 @@ function prepareStream(
                 hookRunner,
               });
             }
+            const acceptFinalPresentation = () => {
+              const current = input.getRunState();
+              if (
+                outcome.action !== "revise" &&
+                outcome.finalPresentation &&
+                lastAssistant &&
+                !event.hasPendingContinuation &&
+                !agentSession.hasDeliveredSourceReply() &&
+                !input.runAbortController.signal.aborted &&
+                !current.aborted &&
+                !current.timedOut &&
+                !current.promptError &&
+                !current.yieldDetected &&
+                !admission.closed &&
+                isCurrentRegistration()
+              ) {
+                finalPresentationCandidate = {
+                  assistant: lastAssistant,
+                  presentation: outcome.finalPresentation,
+                };
+              }
+            };
             if (outcome.action === "finalize") {
+              acceptFinalPresentation();
               return;
             }
             if (outcome.action === "revise") {
@@ -265,6 +294,7 @@ function prepareStream(
               activeSession.agent.hasQueuedMessages() ||
               !hasCurrentRegistration()
             ) {
+              acceptFinalPresentation();
               return;
             }
             // This is a same-prompt follow-up, not a replay or draft rewind.
@@ -720,6 +750,10 @@ function prepareStream(
     toolSearchCatalogExecutor,
     getBeforeAgentFinalizeRevisionReason: () => beforeAgentFinalizeRevisionReason,
     getBeforeAgentFinalizeRevisionEntryId: () => beforeAgentFinalizeRevisionEntryId,
+    getFinalPresentation: (assistant: AssistantMessage | undefined) =>
+      assistant && finalPresentationCandidate?.assistant === assistant
+        ? finalPresentationCandidate.presentation
+        : undefined,
     stopAcceptingSteerMessages: admission.stop,
   };
 }

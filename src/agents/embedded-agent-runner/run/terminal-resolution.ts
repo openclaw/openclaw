@@ -43,6 +43,7 @@ import {
 } from "./auth-profile-success.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
+import { attachEmbeddedFinalPresentation } from "./final-presentation.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import {
   classifyAssistantTurn,
@@ -623,7 +624,7 @@ async function completeEmbeddedRun(
           : input.prepared.preparedTerminalReply.terminalReply;
   return {
     action: "complete",
-    result: {
+    result: attachEmbeddedFinalPresentation(input, {
       payloads: terminalPayloads?.length ? terminalPayloads : undefined,
       ...(!error && input.attempt.diagnosticTrace
         ? { diagnosticTrace: freezeDiagnosticTraceContext(input.attempt.diagnosticTrace) }
@@ -715,6 +716,6 @@ async function completeEmbeddedRun(
       },
       ...copyAttemptDeliveryState(input.attempt),
       sourceReplyDeliveryState: input.prepared.sourceReplyDeliveryState,
-    },
+    }),
   };
 }

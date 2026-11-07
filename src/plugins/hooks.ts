@@ -20,6 +20,7 @@ import {
   withAgentRunId,
   withoutIncognitoLlmContent,
 } from "./hook-agent-observations.js";
+import { mergeBeforeAgentFinalize } from "./hook-before-agent-finalize.js";
 import { createChannelIngressHookRunner } from "./hook-channel-ingress.js";
 import { readClaimingHookAdmission } from "./hook-claim-admission.js";
 import { isHookContextEligible } from "./hook-context-eligibility.js";
@@ -39,7 +40,6 @@ import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-regist
 import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
 import type {
   BeforeAgentFinalizeResultWithRetryCandidates,
-  BeforeAgentFinalizeRetry,
   HookFailurePolicy,
   HookRunnerOptions,
   HookContext,
@@ -53,7 +53,6 @@ import { withHookTimeout } from "./hook-timeout.js";
 import { PLUGIN_HOOK_METADATA } from "./hook-types.js";
 import type {
   PluginHookAgentContext,
-  PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
@@ -337,63 +336,6 @@ export function createHookRunner(
         right: appendSystemContext,
       }),
     };
-  };
-
-  const mergeBeforeAgentFinalize = (
-    acc: BeforeAgentFinalizeResultWithRetryCandidates | undefined,
-    next: PluginHookBeforeAgentFinalizeResult,
-  ): BeforeAgentFinalizeResultWithRetryCandidates => {
-    const normalizeRetry = (
-      retry: PluginHookBeforeAgentFinalizeResult["retry"] | undefined,
-    ): BeforeAgentFinalizeRetry | undefined => {
-      const instruction = typeof retry?.instruction === "string" ? retry.instruction.trim() : "";
-      if (!instruction) {
-        return undefined;
-      }
-      return {
-        ...retry,
-        instruction,
-      };
-    };
-    if (acc?.action === "finalize") {
-      return acc;
-    }
-    if (next.action === "finalize") {
-      return { action: "finalize", reason: next.reason };
-    }
-    if (acc?.action === "revise" && next.action === "revise") {
-      const nextRetry = normalizeRetry(next.retry);
-      const retryCandidates = [
-        ...(acc.retryCandidates ?? (acc.retry ? [acc.retry] : [])),
-        ...(nextRetry ? [nextRetry] : []),
-      ];
-      const retry = retryCandidates[0];
-      const result: BeforeAgentFinalizeResultWithRetryCandidates = {
-        action: "revise",
-        reason: concatOptionalTextSegments({ left: acc.reason, right: next.reason }),
-        ...(retry ? { retry } : {}),
-      };
-      if (retryCandidates.length > 1) {
-        Object.defineProperty(result, "retryCandidates", {
-          configurable: true,
-          enumerable: false,
-          value: retryCandidates,
-        });
-      }
-      return result;
-    }
-    if (acc?.action === "revise") {
-      return acc;
-    }
-    if (next.action === "revise") {
-      const retry = normalizeRetry(next.retry);
-      return {
-        action: "revise",
-        reason: next.reason,
-        ...(retry ? { retry } : {}),
-      };
-    }
-    return next.action === "continue" ? { action: "continue", reason: next.reason } : (acc ?? next);
   };
 
   const handleHookError = (params: {
