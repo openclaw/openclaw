@@ -1,3 +1,4 @@
+import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 
 export type SessionTranscriptReplayGroup = {
@@ -10,6 +11,17 @@ export type SessionTranscriptReplaySelection = {
   entryIds: string[];
   maxBytes?: number;
 };
+
+/** Bookkeeping can separate a user from its carriers without starting another model turn. */
+export function isSessionTranscriptReplayMetadataType(type: unknown, customType: unknown): boolean {
+  return (
+    type === "thinking_level_change" ||
+    type === "model_change" ||
+    (type === "custom" && customType !== BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE) ||
+    type === "label" ||
+    type === "session_info"
+  );
+}
 
 /** Bound both request metadata and uncompressed transcript payload acquisition. */
 export function validateSessionTranscriptReplaySelection(

@@ -172,12 +172,18 @@ describe("memory transcript read adapters", () => {
         display: false,
       }),
       message("selected", "root", "user", "Selected"),
-      control("custom_message", "runtime", "selected", {
+      control("thinking_level_change", "thinking", "selected", { thinkingLevel: "high" }),
+      control("custom", "snapshot", "thinking", {
+        customType: "model-snapshot",
+        data: { padding: "x".repeat(20_000) },
+      }),
+      control("custom_message", "runtime", "snapshot", {
         customType: "openclaw.runtime-context",
         content: "Runtime facts",
         display: false,
       }),
-      control("custom_message", "update", "runtime", {
+      control("session_info", "info", "runtime", { name: "Canonical replay" }),
+      control("custom_message", "update", "info", {
         customType: "openclaw.system-update",
         content: "Operator facts",
         display: false,
@@ -188,10 +194,39 @@ describe("memory transcript read adapters", () => {
         content: "Later context",
         display: false,
       }),
+      {
+        ...message("pending", "later-carrier", "assistant", "Background result"),
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "automation-result",
+          content: "Background result",
+          excludeFromContext: true,
+          openclawModelPlacement: "pending",
+        },
+      },
+      message("placed-user", "pending", "user", "Before placement"),
+      control("custom", "placement", "placed-user", {
+        customType: "openclaw.background-result-placement",
+        data: { afterEntryId: "placed-user", resultEntryIds: ["pending"] },
+      }),
+      control("custom_message", "placed-carrier", "placement", {
+        customType: "openclaw.runtime-context",
+        content: "After placement",
+        display: false,
+      }),
     ]);
     await withSessionTranscriptDeltaReader(scope, async (reader) => {
       const result = await reader.replayGroups({
-        entryIds: ["selected", "root", "abandoned", "assistant", "missing", "selected"],
+        entryIds: [
+          "selected",
+          "root",
+          "abandoned",
+          "assistant",
+          "missing",
+          "selected",
+          "placed-user",
+        ],
         maxBytes: 2000,
       });
       expect(result).toMatchObject([
@@ -204,6 +239,7 @@ describe("memory transcript read adapters", () => {
           ],
         },
         { entryId: "root", message: { role: "user", content: "Root" }, carriers: [] },
+        { entryId: "placed-user", message: { content: "Before placement" }, carriers: [] },
       ]);
       await expect(reader.replayGroups({ entryIds: ["selected"], maxBytes: 100 })).rejects.toThrow(
         "exceeds maxBytes",

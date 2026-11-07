@@ -306,12 +306,15 @@ const groups = await readSessionTranscriptReplayGroups({
 });
 ```
 
-Each group contains `entryId`, the canonical `message`, and its contiguous
-runtime-context and system-update `carriers`. Results follow requested ID order,
-with duplicates returned once. Missing, inactive-branch, non-user, and
-admission-fenced IDs are omitted. Carriers stop at the first other entry; they
-never come from another branch or turn. This is an identity-based read, not a
-text search or permission to restore compacted messages.
+Each group contains `entryId`, the canonical `message`, and its adjacent
+runtime-context and system-update `carriers` in model history. Thinking/model
+changes, custom bookkeeping, labels, and session information do not interrupt
+the group. Other messages, background-result placements, compaction, reset, and
+branch-summary boundaries do.
+Results follow requested ID order, with duplicates returned once. Missing,
+inactive-branch, non-user, and admission-fenced IDs are omitted. Carriers never
+come from another branch or turn. This is an identity-based read, not a text
+search or permission to restore compacted messages.
 
 The read uses the existing transcript owner, including memory-only sessions,
 and preserves current-turn admission and database-lifetime checks. Durable reads

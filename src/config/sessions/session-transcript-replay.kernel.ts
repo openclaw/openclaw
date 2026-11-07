@@ -13,13 +13,14 @@ import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js"
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
+  isSessionTranscriptReplayMetadataType,
   validateSessionTranscriptReplaySelection,
   type SessionTranscriptReplayGroup,
   type SessionTranscriptReplaySelection,
 } from "./session-transcript-replay.types.js";
 import { readTranscriptPayload, transcriptEventNavigationSql } from "./transcript-payload.js";
 
-/** Read requested active users and their contiguous owned carriers in one admitted snapshot. */
+/** Read requested active users and their model-adjacent carriers in one admitted snapshot. */
 export function readSessionTranscriptReplayGroupsCore(
   scope: SessionTranscriptReadScope,
   selection: SessionTranscriptReplaySelection,
@@ -104,6 +105,10 @@ export function readSessionTranscriptReplayGroupsCore(
             database.db,
             metadata.where("active.active_position", "=", position),
           );
+          // Thinking/model snapshots do not change carrier ownership or enter model context.
+          if (next && isSessionTranscriptReplayMetadataType(next.type, next.customType)) {
+            continue;
+          }
           if (
             !next ||
             next.type !== "custom_message" ||

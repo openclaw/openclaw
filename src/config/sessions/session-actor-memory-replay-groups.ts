@@ -5,6 +5,7 @@ import { createSessionActorMemoryHistoryNavigation } from "./session-actor-memor
 import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import {
+  isSessionTranscriptReplayMetadataType,
   validateSessionTranscriptReplaySelection,
   type SessionTranscriptReplayGroup,
   type SessionTranscriptReplaySelection,
@@ -47,12 +48,21 @@ export function readSessionActorMemoryReplayGroups(
       continue;
     }
     const group: SessionTranscriptReplayGroup = { entryId, message, carriers: [] };
-    // Only contiguous owned carriers follow their user; never borrow another turn's context.
+    // Skip bookkeeping, but never cross a model message or history boundary to borrow context.
     for (let position = row.activePosition + 1; position < active.length; position++) {
       const next = active[position]!;
+      if (!isIndexedSessionEntry(next.event) || next.rawSeq >= beforeRawSeq) {
+        break;
+      }
       if (
-        !isIndexedSessionEntry(next.event) ||
-        next.rawSeq >= beforeRawSeq ||
+        isSessionTranscriptReplayMetadataType(
+          next.event.type,
+          next.event.type === "custom" ? next.event.customType : undefined,
+        )
+      ) {
+        continue;
+      }
+      if (
         next.event.type !== "custom_message" ||
         (next.event.customType !== RUNTIME_CONTEXT_CUSTOM_TYPE &&
           next.event.customType !== SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE)
