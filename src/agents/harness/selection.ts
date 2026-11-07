@@ -308,7 +308,7 @@ export async function runAgentHarnessAttempt(
             if (nativePermissionsConsented && !currentConsent) {
               const message =
                 "Native runtime consent was revoked before dispatch. Review this chat's permissions before retrying.";
-              throw new AgentHarnessPreflightError(message, { userMessage: message });
+              throw new AgentHarnessPreflightError(message, { desktopMessage: message });
             }
           }
           attempt.hostCapabilities?.assertActive();
@@ -329,7 +329,7 @@ export async function runAgentHarnessAttempt(
   if (nativeSessionRuntime && harness !== nativeSessionRuntime.harness) {
     const message =
       "Native session runtime changed before dispatch. Reattach the original native session before retrying.";
-    throw new AgentHarnessPreflightError(message, { userMessage: message });
+    throw new AgentHarnessPreflightError(message, { desktopMessage: message });
   }
   if (internalParams.contextEngineLogicalTurnLease) {
     const effective = await beginContextEngineLogicalTurn({

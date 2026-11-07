@@ -65,10 +65,14 @@ suite.define(() => {
           {
             role: "custom",
             customType: "run-failed-before-reply",
-            content: summary,
+            content: "Your request couldn't be completed.",
             display: true,
             timestamp: 2,
-            openclawRunError: { runId, summary },
+            openclawRunError: {
+              runId,
+              summary: "Your request couldn't be completed.",
+              desktopSummary: summary,
+            },
             __openclaw: { id: "startup-failure", seq: 2, runId },
           },
         ],

@@ -57,6 +57,7 @@ it("commits lifecycle in one request while preserving a queued goal update", () 
         startedAt: 1_000,
         endedAt: 2_000,
         error: "Provider disconnected",
+        desktopErrorNotice: "Provider disconnected. Try again shortly.",
       },
     };
     Object.defineProperty(event, "lifecycleGeneration", { value: generation });
@@ -70,7 +71,12 @@ it("commits lifecycle in one request while preserving a queued goal update", () 
       expect.objectContaining({
         type: "custom_message",
         customType: "run-failed-before-reply",
-        details: { runId, error: "Provider disconnected" },
+        content: "Your request couldn't be completed.",
+        details: {
+          runId,
+          error: "Provider disconnected",
+          desktopNotice: "Provider disconnected. Try again shortly.",
+        },
       }),
     );
   }));

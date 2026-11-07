@@ -311,9 +311,13 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             );
             expect(notices).toEqual([
               expect.objectContaining({
-                content:
-                  "The request was interrupted because OpenClaw storage is busy. Check its status before trying again.",
-                details: { runId, error: diagnostic, errorKind: "state_contention" },
+                content: "Your request couldn't be completed.",
+                details: {
+                  runId,
+                  error: diagnostic,
+                  desktopNotice:
+                    "The request was interrupted because OpenClaw storage is busy. Check its status before trying again.",
+                },
               }),
             ]);
             await lifecycle.finalize();
@@ -370,7 +374,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         ]);
         if (stateContention) {
           const summary =
-            "The request was interrupted because OpenClaw storage is busy. Check its status before trying again.";
+            "Your request was interrupted while the server was busy. Check its status before trying again.";
           const terminal = broadcast.mock.calls.at(-1)?.[1];
           expect(terminal).toMatchObject({ errorKind: "state_contention" });
           expect(terminal.errorMessage).toMatch(new RegExp(`^${summary.replaceAll(".", "\\.")}`));

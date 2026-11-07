@@ -141,7 +141,8 @@ it("keeps public guidance when native consent is revoked before dispatch", async
   await expect(runAgentHarnessAttempt(attempt)).rejects.toMatchObject({
     name: "AgentHarnessPreflightError",
     message,
-    userMessage: message,
+    desktopMessage: message,
+    userMessage: undefined,
   });
   expect(dispatch).toHaveBeenCalledOnce();
   expect(nativeStart).not.toHaveBeenCalled();
@@ -168,7 +169,8 @@ it("keeps public guidance when a bound native runtime changes before dispatch", 
   ).rejects.toMatchObject({
     name: "AgentHarnessPreflightError",
     message,
-    userMessage: message,
+    desktopMessage: message,
+    userMessage: undefined,
   });
   expect(nativeStart).not.toHaveBeenCalled();
 });

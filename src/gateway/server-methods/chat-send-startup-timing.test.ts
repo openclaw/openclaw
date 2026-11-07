@@ -181,7 +181,7 @@ test.each([
     ),
     notice:
       "The request was interrupted because OpenClaw storage is busy. Check its status before trying again.",
-    errorKind: "state_contention",
+    errorKind: undefined,
     diagnostic: undefined,
   },
   {
@@ -266,8 +266,13 @@ test.each([
         expect(notices).toEqual([
           expect.objectContaining({
             customType: "run-failed-before-reply",
-            content: notice,
-            details: expect.objectContaining({ runId, ...(errorKind ? { errorKind } : {}) }),
+            content: "Your request couldn't be completed.",
+            details: expect.objectContaining({
+              runId,
+              ...(notice !== "Your request couldn't be completed."
+                ? { desktopNotice: notice }
+                : {}),
+            }),
           }),
         ]);
         if (diagnostic) {
