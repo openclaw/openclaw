@@ -403,6 +403,8 @@ if (values.mode === "run" || values.mode === "resume") {
       if (!existsSync(`${options.path}.alias`)) {
         symlinkSync(options.path, `${options.path}.alias`);
       }
+      // Lend the child's exact alias path the surviving owner's physical admission.
+      openOpenClawAgentDatabase({ ...options, path: `${options.path}.alias` });
       const holder = fork(
         fileURLToPath(import.meta.url),
         ["--state-dir", root, "--mode", "hold", "--scenario", "stale-lease"],
