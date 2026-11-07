@@ -224,6 +224,7 @@ final class TalkModeManager {
     private var realtimeRelayGeneration: UInt64 = 0
     private var prefetchedRealtimeSession: TalkRealtimeClientSession?
     private var realtimePrefetchTask: Task<Void, Never>?
+    private var realtimeSessionIdentity: TalkModeGatewayConfigState.RealtimeSessionIdentity?
     private var realtimeVoiceSelection: RealtimeTalkVoiceSelection?
     private var realtimeVoiceSelectionRoute: GatewayNodeSessionRoute?
     private var realtimeVoiceSelectionSubscription: GatewayServerEventSubscription?
@@ -3767,16 +3768,15 @@ extension TalkModeManager {
     }
 
     private func ensureTalkConfigLoadedForStart() async {
-        if self.gatewayTalkConfigLoaded {
-            return
-        }
-
-        await self.reloadConfig()
+        // Talk settings can change on the Gateway at any time; every start uses the current config.
+        // A failed refresh keeps the last good config instead of dropping to native speech.
+        await self.reloadConfig(keepLastGoodOnFailure: self.gatewayTalkConfigLoaded)
     }
 
     func reloadConfig(
         gateway gatewayOverride: GatewayNodeSession? = nil,
         gatewayRoute: GatewayNodeSessionRoute? = nil,
+        keepLastGoodOnFailure: Bool = false,
         shouldApply: @MainActor @Sendable () -> Bool = { true }) async
     {
         guard let gateway = gatewayOverride ?? gateway else { return }
@@ -3787,13 +3787,17 @@ extension TalkModeManager {
             }
             guard shouldApply() else { return }
             self.pcmFormatUnavailable = false
-            self.invalidatePrefetchedRealtimeSession()
             let parsed = TalkModeGatewayConfigParser.parse(
                 config: loaded.config,
                 defaultProvider: Self.defaultTalkProvider,
                 defaultModelIdFallback: Self.defaultModelIdFallback,
                 defaultRealtimeModelIdFallback: Self.defaultRealtimeModelIdFallback,
                 defaultSilenceTimeoutMs: Self.defaultSilenceTimeoutMs)
+            if parsed.realtimeSessionIdentity != self.realtimeSessionIdentity {
+                // A prefetch (finished or in flight) keeps the provider, model and voice it was created with.
+                self.cancelRealtimePrefetch()
+                self.invalidatePrefetchedRealtimeSession()
+            }
             if parsed.snapshot.missingResolvedPayload {
                 GatewayDiagnostics.log(
                     "talk config ignored: normalized payload missing talk.resolved")
@@ -3803,6 +3807,10 @@ extension TalkModeManager {
             return
         } catch {
             guard shouldApply() else { return }
+            if keepLastGoodOnFailure {
+                GatewayDiagnostics.log("talk config refresh failed; keeping last loaded config")
+                return
+            }
             self.applyTalkConfigLoadFailure(error)
         }
     }
@@ -3849,6 +3857,7 @@ extension TalkModeManager {
         redactedFallbackMissingScope: String?)
     {
         let realtimeVoiceId = parsed.snapshot.realtime.voice
+        self.realtimeSessionIdentity = parsed.realtimeSessionIdentity
         self.runtimeRoute = parsed.route
         self.realtimeProvider = parsed.snapshot.realtime.provider
         self.realtimeModelId = parsed.realtimeModelId
@@ -3924,6 +3933,7 @@ extension TalkModeManager {
     }
 
     private func applyTalkConfigLoadFailureFallback() {
+        self.realtimeSessionIdentity = nil
         self.runtimeRoute = .localElevenLabs
         self.realtimeProvider = nil
         self.realtimeModelId = nil
