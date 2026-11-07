@@ -9,8 +9,8 @@ import { useAutoCleanupTempDirTracker } from "../../../test-support.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "../bridge-auth-registry.js";
 import { browserAct } from "../client-actions.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
-import { BrowserServiceError } from "../client-fetch.js";
-import { browserSnapshot } from "../client.js";
+import { BrowserServiceError, fetchBrowserJson } from "../client-fetch.js";
+import { browserCloseTab, browserOpenTab, browserSnapshot, browserTabs } from "../client.js";
 import { resolveBrowserConfig } from "../config.js";
 import { launchChromium, readTargetId } from "../pw-chromium.test-support.js";
 import { closePlaywrightBrowserConnection } from "../pw-session.js";
@@ -180,5 +180,68 @@ describe.runIf(process.env.OPENCLAW_BROWSER_ACTION_ERRORS_E2E === "1")(
         await page.getByRole("textbox", { name: "Working input", exact: true }).inputValue(),
       ).toBe("browser remains usable");
     });
+
+    it.each([false, true])(
+      "reports renderer crashes with new-tab recovery (cold connection: %s)",
+      async (cold) => {
+        const crashed = await context.newPage();
+        const opened: string[] = [];
+        try {
+          await crashed.goto(page.url().replace("127.0.0.1", "localhost"));
+          const crashedId = await readTargetId(crashed);
+          const sibling = await browserOpenTab(baseUrl, page.url());
+          opened.push(sibling.targetId);
+          await browserSnapshot(baseUrl, { targetId: crashedId, format: "ai" });
+          if (cold) {
+            await closePlaywrightBrowserConnection({ cdpUrl });
+          }
+          const session = await context.newCDPSession(crashed);
+          const didCrash = crashed.waitForEvent("crash");
+          await Promise.race([didCrash, session.send("Page.crash").then(() => didCrash)]);
+          // Closing this target below retires the CDP session; detach waits on its dead renderer.
+
+          for (const [path, body] of [
+            ["/screenshot", { targetId: crashedId }],
+            [`/snapshot?targetId=${crashedId}&format=ai&timeoutMs=2000`, undefined],
+            ["/snapshot?format=ai&timeoutMs=2000", undefined],
+            ["/navigate", { targetId: crashedId, url: page.url() }],
+          ] as const) {
+            const error = await fetchBrowserJson(`${baseUrl}${path}`, {
+              timeoutMs: 2_000,
+              ...(body ? { method: "POST", body: JSON.stringify(body) } : {}),
+              headers: { "Content-Type": "application/json" },
+            }).catch((caught: unknown) => caught);
+            expect(error).toBeInstanceOf(BrowserServiceError);
+            expect(error).toMatchObject({ status: 500, code: "ACT_OPERATION_FAILED" });
+            expect((error as Error).message).toMatch(/tab.*crashed/i);
+            expect((error as Error).message).toMatch(/open.*new tab/i);
+            expect((error as Error).message).not.toMatch(
+              /browser is currently unavailable|restart|retry the browser tool/i,
+            );
+          }
+          expect((await browserTabs(baseUrl)).tabs).toContainEqual(
+            expect.objectContaining({ targetId: crashedId, crashed: true }),
+          );
+          expect(
+            await browserSnapshot(baseUrl, { targetId: sibling.targetId, format: "ai" }),
+          ).toMatchObject({ snapshot: expect.stringContaining("Working input") });
+          const replacement = await browserOpenTab(baseUrl, page.url());
+          opened.push(replacement.targetId);
+          expect(
+            await browserSnapshot(baseUrl, { targetId: replacement.targetId, format: "ai" }),
+          ).toMatchObject({ snapshot: expect.stringContaining("Working input") });
+          await browserCloseTab(baseUrl, crashedId);
+          expect((await browserTabs(baseUrl)).tabs).not.toContainEqual(
+            expect.objectContaining({ targetId: crashedId }),
+          );
+        } finally {
+          await crashed.close().catch(() => {});
+          for (const openedId of opened) {
+            await browserCloseTab(baseUrl, openedId);
+          }
+        }
+      },
+      20_000,
+    );
   },
 );

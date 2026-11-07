@@ -1,5 +1,42 @@
+import type { CdpDocumentIdentities } from "../cdp-page-session.js";
+import { getDocumentIdentitiesViaCdp } from "../cdp.js";
+import type { BrowserTab } from "../client.types.js";
+import { BrowserTabCrashedError } from "../errors.js";
+import type { PwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { getProfileLifecycle } from "../server-context.lifecycle.js";
+
+/** Optional metadata must not hide a terminal target failure behind a CDP fallback. */
+export function ignoreUnavailableSnapshotMetadata(error: unknown): undefined {
+  if (error instanceof BrowserTabCrashedError) {
+    throw error;
+  }
+  return undefined;
+}
+
+export async function readSnapshotDocumentIdentities(opts: {
+  tab: BrowserTab;
+  cdpUrl: string;
+  pwModule: PwAiModule | null;
+  timeoutMs?: number;
+}): Promise<CdpDocumentIdentities> {
+  const readPlaywrightIdentities = opts.pwModule?.getDocumentIdentitiesViaPlaywright;
+  const playwrightIdentities = readPlaywrightIdentities
+    ? await readPlaywrightIdentities({
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.tab.targetId,
+        timeoutMs: opts.timeoutMs,
+      }).catch(ignoreUnavailableSnapshotMetadata)
+    : undefined;
+  if (playwrightIdentities?.mainFrame || !opts.tab.wsUrl) {
+    return playwrightIdentities ?? {};
+  }
+  return await getDocumentIdentitiesViaCdp({
+    wsUrl: opts.tab.wsUrl,
+    ...(opts.tab.wsLookup ? { lookup: opts.tab.wsLookup } : {}),
+    timeoutMs: opts.timeoutMs,
+  }).catch(() => ({}));
+}
 
 /** Pin capture at the actual bridge; a failed capture must never enable generic recovery. */
 export async function captureBrowserOperationTarget(opts: {
