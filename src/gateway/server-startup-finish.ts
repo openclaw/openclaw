@@ -674,6 +674,12 @@ export async function finishGatewayStartup(params: {
           : [record.rootDir, record.source],
       ) ?? []),
     ];
+    const { rememberGatewayStartupPluginProtection } =
+      await import("../plugins/retired-git-installs.js");
+    rememberGatewayStartupPluginProtection({
+      configs: [cfgAtStart],
+      paths: startupInstallPaths,
+    });
     registerGatewayLifetimeSidecars(
       gatewayRuntimeServices.scheduleGatewayIdleTask({
         id: "maintenance:retained-plugin-generations",

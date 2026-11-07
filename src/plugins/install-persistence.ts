@@ -56,6 +56,10 @@ import { collectInstalledPluginSourceSnapshots } from "./plugin-source-snapshot-
 import { preparePluginInstallSourceSnapshots } from "./plugin-source-snapshot-install.js";
 import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
+import {
+  forgetRetiredGitPluginInstall,
+  rememberRetiredGitPluginInstall,
+} from "./retired-git-installs.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { withPluginSourceCleanup } from "./source-cleanup.js";
 import { buildPluginSnapshotReportAsync } from "./status.js";
@@ -528,6 +532,15 @@ async function persistPluginInstallOwned(
           sourceDigests: source?.sourceDigests ?? {},
           write: receipt,
         });
+        // The record now names the new checkout. Record the old Git directory
+        // before metadata refresh so a later failure can still retire it.
+        if (replacedInstallRemoval?.cleanup?.kind === "git") {
+          await rememberRetiredGitPluginInstall({
+            pluginId: params.pluginId,
+            removal: replacedInstallRemoval,
+            env: params.env,
+          });
+        }
         await refreshManagedPluginMetadata({
           config: next,
           assertCurrent: params.beforePersistentApply,
@@ -560,6 +573,12 @@ async function persistPluginInstallOwned(
             reportWarning(warning);
           }
           if (removalResult.directoryRemoved) {
+            if (replacedInstallRemoval.cleanup?.kind === "git") {
+              await forgetRetiredGitPluginInstall({
+                target: replacedInstallRemoval.target,
+                env: params.env,
+              });
+            }
             runtime.log(
               theme.muted(
                 `Removed previous plugin install directory: ${shortenHomePath(replacedInstallRemoval.target)}`,

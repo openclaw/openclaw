@@ -208,6 +208,44 @@ export async function startGatewayPostAttachRuntime(params: {
       return await disposeUnattached();
     }
     pluginRegistry = loaded.pluginRegistry;
+    if (!params.isClosing?.()) {
+      const {
+        cleanupRetiredGitPluginInstalls,
+        collectConfiguredPluginReferencePaths,
+        gitInstallProtectPaths,
+        rememberGatewayStartupPluginProtection,
+      } = await import("../plugins/retired-git-installs.js");
+      const { getRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
+      const assertStartupCurrent = () => {
+        if (params.isClosing?.()) {
+          throw new Error("Gateway is closing");
+        }
+      };
+      rememberGatewayStartupPluginProtection({
+        configs: [params.cfgAtStart],
+        paths: pluginRegistry.plugins.flatMap((plugin) =>
+          [plugin.rootDir, plugin.source].filter((value): value is string =>
+            Boolean(value?.trim()),
+          ),
+        ),
+      });
+      await cleanupRetiredGitPluginInstalls({
+        protectPaths: gitInstallProtectPaths({
+          plugins: pluginRegistry.plugins,
+          extra: collectConfiguredPluginReferencePaths([
+            params.cfgAtStart,
+            params.getConfig(),
+            getRuntimeConfigSnapshot(),
+          ]),
+        }),
+        assertCurrent: assertStartupCurrent,
+        beforePersistentApply: assertStartupCurrent,
+      }).catch((error: unknown) => {
+        if (!params.isClosing?.()) {
+          params.log.warn(`retired git plugin cleanup failed: ${String(error)}`);
+        }
+      });
+    }
     params.broadcast?.(
       "plugins.changed",
       { generation: getPluginRegistryVersion(pluginRegistry) },

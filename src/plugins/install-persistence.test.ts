@@ -31,6 +31,7 @@ import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
+import { hasRetiredGitPluginInstallCandidates } from "./retired-git-installs.js";
 import type { PluginUninstallDirectoryRemoval } from "./uninstall.js";
 
 async function persistPluginInstall(
@@ -335,6 +336,44 @@ it("removes a replaced managed install directory before refreshing the registry"
   expectRuntimeLogIncludes(
     "Removed previous plugin install directory: /tmp/openclaw/extensions/codex",
   );
+});
+
+it("keeps a replaced git checkout when activation fails", async () => {
+  using directory = temporaryInstall("openclaw-git-retire-");
+  const stateDir = directory.root;
+  const env = { OPENCLAW_STATE_DIR: stateDir, HOME: stateDir };
+  const previousRepo = path.join(stateDir, "git", "git-old", "repo");
+  const nextRepo = path.join(stateDir, "git", "git-new", "repo");
+  fs.mkdirSync(previousRepo, { recursive: true });
+  fs.writeFileSync(path.join(previousRepo, "kept.txt"), "old");
+  fs.mkdirSync(nextRepo, { recursive: true });
+  mockEnabledPlugin("demo-slow");
+  mockReplacedInstall(
+    "demo-slow",
+    {
+      source: "git",
+      spec: "git:file:///tmp/demo-plugin@v1.0.0",
+      installPath: previousRepo,
+    },
+    { kind: "git", parentDir: path.dirname(previousRepo) },
+  );
+  const activation = new Error("admitted work did not settle within 60s");
+  await expect(
+    persistNpm("demo-slow", {
+      env,
+      install: {
+        source: "git",
+        spec: "git:file:///tmp/demo-plugin@v1.0.1",
+        installPath: nextRepo,
+      },
+      applyRuntime: async () => {
+        throw activation;
+      },
+    }),
+  ).rejects.toMatchObject({ name: "PluginInstallPersistedError", cause: activation });
+  expect(fs.readFileSync(path.join(previousRepo, "kept.txt"), "utf8")).toBe("old");
+  expect(removeDirectory).not.toHaveBeenCalled();
+  expect(await hasRetiredGitPluginInstallCandidates(env)).toBe(true);
 });
 
 it("preserves replaced npm install directories across generation updates", async () => {
