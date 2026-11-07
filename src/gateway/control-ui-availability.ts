@@ -3,7 +3,7 @@ import path from "node:path";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { openClawMascotStyles, renderOpenClawMascot } from "../shared/openclaw-mascot.js";
-import { OPENCLAW_WORDMARK_TEXT_SVG } from "../shared/openclaw-wordmark.js";
+import { OPENCLAW_WORDMARK_SVG, OPENCLAW_WORDMARK_TEXT_SVG } from "../shared/openclaw-wordmark.js";
 import {
   applyControlUiSecurityHeaders,
   buildControlUiCspHeader,
@@ -79,12 +79,12 @@ function railIcon(body: string): string {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
 }
 
-// The page's own mascot stands in the main area, so the headers carry only the text wordmark.
-// The sidebar's aria-hidden covers its copy's label.
-const SIDEBAR_WORDMARK_SVG = OPENCLAW_WORDMARK_TEXT_SVG.replace(
-  'class="wordmark wordmark-text" role="img" aria-label="OpenClaw"',
+// The sidebar header carries the full lockup; the phone header carries only the text, since the
+// page's own mascot stands right below it. The sidebar's aria-hidden covers its label.
+const SIDEBAR_WORDMARK_SVG = OPENCLAW_WORDMARK_SVG.replace(
+  'class="wordmark" role="img" aria-label="OpenClaw"',
   'class="side-brand"',
-);
+).replaceAll("openclaw-wordmark-shell", "openclaw-sidebar-shell");
 
 // Decorative copy of the Control UI's disconnected shell, so the app replaces it without a jump.
 const SHELL_SIDEBAR = `<aside class="sidebar" aria-hidden="true" data-window-drag><div class="rail" data-window-drag>
