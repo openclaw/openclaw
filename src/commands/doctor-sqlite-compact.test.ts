@@ -114,7 +114,10 @@ it.each([false, true])("rejects an initial busy checkpoint (close fails=%s)", (c
     expect(() => compactDoctorSqliteFile({ sqlitePath, busyTimeoutMs: 0, afterSuccess })).toThrow(
       expect.objectContaining({
         constructor: AggregateError,
-        errors: [expect.any(walCheckpoint.SqliteWalCheckpointBusyError), closeFailure],
+        errors: [
+          expect.objectContaining({ message: expect.stringMatching(/checkpoint remained busy/) }),
+          closeFailure,
+        ],
       }),
     );
     expect(afterSuccess).not.toHaveBeenCalled();
@@ -137,7 +140,7 @@ it("does not defer a real busy checkpoint after compaction", () => {
   });
   try {
     expect(() => compactDoctorSqliteFile({ sqlitePath, busyTimeoutMs: 0 })).toThrow(
-      walCheckpoint.SqliteWalCheckpointBusyError,
+      /checkpoint remained busy/,
     );
     expect(checkpointCalls).toBe(2);
   } finally {

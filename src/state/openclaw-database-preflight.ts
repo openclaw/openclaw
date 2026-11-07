@@ -59,6 +59,7 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
+import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import {
   executeExistingOpenClawStateRead,
   getActiveOpenClawStateDatabaseReadSnapshotAsync,
@@ -93,6 +94,7 @@ export async function assertOpenClawDatabasesReady(
   const schemas = await preflightOpenClawDatabaseSchemas(
     {
       env: options.env,
+      preserveSourceArtifacts: isLiveStateRead() ? false : undefined,
       onAgentInspection: options.onAgentInspection,
       onRegisteredAgentDatabases: options.onRegisteredAgentDatabases,
       verifyCurrentSchemaShape: true,
@@ -248,7 +250,7 @@ export async function preflightOpenClawDatabaseSchemas(
     options.reuseStartupSchemaPreparation &&
     !options.requireStartupMigrationReadiness &&
     !options.verifyCurrentSchemaShape &&
-    !options.openStateSchemaReadAdmission
+    !options.doctorSchemaReadAdmission
       ? getAgentDatabaseStartupAdmission()
       : undefined;
   const assertPreparedStateSchema = preparedStartup?.takePreparedStateSchema(options.env);
@@ -273,24 +275,31 @@ export async function preflightOpenClawDatabaseSchemas(
   }
   try {
     if (statePresence.status === "present") {
-      if (getDatabaseEngineInput("state")) {
+      const input: StateSchemaInspectionInput = {
+        pathname: statePath,
+        supportedVersion: supportedVersions.state,
+        requireStartupMigrationReadiness: options.requireStartupMigrationReadiness,
+        verifyCurrentSchemaShape: options.verifyCurrentSchemaShape,
+        scope: options.scope,
+        purpose,
+        doctorSchemaReadAdmission: options.doctorSchemaReadAdmission,
+      };
+      if (
+        getDatabaseEngineInput("state") ||
+        (options.verifyCurrentSchemaShape &&
+          options.preserveSourceArtifacts === false &&
+          getOpenClawDatabaseMaintenanceScope())
+      ) {
         const read = await executeExistingOpenClawStateRead(
           { env: options.env },
-          {
-            type: "stateBootstrap.inspect",
-            input: {
-              pathname: statePath,
-              supportedVersion: supportedVersions.state,
-              purpose,
-              scope: options.scope,
-            },
-          },
+          { type: "stateBootstrap.inspect", input },
           { signal: options.signal, current: true },
         );
         if (!read) {
-          throw new Error("Shared state disappeared during PostgreSQL startup admission");
+          throw new Error("Shared state disappeared during schema admission");
         }
         Object.assign(result, read.inspection.schemas);
+        stateInspectionErrors.push(...read.inspection.inspectionErrors);
         registeredDatabases = read.inspection.registeredDatabases ?? [];
         deletionJournal = read.inspection.deletionJournal ?? deletionJournal;
       } else {
@@ -308,21 +317,12 @@ export async function preflightOpenClawDatabaseSchemas(
         let stateLocation =
           activeSnapshot?.location ?? (liveState || assertStateSource ? statePath : undefined);
         options.signal?.throwIfAborted();
-        const input: StateSchemaInspectionInput = {
-          pathname: statePath,
-          supportedVersion: supportedVersions.state,
-          requireStartupMigrationReadiness: options.requireStartupMigrationReadiness,
-          verifyCurrentSchemaShape: options.verifyCurrentSchemaShape,
-          scope: options.scope,
-          purpose,
-        };
         const inspectSource =
           stateLocation === undefined && options.preserveSourceArtifacts === false;
         await using reader =
           !assertStateSource &&
           (purpose === "runtime" || inspectSource) &&
-          (!options.requireStartupMigrationReadiness || liveState) &&
-          !options.openStateSchemaReadAdmission
+          (!options.requireStartupMigrationReadiness || liveState)
             ? createAgentSchemaInspectionWorker()
             : undefined;
         // Online inspection needs one native read transaction, not a payload-sized copy.
@@ -352,7 +352,9 @@ export async function preflightOpenClawDatabaseSchemas(
               readOnly: true,
               timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
             });
-            closeStateSchemaReadAdmission = options.openStateSchemaReadAdmission?.(stateDatabase);
+            closeStateSchemaReadAdmission = options.doctorSchemaReadAdmission
+              ? openDoctorStateSchemaReadAdmission(stateDatabase)
+              : undefined;
             const admittedDatabase = stateDatabase;
             assertStateSource?.();
             inspection =

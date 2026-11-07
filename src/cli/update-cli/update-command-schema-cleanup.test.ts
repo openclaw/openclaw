@@ -11,6 +11,7 @@ import {
 import * as snapshots from "../../infra/sqlite-snapshot-source.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { preflightOpenClawDatabaseSchemas } from "../../state/openclaw-database-preflight.js";
+import * as stateSchemaAdmission from "../../state/openclaw-state-db-doctor-schema.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
@@ -196,6 +197,18 @@ it.each(["cancel", "cancel-retained", "inspection", "close"] as const)(
       }
     } else {
       vi.spyOn(prepared, "cleanupAsync").mockRejectedValue(secondary);
+      vi.spyOn(stateSchemaAdmission, "openDoctorStateSchemaReadAdmission").mockImplementation(
+        (database) => {
+          if (phase === "inspection") {
+            throw primary;
+          }
+          assert.instanceOf(database, requireNodeSqlite().DatabaseSync);
+          inspectedDatabase = database;
+          return () => {
+            throw primary;
+          };
+        },
+      );
     }
     const candidates = vi.fn(() => []);
     const failure = await preflightOpenClawDatabaseSchemas({
@@ -204,17 +217,7 @@ it.each(["cancel", "cancel-retained", "inspection", "close"] as const)(
       signal: cancelled ? controller.signal : undefined,
       configuredAgentDatabaseTargets: cancelled ? candidates : undefined,
       scope: phase === "close" ? "state" : undefined,
-      openStateSchemaReadAdmission: cancelled
-        ? undefined
-        : (database) => {
-            if (phase === "inspection") {
-              throw primary;
-            }
-            inspectedDatabase = database;
-            return () => {
-              throw primary;
-            };
-          },
+      doctorSchemaReadAdmission: cancelled ? undefined : true,
     }).catch((error: unknown) => error);
     if (phase === "cancel") {
       expect(failure).toBe(primary);

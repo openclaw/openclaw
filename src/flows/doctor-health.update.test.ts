@@ -67,9 +67,6 @@ const mocks = vi.hoisted(() => {
     "../cli/update-cli/update-command.js": { updateCommand: handles.updateCommand },
     "../commands/doctor-update.js": { maybeOfferUpdateBeforeDoctor: handles.offerUpdate },
     "../commands/triage.js": { triageCommand: handles.triageCommand },
-    "../commands/doctor/shared/plugin-runtime-symlinks.js": {
-      noteStalePluginRuntimeSymlinks: async () => undefined,
-    },
     "../commands/doctor-platform-notes.js": { noteStartupOptimizationHints: () => undefined },
     // mock-isolation: outcomes do not need config preparation or plugin resources.
     "../commands/doctor-config-flow.js": {

@@ -652,9 +652,9 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         warn(message);
       }
     },
-    async enableSqliteReclamation(agents: readonly AgentDatabaseMigrationTarget[]) {
+    async inspectSqliteReclamation(agents: readonly AgentDatabaseMigrationTarget[]) {
       assertHeld(this, "SQLite reclamation");
-      const result = await settle(() => state.enableSqliteReclamation(agents));
+      const result = await settle(() => state.inspectSqliteReclamation(agents));
       for (const message of result.warnings) {
         warn(message);
       }

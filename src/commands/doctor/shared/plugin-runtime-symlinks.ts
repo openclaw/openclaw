@@ -3,16 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
-import { note } from "../../../../packages/terminal-core/src/note.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { hasErrnoCode } from "../../../infra/errno.js";
 import { capturePathRemovalGuard, removePathWithinRoot } from "../../../infra/fs-safe-remove.js";
 import { readInstallOwner } from "../../../infra/install-owner.js";
 import { resolveOpenClawPackageRootSync } from "../../../infra/openclaw-root.js";
-import { shortenHomePath } from "../../../utils.js";
 
 const PLUGIN_RUNTIME_DEPS_MARKER = "plugin-runtime-deps";
-const MAX_REPORTED = 6;
 
 interface StalePluginRuntimeSymlink {
   readonly name: string;
@@ -72,29 +69,6 @@ export async function collectStalePluginRuntimeSymlinkHealthFindings(
       fixHint: "Run `openclaw doctor --fix` to remove stale plugin-runtime symlinks.",
     }),
   );
-}
-
-export async function noteStalePluginRuntimeSymlinks(
-  packageRoot: string | null | undefined,
-): Promise<void> {
-  const stale = await collectStalePluginRuntimeSymlinks(packageRoot);
-  if (stale.length === 0) {
-    return;
-  }
-
-  const lines = [
-    "- Plugin-runtime symlinks under the global Node prefix point at pruned",
-    `  ${PLUGIN_RUNTIME_DEPS_MARKER} directories from a previous OpenClaw install.`,
-    "- Bundled plugin ESM imports can fail with ERR_MODULE_NOT_FOUND until repaired.",
-  ];
-  for (const item of stale.slice(0, MAX_REPORTED)) {
-    lines.push(`  - ${item.name} -> ${shortenHomePath(item.target)}`);
-  }
-  if (stale.length > MAX_REPORTED) {
-    lines.push(`  - ...and ${stale.length - MAX_REPORTED} more`);
-  }
-  lines.push("- Repair: run `openclaw doctor --fix` to remove the dangling symlinks.");
-  note(lines.join("\n"), "Plugin-runtime symlinks");
 }
 
 export async function removeStalePluginRuntimeSymlinks(

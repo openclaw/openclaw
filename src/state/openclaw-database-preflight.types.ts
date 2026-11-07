@@ -3,7 +3,6 @@ import type { SqliteSchemaIssue } from "../infra/sqlite-schema-contract.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import type { AgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import type { OpenClawSchemaVersions } from "./openclaw-schema-versions.js";
-import type { OpenClawStateSchemaReadAdmission } from "./openclaw-state-db-contract.js";
 import type { OpenClawExternalStateOwnership } from "./openclaw-state-ownership.js";
 
 export type AgentDatabasePreflightStats = {
@@ -101,7 +100,7 @@ export type OpenClawDatabasePreflightOptions = {
   /** Final verification includes required held stores without granting migration authority. */
   inspectHeldAgentDatabaseTargets?: readonly { agentId: string; path: string }[];
   agentAdmissionConfig?: OpenClawConfig;
-  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
+  doctorSchemaReadAdmission?: true;
 };
 
 export type OpenClawDatabaseReadinessOptions = {

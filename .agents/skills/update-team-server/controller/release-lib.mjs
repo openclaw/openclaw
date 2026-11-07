@@ -2618,7 +2618,7 @@ function sessionWitnessTuples(saved) {
   });
 }
 
-function nativeUpdateReceipt(record, required = false) {
+function readNativeUpdateReceipt(record, required = false) {
   if (!record.nativeUpdate) {
     if (required) reject("activation journal has no native update owner");
     return null;
@@ -2636,10 +2636,19 @@ function nativeUpdateReceipt(record, required = false) {
   if (entry.uid !== configOwner.uid || entry.gid !== configOwner.gid)
     reject("native update receipt is not owned by the runtime config owner");
   const receipt = migrationJson(migrationFile(receiptPath, entry.uid, { mode: 0o600, group: entry.gid }).bytes);
-  if (receipt.schemaVersion !== 1 || !["migrated", "restored"].includes(receipt.status) ||
+  if (receipt.schemaVersion !== 1 ||
       receipt.configPath !== record.protectedPaths[0].path ||
       receipt.stateDir !== dirname(dirname(record.protectedPaths[1].path)) ||
       !Array.isArray(receipt.databases) || !receipt.databases.includes(record.protectedPaths[1].path)) {
+    reject("native update receipt belongs to another installation");
+  }
+  return receipt;
+}
+
+function nativeUpdateReceipt(record, required = false) {
+  const receipt = readNativeUpdateReceipt(record, required);
+  if (!receipt) return null;
+  if (!["migrated", "restored"].includes(receipt.status)) {
     if (!required && ["backed-up", "failed", "restoring-config"].includes(receipt.status)) return null;
     reject("native update receipt has no completed migration or restoration");
   }
@@ -8025,6 +8034,10 @@ try {
     case "journal-field": {
       const [pathname, field] = args;
       let value = ownedJournal(pathname);
+      if (field === "nativeUpdate.recovery") {
+        result = readNativeUpdateReceipt(value)?.backup === "scoped" ? "forward" : "rollback";
+        break;
+      }
       for (const part of field.split(".")) value = value?.[part];
       if (value === undefined) reject(`journal field is absent: ${field}`);
       result = typeof value === "object" ? JSON.stringify(value) : String(value);

@@ -208,3 +208,18 @@ it("does not commit after Doctor maintenance authority expires", async () => {
     });
   });
 });
+
+it("leaves historical title repair to standalone Doctor during update", async () => {
+  await withSession(async (params) => {
+    const before = sessionAccessor.loadSessionEntry(params);
+    await noteSessionTranscriptHealth({
+      cfg,
+      env: { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+      shouldRepair: true,
+      postSessionPluginMigrationPlanBound: true,
+    });
+    expect(sessionAccessor.loadSessionEntry(params)).toEqual(before);
+    await repair();
+    expect(sessionAccessor.loadSessionEntry(params)).toEqual({ ...before, displayName: title });
+  });
+});

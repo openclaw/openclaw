@@ -361,8 +361,8 @@ export async function createDoctorMaintenanceState(options: {
         await enterResources(owner!);
       }
     },
-    async enableSqliteReclamation(agents: readonly AgentDatabaseMigrationTarget[]) {
-      const { enableDoctorSqliteReclamation } = await import("./doctor-sqlite-reclamation.js");
+    async inspectSqliteReclamation(agents: readonly AgentDatabaseMigrationTarget[]) {
+      const { inspectDoctorSqliteReclamation } = await import("./doctor-sqlite-reclamation.js");
       const { closeOpenClawAgentDatabaseByPathAsync } =
         await import("../state/openclaw-agent-db-lifecycle.js");
       const databasePath = resolveOpenClawStateSqlitePath(selectedEnv);
@@ -379,13 +379,11 @@ export async function createDoctorMaintenanceState(options: {
       try {
         result = await owner!.run(async () => {
           await closeOpenClawStateDatabaseByPathAsync(databasePath);
-          await assertDoctorAgentLeaseAdmission(selectedEnv, options.signal);
-          return enableDoctorSqliteReclamation({
+          return inspectDoctorSqliteReclamation({
             env: selectedEnv,
             agents,
             signal: options.signal,
             assertCurrent: () => assertOwnerCurrent(databasePath),
-            log: params.runtime.log,
           });
         });
       } catch (error) {

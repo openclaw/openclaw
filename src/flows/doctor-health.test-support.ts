@@ -115,7 +115,6 @@ const mocks = vi.hoisted(() => {
     "../commands/doctor-ui.js": { maybeRepairUiProtocolFreshness: async () => undefined },
     "../commands/doctor-install.js": { noteSourceInstallIssues: () => undefined },
     "../commands/doctor/shared/plugin-runtime-symlinks.js": {
-      noteStalePluginRuntimeSymlinks: async () => undefined,
       removeStalePluginRuntimeSymlinks: async () => ({ changes: [], warnings: [] }),
     },
     "../commands/doctor-platform-notes.js": { noteStartupOptimizationHints: () => undefined },

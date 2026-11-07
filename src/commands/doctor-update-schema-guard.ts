@@ -172,8 +172,11 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   /** Read-only pre-capture publication check; never authorizes an agent repair. */
   statePublicationOnly?: boolean;
   preserveSourceArtifacts?: true;
+  /** Candidate-owned native migration cannot return to an older ledger writer. */
+  forwardRecoveryOnly?: true;
 }): Promise<DoctorDatabasePreflight | undefined> {
-  if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1") {
+  if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1" || options.forwardRecoveryOnly) {
+    // This only omits old-parent inspection; migration still needs Doctor custody.
     return undefined;
   }
   // Mode flags and retained captures are not live mutation authority. Only the

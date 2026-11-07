@@ -66,7 +66,7 @@ import { maybeRepairStaleConfiguredAuthOrders } from "./shared/stale-auth-order.
 import { repairStaleOAuthProfileShadows } from "./shared/stale-oauth-profile-shadows.js";
 import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
 import { maybeRepairStaleSubagentAllowlists } from "./shared/stale-subagent-allowlist.js";
-import { isUpdatePackageSwapInProgress } from "./shared/update-phase.js";
+import { isUpdateDoctorLintPass, isUpdatePackageSwapInProgress } from "./shared/update-phase.js";
 
 /** Run doctor auto-repairs in dependency order and collect sanitized user notes. */
 export async function runDoctorRepairSequence(params: {
@@ -373,7 +373,9 @@ export async function runDoctorRepairSequence(params: {
   await applyRepairStages([maybeRepairExecSafeBinProfiles]);
   appendRepairNotes(migrateLegacyTailscaleProfileIdentities({ env }));
   appendRepairNotes(repairMergedGatewayOwnerProfile({ env, shouldRepair: true }));
-  appendRepairNotes(await removeStalePluginRuntimeSymlinks());
+  if (!isUpdateDoctorLintPass(env)) {
+    appendRepairNotes(await removeStalePluginRuntimeSymlinks());
+  }
   const staleOAuthShadowRepair = await repairStaleOAuthProfileShadows({
     cfg: state.candidate,
     env,

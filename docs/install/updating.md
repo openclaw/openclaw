@@ -144,11 +144,12 @@ also reconciles intent when credential cutover already completed. The candidate
 must contain this fix; older installed updaters are unchanged.
 
 After draining database readers and writers, candidate Doctor inspects SQLite
-reclamation mode without copying databases whose WAL is empty or absent and whose
-rollback journal is absent. Immutable reads preserve source artifacts; databases
-with recovery content retain the private snapshot path. Conversion still uses the
-existing maintenance, space, and integrity checks. This requires the candidate
-Doctor; the installed updater needs no new protocol.
+reclamation mode and free pages directly with an immutable reader. Recovery pages
+defer this optional inspection instead of triggering a database copy. Updates never
+VACUUM a database: enabling incremental reclamation on older files requires explicit
+maintenance with `openclaw doctor --state-sqlite compact` or
+`openclaw doctor --session-sqlite compact --session-sqlite-all-agents`.
+The explicit commands retain their integrity and maintenance checks.
 
 Synchronous integrity workers preserve the migration owner's selected schema-only
 check, matching the asynchronous worker path. Explicit full verification keeps
@@ -361,6 +362,11 @@ initiating process; only serializable options cross the migrated-update handoff.
 
 Native `openclaw update migrate` reports progress while inspecting configuration
 and schemas, capturing its database backup, and verifying the migrated schemas.
+Declared additive SQLite crossings retain the migration owner's scoped checkpoint
+instead of full database copies. Their receipt requires forward recovery with the
+candidate and refuses automatic predecessor restoration. Destructive, rewrite,
+unknown, and unsupported migrations retain full rollback images. See the
+[migration backup contract](/reference/database-schemas/versioning).
 Update Doctor omits the standalone pre-shutdown transcript archive warmup because
 the updater already owns the stopped-Gateway window. Required archive migrations
 and their integrity and recovery checks still run under maintenance custody.
