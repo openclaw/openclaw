@@ -491,6 +491,11 @@ APIs still accept the legacy shape as input and normalize it before saving. See
 Shell chains such as `echo ok && pwd` still need every top-level segment
 to satisfy allowlist rules.
 
+The `exec` tool rejects POSIX shell text containing raw carriage returns, vertical
+tabs, or form feeds before approval handling. This includes quoted text and
+decoded shell-wrapper payloads. Remove these bytes from the command; ordinary
+spaces, tabs, and line feeds remain eligible for automatic allowlist matching.
+
 Examples:
 
 - `rg`

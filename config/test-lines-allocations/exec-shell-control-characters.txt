@@ -1,0 +1,2 @@
+# Authorization, exec guard, and pre-spawn regressions for raw, decoded, and padded shell text.
+108

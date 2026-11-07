@@ -14,6 +14,7 @@ import {
   CommandExplanationWorkLimitError,
   explainShellCommand,
 } from "./command-explainer/extract.js";
+import { CommandExplanationUnsupportedControlCharacterError } from "./command-explainer/tree-sitter-runtime.js";
 import type { CommandExplanation } from "./command-explainer/types.js";
 import { isPathInside } from "./path-guards.js";
 
@@ -21,7 +22,8 @@ type UnsafeExecControlShellCommandKind =
   | "approve"
   | "channel-login"
   | "live-state-sqlite"
-  | "incomplete-analysis";
+  | "incomplete-analysis"
+  | "unsupported-control-character";
 
 type ExecControlShellCommandContext = {
   stateDir?: string;
@@ -267,17 +269,37 @@ function targetsLiveStateSqliteDatabase(
   });
 }
 
+function isShellBoundaryWhitespace(charCode: number): boolean {
+  return charCode === 0x20 || charCode === 0x09 || charCode === 0x0a;
+}
+
+function trimShellBoundaryWhitespace(command: string): string {
+  let start = 0;
+  let end = command.length;
+  while (start < end && isShellBoundaryWhitespace(command.charCodeAt(start))) {
+    start += 1;
+  }
+  while (end > start && isShellBoundaryWhitespace(command.charCodeAt(end - 1))) {
+    end -= 1;
+  }
+  return command.slice(start, end);
+}
+
 export async function detectUnsafeExecControlShellCommand(
   command: string,
   context: ExecControlShellCommandContext = {},
 ): Promise<UnsafeExecControlShellCommandKind | null> {
-  const rawCommand = command.trim();
+  // Only trim shell whitespace; CR, VT, and FF must reach the parser for rejection.
+  const rawCommand = trimShellBoundaryWhitespace(command);
   let explanation: CommandExplanation | null = null;
   try {
     explanation = await explainShellCommand(rawCommand);
   } catch (error) {
     if (error instanceof CommandExplanationWorkLimitError) {
       return "incomplete-analysis";
+    }
+    if (error instanceof CommandExplanationUnsupportedControlCharacterError) {
+      return "unsupported-control-character";
     }
     // Fall back to line-local shell splitting below.
   }
@@ -314,6 +336,11 @@ function rejectIncompleteCommandAnalysis(
   if (unsafeKind === "incomplete-analysis") {
     throw new Error(
       "exec cannot run a shell command that exceeds the command explanation work limit. Simplify the command so its complete syntax can be inspected before execution.",
+    );
+  }
+  if (unsafeKind === "unsupported-control-character") {
+    throw new Error(
+      "exec cannot run a shell command containing unsupported control characters. Remove them so the complete syntax can be inspected before execution.",
     );
   }
 }
