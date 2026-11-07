@@ -552,6 +552,14 @@ cleanup registration. This covers `onDiagnosticEvent` and
 `onInternalDiagnosticEvent` from `openclaw/plugin-sdk/diagnostic-runtime`, as well
 as host-owned diagnostic subscriptions created on the plugin's behalf.
 
+Diagnostic dispatch is process-wide. When a non-activating load keeps a separate
+discovery instance of your plugin alive beside the Gateway's instance, both
+instances' subscriptions receive each event with the same `seq`, and a
+module-level guard does not see the other instance. A listener that records
+usage or cost then counts every event twice until the discovery instance is
+disposed. Subscribe only when `api.registrationMode === "full"` or from a service
+`start()`; see [Registration mode](/plugins/sdk-entrypoints/registration-mode#registration-mode).
+
 ### Handle native client errors
 
 Attach an `error` listener before connecting any long-lived native client that
