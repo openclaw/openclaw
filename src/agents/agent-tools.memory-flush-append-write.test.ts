@@ -40,11 +40,57 @@ describe.each(["host", "sandbox"] as const)("%s append", (backend) => {
   const saved =
     "# Daily notes\n\n- Project Alder uses port 7319.\n\n## Deployment\nUse staging first.\n\n---\n";
   const added = "- Project Birch uses port 8421.\n";
-  const backendTool = () =>
+  const backendTool = (
+    options: Partial<Parameters<typeof wrapToolMemoryFlushAppendOnlyWrite>[1]> = {},
+  ) =>
     wrap({
       sandbox:
         backend === "sandbox" ? { root, bridge: createHostSandboxFsBridge(root) } : undefined,
+      ...options,
     });
+
+  it.each([
+    ["payload length", `${"x".repeat(400)}\n${"y".repeat(400)}`],
+    ["reported oversized line", "x".repeat(1200)],
+    ["UTF-16 length", "🐈".repeat(400) + "x"],
+  ])(
+    "rejects %s without changing oversized legacy notes, then accepts an 800-unit delta",
+    async (_name, content) => {
+      const legacy = `# Existing daily notes\r\n\r\n${"歷史🐈".repeat(300)}\r\nLegacy tail`;
+      await seed(legacy);
+      const observe = vi.fn(async () => true);
+      const persist = vi.fn(async ({ commit }: { commit: () => Promise<void> }) => commit());
+      const tool = backendTool({
+        memoryWriteProvenance: {
+          classifies: observe,
+          write: persist,
+          clearAfterDelete: async () => {},
+        },
+      });
+      await expect(write(tool, content)).rejects.toThrow(/max 800/);
+      expect(await fs.readFile(absolute())).toEqual(Buffer.from(legacy));
+      expect(observe).not.toHaveBeenCalled();
+      expect(persist).not.toHaveBeenCalled();
+
+      // Whitespace and CRLF count, but accepted content is never trimmed or rewritten.
+      const accepted = `  ${"x".repeat(396)}\r\n${"y".repeat(399)}\n`;
+      await write(tool, accepted);
+      expect(await fs.readFile(absolute())).toEqual(Buffer.from(`${legacy}\n${accepted}`));
+      expect(persist).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not create a daily file for an oversized first append", async () => {
+    await expect(write(backendTool(), "x".repeat(801))).rejects.toThrow(/max 800/);
+    await expect(fs.stat(path.join(root, "memory"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps provider-selected non-daily files outside the daily payload bound", async () => {
+    const relativePath = "memory/checkpoint.md";
+    const content = "x".repeat(1200);
+    await write(backendTool({ relativePath }), content, relativePath);
+    expect(await fs.readFile(path.join(root, relativePath), "utf8")).toBe(content);
+  });
 
   it.each([
     ["whole note without trailing newline", saved.trimEnd(), saved + added],

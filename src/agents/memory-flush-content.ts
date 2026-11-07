@@ -1,5 +1,19 @@
-/** Reject replayed notes without editing either the saved bytes or the proposed delta. */
-export function assertNewMemoryFlushContent(existing: string, content: string): void {
+const DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS = 800;
+
+/** Reject oversized daily appends and replayed notes without rewriting either input. */
+export function assertNewMemoryFlushContent(
+  existing: string,
+  content: string,
+  relativePath: string,
+): void {
+  if (
+    /^memory\/\d{4}-\d{2}-\d{2}\.md$/.test(relativePath) &&
+    content.length > DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS
+  ) {
+    throw new Error(
+      `Memory flush append rejected: content too large (${content.length} chars; max ${DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS}). Nothing was appended. Retry with a short pointer only.`,
+    );
+  }
   const previous = existing.replaceAll("\r\n", "\n").trim();
   if (!previous) {
     return;
