@@ -280,6 +280,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["device.token.revoke", "devices", "operator.pairing", "<=2026.7"],
   ["device.pair.setupCode", "device-pair-setup", "operator.admin", "<=2026.7", UNADVERTISED],
   ["device.pair.setupStatus", "device-pair-setup", "operator.admin", "2026.8", UNADVERTISED],
+  ["device.pair.code", "device-pair-code", "operator.admin", "2026.11", UNADVERTISED],
   ["node.rename", "nodes", "operator.pairing", "<=2026.7"],
   ["node.list", "nodes", "operator.read", "<=2026.7"],
   ["node.describe", "nodes", "operator.read", "<=2026.7"],

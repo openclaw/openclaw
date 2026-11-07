@@ -282,6 +282,7 @@ export function approveDevicePairingInWorker(
       tokens[roleForToken] = createDeviceAuthToken({
         role: roleForToken,
         scopes: nextScopes,
+        issuer: options?.tokenIssuer,
         existing: existingToken,
         preserveExistingIssuer: true,
         now: tokenNow,
