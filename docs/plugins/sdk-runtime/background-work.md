@@ -320,9 +320,10 @@ and stays visible for inspection. One invocation can create at most 4
 schedules, and each plugin can keep at most 8 active schedules per parent
 session. Enabled schedules bound to the loaded plugin instance count toward that
 cap, as do unexpired schedules of the same plugin code that a restart can
-re-arm. Schedules bound to a replaced plugin instance or to different code can
-never run plugin code again, so they do not block re-enrollment; each one
-retires at its next occurrence.
+re-arm. Schedules bound to a replaced plugin instance or to different code, or
+created before their parent conversation was reset (with `/new`, `/reset`, or an
+automatic session reset), can never run plugin code again, so they do not block
+re-enrollment; each one retires at its next occurrence.
 
 The stored ceiling is the requester's whole native tool surface, at most 256
 plain tool names. A larger surface refuses scheduling with an explicit error.
@@ -346,11 +347,12 @@ choose a different parent or delivery route.
 Within one Gateway process, schedules bind the exact managed plugin instance,
 not just its ID, version, or source path. Registry adoption of that same
 instance preserves the binding. After an in-process plugin reload, the first
-occurrence that finds another live instance of the plugin is refused without
-running plugin code and retires the schedule; it does not wait for generic
-repeated-failure auto-disable. That refusal spends one attempt. A transient gap,
-such as a registry swap that keeps the same instance or a plugin that is still
-unloading, is an ordinary refusal that retries at the next occurrence.
+occurrence that finds another live instance of the plugin, or finds the plugin
+disabled or uninstalled, is refused without running plugin code and retires the
+schedule; it does not wait for generic repeated-failure auto-disable. That
+refusal spends one attempt. A transient gap, such as a registry swap that keeps
+the same instance or an enabled plugin that is still unloading, is an ordinary
+refusal that retries at the next occurrence.
 
 Accepted schedules survive a Gateway restart on hosts advertising
 `command-scheduled-turns-restart-v1` in `api.runtime.capabilities`. The accepted
