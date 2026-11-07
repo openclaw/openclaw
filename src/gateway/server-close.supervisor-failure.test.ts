@@ -34,7 +34,7 @@ it("closes agent databases after a settled supervisor failure without rescanning
     vi.spyOn(schema, "agentDatabaseIntegrityBeforeMutationSteps").mockImplementation(function* (
       ...args
     ) {
-      diagnostics = args[3];
+      diagnostics = args[3]?.diagnostics;
       return yield* gate(...args);
     });
     resetGatewayWorkAdmission();

@@ -180,8 +180,8 @@ function openAgentDatabaseBackend(
   let releaseBorrow: (() => void) | undefined;
   let identity: AgentDatabaseFileExecutionIdentity | undefined;
   let openingFailure: { error: unknown } | undefined;
-  let startupJournalRequested = false;
   type RequestPreparation = ReturnType<typeof readAgentDatabaseRequestPreparation>;
+  let startup: RequestPreparation | undefined;
   let publicationPreparation: RequestPreparation | undefined;
   const openShared = () => {
     if (!shared) {
@@ -194,10 +194,10 @@ function openAgentDatabaseBackend(
     }
     return shared;
   };
-  const withPreparation = <T>(preparation: RequestPreparation, run: () => T): T => {
-    startupJournalRequested = preparation.startupJournal;
+  const withPreparation = <T>(preparation: RequestPreparation | undefined, run: () => T): T => {
+    startup = preparation;
     try {
-      return preparation.deletion
+      return preparation?.deletion
         ? withAgentDeletionWorkerCleanup(
             preparation.deletion,
             {
@@ -212,7 +212,7 @@ function openAgentDatabaseBackend(
           )
         : run();
     } finally {
-      startupJournalRequested = false;
+      startup = undefined;
     }
   };
   const readDeletionJournal = () =>
@@ -254,12 +254,11 @@ function openAgentDatabaseBackend(
         const preparation = receiveMessageOnPort(port1)?.message as {
           validation?: OpenClawAgentDatabaseValidation;
           integrityRevoked: boolean;
-          startupIntegrity?: import("./agent-database-startup-integrity.js").AgentDatabaseStartupIntegrity;
         };
         lease.validation = preparation.validation;
         lease.integrityRevoked = preparation.integrityRevoked;
-        lease.startupIntegrity = preparation.startupIntegrity;
-        lease.startupRepair = startupJournalRequested
+        lease.startupIntegrityRequired = startup?.startupIntegrityRequired;
+        lease.startupRepair = startup?.startupJournal
           ? maintenance.repairStartupIntegrity.bind(undefined, lease.receipt)
           : undefined;
       } catch (error) {
@@ -351,14 +350,18 @@ function openAgentDatabaseBackend(
     }
     // A fresh open already admitted the schema; publication below still checks its live receipt.
     if (refreshSchema && !validation) {
-      validation = refreshOpenClawAgentDatabaseSchema(database, admitOpen);
+      validation = refreshOpenClawAgentDatabaseSchema(
+        database,
+        admitOpen,
+        !startup?.startupIntegrityRequired,
+      );
     }
     requestSqliteWorkerOperationAdmission({
       stage: "prepare",
       facts: {
         identity,
         validation,
-        ...(startupJournalRequested ? { agentDeletionJournalPresent: readDeletionJournal() } : {}),
+        ...(startup?.startupJournal ? { agentDeletionJournalPresent: readDeletionJournal() } : {}),
       },
     });
     return database;
@@ -381,7 +384,7 @@ function openAgentDatabaseBackend(
     const signal = agentDatabaseStartupInspectionSignal(
       expectDefined(preparation.startupCancellation, "Startup inspection cancellation"),
     );
-    startupJournalRequested = preparation.startupJournal;
+    startup = preparation;
     const steps = openClaimedWriterSteps(true);
     try {
       let step = steps.next();
@@ -400,7 +403,7 @@ function openAgentDatabaseBackend(
         }
       }
     } finally {
-      startupJournalRequested = false;
+      startup = undefined;
     }
   };
   const openWriter = (refreshSchema = false) =>
@@ -419,7 +422,7 @@ function openAgentDatabaseBackend(
       stage,
       facts: {
         identity,
-        ...(startupJournalRequested ? { agentDeletionJournalPresent: readDeletionJournal() } : {}),
+        ...(startup?.startupJournal ? { agentDeletionJournalPresent: readDeletionJournal() } : {}),
         ...(publication ? { publication } : {}),
       },
     };
@@ -670,7 +673,7 @@ function openAgentDatabaseBackend(
       }
       if (command.type === "database.domain.publish") {
         try {
-          withPreparation(publicationPreparation ?? { startupJournal: false }, () =>
+          withPreparation(publicationPreparation, () =>
             domain.cleanupPublication(command.input.id),
           );
         } finally {

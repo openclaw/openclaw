@@ -89,7 +89,7 @@ it.each([false, true])("defers seal-less Doctor reopens (pinned WAL: %s)", async
       checks += 1;
       yield check;
     }
-    diagnostics.push({ ...args[3] });
+    diagnostics.push({ ...args[3]?.diagnostics });
     return false;
   });
   const maintenance = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "quick" });
@@ -203,7 +203,7 @@ it.each([
       yield step.value;
       step = operation.next();
     }
-    diagnostics = args[3];
+    diagnostics = args[3]?.diagnostics;
     return step.value;
   });
   const reopen = () => openOpenClawAgentDatabase(options);
@@ -423,12 +423,12 @@ it.each([
       expect.objectContaining({
         agentId: "receipt-agent",
         integrityGateReason: outcome === "malformed-identity" ? "malformed-proof" : outcome,
-        integrityGateMode: ["no-proof", "schema-mismatch"].includes(outcome) ? "deferred" : "full",
-        integrityGateOutcome: ["no-proof", "schema-mismatch"].includes(outcome)
-          ? "pending"
-          : "healthy",
+        integrityGateMode: "deferred",
+        integrityGateOutcome: "pending",
       }),
     );
+    expect(readSqliteDatabaseIntegrityVerification(reopened.path)).toBeUndefined();
+    expect(readSqliteDatabaseCleanClose(first.path)).toBe(false);
   }
 });
 
@@ -592,7 +592,7 @@ it("explicit full maintenance refuses an orphan allocated page before admission"
   }
 });
 
-it("does not lend remembered integrity to another file at the same path", () => {
+it("does not lend remembered integrity to explicit verification of a replacement file", async () => {
   const options = {
     agentId: "integrity-cache",
     env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-replacement-") },
@@ -603,9 +603,14 @@ it("does not lend remembered integrity to another file at the same path", () => 
   fs.copyFileSync(database.path, replacement);
   createUnsafeIndexDrift(replacement);
   fs.renameSync(replacement, database.path);
-  expect(() => openOpenClawAgentDatabase(options)).toThrow(
-    /integrity_check failed.*missing from index unsafe_index_records_value/iu,
-  );
+  const maintenance = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+  try {
+    expect(() => maintenance.run(() => openOpenClawAgentDatabase(options))).toThrow(
+      /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+    );
+  } finally {
+    await maintenance.close();
+  }
 });
 
 it("rechecks the media version guard after a validated handle is replaced by a populated v0 store", () => {
@@ -632,7 +637,7 @@ it("rechecks the media version guard after a validated handle is replaced by a p
 });
 
 it.each(["invalid seal", "foreign lease"] as const)(
-  "reuses physical proof only without a foreign lease (%s)",
+  "keeps current-schema admission bounded with an invalid seal or foreign lease (%s)",
   (change) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-integrity-policy-") };
     const options = { agentId: "policy", env };
@@ -660,7 +665,7 @@ it.each(["invalid seal", "foreign lease"] as const)(
         ...args
       ) {
         const result = yield* gate(...args);
-        diagnostics = args[3];
+        diagnostics = args[3]?.diagnostics;
         return result;
       });
       logger.info.mockClear();
@@ -670,7 +675,7 @@ it.each(["invalid seal", "foreign lease"] as const)(
           .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='preserved'")
           .get(),
       ).toEqual({ state_json: '{"ok":true}' });
-      expect(diagnostics?.integrityGateOutcome).toBe(lease ? "healthy" : "cached");
+      expect(diagnostics?.integrityGateOutcome).toBe(lease ? "pending" : "cached");
       reopened.db.exec("UPDATE auth_profile_state SET updated_at=2 WHERE state_key='preserved'");
       expect(readSqliteDatabaseCleanClose(original.path)).toBe(false);
     } finally {

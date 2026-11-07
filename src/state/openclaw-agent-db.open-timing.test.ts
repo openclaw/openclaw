@@ -12,6 +12,7 @@ import {
   withOpenClawAgentDatabaseAsync as withAgentDb,
   resolveOpenClawAgentSqlitePath as agentDbPath,
 } from "./openclaw-agent-db.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 
 const logger = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
@@ -113,10 +114,10 @@ describe("agent database open timings", () => {
     const collect = (database: ReturnType<typeof openAgentDb>) => {
       databases.push(database);
     };
-    const outcomes = Promise.allSettled([
-      withAgentDb(options, collect),
-      withAgentDb(options, collect),
-    ]);
+    const scope = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+    const outcomes = scope.run(() =>
+      Promise.allSettled([withAgentDb(options, collect), withAgentDb(options, collect)]),
+    );
     try {
       await nativeFinished.promise;
       advance(1_000);
@@ -149,6 +150,7 @@ describe("agent database open timings", () => {
     } finally {
       release.resolve();
       await outcomes;
+      await scope.close();
     }
   });
 });

@@ -452,7 +452,7 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
   provenance: string | null;
   validation?: OpenClawAgentDatabaseValidation;
   integrityRevoked?: boolean;
-  startupIntegrity?: import("./agent-database-startup-integrity.js").AgentDatabaseStartupIntegrity;
+  startupIntegrityRequired?: boolean;
   startupRepair?: (
     check: SqliteIntegrityCheck,
     error: unknown,

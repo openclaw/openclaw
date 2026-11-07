@@ -660,7 +660,7 @@ it.each([
   ["two-leases", 0],
   ["two-leases-missing-metadata", 0],
   ["two-leases-stale", 0],
-  ["two-leases-unknown-owner", 1],
+  ["two-leases-unknown-owner", 0],
   ["two-leases-unclean", 0],
   ["prepared-existing", 0],
   ["invalidated", 0],

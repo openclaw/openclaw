@@ -19,10 +19,7 @@ import { assertSqliteDatabaseHeader } from "../infra/sqlite-integrity.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { createPermitPool } from "../shared/permit-pool.js";
 import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
-import {
-  captureAgentDatabaseStartupIntegrity,
-  prepareAgentDatabaseStartupVerification as prepareStartupVerification,
-} from "./agent-database-startup-integrity.js";
+import { prepareAgentDatabaseStartupVerification as prepareStartupVerification } from "./agent-database-startup-integrity.js";
 import { verifyAgentDatabaseStartupIntegrity } from "./agent-database-startup-verification.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
@@ -145,24 +142,26 @@ it("rejects an impossible freelist header without a full database scan", () => {
   );
 });
 
-it("binds provisional startup admission to its original lifetime and physical file", () => {
+it("binds background startup verification to its original lifetime and physical file", async () => {
   const { path: file, agentId } = f.agent();
   const input = { agentId, paths: [file], env: f.env, signal: new AbortController().signal };
-  const activation = { isCurrent: () => true, verifyIntegrity: async () => {} };
+  const verifyIntegrity = vi.fn(async () => {});
+  const activation = { isCurrent: () => true, verifyIntegrity };
   const owner = prepareStartupVerification(input, activation, createPermitPool(1))!;
-  const policy = captureAgentDatabaseStartupIntegrity(file, agentId)!;
-  expect(captureAgentDatabaseStartupIntegrity(file, "other")).toBeUndefined();
   owner.revoke();
-  expect(Atomics.load(new Int32Array(policy.valid), 0)).toBe(0);
-  using cleanup = new DisposableStack();
-  cleanup.defer(prepareStartupVerification(input, activation, createPermitPool(1))!.revoke);
+  await owner.verify();
+  expect(verifyIntegrity).not.toHaveBeenCalled();
+  const successor = prepareStartupVerification(input, activation, createPermitPool(1))!;
   owner.revoke();
-  expect(captureAgentDatabaseStartupIntegrity(file, agentId)).toBeDefined();
+  await successor.verify();
+  expect(verifyIntegrity).toHaveBeenCalledOnce();
+  const replaced = prepareStartupVerification(input, activation, createPermitPool(1))!;
   closeOpenClawAgentDatabasesForTest();
   fs.renameSync(file, `${file}.old`);
   using replacement = openDatabase(file);
   replacement.exec("CREATE TABLE replacement(id INTEGER PRIMARY KEY)");
-  expect(() => captureAgentDatabaseStartupIntegrity(file, agentId)).toThrow(/identity changed/iu);
+  await replaced.verify();
+  expect(verifyIntegrity).toHaveBeenCalledOnce();
 });
 
 it("reports an uncleared quarantine row instead of claiming repair success", () => {

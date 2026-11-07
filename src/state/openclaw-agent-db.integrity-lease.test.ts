@@ -51,6 +51,7 @@ import {
   readOpenClawDatabaseQuarantineFailure,
 } from "./openclaw-quarantine-store.js";
 import { seedOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.test-support.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseForTest,
@@ -81,13 +82,20 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
-async function openChild(pathname: string, env: NodeJS.ProcessEnv, sharedPath?: string) {
+async function openChild(
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+  sharedPath?: string,
+  fullIntegrity = false,
+) {
   const script = sharedPath
     ? "./openclaw-agent-db-schema-contention.test-support.mjs"
     : "./openclaw-agent-db-held-child.test-support.ts";
   const child = fork(
     fileURLToPath(new URL(script, import.meta.url)),
-    sharedPath ? [pathname, sharedPath] : ["integrity-lease", pathname],
+    sharedPath
+      ? [pathname, sharedPath]
+      : ["integrity-lease", pathname, "", fullIntegrity ? "full" : ""],
     {
       execArgv: sharedPath ? [] : ["--import", "tsx"],
       env: { ...process.env, ...env },
@@ -145,7 +153,7 @@ function observeIntegrity() {
     ...args
   ) {
     const result = yield* gate(...args);
-    diagnostics = args[3];
+    diagnostics = args[3]?.diagnostics;
     return result;
   });
   return () => diagnostics;
@@ -224,7 +232,8 @@ it.each(process.platform === "win32" ? [false] : [false, true])(
       // Let the child verify the file itself; a peer that borrows admission cannot certify it.
       closeOpenClawAgentDatabaseByPath(owner.database.path);
     }
-    const child = await openChild(childPath, owner.env);
+    // An alias cannot borrow peer verification; the last closer must verify explicitly.
+    const child = await openChild(childPath, owner.env, undefined, alias);
     if (!alias) {
       openOpenClawAgentDatabase({ agentId: "integrity-lease", env: owner.env }).db.exec(
         "INSERT INTO auth_profile_state VALUES ('parent-writer', '{}', 1)",
@@ -338,7 +347,7 @@ it.runIf(process.platform === "linux")(
 
 it.each([
   { swapped: false, outcome: "cached" },
-  { swapped: true, outcome: "healthy" },
+  { swapped: true, outcome: "pending" },
 ] as const)(
   "borrows a live peer admission only for the file opened after the claim (swapped: $swapped)",
   async ({ swapped, outcome }) => {
@@ -363,13 +372,14 @@ it.each([
 
     expect(opened).toBe(true);
     expect(diagnostics()?.integrityGateOutcome).toBe(outcome);
+    expect(diagnostics()?.integrityGateMode).toBe(swapped ? "deferred" : undefined);
     database.db.exec("INSERT INTO auth_profile_state VALUES ('race-writer', '{}', 1)");
     await closeChild(child);
     closeOpenClawAgentDatabaseByPath(pathname);
-    // Only a process that actually checked the file can certify it on its last close.
+    // Neither borrowed nor bounded admission supplies a full verification receipt.
     expect(
-      readSqliteCleanCloseSeal(pathname, fs.statSync(pathname, { bigint: true })) !== undefined,
-    ).toBe(swapped);
+      readSqliteCleanCloseSeal(pathname, fs.statSync(pathname, { bigint: true })),
+    ).toBeUndefined();
   },
 );
 
@@ -384,10 +394,15 @@ it("does not lend a live peer admission to a file replaced at the same path", as
   const child = await openChild(pathname, env);
   fs.renameSync(replacement, pathname);
 
-  expect(() => openOpenClawAgentDatabase(options)).toThrow(
-    /integrity_check failed.*missing from index unsafe_index_records_value/iu,
-  );
-  await closeChild(child);
+  const maintenance = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+  try {
+    expect(() => maintenance.run(() => openOpenClawAgentDatabase(options))).toThrow(
+      /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+    );
+  } finally {
+    await maintenance.close();
+    await closeChild(child);
+  }
 });
 
 it("does not certify a failed checkpoint or native close", () => {

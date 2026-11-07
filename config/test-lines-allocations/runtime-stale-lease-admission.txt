@@ -1,0 +1,2 @@
+# Preserve admission corruption, authority, FIFO, and retained-worker runtime/startup proof with explicit verification and schema-repair fixtures.
+34

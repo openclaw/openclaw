@@ -34,7 +34,7 @@ import {
   captureAgentDatabasePreparationJournal,
   recordAgentDatabaseStartupFtsRepair,
 } from "./agent-database-admission.js";
-import { captureAgentDatabaseStartupIntegrity } from "./agent-database-startup-integrity.js";
+import { captureAgentDatabaseStartupVerification } from "./agent-database-startup-integrity.js";
 import { captureAgentDeletionCleanupAdmission } from "./agent-deletion-cleanup-admission.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import {
@@ -177,6 +177,9 @@ export function createAgentDatabaseNativeGeneration(
       const assertPreparationJournal = captureAgentDatabasePreparationJournal(agentId, {
         env: context.environment,
       });
+      const assertBackgroundIntegrity = assertPreparationJournal
+        ? captureAgentDatabaseStartupVerification(pathname)
+        : undefined;
       const nativeLocations = [
         pathname,
         ...(nativeIdentity ? [nativeIdentity.nativeLocation] : []),
@@ -186,6 +189,7 @@ export function createAgentDatabaseNativeGeneration(
       const assertSourceCurrent = (identity?: AgentDatabaseFileExecutionIdentity) => {
         source.assertCurrent();
         assertCurrent();
+        assertBackgroundIntegrity?.();
         // The reference checks its captured constraints; this owner checks the path last.
         assertCallerCurrent?.(identity);
       };
@@ -282,7 +286,6 @@ export function createAgentDatabaseNativeGeneration(
               path: pathname,
             });
             const preparation = {
-              startupIntegrity: captureAgentDatabaseStartupIntegrity(pathname, agentId),
               integrityRevoked: hasRevokedOpenClawAgentDatabaseValidation(pathname),
               validation: getOpenClawAgentDatabaseValidationForTransfer({
                 agentId,
@@ -370,6 +373,8 @@ export function createAgentDatabaseNativeGeneration(
         attachment: {
           kind: "agent-execution",
           startupJournal: assertPreparationJournal !== undefined,
+          // Startup repair without a background verifier retains foreground verification.
+          startupIntegrityRequired: Boolean(assertPreparationJournal && !assertBackgroundIntegrity),
           ...(startupCancellation ? { startupCancellation } : {}),
           ...(cleanup ? { deletion: cleanup.guard } : {}),
         },

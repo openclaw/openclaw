@@ -49,7 +49,11 @@ const edge = vi.hoisted(() => {
       ) => typeof database
     >(),
     request: vi.fn<AdmissionModule["requestSqliteWorkerOperationAdmission"]>(),
-    attachment: vi.fn(() => ({ kind: "agent-execution", startupJournal: false })),
+    attachment: vi.fn(() => ({
+      kind: "agent-execution",
+      startupJournal: false,
+      startupIntegrityRequired: false,
+    })),
     nativeClose: vi.fn(() => {
       database.db.isOpen = false;
       return true;

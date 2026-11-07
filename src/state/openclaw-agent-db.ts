@@ -419,17 +419,20 @@ function* openOpenClawAgentDatabaseSteps(
           db,
           agentId,
           pathname,
-          diagnostics,
-          verification,
-          (isValidatedReopen && reuseAdmittedIntegrity) ||
-            (diagnostics.integrityGateReason === "lease-class" &&
-              liveOwnerProvenance !== undefined &&
-              // Re-read after the native open: the claim's file must be the one this handle opened.
-              readAgentDatabaseLeaseProvenance(pathname) === liveOwnerProvenance),
-          reusedSchema,
-          integrityCheck,
-          repairAdmission?.integrityTables ?? [],
-          preparedLease?.startupIntegrity,
+          {
+            runtimeAdmission: !preparedLease?.startupIntegrityRequired,
+            diagnostics,
+            verification,
+            reuseRuntimeIntegrity:
+              (isValidatedReopen && reuseAdmittedIntegrity) ||
+              (diagnostics.integrityGateReason === "lease-class" &&
+                liveOwnerProvenance !== undefined &&
+                // Re-read after the native open: the claim's file must be the one this handle opened.
+                readAgentDatabaseLeaseProvenance(pathname) === liveOwnerProvenance),
+            admittedSchema: reusedSchema,
+            integrityCheck,
+            integrityTables: repairAdmission?.integrityTables ?? [],
+          },
         );
         assertCurrent(validationDatabase);
         if (!diagnostics.integrityGateOutcome || diagnostics.integrityGateOutcome === "cached") {
