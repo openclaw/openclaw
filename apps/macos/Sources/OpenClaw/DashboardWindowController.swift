@@ -122,6 +122,13 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private(set) var signedOut: DashboardFailurePage.SignedOut?
     private(set) var signedOutNeedsRefresh = false
     private var reconnectTask: (id: UUID, task: Task<Void, Never>)?
+    // A finished signed-out attempt keeps its page actions until the window is replaced.
+    private var finishedSignInAttempt: UUID?
+    var isSigningIn: Bool {
+        guard let reconnectTask else { return false }
+        return reconnectTask.id != self.finishedSignInAttempt
+    }
+
     private var signInProgress: GatewayBrowserSignInProgress?
     private var browserSignInRoute: (baseURL: URL, url: URL)?
     private var navigationGeneration: UInt64 = 0
@@ -833,7 +840,10 @@ extension DashboardWindowController {
         let task = Task { @MainActor [weak self] in
             do {
                 try await GatewayBrowserSignInCoordinator.reconnectGateway(id: id, progress: progress)
-                // The profile-store notification replaces this document in its existing window.
+                // The profile-store notification replaces this document in its existing window. A finished
+                // attempt no longer holds focus, so the Gateways menu can reload a page the refresh skipped.
+                guard let self, self.reconnectTask?.id == attempt else { return }
+                self.finishedSignInAttempt = attempt
             } catch {
                 guard let self, self.reconnectTask?.id == attempt, self.isWindowOpen else { return }
                 self.reconnectTask = nil

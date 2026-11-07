@@ -141,7 +141,9 @@ extension DashboardManager {
     nonisolated static let failureURL = URL(string: "about:blank")!
 
     func canFocusWithoutReload(_ controller: DashboardWindowController) -> Bool {
-        controller.documentHost.hasCurrentBrowserSession && !controller.isShowingFailurePage
+        // A reload replaces the window controller, which cancels the sign-in the user is completing.
+        controller.isSigningIn ||
+            (controller.documentHost.hasCurrentBrowserSession && !controller.isShowingFailurePage)
     }
 
     func loadWindow(
