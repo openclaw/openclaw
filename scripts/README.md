@@ -334,8 +334,11 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
 Continuous gestures are opt-in with `--steps gestures`: pointer sweeps and wheel
 scrolling over Sidebar, Chat, Advanced Settings and Sessions; transcript selection
 across the virtual window and within a message; sidebar/split dividers; window
-resizing; and mobile portrait/landscape viewport changes. Fixtures use 100/2,000
-messages and 100/1,000 sessions (Sessions still renders its 100-row page, and
+resizing; and mobile portrait/landscape viewport changes. The window-resize
+scenario retains the Review panel; `gesture-window-resize-details-{realistic,large}`
+also explicitly opens the session Details inspector and checks that it stays open.
+Fixtures use 100/2,000 messages and 100/1,000 sessions (Sessions still renders its
+100-row page, and
 Advanced Settings has 303 fields in both variants). Pointer and wheel input target
 60 Hz; viewport commands serialize to preserve driver correctness. Each result
 records actual delivery cadence, rAF interval median/p95 and counts above 16.7/33 ms,
@@ -882,7 +885,11 @@ Compare the emitted files of two adjacent builds with
 `node scripts/compare-control-ui-update-cache.ts --base-dir <build-A>
 --head-dir <build-B> --output <report.json>`. The report separates identical
 files, renamed files with only generated-reference changes, payload changes,
-and public-asset URL changes. Gzip and Brotli columns use emitted sidecars only
+and public-asset URL changes. Its reference graph includes emitted JavaScript,
+CSS, and preload-table references, with strongly connected components and the
+direct and transitive referrers of payload-changing files. This distinguishes a
+shared filename cascade from several independent source changes; source-map
+comments do not add graph edges. Gzip and Brotli columns use emitted sidecars only
 where the Gateway serves them. Full-cache and offline-inventory totals describe
 potential downloads after those inventories have been cached; browser timing
 runs below record what a particular visit actually requests.

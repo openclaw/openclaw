@@ -367,13 +367,13 @@ export async function startApplicationRouter(
         if (target.status === "success" && !target.isFetching) {
           const pendingVerification = interrupted;
           interrupted = undefined;
-          // Snapshot admission can finish after hello; verify it once even without
+          // Cached admission can finish after hello; verify it once even without
           // an interrupted connection, using the loader's authoritative replacement.
           // SAFETY: This branch accepts only session routes loaded by loadChatRoute.
           const data = target.data as ChatRouteData | undefined;
           if (
             data?.kind === "session" &&
-            data.sessionResolutionFromCache === "snapshot" &&
+            data.sessionResolutionFromCache &&
             !revalidatedCache.has(target.abortController)
           ) {
             revalidatedCache.add(target.abortController);

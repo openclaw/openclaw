@@ -458,7 +458,10 @@ file links also support spaces, emoji, and punctuation in filenames; for example
 `[Read notes](notes/caf%C3%A9%20note.md)` opens the workspace file. Bare CSV
 filenames in authored links, such as `[Read inventory](inventory.csv)`, and code
 spans also open the file preview. Plain-text and inline-code file detection stays
-conservative to avoid turning prose into links.
+conservative to avoid turning prose into links. Unprefixed paths such as
+`src/index.ts` require a recognized file extension, so repository names such as
+`openclaw/openclaw.ai` remain text. For uncommon file extensions, use an explicit
+path such as `./assets/logo.ai` or an authored Markdown link.
 
 In a workspace Markdown file's **Preview**, authored relative file links resolve
 from the document's folder. For example, a report in `reports/review.md` can open
