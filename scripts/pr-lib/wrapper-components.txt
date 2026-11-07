@@ -311,6 +311,7 @@ src/agents/github-host-runtime.ts
 src/agents/github-host.ts
 src/agents/internal-runtime-context.ts
 src/agents/mcp-oauth-store-error.ts
+src/agents/mcp-ui-resource-bounds.ts
 src/agents/model-auth-policy.ts
 src/agents/model-catalog-entry.ts
 src/agents/model-catalog-lookup.ts

@@ -136,6 +136,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/managed-image-attachments.test.ts",
   "src/gateway/managed-image-record-store.test.ts",
   "src/gateway/managed-outgoing-gc-availability.test.ts",
+  // Saved-display restoration exercises the host-owned durable transcript worker.
+  "src/gateway/mcp-app-saved-display.test.ts",
   "src/gateway/mcp-http.completion-lineage.test.ts",
   "src/gateway/mcp-http.configured-mcp-authority.test.ts",
   "src/gateway/mcp-http.exec-completion.test.ts",

@@ -336,6 +336,10 @@ MCP Apps and Canvas previews also retain their loaded frames through a connectio
 blip to the same Gateway. Gateway-backed actions pause until reconnection; they
 are not queued for replay. MCP discovery keeps its last results while offline.
 If an app times out during initialization, use **Retry** to load it again.
+After a temporary MCP App view expires, the host requests a fresh authorized view
+without replaying the original tool or the failed action. If recovery fails, the
+last rendered content remains readable with **Retry**. Restoring saved content
+does not restore expired action grants.
 Changing Gateway, losing access, or selecting different content retires the old
 frame and its local state.
 

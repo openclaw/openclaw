@@ -74,7 +74,7 @@ beforeEach(() => {
   mocks.getMcpAppViewLease.mockReturnValue(view);
 });
 
-async function restoreFromMessages(messages: unknown[], viewId: string) {
+async function restoreFromMessages(messages: unknown[], viewId: string, requesterId?: string) {
   mocks.visitSessionMessagesAsync.mockImplementation(
     (_scope: unknown, visit: (message: unknown) => void) => {
       for (const message of messages) {
@@ -82,7 +82,7 @@ async function restoreFromMessages(messages: unknown[], viewId: string) {
       }
     },
   );
-  return await restoreMcpAppView({ cfg: {}, sessionKey: "agent:main:main", viewId });
+  return await restoreMcpAppView({ cfg: {}, sessionKey: "agent:main:main", viewId, requesterId });
 }
 
 function descriptor(viewId: string, toolCallId: string) {
@@ -275,6 +275,78 @@ describe("MCP App transcript reconstruction", () => {
       ),
     ).resolves.toBeUndefined();
   });
+
+  it.each(["small", "quoted HTML near live limit"])(
+    "restores %s saved App-only content while isolating concurrent requesters",
+    async (size) => {
+      const savedDisplay = {
+        version: 1,
+        descriptor: descriptor("mcp-app-saved", "call-1"),
+        html:
+          size === "small"
+            ? "<!doctype html><main>Saved synthetic diagram</main>"
+            : `<main>${'"'.repeat(1024 * 1024)}</main>`,
+        requesterId: "alice",
+        toolInput: { city: "Paris" },
+        toolResult: {
+          content: [{ type: "text", text: "created once" }],
+          _meta: {
+            checkpoint: size === "small" ? "synthetic-checkpoint" : "x".repeat(4.5 * 1024 * 1024),
+            diagram: ["choose", "add", "chat"],
+          },
+        },
+      };
+      const restoration = restoreFromMessages(
+        [
+          {
+            role: "assistant",
+            content: [
+              { type: "toolCall", id: "call-1", name: "demo__show", args: { city: "Paris" } },
+            ],
+          },
+          // Saved display belongs to the transcript's non-message custom-entry lane,
+          // not capped tool details or model-visible content.
+          { type: "custom", customType: "mcp-app-display", data: savedDisplay },
+          toolResult("mcp-app-saved", "call-1", { resultMetaState: "unavailable" }),
+        ],
+        "mcp-app-saved",
+        "alice",
+      );
+      const [restored, otherRequester] = await Promise.all([
+        restoration,
+        restoreMcpAppView({
+          cfg: {},
+          sessionKey: "agent:main:main",
+          viewId: "mcp-app-saved",
+          requesterId: "bob",
+        }),
+      ]);
+      expect(restored).toEqual({ runtime, view });
+      expect(otherRequester).toBeUndefined();
+      expect(mocks.acquireSessionMcpRuntime).toHaveBeenCalledOnce();
+      expect(mocks.fetchMcpAppView).toHaveBeenCalledOnce();
+      expect(mocks.fetchMcpAppView).toHaveBeenCalledWith(
+        expect.objectContaining({
+          savedDisplay,
+          toolInput: savedDisplay.toolInput,
+          toolResult: savedDisplay.toolResult,
+          viewId: "mcp-app-saved",
+          allowedAppToolNames: new Set(),
+        }),
+      );
+      for (const requesterId of ["alice", "bob"]) {
+        const minted = await mintMcpAppViewFromTranscript({
+          cfg: {},
+          sessionKey: "agent:main:main",
+          descriptor: savedDisplay.descriptor,
+          requesterId,
+          allowedAppToolNames: new Set(),
+          readOnly: true,
+        });
+        expect(minted).toEqual(requesterId === "alice" ? { runtime, view } : undefined);
+      }
+    },
+  );
 
   it("rejects a descriptor without its matching tool-call input", async () => {
     await expect(

@@ -64,7 +64,7 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
           }}
           class="mount"
         />
-        <Show when={read().inactive !== "ended" && read().error}>
+        <Show when={(read().inactive !== "ended" || read().readable) && read().error}>
           {(error) => (
             <div class="error">
               {t("mcpApp.unavailable", {
@@ -73,7 +73,7 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
               <button
                 type="button"
                 disabled={gateway.read().snapshot.phase !== "connected"}
-                onClick={() => void owner.setup(owner.currentBinding())}
+                onClick={() => void owner.retry()}
               >
                 {t("mcpApp.retry")}
               </button>

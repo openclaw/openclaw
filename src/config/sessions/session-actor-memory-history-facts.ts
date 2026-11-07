@@ -1,6 +1,7 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { measureMcpAppViewBytes } from "../../agents/mcp-ui-resource-bounds.js";
 import {
   buildSessionPreviewItems,
   projectSessionDisplayMessage,
@@ -518,25 +519,51 @@ export function readSessionActorMemoryHistoryFacts(
     case "session.history.bounded-tail":
       return readSessionActorMemoryBoundedTail(window, navigation, query.input.options);
     case "session.history.visitor-source": {
-      const rows = navigation.visibleMessages;
+      const rows = query.input.mcpAppDisplays
+        ? navigation.active.filter(
+            (row) =>
+              navigation.visibleMessages.includes(row) ||
+              (asOptionalRecord(row.event)?.type === "custom" &&
+                asOptionalRecord(row.event)?.customType === "mcp-app-display"),
+          )
+        : navigation.visibleMessages;
       const start = resolveIntegerOption(query.input.offset, 0, { min: 0, max: rows.length });
       const messages: Array<{ message: unknown; seq: number }> = [];
       let end = start;
       let bytes = 0;
       for (const row of rows.slice(start, start + SOURCE_PAGE_MAX_MESSAGES)) {
-        if (row.serializedBytes > SOURCE_PAGE_MAX_BYTES) {
+        const event = asOptionalRecord(row.event);
+        const display = query.input.mcpAppDisplays && event?.type === "custom";
+        let rowBytes = row.serializedBytes;
+        if (display) {
+          const data = asOptionalRecord(event.data);
+          if (data?.version !== 1 || typeof data.html !== "string" || !isRecord(data.toolResult)) {
+            end++;
+            continue;
+          }
+          try {
+            // Escaping a valid display can exceed a serialized message page.
+            // Private selection retains the resource owner's admitted payload bound.
+            rowBytes = measureMcpAppViewBytes(data.html, data.toolInput, data.toolResult);
+          } catch {
+            end++;
+            continue;
+          }
+        }
+        if (rowBytes > SOURCE_PAGE_MAX_BYTES) {
           throw new Error(
             `Transcript source message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
           );
         }
-        if (bytes + row.serializedBytes > SOURCE_PAGE_MAX_BYTES) {
+        if (bytes + rowBytes > SOURCE_PAGE_MAX_BYTES) {
           break;
         }
-        bytes += row.serializedBytes;
+        bytes += rowBytes;
         end++;
-        const message = asOptionalRecord(row.event)?.message;
+        const message =
+          event?.type === "custom" && query.input.mcpAppDisplays ? event : event?.message;
         if (message !== undefined) {
-          messages.push({ message, seq: row.messagePosition! + 1 });
+          messages.push({ message, seq: (row.messagePosition ?? 0) + 1 });
         }
       }
       return { messages, ...(end < rows.length ? { nextOffset: end } : {}) };

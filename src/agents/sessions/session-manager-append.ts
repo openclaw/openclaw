@@ -616,6 +616,24 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     if (message.role === "assistant") {
       applyAssistantDeliveryDirectives(message);
     }
+    if (message.role === "toolResult") {
+      const target = this.getSessionTarget();
+      if (target?.sessionKey) {
+        const { captureMcpAppSavedDisplay } = await import("../mcp-ui-resource.js");
+        const display = captureMcpAppSavedDisplay(message, target.sessionKey, target.agentId);
+        if (display) {
+          // Orphans are harmless: reconstruction also requires the visible result.
+          await this.appendEntryAsync({
+            type: "custom",
+            customType: "mcp-app-display",
+            data: display,
+            id: generateSessionEntryId(),
+            parentId: this.appendParentId,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+    }
     const appended = await this.appendEntryAsync<SessionMessageEntry>(
       {
         type: "message",
