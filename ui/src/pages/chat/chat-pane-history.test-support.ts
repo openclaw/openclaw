@@ -111,8 +111,8 @@ function createPaginatedChatPane(request: ReturnType<typeof vi.fn>, firstSeq: nu
   return result;
 }
 
-export function createNativeShowEarlierPane(request: ReturnType<typeof vi.fn>) {
-  const result = createPaginatedChatPane(request, 3);
+export function createNativeShowEarlierPane(request: ReturnType<typeof vi.fn>, firstSeq = 3) {
+  const result = createPaginatedChatPane(request, firstSeq);
   const thread = appendChatThread(result.pane);
   vi.spyOn(result.pane, "updateComplete", "get").mockReturnValue(Promise.resolve(true));
   const scrollToOffset = vi.spyOn(result.pane.transcript, "scrollToOffset");

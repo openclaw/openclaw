@@ -17,6 +17,7 @@ import { LoadingState } from "../../../components/solid/loading-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import type { TemplateReference } from "../../../components/template-reference-surface.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import {
   anchorFromNavigationEvent,
   shouldHandleNavigationClick,
@@ -86,12 +87,53 @@ function openManagedArtifactLink(event: Event, props: ChatThreadProps): boolean 
   return true;
 }
 
-export function ChatThread(input: {
+type ChatThreadInput = {
   props: ChatThreadProps;
   transcript: ChatTranscript;
   bindViewport?: (element: HTMLDivElement) => () => void;
   historySupplement?: TranscriptHeader;
-}) {
+};
+
+export function ChatThread(input: ChatThreadInput) {
+  // Restored snapshots join the header and composer in their first visible frame.
+  const initialReady = Boolean(input.props.restoring);
+  const [ready, setReady] = createSignal(initialReady);
+  const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
+  return (
+    <div class="chat-thread-viewport" ref={[elementRef(input.props.onScrollPortRef)]}>
+      <Show when={ready() || isPresented()}>
+        {(_presented) => {
+          onSettled(() => {
+            // Paint the pane and composer before preparing the initial transcript range.
+            scheduleLayout(setReady, () => () => {
+              scheduleLayout(setReady, () => () => setReady(true));
+            });
+            return () => cancelLayout(setReady);
+          });
+          return (
+            <>
+              {ready() ? (
+                <ChatThreadContent {...input} presented={isPresented()} />
+              ) : (
+                <div
+                  class={[
+                    "chat-thread",
+                    { "chat-thread--annotations": input.props.commentAttachments !== undefined },
+                  ]}
+                  ref={[elementRef(input.bindViewport)]}
+                >
+                  <ChatConversationLoading route />
+                </div>
+              )}
+            </>
+          );
+        }}
+      </Show>
+    </div>
+  );
+}
+
+function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
   const mobile = useContext(ChatConversationMobile);
   // Admission stays with the transcript; all overlay lifetime work loads on intent.
   const [templateIntent, setTemplateIntent] = createSignal<TemplateReference | null>(null);
@@ -132,7 +174,6 @@ export function ChatThread(input: {
       unregister?.();
     };
   });
-  const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
@@ -251,8 +292,8 @@ export function ChatThread(input: {
     return current().session.liveAnnouncementText;
   });
   return (
-    <div class="chat-thread-viewport" ref={[elementRef(input.props.onScrollPortRef)]}>
-      <Show when={isPresented() && root()}>
+    <>
+      <Show when={input.presented && root()}>
         {(element) => {
           onSettled(() => {
             const initialStopSearch = watchChatSearchHighlight(
@@ -428,12 +469,12 @@ export function ChatThread(input: {
       </div>
       <Show when={templateIntent()}>
         <TemplateReferenceView
-          presented={isPresented()}
+          presented={input.presented}
           source={() => input.props}
           intent={templateIntent()!}
           onDismiss={() => setTemplateIntent(null)}
         />
       </Show>
-    </div>
+    </>
   );
 }

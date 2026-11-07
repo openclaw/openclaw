@@ -85,11 +85,12 @@ export function isTranscriptProgrammaticScroll(
   element: HTMLDivElement | null,
   offset?: number,
   maintenanceTarget = state.maintenanceScrollOffset,
+  command = state.scrollCommand,
 ): boolean {
   return (
     state.pendingScrollOffset !== null ||
     isTranscriptMaintenanceScroll(state, element, offset, maintenanceTarget) ||
-    (state.scrollCommand !== null &&
+    (command !== null &&
       (maxTranscriptScrollOffset(element) ?? 0) - (offset ?? element?.scrollTop ?? 0) >
         CHAT_TRANSCRIPT_END_THRESHOLD_PX)
   );
@@ -102,9 +103,12 @@ export function scrollTranscriptToEnd(
   cancelScroll: (preserveEnd?: boolean) => void,
   measureSkippedRows: () => void,
   endAnchor: TranscriptEndAnchor,
-  prepareEnd: (ready: () => void, isCurrent: () => boolean) => void,
+  prepareEnd: (ready: () => void, isCurrent: () => boolean, native: boolean) => void,
 ): void {
-  // Retargeting automatic follow must not insert an instant stop.
+  if (source === "auto" && endAnchor.capture(instance.scrollElement)) {
+    return;
+  }
+  // Retargeting retains native motion and its issued destination during preparation.
   if (source !== "auto" || state.scrollCommand?.target !== "end") {
     cancelScroll();
   } else if (state.scrollCommand.behavior === "smooth" && behavior !== "smooth") {
@@ -115,6 +119,7 @@ export function scrollTranscriptToEnd(
   const command = (state.scrollCommand = {
     behavior,
     target: "end",
+    offset: state.scrollCommand?.target === "end" ? state.scrollCommand.offset : undefined,
   });
   const scroll = () => {
     instance.scrollToEnd({ behavior });
@@ -131,10 +136,10 @@ export function scrollTranscriptToEnd(
       endAnchor.capture(element);
     }
   };
-  if (source !== "auto" && behavior === "smooth") {
+  if (source === "auto" || behavior === "smooth") {
     // Measure the bounded destination before native motion. A late estimate
     // contraction otherwise clamps the journey backward.
-    prepareEnd(scroll, () => state.scrollCommand === command);
+    prepareEnd(scroll, () => state.scrollCommand === command, source === "auto");
   } else {
     scroll();
   }
@@ -184,7 +189,7 @@ type OffsetOwner = {
   readonly endAnchor: TranscriptEndAnchor;
   canFollowEnd(): boolean;
   isProgrammaticScroll(): boolean;
-  isMaintenanceScroll(): boolean;
+  isMaintenanceScroll(command?: TranscriptOffsetState["scrollCommand"]): boolean;
   cancelScroll(preserveEnd?: boolean): void;
   onLayoutCorrection(before: number, after: number): void;
   invalidate(): void;
@@ -210,7 +215,14 @@ export function observeTranscriptOffset(
   let maintenanceTarget: number | null = null;
   let maintenanceRevision = 0;
   let maintenanceFrame: number | null = null;
-  let capturedNativeScroll: { scroll: TranscriptNativeScroll; before: number } | null = null;
+  type CapturedNativeScroll = {
+    scroll: TranscriptNativeScroll;
+    before: number;
+    acknowledgedOffset: number;
+    retiring: boolean;
+    command: TranscriptOffsetState["scrollCommand"];
+  };
+  let capturedNativeScroll: CapturedNativeScroll | null = null;
   let touchY: number | undefined;
   const contactIds = new Set<number>();
   const localTouchY = (event: TouchEvent) =>
@@ -241,8 +253,13 @@ export function observeTranscriptOffset(
       maintenanceTarget = owner.state.maintenanceScrollOffset = after;
       maintenanceRevision += 1;
       const captured = capturedNativeScroll;
+      if (captured) {
+        // Publishing the original root fact must not rewind a newer owned write.
+        captured.acknowledgedOffset = after;
+      }
       if (
         captured &&
+        !captured.retiring &&
         ((before === captured.before && after === captured.scroll.viewport.scrollTop) ||
           (after === captured.before && before === captured.scroll.viewport.scrollTop))
       ) {
@@ -294,22 +311,49 @@ export function observeTranscriptOffset(
       maintenanceRevision += 1;
     }
   };
-  const readNativeScroll = (offset: number): TranscriptNativeScroll => {
+  const readNativeScroll = (offset: number): CapturedNativeScroll => {
     reconcileMaintenanceOffset();
+    const viewport = {
+      scrollTop: offset,
+      clientHeight: element?.clientHeight ?? 0,
+      scrollHeight: element?.scrollHeight ?? 0,
+    };
+    const delta = offset - nativePolicyOffset;
+    const command = owner.state.scrollCommand;
+    // Measurement sync can consume the numeric offset before this event. Decide
+    // retirement from pane policy's movement and the OLD maintenance target.
+    const retiringCommand =
+      delta !== 0 &&
+      command?.target === "end" &&
+      command.offset === undefined &&
+      owner.state.pendingScrollOffset === null &&
+      !isTranscriptMaintenanceScroll(owner.state, element, offset, maintenanceTarget)
+        ? command
+        : null;
+    const preparedCommand = retiringCommand ? null : command;
     return {
-      viewport: {
-        scrollTop: offset,
-        clientHeight: element?.clientHeight ?? 0,
-        scrollHeight: element?.scrollHeight ?? 0,
+      scroll: {
+        viewport,
+        delta,
+        programmatic: isTranscriptProgrammaticScroll(
+          owner.state,
+          element,
+          offset,
+          maintenanceTarget,
+          preparedCommand,
+        ),
+        maintenance: owner.isMaintenanceScroll(preparedCommand),
       },
-      delta: offset - nativePolicyOffset,
-      programmatic: owner.isProgrammaticScroll(),
-      maintenance: owner.isMaintenanceScroll(),
+      before: nativeOffset,
+      acknowledgedOffset: offset,
+      retiring: false,
+      command: retiringCommand,
     };
   };
-  const publishOffset = (offset: number, scrolling: boolean, scroll?: TranscriptNativeScroll) => {
-    if (scroll) {
-      nativePolicyOffset = scroll.viewport.scrollTop;
+  const publishOffset = (offset: number, scrolling: boolean, captured?: CapturedNativeScroll) => {
+    const scroll = captured?.scroll;
+    if (captured) {
+      nativePolicyOffset = captured.acknowledgedOffset;
     }
     // Native policy uses only the root event's captured geometry. Explicit
     // synchronization and idle notifications do not manufacture reader input.
@@ -509,14 +553,43 @@ export function observeTranscriptOffset(
     publishInput(event);
     owner.onHistoryIntent?.(event);
   };
+  const currentViewport = () =>
+    element !== null && element === owner.getScrollElement() && instance.scrollElement === element;
   const captureScroll = (event: Event) => {
-    if (event.target === element && element) {
-      // One root delivery owns these primitives until consumed. A nested root
-      // supersedes it; never restore an older viewport after that delivery.
-      capturedNativeScroll = { scroll: readNativeScroll(element.scrollTop), before: nativeOffset };
+    if (event.target !== element || !element) {
+      // Child scrolling can resize the composer without becoming transcript input.
+      owner.onComposerLayout(true);
+      return;
     }
-    // Child scrolling can resize the composer without becoming transcript input.
+    if (!currentViewport()) {
+      return;
+    }
+    // Assign before callbacks: a nested delivery or disconnect wins this identity.
+    const captured = (capturedNativeScroll = readNativeScroll(element.scrollTop));
     owner.onComposerLayout(true);
+    if (capturedNativeScroll !== captured || !currentViewport()) {
+      if (capturedNativeScroll === captured) {
+        capturedNativeScroll = null;
+      }
+      return;
+    }
+    if (
+      captured.command &&
+      owner.state.scrollCommand === captured.command &&
+      !captured.scroll.maintenance
+    ) {
+      // Only genuine composer corrections may promote the original fact. A
+      // cancellation writing the inverse pair must remain a later owned write.
+      captured.retiring = true;
+      try {
+        owner.cancelScroll();
+      } finally {
+        captured.retiring = false;
+      }
+      if (!currentViewport() && capturedNativeScroll === captured) {
+        capturedNativeScroll = null;
+      }
+    }
   };
   const listeners = new AbortController();
   const passive = { passive: true, signal: listeners.signal };
@@ -542,7 +615,7 @@ export function observeTranscriptOffset(
     if (element !== owner.getScrollElement()) {
       return;
     }
-    publishOffset(offset, scrolling, captured?.scroll);
+    publishOffset(offset, scrolling, captured ?? undefined);
     // The offset observer already owns idle detection on browsers without
     // scrollend. Release touch-held history through that same lifecycle.
     if (!scrolling) {
@@ -561,16 +634,7 @@ export function observeTranscriptOffset(
       owner.state.scrollCommand?.target === "end" &&
       Math.abs((maxTranscriptScrollOffset(element) ?? 0) - element.scrollTop) <= (scrolling ? 0 : 1)
     ) {
-      if (owner.state.scrollCommand.behavior === "smooth") {
-        owner.cancelScroll(true);
-      } else {
-        owner.state.scrollCommand = null;
-        // Arrival can precede the queued reconciliation frame. Retire its
-        // index target too, without cancelling the reader’s end-follow intent.
-        // The notification can lag a newer native write; hold the current viewport.
-        instance.scrollToOffset(element.scrollTop, { behavior: "instant" });
-        owner.endAnchor.capture(element);
-      }
+      owner.cancelScroll(true);
     }
   });
   return () => {

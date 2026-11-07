@@ -1815,14 +1815,9 @@ describe("chat slash menu accessibility", () => {
   it.each([{ args: "example/model explain this", allowed: false }])(
     "checks the complete inline model command before sending $args",
     ({ args, allowed }) => {
-      let draft = "";
-      const onDraftChange = vi.fn((next: string) => {
-        draft = next;
-      });
       const onSend = vi.fn();
       const onSlashCommand = vi.fn();
-      const { container } = createReactiveDraftHarness({
-        onDraftChange,
+      const { container, readDraft } = createReactiveDraftHarness({
         onSend,
         onSlashCommand,
         modelRequiredReason: "Connect a provider to send messages.",
@@ -1833,24 +1828,19 @@ describe("chat slash menu accessibility", () => {
       keydownComposer(container, "Enter");
       if (allowed) {
         expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith(`/model ${args}`);
-        expect(draft).toBe("retained draft ");
+        expect(readDraft()).toBe("retained draft ");
       } else {
         expect(onSlashCommand).not.toHaveBeenCalled();
-        expect(draft).toBe(`retained draft /model ${args}`);
+        expect(readDraft()).toBe(`retained draft /model ${args}`);
       }
       expect(onSend).not.toHaveBeenCalled();
     },
   );
 
   it("keeps a typed inline argument on plain Enter in modifier-enter mode", () => {
-    let draft = "";
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
     const onSend = vi.fn();
     const onSlashCommand = vi.fn();
-    const { container } = createReactiveDraftHarness({
-      onDraftChange,
+    const { container, readDraft } = createReactiveDraftHarness({
       onSend,
       onSlashCommand,
       sendShortcut: "modifier-enter",
@@ -1862,22 +1852,18 @@ describe("chat slash menu accessibility", () => {
     expect(plainEnter.defaultPrevented).toBe(false);
     expect(onSlashCommand).not.toHaveBeenCalled();
     expect(onSend).not.toHaveBeenCalled();
-    expect(draft).toBe("hello /think high");
+    expect(readDraft()).toBe("hello /think high");
 
     const modifierEnter = keydownComposer(container, "Enter", { ctrlKey: true });
 
     expect(modifierEnter.defaultPrevented).toBe(true);
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/think high");
     expect(onSend).not.toHaveBeenCalled();
-    expect(draft).toBe("hello ");
+    expect(readDraft()).toBe("hello ");
   });
 
   it("preserves typed inline argument mode across command hydration", async () => {
-    let draft = "";
     let resolveRefresh: (() => void) | undefined;
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
     const onSend = vi.fn();
     const onSlashCommand = vi.fn();
     const onSlashIntent = vi.fn(
@@ -1886,8 +1872,7 @@ describe("chat slash menu accessibility", () => {
           resolveRefresh = resolve;
         }),
     );
-    const { container } = createReactiveDraftHarness({
-      onDraftChange,
+    const { container, readDraft } = createReactiveDraftHarness({
       onSend,
       onSlashCommand,
       onSlashIntent,
@@ -1895,7 +1880,7 @@ describe("chat slash menu accessibility", () => {
 
     inputDraftAtEnd(container, "hello /thin");
     keydownComposer(container, "Enter");
-    expect(draft).toBe("hello /think ");
+    expect(readDraft()).toBe("hello /think ");
 
     resolveRefresh?.();
     await Promise.resolve();
@@ -1904,17 +1889,13 @@ describe("chat slash menu accessibility", () => {
     keydownComposer(container, "Enter");
 
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/think high");
-    expect(draft).toBe("hello ");
+    expect(readDraft()).toBe("hello ");
     expect(onSend).not.toHaveBeenCalled();
   });
 
   it("removes a typed inline command argument without consuming trailing prose", () => {
-    let draft = "";
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
     const onSlashCommand = vi.fn();
-    const { container } = createReactiveDraftHarness({ onDraftChange, onSlashCommand });
+    const { container, readDraft } = createReactiveDraftHarness({ onSlashCommand });
     const textarea = getComposerTextarea(container);
     const initial = "before /thin after";
     const commandEnd = initial.indexOf("/thin") + "/thin".length;
@@ -1923,7 +1904,7 @@ describe("chat slash menu accessibility", () => {
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
 
     keydownComposer(container, "Enter");
-    expect(draft).toBe("before /think  after");
+    expect(readDraft()).toBe("before /think  after");
 
     const withArgument = "before /think high after";
     const argumentEnd = withArgument.indexOf("high") + "high".length;
@@ -1933,52 +1914,40 @@ describe("chat slash menu accessibility", () => {
     keydownComposer(container, "Enter");
 
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/think high");
-    expect(draft).toBe("before after");
-    expect(textarea.value).toBe(draft);
+    expect(readDraft()).toBe("before after");
+    expect(textarea.value).toBe(readDraft());
   });
 
   it("does not consume trailing prose as a directly typed inline argument", () => {
-    let draft = "";
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
     const onSend = vi.fn();
     const onSlashCommand = vi.fn();
-    const { container } = createReactiveDraftHarness({ onDraftChange, onSend, onSlashCommand });
+    const { container, readDraft } = createReactiveDraftHarness({ onSend, onSlashCommand });
 
     inputDraftAtEnd(container, "before /think high then answer concisely");
     keydownComposer(container, "Enter");
 
     expect(onSlashCommand).not.toHaveBeenCalled();
     expect(onSend).toHaveBeenCalledOnce();
-    expect(draft).toBe("before /think high then answer concisely");
+    expect(readDraft()).toBe("before /think high then answer concisely");
   });
 
   it("tab-completes an inline command argument without replacing surrounding prose", () => {
-    let draft = "";
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
     const onSlashCommand = vi.fn();
-    const { container } = createReactiveDraftHarness({ onDraftChange, onSlashCommand });
+    const { container, readDraft } = createReactiveDraftHarness({ onSlashCommand });
 
     inputDraftAtEnd(container, "hello /verb");
     keydownComposer(container, "Tab");
     keydownComposer(container, "Tab");
 
     expect(onSlashCommand).not.toHaveBeenCalled();
-    expect(draft).toBe("hello /verbose on ");
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(readDraft()).toBe("hello /verbose on ");
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(readDraft());
   });
 
   it("uses a trailing colon to select only an inline skill reference", async () => {
     replaceSkillCommands({ key: "weather", description: "Check the weather." });
-    let draft = "";
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
     const onSlashCommand = vi.fn();
-    const { container } = createReactiveDraftHarness({ onDraftChange, onSlashCommand });
+    const { container, readDraft } = createReactiveDraftHarness({ onSlashCommand });
 
     inputDraftAtEnd(container, "Please use /weather:");
     await waitForSolid(() =>
@@ -1987,25 +1956,21 @@ describe("chat slash menu accessibility", () => {
     keydownComposer(container, "Enter");
 
     expect(onSlashCommand).not.toHaveBeenCalled();
-    expect(draft).toBe("Please use $weather ");
+    expect(readDraft()).toBe("Please use $weather ");
   });
 
   it("serializes a selected inline /exec host argument canonically", () => {
-    let draft = "";
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
     const onSend = vi.fn();
     const onSlashCommand = vi.fn();
-    const { container } = createReactiveDraftHarness({ onDraftChange, onSend, onSlashCommand });
+    const { container, readDraft } = createReactiveDraftHarness({ onSend, onSlashCommand });
 
     inputDraftAtEnd(container, "Please /exec");
     keydownComposer(container, "Tab");
     keydownComposer(container, "Enter");
 
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/exec host=auto");
-    expect(draft).toBe("Please ");
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(readDraft()).toBe("Please ");
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(readDraft());
     expect(onSend).not.toHaveBeenCalled();
   });
 
@@ -2068,17 +2033,13 @@ describe("chat slash menu accessibility", () => {
     },
   ])("completes $draft without submitting the surrounding prompt", async (sample) => {
     replaceSkillCommands(sample);
-    let draft = "";
     const onSend = vi.fn();
-    const { container } = createReactiveDraftHarness({
-      onDraftChange: (next) => {
-        draft = next;
-      },
+    const { container, readDraft } = createReactiveDraftHarness({
       onSend,
     });
     inputDraftAtEnd(container, sample.draft);
     keydownComposer(container, "Enter");
-    expect(draft).toBe(sample.expected);
+    expect(readDraft()).toBe(sample.expected);
     expect(onSend).not.toHaveBeenCalled();
     expect(container.querySelector(".skill-menu")).toBeNull();
     await Promise.resolve();
@@ -2234,14 +2195,9 @@ describe("chat slash menu accessibility", () => {
   ])(
     "does not dispatch stale $commandDraft selections after disconnect",
     async ({ commandDraft, optionName, argument }) => {
-      let draft = "";
-      const onDraftChange = vi.fn((next: string) => {
-        draft = next;
-      });
       const onSend = vi.fn();
       const onSlashCommand = vi.fn();
-      const { container, renderCurrent } = createReactiveDraftHarness({
-        onDraftChange,
+      const { container, readDraft, renderCurrent } = createReactiveDraftHarness({
         onSend,
         onSlashCommand,
       });
@@ -2258,15 +2214,15 @@ describe("chat slash menu accessibility", () => {
         ),
       );
       expect(option).toBeInstanceOf(HTMLElement);
-      const draftBeforeDisconnect = draft;
+      const draftBeforeDisconnect = readDraft();
       if (!argument) {
-        expect(draft).toBe("hello /statu");
+        expect(readDraft()).toBe("hello /statu");
       }
       renderCurrent({ connected: false });
       option?.click();
       expect(onSlashCommand).not.toHaveBeenCalled();
       expect(onSend).not.toHaveBeenCalled();
-      expect(draft).toBe(draftBeforeDisconnect);
+      expect(readDraft()).toBe(draftBeforeDisconnect);
     },
   );
 

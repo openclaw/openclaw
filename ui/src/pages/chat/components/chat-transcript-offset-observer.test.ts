@@ -2,6 +2,7 @@
 import { Virtualizer } from "@tanstack/virtual-core";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { makeChatHost } from "../chat-host.test-support.ts";
+import { createNativeShowEarlierPane } from "../chat-pane-history.test-support.ts";
 import {
   canAutoFollowChat,
   type ChatScrollHost,
@@ -24,6 +25,7 @@ import {
   type TranscriptScrollObservation,
 } from "./chat-transcript-scroll-events.ts";
 import { createTranscriptPresentation } from "./chat-transcript-session.ts";
+import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -39,7 +41,7 @@ function offsetOwner(
     state,
     getScrollElement: () => element,
     endAnchor: new TranscriptEndAnchor(() => {}),
-    prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
+    prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
     canFollowEnd: () => false,
     isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
     isMaintenanceScroll: () => isTranscriptMaintenanceScroll(state, element),
@@ -208,7 +210,7 @@ it.each([
   element.scrollTop = 12;
   element.dispatchEvent(new Event("scroll"));
   onOffset.mockClear();
-  state.scrollCommand = { target: "end", behavior: "smooth" };
+  state.scrollCommand = { target: "end", behavior: "smooth", offset: 20 };
   element.scrollTop = 19;
   expect(isTranscriptProgrammaticScroll(state, element)).toBe(false);
   element.dispatchEvent(new Event("scroll"));
@@ -885,3 +887,195 @@ it.each([false, true])(
     expect(follow).toHaveBeenCalledTimes(detached ? 0 : 1);
   },
 );
+
+it.each(
+  [-1, 1].flatMap((direction) =>
+    ["none", "before capture", "after capture"].map((sync) => ({ direction, sync })),
+  ),
+)(
+  "retires unissued preparation before boundary policy ($direction, $sync)",
+  ({ direction, sync }) => {
+    const observed = observedMaintenance();
+    observed.native(400);
+    const { pane, state } = createNativeShowEarlierPane(vi.fn());
+    pane.visuallyPresented = true;
+    state.chatHistoryPagination.hasNewer = true;
+    pane.historyAutoLoadBlocked = true;
+    const armOlder = vi.spyOn(pane, "syncHistoryObserver").mockImplementation(() => {});
+    const loadNewer = vi.spyOn(pane, "loadNewerMessages").mockResolvedValue(true);
+    pane.historyObserverArmed = false;
+    observed.owner.onNativeScroll.mockImplementation((scroll) =>
+      pane.handleTranscriptScroll(scroll),
+    );
+    observed.owner.onNativeScroll.mockClear();
+    observed.owner.cancelScroll.mockImplementation(() => {
+      observed.state.scrollCommand = null;
+    });
+    observed.state.scrollCommand = { target: "end", behavior: "smooth" };
+    observed.element.scrollTop = direction < 0 ? 100 : 700;
+    if (sync === "before capture") {
+      observed.state.syncNativeOffset?.(true);
+    } else if (sync === "after capture") {
+      observed.owner.onComposerLayout.mockImplementationOnce(() =>
+        observed.state.syncNativeOffset?.(true),
+      );
+    }
+    observed.native();
+    expect(observed.owner.cancelScroll).toHaveBeenCalledExactlyOnceWith();
+    expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
+      viewport: { scrollTop: direction < 0 ? 100 : 700, clientHeight: 200, scrollHeight: 1000 },
+      delta: direction * 300,
+      programmatic: false,
+      maintenance: false,
+    });
+    expect(armOlder).toHaveBeenCalledTimes(direction < 0 ? 1 : 0);
+    expect(loadNewer).toHaveBeenCalledTimes(direction > 0 ? 1 : 0);
+  },
+);
+
+it.each(["no write", "new target", "inverse write", "post-cancel clamp"] as const)(
+  "keeps the original reader fact through cancellation: %s",
+  (change) => {
+    const observed = observedMaintenance();
+    observed.native(400);
+    observed.owner.onNativeScroll.mockClear();
+    observed.state.scrollCommand = { target: "end", behavior: "smooth" };
+    observed.owner.cancelScroll.mockImplementation(() => {
+      observed.state.scrollCommand = null;
+      if (change === "post-cancel clamp") {
+        observed.resize(200);
+      } else if (change !== "no write") {
+        observed.write(change === "inverse write" ? 400 : 300);
+      }
+    });
+    observed.native(200);
+    expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
+      viewport: { scrollTop: 200, clientHeight: 200, scrollHeight: 1000 },
+      delta: -200,
+      programmatic: false,
+      maintenance: false,
+    });
+    observed.native();
+    const written = change === "new target" || change === "inverse write";
+    expect(observed.owner.onNativeScroll.mock.calls.at(-1)?.[0]).toMatchObject({
+      delta: 0,
+      programmatic: written,
+      maintenance: written,
+    });
+  },
+);
+
+it("keeps an OLD clamped maintenance target owned while end preparation is unissued", () => {
+  const observed = observedMaintenance();
+  observed.write(600);
+  observed.native();
+  observed.owner.onNativeScroll.mockClear();
+  observed.state.scrollCommand = { target: "end", behavior: "smooth" };
+  observed.resize(200);
+  observed.native(200);
+  expect(observed.owner.cancelScroll).toHaveBeenCalledExactlyOnceWith(true);
+  expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
+    viewport: { scrollTop: 200, clientHeight: 200, scrollHeight: 400 },
+    delta: -400,
+    programmatic: true,
+    maintenance: true,
+  });
+});
+
+it.each(["nested", "disconnect", "replacement observer"] as const)(
+  "lets %s win a cancellation's native capture",
+  (change) => {
+    const observed = observedMaintenance();
+    observed.native(100);
+    observed.owner.onNativeScroll.mockClear();
+    observed.state.scrollCommand = { target: "end", behavior: "smooth" };
+    observed.owner.cancelScroll.mockImplementation(() => {
+      observed.state.scrollCommand = null;
+      if (change === "nested") {
+        observed.native(300);
+      } else {
+        observed.stop();
+        if (change === "replacement observer") {
+          onTestFinished(observed.connect());
+        }
+      }
+    });
+    observed.native(200);
+    expect(observed.owner.onNativeScroll).toHaveBeenCalledTimes(change === "nested" ? 1 : 0);
+    if (change === "nested") {
+      expect(observed.owner.onNativeScroll.mock.calls[0]?.[0]).toMatchObject({
+        viewport: { scrollTop: 300 },
+        delta: 200,
+        programmatic: false,
+        maintenance: false,
+      });
+    } else if (change === "replacement observer") {
+      observed.native(250);
+      expect(observed.owner.onNativeScroll.mock.calls[0]?.[0]).toMatchObject({
+        delta: 50,
+        programmatic: false,
+        maintenance: false,
+      });
+    }
+  },
+);
+
+it("does not retire a command installed by composer layout", () => {
+  const observed = observedMaintenance();
+  observed.native(100);
+  observed.state.scrollCommand = { target: "end", behavior: "smooth" };
+  const replacement = { target: "end", behavior: "auto", offset: 700 } as const;
+  observed.owner.onComposerLayout.mockImplementationOnce(() => {
+    observed.state.scrollCommand = replacement;
+  });
+  observed.native(200);
+  expect(observed.owner.cancelScroll).not.toHaveBeenCalled();
+  expect(observed.state.scrollCommand).toBe(replacement);
+});
+
+it.each([false, true])("physically stops only an issued smooth command (issued: %s)", (issued) => {
+  installTranscriptDomMocks();
+  const host = new ChatSessionVirtualizerHost(vi.fn());
+  onTestFinished(() => {
+    host.dispose();
+    resetTranscriptTestDom();
+  });
+  const element = document.createElement("div");
+  element.scrollTop = 100;
+  vi.spyOn(host, "scrollElement", "get").mockReturnValue(element);
+  const stop = vi.spyOn(host.virtualizer, "scrollToOffset").mockImplementation(() => {});
+  const cancel = vi.spyOn(host.virtualizer, "cancelScroll");
+  host.offsetState.scrollCommand = {
+    target: "end",
+    behavior: "smooth",
+    ...(issued ? { offset: 700 } : {}),
+  };
+  host.cancelScroll();
+  expect(host.offsetState.scrollCommand).toBeNull();
+  expect(cancel).toHaveBeenCalledTimes(issued ? 0 : 1);
+  expect(stop).toHaveBeenCalledTimes(issued ? 1 : 0);
+  if (issued) {
+    expect(stop).toHaveBeenCalledExactlyOnceWith(100, { behavior: "instant" });
+  }
+});
+
+it("does not stop a reconnected host at the same native element", () => {
+  installTranscriptDomMocks();
+  const host = new ChatSessionVirtualizerHost(vi.fn());
+  onTestFinished(() => {
+    host.dispose();
+    resetTranscriptTestDom();
+  });
+  const element = document.createElement("div");
+  vi.spyOn(host, "scrollElement", "get").mockReturnValue(element);
+  host.connect();
+  const stop = vi.spyOn(host.virtualizer, "scrollToOffset").mockImplementation(() => {});
+  host.offsetState.scrollCommand = { target: "end", behavior: "smooth", offset: 700 };
+  vi.spyOn(host.initialRange, "finishEnd").mockImplementationOnce(() => {
+    host.disconnect();
+    host.connect();
+  });
+  host.cancelScroll();
+  expect(host.connected).toBe(true);
+  expect(stop).not.toHaveBeenCalled();
+});

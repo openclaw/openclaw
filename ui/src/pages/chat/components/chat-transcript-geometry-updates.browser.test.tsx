@@ -176,7 +176,7 @@ it("publishes native scroll policy and row position in one Solid update", async 
           state: offsetState,
           getScrollElement: () => viewport,
           endAnchor: new TranscriptEndAnchor(() => {}),
-          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
+          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
           canFollowEnd: () => false,
           isProgrammaticScroll: () => isTranscriptProgrammaticScroll(offsetState, viewport),
           isMaintenanceScroll: () => isTranscriptMaintenanceScroll(offsetState, viewport),
