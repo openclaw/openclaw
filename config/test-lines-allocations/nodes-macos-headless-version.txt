@@ -1,0 +1,2 @@
+# Legacy single-version node host platform classification regressions (issue #193527).
+27
