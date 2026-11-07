@@ -1,4 +1,5 @@
 import { pathForRoute } from "../../ui/src/app-route-paths.ts";
+import { createColdLoadProbeInitScript } from "../../ui/src/test-helpers/control-ui-cold-load-probes.ts";
 import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { createEnginePageScenarios } from "./control-ui-engine-page-scenarios.ts";
@@ -19,6 +20,13 @@ export function createEngineSettingsSearchScenarios(
       navigation: "measured",
       expected:
         "A schema-only Settings search finds its section while config loads; search remains editable.",
+      initScript: createColdLoadProbeInitScript({
+        ownerProbes: false,
+        sidebarCounters: false,
+        latencyMs: gatewayLatencyMs,
+        frameGapMs: 0,
+        events: [],
+      }),
       fixtureOverrides: (sandbox, fixture) => {
         const source = base.fixtureOverrides?.(sandbox, fixture) ?? fixture;
         return {
@@ -73,8 +81,10 @@ export function createEngineSettingsSearchScenarios(
             throw new Error("Settings search lost the query or became disabled");
           }
           const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+          const reads: { pendingMethods: string[] } = Reflect.get(window, "__coldLoad").read();
           return {
             searchReadyMs: performance.now() - started,
+            configPendingAtSearchReady: reads.pendingMethods.includes("config.get"),
             inputCharacters: input.value.length,
             configRequests: gateway.findRequests("config.get").length,
             schemaRequests: gateway.findRequests("config.schema").length,
