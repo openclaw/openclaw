@@ -399,11 +399,13 @@ function disposeSession(session: LspSession): Promise<void> {
       }
     }
     session.pendingRequests.rejectAll(lspSessionDisposedError());
+    let cleanupConfirmed = false;
     try {
       await closeOwnedStdioProcess(session.process, {
         graceMs: LSP_PROCESS_TREE_KILL_GRACE_MS,
         force: session.forceClose,
       });
+      cleanupConfirmed = true;
     } catch (error) {
       recordAgentCleanupFailure();
       logWarn(
@@ -411,7 +413,13 @@ function disposeSession(session: LspSession): Promise<void> {
       );
       throw error;
     } finally {
-      activeBundleLspSessions.delete(session);
+      // A session whose process tree shutdown could not be confirmed stays in the
+      // active registry so a later global sweep can still observe that uncertainty
+      // and surface it through the cleanup contract instead of silently dropping it.
+      // The cached disposal promise keeps retries from re-running a terminal owner.
+      if (cleanupConfirmed) {
+        activeBundleLspSessions.delete(session);
+      }
     }
   })();
   return session.disposal;

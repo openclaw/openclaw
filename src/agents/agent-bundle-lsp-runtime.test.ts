@@ -535,4 +535,23 @@ describe("bundle LSP runtime", () => {
     expect(runtime.tools).toEqual([]);
     expect(cleanupScope.outcome).toBe("uncertain");
   });
+
+  it("keeps failed cleanup discoverable for a later global sweep", async () => {
+    const child = new MockChildProcess();
+    // The process owner cannot certify descendant extinction, so close rejects.
+    Object.defineProperty(child, "waitForExtinction", { value: undefined });
+    const runtime = await startRuntime(child);
+
+    // Runtime disposal reports the failure through its own scoped receipt.
+    const firstScope = createAgentCleanupScope();
+    await firstScope.run(() => runtime.dispose());
+    expect(firstScope.outcome).toBe("uncertain");
+
+    // A later global sweep must still observe the uncertain session (the process
+    // tree may still be alive) instead of silently reporting a closed scope.
+    const sweepScope = createAgentCleanupScope();
+    await sweepScope.run(() => disposeAllBundleLspRuntimes());
+    expect(sweepScope.outcome).toBe("uncertain");
+    expect(child.dispose).toHaveBeenCalledOnce();
+  });
 });
