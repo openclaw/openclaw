@@ -35,7 +35,7 @@ For `Invalid service_tier argument`, check the selected model and speed setting.
 
 ## Connection to the AI service failed
 
-If a reply says OpenClaw could not connect to the AI service, check the provider connection. For a local model, confirm that its server is running and reachable at the configured URL. A server that stops during a turn can leave completed work in the conversation; check those results before retrying. Use `openclaw logs --follow` for connection diagnostics.
+If a reply says OpenClaw could not connect to the AI service, check the provider connection. When OpenClaw knows which model it was calling, the reply starts with it, for example `⚠️ ollama/llama3.3 request failed:`, so with fallbacks or several providers you can tell which endpoint is down. For a local model, confirm that its server is running and reachable at the configured URL. A server that stops during a turn can leave completed work in the conversation; check those results before retrying. Use `openclaw logs --follow` for connection diagnostics.
 
 ## Unreadable conversation history
 
