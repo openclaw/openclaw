@@ -45,6 +45,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-provider-failure-cause.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-quota-account-identity.e2e.test.ts",
   "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-session-companion-private.real-gateway.e2e.test.ts",
@@ -81,9 +82,11 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/model-key-save-check.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-provider-remove-in-use.real-gateway.e2e.test.ts",
+  "ui/src/e2e/model-providers-fresh-install.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-setup-provider-errors.real-gateway.e2e.test.ts",
   "ui/src/e2e/mount-recovery.e2e.test.ts",
   "ui/src/e2e/native-notifications-loading.e2e.test.ts",
+  "ui/src/e2e/pinned-snooze.e2e.test.ts",
   "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
   "ui/src/e2e/presentation-primitives.e2e.test.ts",
@@ -98,7 +101,6 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
   "ui/src/e2e/shell-module-loading.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
-  "ui/src/e2e/sidebar-boot-imports.e2e.test.ts",
   "ui/src/e2e/skill-workshop-plugin-enable.real-gateway.e2e.test.ts",
   "ui/src/e2e/stale-build-recovery.production.e2e.test.ts",
   "ui/src/e2e/terminal-fonts.e2e.test.ts",
@@ -126,6 +128,7 @@ const uiE2eStandaloneTestFiles = [
   "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
   "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
+  "ui/src/lib/openclaw-id/onepassword-save.retention.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
 
 // Real Gateways never overlap the parallel phase when the CI skip is absent.

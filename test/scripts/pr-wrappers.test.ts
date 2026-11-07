@@ -293,10 +293,23 @@ function createMismatchedWrapperTemplate({
   git(canonical, ["add", "."]);
   git(canonical, ["commit", "-m", "test: canonical wrapper"]);
   git(canonical, ["push", "-u", "origin", "main"]);
+  expect(git(canonical, ["rev-parse", "refs/remotes/origin/main"]).stdout.trim()).toBe(
+    git(canonical, ["rev-parse", "main"]).stdout.trim(),
+  );
+  // Prepare both histories once; worktree back-links belong to each private copy.
+  git(canonical, ["checkout", "-b", "feature"]);
+  writeFileSync(
+    join(canonical, "scripts", "pr-lib", "gates.sh"),
+    'ci_dispatch() { echo "local wrapper executed"; }\n',
+  );
+  git(canonical, ["add", "scripts/pr-lib/gates.sh"]);
+  git(canonical, ["commit", "-m", "test: local wrapper"]);
+  const localRevision = git(canonical, ["rev-parse", "HEAD"]).stdout.trim();
+  git(canonical, ["checkout", "main"]);
   // Pack once so private fixture copies do not repeat thousands of loose files.
   git(canonical, ["repack", "-ad"]);
   git(origin, ["repack", "-ad"]);
-  return { canonical, origin, bin };
+  return { canonical, origin, bin, localRevision };
 }
 
 function makeMismatchedWrapperRepo({
@@ -325,22 +338,9 @@ function makeMismatchedWrapperRepo({
   copyTreeCloseOnExec(template.canonical, canonical);
   cpSync(template.origin, origin, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
   git(canonical, ["remote", "set-url", "origin", origin]);
-  git(canonical, ["worktree", "add", "-b", "feature", linkedPath, "main"]);
+  git(canonical, ["worktree", "add", linkedPath, "feature"]);
 
   const linked = realpathSync(linkedPath);
-  git(linked, ["config", "commit.gpgSign", "false"]);
-  expect(git(linked, ["rev-parse", "refs/remotes/origin/main"]).stdout.trim()).toBe(
-    git(canonical, ["rev-parse", "main"]).stdout.trim(),
-  );
-
-  writeFileSync(
-    join(linked, "scripts", "pr-lib", "gates.sh"),
-    'ci_dispatch() { echo "local wrapper executed"; }\n',
-  );
-  git(linked, ["add", "scripts/pr-lib/gates.sh"]);
-  git(linked, ["commit", "-m", "test: local wrapper"]);
-  const localRevision = git(linked, ["rev-parse", "HEAD"]).stdout.trim();
-
   linkPrWrapperDependencies(canonical);
 
   return {
@@ -349,7 +349,7 @@ function makeMismatchedWrapperRepo({
     env: fixtureEnv,
     git,
     linked,
-    localRevision,
+    localRevision: template.localRevision,
     root,
     gitText(args: string[], cwd = canonical) {
       return git(cwd, args).stdout.trim();

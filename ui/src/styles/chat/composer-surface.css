@@ -66,7 +66,6 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  scrollbar-width: thin;
 }
 
 .chat-footer__context:not(
@@ -148,11 +147,7 @@
 .agent-chat__input,
 .agent-chat__disabled-banner.callout,
 .agent-chat__composer-notices
-  :is(
-    .chat-composer-neighbor-card,
-    .agent-chat__composer-errors--standalone,
-    .agent-chat__talk-status.callout
-  ) {
+  :is(.chat-composer-neighbor-card, .agent-chat__composer-alert, .agent-chat__talk-status.callout) {
   border-radius: var(--chat-composer-radius);
   corner-shape: var(--chat-composer-corner-shape);
 }
@@ -259,7 +254,9 @@
   }
 }
 
-:root[data-theme-mode="dark"] :is(.chat-footer, .agent-chat__composer-shell, .agent-chat__input) {
+:root[data-theme-mode="dark"] .chat-footer,
+:root[data-theme-mode="dark"] .agent-chat__composer-shell,
+:root[data-theme-mode="dark"] .agent-chat__input {
   --chat-composer-hairline: color-mix(in srgb, var(--text-strong) 9%, transparent);
 }
 
@@ -422,11 +419,7 @@
 }
 
 .agent-chat__composer-combobox > textarea {
-  --scrollbar-thumb: color-mix(in srgb, var(--muted) 20%, transparent);
-  --scrollbar-thumb-hover: color-mix(in srgb, var(--muted) 28%, transparent);
-
   field-sizing: content;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 @supports selector(::-webkit-scrollbar) {
@@ -441,8 +434,6 @@
     /* Short drafts use padding: reserving a native gutter makes every edit relayout slower. */
     padding-inline-end: var(--chat-composer-editor-inset-inline);
     scrollbar-gutter: auto;
-    scrollbar-width: auto;
-    scrollbar-color: auto;
   }
 
   .agent-chat__composer-combobox > textarea:where([data-composer-scrollable]) {
@@ -457,14 +448,6 @@
       0px,
       calc(var(--chat-composer-radius) - var(--chat-composer-editor-inset-block))
     );
-  }
-
-  .agent-chat__composer-combobox > textarea::-webkit-scrollbar-thumb {
-    background-color: var(--scrollbar-thumb);
-  }
-
-  .agent-chat__composer-combobox > textarea::-webkit-scrollbar-thumb:hover {
-    background-color: var(--scrollbar-thumb-hover);
   }
 }
 
@@ -662,7 +645,8 @@
 }
 
 /* A quantitative gauge needs a clear track and arc at this compact size. */
-.agent-chat__composer-footer :is(.context-ring__track, .context-ring__fill) {
+.agent-chat__composer-footer .context-ring__track,
+.agent-chat__composer-footer .context-ring__fill {
   stroke-width: var(--chat-composer-context-stroke);
 }
 
@@ -883,7 +867,7 @@
 .chat-send-btn {
   width: 36px;
   border-radius: var(--radius-full);
-  background: var(--primary);
+  background: var(--chat-send-bg);
   color: var(--chat-send-foreground);
   box-shadow: 0 1px 3px var(--accent-subtle);
   transition:
@@ -946,7 +930,7 @@
   min-width: var(--chat-composer-send-size);
   height: var(--chat-composer-send-size);
   padding: 5px;
-  background: var(--primary);
+  background: var(--chat-send-bg);
   color: var(--chat-send-foreground);
   box-shadow: none;
 }

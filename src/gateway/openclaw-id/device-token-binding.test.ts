@@ -33,6 +33,11 @@ describe("device tokens bound to the authenticated endpoint key", () => {
     expect(await checkDeviceTokenPeer({ deviceId: "d", role: "operator", peerKey: W2 })).toEqual({
       ok: true,
     });
+    await recordDeviceTokenPeer({ deviceId: "d", role: "operator", peerKey: undefined });
+    // A relayed issuance without a writer would mint a token no removal can find.
+    await expect(
+      recordDeviceTokenPeer({ deviceId: "d", role: "operator", peerKey: W2 }),
+    ).rejects.toThrow("bindings are unavailable");
   });
 
   it("records the key that obtained a token and accepts it from that key", async () => {
@@ -102,6 +107,8 @@ describe("device tokens bound to the authenticated endpoint key", () => {
       ok: false,
       reason: "device-token-bindings-unreadable",
     });
-    await recordDeviceTokenPeer({ deviceId: "e", role: "operator", peerKey: W1 });
+    await expect(
+      recordDeviceTokenPeer({ deviceId: "e", role: "operator", peerKey: W1 }),
+    ).rejects.toThrow("bindings are unavailable");
   });
 });

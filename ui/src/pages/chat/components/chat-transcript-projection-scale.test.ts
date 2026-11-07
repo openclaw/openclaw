@@ -19,6 +19,7 @@ import {
 } from "../chat-view.test-helpers.ts";
 import { createRealtimeTalkConversationState } from "../talk/conversation-state.ts";
 import { updateRealtimeTalkConversation } from "../talk/conversation.ts";
+import { settleChatMount } from "../test-helpers/chat-mount-frames.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -69,15 +70,17 @@ async function mountLiveThread(
   transcript: ReturnType<typeof createTranscript>,
   makeProps: () => Parameters<typeof createChatViewFrame>[0],
 ) {
-  const view = mountSolid(() => {
-    const props = makeProps();
-    const viewFrame = createChatViewFrame(
-      props,
-      () => undefined,
-      createAsyncQuestionPresentation(getTranscriptState(paneId), props),
-    );
-    return createComponent(ChatThread, { props: viewFrame.threadProps, transcript });
-  });
+  const view = settleChatMount(() =>
+    mountSolid(() => {
+      const props = makeProps();
+      const viewFrame = createChatViewFrame(
+        props,
+        () => undefined,
+        createAsyncQuestionPresentation(getTranscriptState(paneId), props),
+      );
+      return createComponent(ChatThread, { props: viewFrame.threadProps, transcript });
+    }),
+  );
   onTestFinished(view.unmount);
   transcript.start();
   transcript.update();
@@ -491,10 +494,11 @@ describe("transcript projection", () => {
       msg("assistant", "needle", 1_000, { __openclaw: { id: "matching-row" } }),
     ]);
     props.chatBubbleMode = true;
-    const read = vi.fn(() => 700);
+    const heights = new Proxy<Record<string, number>>({}, { get: () => 700 });
+    const read = vi.fn(() => heights);
     props.widgetLayout = {
-      read,
-      readRows: () => undefined,
+      read: (key) => heights[key],
+      readRows: read,
       write: vi.fn(),
       writeRows: vi.fn(),
       invalidateRow: vi.fn(),

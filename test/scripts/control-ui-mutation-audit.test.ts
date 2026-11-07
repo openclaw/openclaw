@@ -109,12 +109,140 @@ it("measures a Gateway response from browser-local delivery through its last DOM
       inputSource: "gateway",
       inputCount: 1,
       mutationCount: 1,
+      firstCommitMs: 40,
+      firstCommitLatencyMs: 10,
+      activations: [],
       driverMs: 20,
       applicationMs: 10,
       assertionTailMs: 10,
       settleMs: 20,
     });
     expect(window.openclawEngineMarkGatewayInput).toBeUndefined();
+  } finally {
+    timing.endScenario();
+  }
+});
+
+it("separates two native activations without counting pointerup or click as inputs", async () => {
+  const clock = vi.spyOn(performance, "now").mockReturnValue(10);
+  const listeners = vi.spyOn(document, "addEventListener");
+  const node = document.createElement("div");
+  document.body.append(node);
+  const timing = createEngineActionTiming(false);
+  timing.start();
+  const native = (type: string, at: number) => {
+    clock.mockReturnValue(at);
+    const listener = listeners.mock.calls.find(([name]) => name === type)?.[1];
+    if (typeof listener !== "function") {
+      throw new Error(`Missing native input listener: ${type}`);
+    }
+    // Scripted DOM events cannot be trusted; supply the browser's event boundary.
+    listener.call(
+      document,
+      new Proxy(new Event(type), {
+        get: (event, key) => (key === "isTrusted" ? true : Reflect.get(event, key, event)),
+      }),
+    );
+  };
+  try {
+    native("pointerdown", 20);
+    clock.mockReturnValue(25);
+    node.setAttribute("title", "pointerdown focus");
+    await Promise.resolve();
+    native("pointerup", 30);
+    native("click", 35);
+    clock.mockReturnValue(40);
+    node.setAttribute("title", "first click applied");
+    await Promise.resolve();
+    native("pointerdown", 50);
+    native("pointerup", 55);
+    native("click", 60);
+    clock.mockReturnValue(65);
+    node.setAttribute("title", "second click applied");
+    await Promise.resolve();
+    clock.mockReturnValue(70);
+    timing.endScenario();
+    expect(timing.finish()).toMatchObject({
+      firstInputMs: 20,
+      lastInputMs: 50,
+      firstCommitMs: 25,
+      lastCommitMs: 65,
+      firstCommitLatencyMs: 5,
+      applicationMs: 45,
+      inputCount: 2,
+      mutationCount: 3,
+      activationsTruncated: false,
+      activations: [
+        {
+          type: "pointerdown",
+          pointerdownMs: 20,
+          pointerupMs: 30,
+          clickMs: 35,
+          firstCommitMs: 25,
+          lastCommitMs: 40,
+          firstMutationMs: 25,
+          firstMutationAfterClickMs: 40,
+          lastMutationMs: 40,
+          firstCommitLatencyMs: 5,
+          clickToFirstMutationMs: 5,
+          mutationCount: 2,
+        },
+        {
+          type: "pointerdown",
+          pointerdownMs: 50,
+          pointerupMs: 55,
+          clickMs: 60,
+          firstCommitMs: 65,
+          lastCommitMs: 65,
+          firstMutationMs: 65,
+          firstMutationAfterClickMs: 65,
+          lastMutationMs: 65,
+          firstCommitLatencyMs: 15,
+          clickToFirstMutationMs: 5,
+          mutationCount: 1,
+        },
+      ],
+    });
+  } finally {
+    timing.endScenario();
+  }
+});
+
+it("bounds native activation detail while preserving the full action's counters", () => {
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+  const listeners = vi.spyOn(document, "addEventListener");
+  const timing = createEngineActionTiming(false);
+  timing.start();
+  try {
+    const listener = listeners.mock.calls.find(([name]) => name === "input")?.[1];
+    if (typeof listener !== "function") {
+      throw new Error("Missing native input listener");
+    }
+    for (let index = 1; index <= 101; index++) {
+      clock.mockReturnValue(index);
+      listener.call(
+        document,
+        new Proxy(new Event("input"), {
+          get: (event, key) => (key === "isTrusted" ? true : Reflect.get(event, key, event)),
+        }),
+      );
+    }
+    timing.endScenario();
+    const result = timing.finish();
+    expect(result).toMatchObject({
+      inputCount: 101,
+      firstCommitMs: 1,
+      lastCommitMs: 101,
+      firstCommitLatencyMs: 0,
+      applicationMs: 100,
+      activationsTruncated: true,
+    });
+    expect(result.activations).toHaveLength(100);
+    expect(result.activations[99]).toMatchObject({
+      firstCommitMs: 100,
+      lastCommitMs: 100,
+      commitSource: "native-value",
+    });
   } finally {
     timing.endScenario();
   }
