@@ -106,10 +106,8 @@ async function settleRootContent(): Promise<void> {
 
 async function settleImports() {
   await vi.dynamicImportSettled();
-  for (let frame = 0; frame < 2; frame++) {
-    frames.flush(performance.now());
-    await settleRootContent();
-  }
+  frames.flush(performance.now());
+  await settleRootContent();
 }
 
 function expectSurface(present: string[], absent: string[] = []) {

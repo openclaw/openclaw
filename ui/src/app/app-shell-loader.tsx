@@ -19,9 +19,7 @@ const LazyShell = lazy(
     // Finish evaluating the shell graph before constructing its DOM in a new frame.
     if (document.visibilityState !== "hidden") {
       await new Promise<void>((resolve) => {
-        scheduleLayout(resolve, () => () => {
-          scheduleLayout(resolve, () => resolve);
-        });
+        scheduleLayout(resolve, () => resolve);
       });
     }
     return shell;

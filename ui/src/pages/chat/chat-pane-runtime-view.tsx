@@ -194,10 +194,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         return undefined;
       }
       // Hydrate before constructing the complete pane, keeping cached rows and
-      // Details together while the existing loading surface can paint.
-      scheduleLayout(setMounted, () => () => {
-        scheduleLayout(setMounted, () => () => setMounted(true));
-      });
+      // Details together in the next frame of the existing loading surface.
+      scheduleLayout(setMounted, () => () => setMounted(true));
       return () => cancelLayout(setMounted);
     });
     return (

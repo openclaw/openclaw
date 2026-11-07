@@ -226,11 +226,9 @@ it.each(["ready", "unavailable"] as const)(
     const paintPane = async () => {
       expect(view.pane.querySelector(".chat-pane__header")).toBeNull();
       expect(view.pane.querySelector("textarea")).toBe(bootComposer);
-      for (let frame = 0; frame < 2; frame++) {
-        clock.flush(performance.now());
-        await Promise.resolve();
-        flush();
-      }
+      clock.flush(performance.now());
+      await Promise.resolve();
+      flush();
     };
     flush();
     await vi.advanceTimersByTimeAsync(99);
