@@ -1,10 +1,10 @@
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import {
   isExactSemverVersion,
   parseRegistryNpmSpec,
-  type ParsedRegistryNpmSpec,
   resolveOpenClawReleaseCohortVersion,
+  type NpmSpecResolution,
+  type ParsedRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
 import { selectNpmChannelVersion, type UpdateChannel } from "../infra/update-channels.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";

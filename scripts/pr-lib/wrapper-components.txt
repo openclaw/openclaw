@@ -1849,6 +1849,7 @@ src/process/gateway-work-admission.ts
 src/process/kill-tree.ts
 src/process/linux-exec-cgroup-device.ts
 src/process/linux-exec-cgroup.ts
+src/process/linux-oom-score-spawn.ts
 src/process/linux-oom-score.ts
 src/process/output-drain.ts
 src/process/process-deadline.ts

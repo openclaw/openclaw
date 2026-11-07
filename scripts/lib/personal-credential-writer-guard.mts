@@ -38,6 +38,7 @@ const authEnrollmentRuntime = "src/agents/auth-profiles/authorization-enrollment
 const authKernel = "src/agents/auth-profiles/store-update.worker.ts";
 const authProfiles = "src/agents/auth-profiles/profiles.ts";
 const authStorage = "src/agents/sessions/auth-storage.ts";
+const authStorageCore = "src/agents/sessions/auth-storage.core.ts";
 const catalogWorker = "src/agents/prepared-model-catalog.worker.ts";
 const factory = (name: string) => key(authStore, `createAuthProfileStoreRuntime/${name}`);
 const guardedTables = new Set([
@@ -138,11 +139,14 @@ const recommendationCallbacks = new Map(
 // Native SDK compatibility has exact exported roots; workers must enter a host publication route.
 const authCredentialCallers = new Map<string, readonly string[]>([
   [
-    key(authStorage, "AuthStorage"),
+    key(authStorageCore, "AuthStorage"),
     ["forAgent", "forAgentAsync", "fromStorage", "inMemory"].map((name) =>
-      key(authStorage, `AuthStorage/${name}`),
+      key(authStorageCore, `AuthStorage/${name}`),
     ),
   ],
+  [key(authStorage, "AuthStorage"), []],
+  [key(authStorageCore, "AuthStorage/forAgent"), []],
+  [key(authStorage, "forAgent"), [key(authStorage, "AuthStorage/forAgent")]],
   [key(authStorage, "AuthStorage/forAgent"), [key(authStorage, "AuthStorage/create")]],
   [key(authStorage, "AuthStorage/create"), []],
   [
@@ -157,7 +161,7 @@ const authCredentialCallers = new Map<string, readonly string[]>([
       key(authProfiles, "removeAuthProfileTargetsWithLocks/publish"),
       key("src/agents/auth-profiles/upsert-with-lock.ts", "persistAuthProfileBatch"),
       key("src/agents/auth-profiles/candidate-stores.ts", "runCandidateAuthProfileUpdate"),
-      key("src/agents/sessions/auth-storage.ts", "SqliteAuthStorageBackend/updateAsync"),
+      key(authStorageCore, "SqliteAuthStorageBackend/updateAsync"),
       key(
         "src/system-agent/setup-inference-credential-access.ts",
         "activateSavedSetupCredential/replaceCredential",
@@ -262,7 +266,7 @@ const authCredentialCallers = new Map<string, readonly string[]>([
     key(authRuntime, "saveAuthProfileStoreWithPreparedOwner"),
     [
       key("src/agents/auth-profiles/candidate-stores.ts", "runCandidateAuthProfileUpdate"),
-      key("src/agents/sessions/auth-storage.ts", "SqliteAuthStorageBackend/withLock"),
+      key(authStorageCore, "SqliteAuthStorageBackend/withLock"),
       key("src/commands/doctor-auth-flat-profiles.ts", "maybeMigrateAuthProfileJsonStoresToSqlite"),
     ],
   ],
@@ -962,6 +966,29 @@ const repeatedEdges = new Map([
   ]),
 ]);
 
+function isAuthStorageFacadeInitializer(node: ts.Node): node is ts.CallExpression {
+  if (
+    !ts.isCallExpression(node) ||
+    !ts.isPropertyAccessExpression(node.expression) ||
+    !ts.isIdentifier(node.expression.expression) ||
+    node.expression.expression.text !== "Object" ||
+    node.expression.name.text !== "assign" ||
+    !ts.isVariableDeclaration(node.parent) ||
+    !ts.isIdentifier(node.parent.name) ||
+    node.parent.name.text !== "AuthStorage" ||
+    node.parent.initializer !== node ||
+    !ts.isVariableDeclarationList(node.parent.parent) ||
+    !(node.parent.parent.flags & ts.NodeFlags.Const) ||
+    !ts.isVariableStatement(node.parent.parent.parent) ||
+    !ts.isSourceFile(node.parent.parent.parent.parent) ||
+    node.arguments.length !== 2
+  ) {
+    return false;
+  }
+  const methods = node.arguments[1];
+  return methods !== undefined && ts.isObjectLiteralExpression(methods);
+}
+
 function operation(node: ts.Node): string {
   const scope: string[] = [];
   let property: string | undefined;
@@ -978,7 +1005,9 @@ function operation(node: ts.Node): string {
     if (
       ts.isVariableDeclaration(parent) &&
       parent.initializer &&
-      (ts.isArrowFunction(parent.initializer) || ts.isFunctionExpression(parent.initializer))
+      (ts.isArrowFunction(parent.initializer) ||
+        ts.isFunctionExpression(parent.initializer) ||
+        isAuthStorageFacadeInitializer(parent.initializer))
     ) {
       scope.push(parent.name.getText());
     }
@@ -1009,7 +1038,10 @@ export function inspectPersonalCredentialWriters(
         (ts.isFunctionDeclaration(node) ||
           ts.isFunctionExpression(node) ||
           ts.isClassDeclaration(node) ||
-          (ts.isMethodDeclaration(node) && ts.isClassDeclaration(node.parent)) ||
+          (ts.isMethodDeclaration(node) &&
+            (ts.isClassDeclaration(node.parent) ||
+              (ts.isObjectLiteralExpression(node.parent) &&
+                isAuthStorageFacadeInitializer(node.parent.parent)))) ||
           ts.isVariableDeclaration(node) ||
           ts.isBindingElement(node)) &&
         node.name &&
@@ -1067,8 +1099,20 @@ export function inspectPersonalCredentialWriters(
     resolved.set(symbol, found);
     const declaration = symbol.valueDeclaration?.resolve();
     const direct = declaration && protectedDeclarations.get(declaration);
-    if (direct) {
-      found.push(direct);
+    // Object.assign exposes intersection properties without a single value declaration.
+    // The public override owns its method; the core method remains guarded on direct imports.
+    const declarations = direct
+      ? [direct]
+      : symbol.declarations.flatMap((entry) => {
+          const memberDeclaration = entry.resolve();
+          const target = memberDeclaration && protectedDeclarations.get(memberDeclaration);
+          return target ? [target] : [];
+        });
+    const selected =
+      declarations.find((target) => target.startsWith(`${authStorage}:AuthStorage/`)) ??
+      declarations[0];
+    if (selected) {
+      found.push(selected);
     } else if (declaration && ts.isShorthandPropertyAssignment(declaration)) {
       found.push(...targets(checker.getShorthandAssignmentValueSymbol(declaration)));
     } else if (symbol.flags & SymbolFlags.Module) {
@@ -1256,6 +1300,7 @@ export function inspectPersonalCredentialWriters(
     const visit = (node: ts.Node) => {
       if (
         ts.isTypeNode(node) ||
+        ts.isTypeAliasDeclaration(node) ||
         ts.isImportDeclaration(node) ||
         ((ts.isExportDeclaration(node) || ts.isExportSpecifier(node)) && node.isTypeOnly)
       ) {
@@ -1512,7 +1557,7 @@ export function inspectPersonalCredentialWriters(
             !node.parent.exportClause);
         // Static members retain their own checks; escaping the class bypasses that selection.
         const selectedAuthStorageMember =
-          target === key(authStorage, "AuthStorage") &&
+          [key(authStorage, "AuthStorage"), key(authStorageCore, "AuthStorage")].includes(target) &&
           ((ts.isPropertyAccessExpression(expression.parent) &&
             expression.parent.expression === expression) ||
             (ts.isElementAccessExpression(expression.parent) &&
@@ -1534,7 +1579,63 @@ export function inspectPersonalCredentialWriters(
           ts.isShorthandPropertyAssignment(node.parent) &&
           ts.isObjectLiteralExpression(node.parent.parent) &&
           ts.isReturnStatement(node.parent.parent.parent);
+        const authStorageComposition =
+          file === authStorage &&
+          target === key(authStorageCore, "AuthStorage") &&
+          isAuthStorageFacadeInitializer(expression.parent) &&
+          protectedDeclarations.get(expression.parent.parent) === key(authStorage, "AuthStorage") &&
+          expression.parent.arguments[0] === expression &&
+          expression.parent.arguments[1] !== undefined &&
+          ts.isObjectLiteralExpression(expression.parent.arguments[1]) &&
+          expression.parent.arguments[1].properties.length === 3 &&
+          expression.parent.arguments[1].properties.every(
+            (method) =>
+              ts.isMethodDeclaration(method) &&
+              ts.isIdentifier(method.name) &&
+              ["forAgent", "forAgentAsync", "create"].includes(method.name.text),
+          );
+        const capturedAuthStorageFactory =
+          file === authStorage &&
+          target === key(authStorageCore, "AuthStorage/forAgent") &&
+          ts.isVariableDeclaration(expression.parent) &&
+          expression.parent.initializer === expression &&
+          protectedDeclarations.get(expression.parent) === key(authStorage, "forAgent") &&
+          ts.isVariableDeclarationList(expression.parent.parent) &&
+          Boolean(expression.parent.parent.flags & ts.NodeFlags.Const) &&
+          ts.isVariableStatement(expression.parent.parent.parent) &&
+          ts.isSourceFile(expression.parent.parent.parent.parent) &&
+          !expression.parent.parent.parent.modifiers?.some(
+            (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+          );
+        const descriptorCall = expression.parent;
+        const descriptor = ts.isCallExpression(descriptorCall)
+          ? descriptorCall.arguments[2]
+          : undefined;
+        const authStorageCreateDescriptor =
+          file === authStorage &&
+          target === key(authStorage, "AuthStorage") &&
+          ts.isCallExpression(descriptorCall) &&
+          ts.isPropertyAccessExpression(descriptorCall.expression) &&
+          ts.isIdentifier(descriptorCall.expression.expression) &&
+          descriptorCall.expression.expression.text === "Object" &&
+          descriptorCall.expression.name.text === "defineProperty" &&
+          descriptorCall.arguments.length === 3 &&
+          descriptorCall.arguments[0] === expression &&
+          descriptorCall.arguments[1] !== undefined &&
+          ts.isStringLiteral(descriptorCall.arguments[1]) &&
+          descriptorCall.arguments[1].text === "create" &&
+          descriptor &&
+          ts.isObjectLiteralExpression(descriptor) &&
+          descriptor.properties.length === 1 &&
+          descriptor.properties[0] !== undefined &&
+          ts.isPropertyAssignment(descriptor.properties[0]) &&
+          ts.isIdentifier(descriptor.properties[0].name) &&
+          descriptor.properties[0].name.text === "enumerable" &&
+          descriptor.properties[0].initializer.kind === ts.SyntaxKind.FalseKeyword;
         const forwarded =
+          authStorageComposition ||
+          capturedAuthStorageFactory ||
+          authStorageCreateDescriptor ||
           returnedMember ||
           (runtimeMember &&
             ((file === authRuntime &&

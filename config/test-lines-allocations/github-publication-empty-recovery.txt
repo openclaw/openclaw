@@ -1,0 +1,2 @@
+# Cover the empty publication-recovery regression without an orphan-deferral write.
+2
