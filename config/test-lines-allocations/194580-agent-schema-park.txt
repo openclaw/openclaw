@@ -1,0 +1,2 @@
+71
+# Frozen schema-25 refusal through worker transport and both Gateway CLI startup boundaries; committed-reader maintenance kind.
