@@ -4088,7 +4088,6 @@
 ["src/config/sessions/session-cold-storage.publication.test.ts","./session-accessor.sqlite-archive.js","e312cfe4c91c38ce8c2bd6efbd89ccb425bd20d24b808c9272a264f5342a53e2",1]
 ["src/config/sessions/session-cold-storage.publication.test.ts","./session-accessor.sqlite-page-reclamation.js","12289ceeb5a5afa80223024e6d83d50d086a01be4ba71fe1c041205fa7c258ee",1]
 ["src/config/sessions/session-cold-storage.publication.test.ts","./session-history-archive-pruning.js","aa9e25b6bd4e00abf901aa32594d8abd94eb29b988199b0fd0301fef40811e31",1]
-["src/config/sessions/session-cold-storage.publication.test.ts","./session-history-eviction.js","7aec835ff68a77820a3685081ae35607820f3a26be047832b5b8199dec6f55f0",1]
 ["src/config/sessions/session-cold-storage.publication.test.ts","./session-transcript-worker-runtime.js","d589aebb4d7c09f6a200f476c0f60b39ebe97c4f036eddac8e633f9ad365a2ca",1]
 ["src/config/sessions/session-cold-storage.publication.test.ts","./targets.js","b7c022a9c32415b5994c5a8026a8a9e36364501c32c48ecfaa75359e0ece7976",1]
 ["src/config/sessions/session-compound-worker.test.ts","./session-accessor.sqlite-maintenance-kick.js","64173feff948edd011e4e251a0af8922f273fbe0f8a2820851ad47066e5f2138",1]
