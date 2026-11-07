@@ -50,8 +50,8 @@ async function openNestedParent(page: Page, childCount: number) {
   await modal
     .getByText(
       childCount === 1
-        ? '"Parent" has 1 directly nested session. If you archive only this session, that nested session moves to the top level.'
-        : `"Parent" has ${childCount} directly nested sessions. If you archive only this session, those nested sessions move to the top level.`,
+        ? "“Parent” has 1 directly nested session. If you archive only this session, that nested session moves to the top level."
+        : `“Parent” has ${childCount} directly nested sessions. If you archive only this session, those nested sessions move to the top level.`,
       { exact: true },
     )
     .waitFor();

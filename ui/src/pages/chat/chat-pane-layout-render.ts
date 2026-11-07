@@ -638,7 +638,11 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       header: paneHeader,
       notice:
         !conversationVisible && chatProps.error
-          ? { error: chatProps.error, onDismissError: chatProps.onDismissError }
+          ? {
+              error: chatProps.error,
+              errorDetail: chatProps.errorDetail,
+              onDismissError: chatProps.onDismissError,
+            }
           : undefined,
       sessionKey: state.sessionKey,
       agentId: currentAgentId,

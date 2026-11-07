@@ -4,7 +4,7 @@ import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { showToast } from "../../lib/toast.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
@@ -41,7 +41,7 @@ export class PaletteSessionDraft {
     this.callbacks.changed();
   }
   setSubmissionError(error: unknown) {
-    this.draft?.submission.setError(error instanceof Error ? error.message : String(error));
+    this.draft?.submission.setError(formatUiError(error));
   }
   private slot: PaletteDraftSlot | undefined;
   private get draft(): NewSessionDraft | undefined {
@@ -540,16 +540,13 @@ export class PaletteSessionDraft {
       return;
     }
     const isCurrentOwner = captureSessionNoticeOwner(context);
-    const row = context.sessions.state.result?.sessions.find(
-      (candidate) => candidate.key === result.key,
-    );
-    const status =
+    const message =
       result.initialRun.status === "rejected"
-        ? result.initialRun.error
+        ? t("palette.sessionCreatedWithError", { error: formatUiError(result.initialRun.error) })
         : t(
             result.initialRun.status === "started"
-              ? "sessionsView.statusRunning"
-              : "sessionsView.statusIdle",
+              ? "palette.sessionStarted"
+              : "palette.sessionCreated",
           );
     const openSession = () => {
       if (this.read().context !== context || !isCurrentOwner()) {
@@ -562,7 +559,9 @@ export class PaletteSessionDraft {
       }
     };
     showToast({
-      message: `${resolveSessionDisplayName(result.key, row)}: ${status}`,
+      message,
+      dedupeKey: `session-create:${result.agentId}:${result.key}`,
+      severity: result.initialRun.status === "rejected" ? "error" : "success",
       actionLabel: t("sessionsView.openSession"),
       onAction: openSession,
     });

@@ -28,10 +28,8 @@ export function installPaneChromeProbe() {
   };
   const frames: Frame[] = [];
   let connectionIndicatorFrames = 0;
-  const detailsFrames: Array<{ at: number; sections: unknown[] }> = [];
-  let detailsSignature = "";
-  const sampleDetails = (at: number) => {
-    const sections = Array.from(document.querySelectorAll(".chat-details[data-desktop]"))
+  const readDetailsSections = () =>
+    Array.from(document.querySelectorAll(".chat-details[data-desktop]"))
       .filter((panel) => panel.getBoundingClientRect().width > 0 && !panel.closest("[inert]"))
       .flatMap((panel) =>
         Array.from(
@@ -55,6 +53,12 @@ export function installPaneChromeProbe() {
             panelTop: Math.round(panelBox.top),
             panelWidth: Math.round(panelBox.width),
             height: Math.round(box.height),
+            environmentBranchVisible:
+              section.getAttribute("data-details-group") === "environment"
+                ? (section
+                    .querySelector(".chat-environment__branch-name")
+                    ?.checkVisibility({ checkOpacity: true, visibilityProperty: true }) ?? false)
+                : undefined,
             sources: {
               liveSession: facts?.sessionFactsReady === true,
               cachedSession: Boolean(facts?.cachedDetails?.session),
@@ -82,6 +86,10 @@ export function installPaneChromeProbe() {
           };
         }),
       );
+  const detailsFrames: Array<{ at: number; sections: ReturnType<typeof readDetailsSections> }> = [];
+  let detailsSignature = "";
+  const sampleDetails = (at: number) => {
+    const sections = readDetailsSections();
     const nextSignature = JSON.stringify(sections);
     if (nextSignature !== detailsSignature && detailsFrames.length < 256) {
       detailsSignature = nextSignature;
@@ -294,6 +302,7 @@ export function installPaneChromeProbe() {
         ),
         truncated:
           truncated ||
+          detailsFrames.length >= 256 ||
           frames.some((frame) => regions.some((region) => frame.regions[region].truncated)),
       };
     },

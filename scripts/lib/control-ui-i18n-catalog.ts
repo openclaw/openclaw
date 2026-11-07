@@ -49,6 +49,7 @@ import { registerGitHubConnectionsEnglish } from "../../ui/src/i18n/locales/en-g
 import { registerGitHubEnglish } from "../../ui/src/i18n/locales/en-github.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerLinkReaderEnglish } from "../../ui/src/i18n/locales/en-link-reader.ts";
+import { registerLocalErrorsEnglish } from "../../ui/src/i18n/locales/en-local-errors.ts";
 import { registerLogbookEnglish } from "../../ui/src/i18n/locales/en-logbook.ts";
 import { registerLoginEnglish } from "../../ui/src/i18n/locales/en-login.ts";
 import { registerLogsEnglish } from "../../ui/src/i18n/locales/en-logs.ts";
@@ -61,6 +62,9 @@ import { registerModelControlsEnglish } from "../../ui/src/i18n/locales/en-model
 import { registerModelSetupEnglish } from "../../ui/src/i18n/locales/en-model-setup.ts";
 import { registerNativeLinkMenuEnglish } from "../../ui/src/i18n/locales/en-native-link-menu.ts";
 import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new-session-setup.ts";
+import { registerOpenClawIdDialogsEnglish } from "../../ui/src/i18n/locales/en-openclaw-id-dialogs.ts";
+import { registerOpenClawIdEnglish } from "../../ui/src/i18n/locales/en-openclaw-id.ts";
+import { registerPermissionErrorsEnglish } from "../../ui/src/i18n/locales/en-permission-errors.ts";
 import { registerPersonalInstructionsEnglish } from "../../ui/src/i18n/locales/en-personal-instructions.ts";
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-plugin-management.ts";
@@ -117,6 +121,8 @@ const sourceFiles = [
   "en-native-link-menu.ts",
   "en-worker-capacity.ts",
   "en.ts",
+  "en-local-errors.ts",
+  "en-permission-errors.ts",
   "en-route-subtitles.ts",
   "en-agents.ts",
   "en-about.ts",
@@ -187,6 +193,8 @@ const sourceFiles = [
   "en-session-placement.ts",
   "en-new-session-runtime.ts",
   "en-new-session-setup.ts",
+  "en-openclaw-id.ts",
+  "en-openclaw-id-dialogs.ts",
   "en-plugin-consent.ts",
   "en-plugin-management.ts",
   "en-portals.ts",
@@ -602,6 +610,8 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerTemplatesEnglish.catalog,
     registerAppsEnglish.catalog,
     registerLogbookEnglish.catalog,
+    registerPermissionErrorsEnglish.catalog,
+    registerLocalErrorsEnglish.catalog,
     registerLogsEnglish.catalog,
     registerApprovalsEnglish.catalog,
     registerSecretsStoreEnglish.catalog,
@@ -644,6 +654,8 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerSessionMachineEnglish.catalog,
     registerSessionPlacementEnglish.catalog,
     registerNewSessionSetupEnglish.catalog,
+    registerOpenClawIdEnglish.catalog,
+    registerOpenClawIdDialogsEnglish.catalog,
     registerPluginConsentEnglish.catalog,
     registerPluginManagementEnglish.catalog,
     registerPortalsEnglish.catalog,

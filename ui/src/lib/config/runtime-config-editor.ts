@@ -52,7 +52,7 @@ export function createRuntimeConfigEditor(
     !state.configApplying &&
     !writes.hasUnacknowledgedDraftWrite();
   const stopReloadGuard = registerControlUiReloadGuard(canReload, () =>
-    showToast({ message: t("configView.reloadBlocked") }),
+    showToast({ severity: "error", message: t("configView.reloadBlocked") }),
   );
   // Browser reloads and tab closes bypass the managed guard; the draft lives only in memory.
   const stopBeforeUnload =

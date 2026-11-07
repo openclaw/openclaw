@@ -72,14 +72,13 @@ function createSubscriptionState(options?: {
   const unsubscribeMessages =
     options?.unsubscribeMessages ?? vi.fn<Unsubscribe>(async () => undefined);
   const host = makeChatHost({ requestHandlers: {}, sessionKey: selected.key });
-  const state = {
-    ...host,
+  const state = Object.assign(host, {
     connectionEpoch: 1,
     chatError: null as string | null,
     chatSessionMessageSubscriptionRequestedKey: options?.previous?.key ?? null,
     chatSessionMessageSubscription: options?.previous ?? null,
     sessions: { ...host.sessions, subscribeMessages, unsubscribeMessages },
-  } satisfies Parameters<typeof syncSubscription>[0];
+  }) satisfies Parameters<typeof syncSubscription>[0];
   onTestFinished(
     createRoot((stop) => {
       projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
@@ -89,6 +88,19 @@ function createSubscriptionState(options?: {
   const publishedLoads = observe(() => historyLoad(state).phase);
   return { selected, state, subscribeMessages, unsubscribeMessages, publishedLoads };
 }
+
+it("retains the same-session observer until forced replacement succeeds", async () => {
+  const previous = { key: "agent:main:selected", agentId: null } satisfies Subscription;
+  const h = createSubscriptionState({ previous });
+  h.subscribeMessages.mockRejectedValueOnce(new Error("Replacement admission failed"));
+  await expect(syncSubscription(h.state, { force: true })).resolves.toBe(false);
+  expect(h.state.chatSessionMessageSubscription).toBe(previous);
+  expect(h.unsubscribeMessages).not.toHaveBeenCalled();
+  h.subscribeMessages.mockResolvedValueOnce(h.selected);
+  await expect(syncSubscription(h.state, { force: true })).resolves.toBe(true);
+  expect(h.state.chatSessionMessageSubscription).toEqual(h.selected);
+  expect(h.unsubscribeMessages).toHaveBeenCalledExactlyOnceWith(previous);
+});
 
 it.each([0, 120_000])(
   "makes the new subscription ready before old release (clock step %s)",

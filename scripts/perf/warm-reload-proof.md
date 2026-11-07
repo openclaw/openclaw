@@ -52,6 +52,17 @@ without recording cache keys or contents.
 independently of a dashboard occupying the main region. These are DOM and I/O
 milestones; filmstrip inspection still owns paint claims.
 
+Details diagnostics record `firstDetailsDomMs`, `firstDetailsPaintMs`, and changed
+`detailsFrames` (population, docking, session height, and section count). Text
+Element Timing supplies the paint marker; compare it with `firstPaintedRowsMs`
+and inspect the corresponding compositor frame and its predecessor. The comparison
+reports `detailsPaintLagMs`; a zero lag alone does not establish complete section
+geometry. Optional rig LoAF/mutation and Details placement probes are retained in
+`probe.rig`; placement wrappers belong only in separate attribution captures.
+`probe.modules` retains JavaScript resource start and response-end times in the same
+navigation time domain as row paints. These are file arrivals, not module evaluation
+or import-promise completion. Details section frames also record cached branch visibility.
+
 For tall dashboard-side transcript anchoring, add `--dashboard-end-anchor` with
 `--transcript-late-paint`. This uses a 1720 × 1515 viewport, a saved 320 px side
 column, 33 short exchanges ending in a roughly 4.5k-character prose reply with
@@ -80,6 +91,12 @@ limit. `contextRingFrames` retains changed composer/ring display samples, and
 `firstComposerDomHasFinalRing` requires the final ring label and dial at opacity one
 in the first visible composer DOM sample. Inspect the correlated compositor frame
 and its predecessor before claiming first-paint presence.
+
+Add `--composer-controls` for the bundled Anthropic model's nondefault 200K window
+and High effort. It uses synthetic credentials and the static catalog without
+model requests. Preparation opens the real picker and requires its final values
+and persisted composer snapshot. Per-frame samples retain control x/width/text;
+use `--active-targets` for active chat and omit it for the archived secondary.
 
 For plugin-publication attribution, add `--plugin-activation`. This enables bundled
 Workboard and two isolated native modules: a neutral CSS theme with a header

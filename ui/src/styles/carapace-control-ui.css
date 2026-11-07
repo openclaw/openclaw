@@ -576,6 +576,11 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   color: var(--primary-foreground);
 }
 
+.settings-page.oc-app-surface .btn.oc-action.primary:active:not(:disabled, [aria-disabled="true"]) {
+  background: var(--primary-active);
+  color: var(--primary-foreground);
+}
+
 .settings-page.oc-app-surface .btn.btn--sm.oc-action,
 .agents-home .btn.btn--sm:is(.agents-home__template-add, .agents-home__open).oc-action {
   padding: 6px 10px;

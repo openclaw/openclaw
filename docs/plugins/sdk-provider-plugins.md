@@ -29,13 +29,13 @@ API calls, not exported OpenClaw functions.
 </Tip>
 
 Auth methods can return `agentRuntimeId` with `defaultModel` when sign-in belongs
-to a native harness. Model Setup applies that runtime to the selected agent's
+to a native harness. Models applies that runtime to the selected agent's
 model entry, not to global model defaults.
 
 `ProviderAuthContext.agentId` identifies the target agent when the caller has one.
 Native sign-in methods may use it to check previously remembered permissions.
 After explicit user consent, return `ProviderAuthResult.nativeRuntimeConsent`
-with the accepted harness IDs. Model Setup stages those permissions on that
+with the accepted harness IDs. Models stages those permissions on that
 agent in the same verified config commit as the runtime routing and plugin enable.
 Do not write a separate permission store or infer consent from successful login.
 
@@ -159,6 +159,9 @@ token requests and persistence; the listener deadline does not cancel that work.
 By default, the listener binds every loopback address resolved for the redirect
 hostname. `bindHostname` adds a loopback host. Use `bindOnlyHostname` instead to
 preserve a provider's exact Node bind host (`localhost`, `127.0.0.1`, or `::1`).
+Port `0` in `redirectUrl` asks for a free port; read the bound redirect from the
+returned `redirectUrl` and use it in both the authorization URL and the token
+exchange.
 
 ## Declare physical credential ownership
 

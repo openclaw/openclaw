@@ -10,6 +10,7 @@ import "@openclaw/fs-safe/errors";
 import { writeExternalFileWithinRoot as writeExternalFileWithinRootBase } from "@openclaw/fs-safe/output";
 import { root as fsSafeRoot, type ReadResult, type RootDefaults } from "@openclaw/fs-safe/root";
 import type { CompatibleFsSafeRoot, LegacyNonBlockingReadOption } from "./fs-safe-compat.js";
+import { allowDrvfsRenameRecovery } from "./fs-safe-drvfs.js";
 
 export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 export {
@@ -70,7 +71,11 @@ export async function root(
   rootDir: string,
   defaults?: RootDefaults & LegacyNonBlockingReadOption,
 ): Promise<Root> {
-  return await fsSafeRoot(rootDir, defaults);
+  return await fsSafeRoot(rootDir, {
+    ...defaults,
+    allowDrvfsRenameRecovery:
+      defaults?.allowDrvfsRenameRecovery !== false && allowDrvfsRenameRecovery(rootDir),
+  });
 }
 
 export type ExternalFileWriteOptions = {
@@ -125,6 +130,7 @@ export async function writeExternalFileWithinRoot(
     staging: "sibling",
     producerIsolation: "private-directory",
     fallbackFileName: options.fallbackFileName ?? options.tempPrefix,
+    allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(path.dirname(requestedPath)),
   });
   // Preserve the caller-facing path spelling while carrying forward any
   // portable basename selected by fs-safe (for example, /var vs /private/var).

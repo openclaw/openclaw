@@ -241,7 +241,10 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
               marker,
             );
           }
-          expect(warn).toHaveBeenCalledTimes(sharedStore ? 0 : 1);
+          expect(warn).toHaveBeenCalledWith(
+            "Agent main resume deferred: agent database unavailable (agent-database-inspection-pending)",
+          );
+          expect(warn).toHaveBeenCalledTimes(sharedStore ? 1 : 2);
           const pendingPreparation = admission.pendingPreparation;
           expect(pendingPreparation).toBeDefined();
           preparationReady.resolve();
@@ -292,20 +295,20 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
               code: "agent-database-inspection-failed",
             });
             expect(() => openAgent(scope)).toThrow("fixture startup preparation failed");
-            expect(warn).toHaveBeenCalledTimes(1);
+            expect(warn).toHaveBeenCalledTimes(2);
           } else if (outcome === "aborted") {
             expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
             expect((await readSessionEntryReadOnlyInWorker(scope))?.resumeAfterRestart).toEqual(
               marker,
             );
-            expect(warn).toHaveBeenCalledTimes(1);
+            expect(warn).toHaveBeenCalledTimes(2);
             return;
           } else {
             expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
             expect(
               (await readSessionEntryReadOnlyInWorker(scope))?.resumeAfterRestart,
             ).toBeUndefined();
-            expect(warn).toHaveBeenCalledTimes(legacyScope ? 3 : 2);
+            expect(warn).toHaveBeenCalledTimes(legacyScope ? 4 : 3);
             if (legacyScope) {
               expect(
                 (await readSessionEntryReadOnlyInWorker(legacyScope))?.mainRestartRecovery,
@@ -323,7 +326,7 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
             );
           }
           await withinTest(resumeMarkedSessions({ context, signal, log: { warn } }), signal);
-          expect(warn).toHaveBeenCalledTimes(outcome === "refused" ? 1 : legacyScope ? 3 : 2);
+          expect(warn).toHaveBeenCalledTimes(outcome === "refused" ? 3 : legacyScope ? 4 : 3);
         } finally {
           recovery.abort();
           preparationReady.resolve();

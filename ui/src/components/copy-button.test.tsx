@@ -111,5 +111,5 @@ it.each(surfaces)("retires pending $name copying when its payload changes", asyn
   current.click();
   await vi.advanceTimersByTimeAsync(0);
   expect(writeText.mock.lastCall?.[0]).toContain("second");
-  expect(current.querySelector("[data-copy-label]")?.textContent).toBe("Copied!");
+  expect(current.querySelector("[data-copy-label]")?.textContent).toBe("Copied");
 });

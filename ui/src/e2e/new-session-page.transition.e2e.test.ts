@@ -483,7 +483,7 @@ suite.define(() => {
     const firstKey = createdKey((await gateway.waitForRequest("sessions.create")).params);
     await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
     await captureProof(page, "ime-deliberate-enter-created.png");
-    await page.getByRole("link", { name: "New conversation" }).first().click();
+    await page.getByRole("link", { name: "New session" }).first().click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     await page.locator(".new-session-page__message").fill("verify another default mock");
     await page.locator(".new-session-page__message").press("Control+Enter");

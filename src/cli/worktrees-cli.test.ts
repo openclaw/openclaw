@@ -127,9 +127,7 @@ describe("worktrees cli", () => {
     "rejects the malformed --removed-at value %j before retiring a snapshot",
     async (removedAt) => {
       setRuntimeConfigSnapshot({}, {});
-      const retire = vi
-        .spyOn(owner, "retireSnapshot")
-        .mockRejectedValue(new Error("Unexpected snapshot retirement"));
+      const retire = vi.spyOn(owner, "retireSnapshot");
       const pending = run(retireSnapshotArgs(removedAt));
       await expect(pending).rejects.toThrow(
         "--removed-at must be a non-negative integer (epoch milliseconds).",
@@ -151,7 +149,10 @@ describe("worktrees cli", () => {
   it("rejects an empty cleanup job selector before cleanup", async () => {
     setRuntimeConfigSnapshot({}, {});
     const gc = vi.spyOn(owner, "gc").mockRejectedValue(new Error("Unexpected cleanup execution"));
-    await expect(run(["gc", "--job", "", "--json"])).rejects.toThrow("--job must not be empty");
+    await expect(run(["gc", "--job", "", "--json"])).rejects.toHaveProperty(
+      "humanOutput",
+      "--job must not be empty.",
+    );
     expect(gc).not.toHaveBeenCalled();
   });
 
