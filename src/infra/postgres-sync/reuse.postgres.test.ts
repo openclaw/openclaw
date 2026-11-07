@@ -198,16 +198,33 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     }
   });
 
-  it("reconnects after an idle backend is terminated, without reusing the broken backend", async () => {
-    const first = open();
-    const killedPid = pid(first);
-    using now = vi.spyOn(performance, "now").mockReturnValue(0);
-    close(first);
+  it.each(["retained", "pooled"])(
+    "reconnects a terminated idle %s backend before caller SQL",
+    async (kind) => {
+      using now = vi.spyOn(Date, "now").mockReturnValue(0);
+      const first = open();
+      const killedPid = pid(first);
+      if (kind === "pooled") close(first);
+      await admin.query("SELECT pg_terminate_backend($1)", [killedPid]);
+      // Only wall time advances while the guest's monotonic clock is suspended.
+      now.mockReturnValue(2 * 60 * 60_000);
+      const recovered = kind === "pooled" ? open() : first;
+      expect(pid(recovered)).not.toBe(killedPid);
+      expect(get(recovered, "SELECT current_schema() AS schema")).toEqual({ schema });
+    },
+  );
+
+  it("refuses a lost transaction without committing or replaying its writes", async () => {
+    const writer = open();
+    const killedPid = pid(writer);
+    exec(writer, "CREATE TABLE interrupted_entries (id integer)");
+    exec(writer, "BEGIN; INSERT INTO interrupted_entries VALUES (1)");
     await admin.query("SELECT pg_terminate_backend($1)", [killedPid]);
-    // Exercise long-idle validation without depending on worker error-event timing.
-    now.mockReturnValue(1000);
-    const recovered = open();
-    expect(pid(recovered)).not.toBe(killedPid);
+    expect(() => exec(writer, "COMMIT")).toThrow("outcome unknown");
+    expect(writer.isOpen).toBe(false);
+    expect(get(open(), "SELECT count(*)::int AS count FROM interrupted_entries")).toEqual({
+      count: 0,
+    });
   });
 
   it("settles committed batches and retains transactions opened later in a batch", () => {
