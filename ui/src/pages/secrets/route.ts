@@ -1,5 +1,7 @@
 import { defineSolidPage } from "../../app-route-types.tsx";
 
-export const page = defineSolidPage("secrets", () =>
-  import("./secrets-page-entry.ts").then((module) => module.loadSecretsPage()),
-);
+export const page = defineSolidPage("secrets", () => {
+  // Start the code font alongside the page without delaying fallback rendering.
+  void document.fonts.load('14px "JetBrains Mono"').catch(() => {});
+  return import("./secrets-page.tsx").then((module) => module.SecretsPage);
+});
