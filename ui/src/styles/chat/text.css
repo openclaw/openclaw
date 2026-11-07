@@ -1048,31 +1048,24 @@
 }
 
 /* The two largest headings are read as titles, so a decorated link inside one
-   keeps only its label: the file, GitHub, and session marks above are legible at
-   body size but oversized and distracting at h1/h2 scale, and the out-of-flow
-   mark plus its reserved padding break the heading's left edge. Smaller
-   headings sit close to body size and keep their marks. Favicons are markup, so
-   they are hidden rather than left unpainted. */
-:is(.chat-text, .sidebar-markdown) :is(h1, h2) :is(a.markdown-file-link, a.markdown-github-link) {
+   keeps only its label: the file and GitHub marks are legible at body size but
+   oversized at h1/h2 scale, and the out-of-flow mark plus its reserved padding
+   break the heading's left edge. Smaller headings sit close to body size and
+   keep their marks. The GitHub mark is bubble-only, so its rules stay on
+   .chat-text; a GitHub item is also a GitHub link, so the mark rule covers both
+   and only the chip's symmetric padding needs its own rule. Favicons are markup,
+   so they are hidden rather than left unpainted. */
+:is(.chat-text, .sidebar-markdown) :is(h1, h2) a.markdown-file-link,
+.chat-text :is(h1, h2) a.markdown-github-link {
   padding-inline-start: 0;
 }
 
-/* Chips keep their surface; each start padding mirrors the chip's end padding. */
-.chat-text :is(h1, h2) a.markdown-github-item,
-:is(.chat-text, .sidebar-markdown) :is(h1, h2) a.markdown-session-link--titled {
+.chat-text :is(h1, h2) a.markdown-github-item {
   padding-inline-start: 0.45em;
 }
 
-:is(.chat-text, .sidebar-markdown)
-  :is(h1, h2)
-  a.markdown-session-link:not(.markdown-session-link--titled) {
-  padding-inline-start: 0.2em;
-}
-
 :is(.chat-text, .sidebar-markdown) :is(h1, h2) a.markdown-file-link::before,
-:is(.chat-text, .sidebar-markdown) :is(h1, h2) a.markdown-github-link::before,
-:is(.chat-text, .sidebar-markdown) :is(h1, h2) a.markdown-github-item::before,
-:is(.chat-text, .sidebar-markdown) :is(h1, h2) a.markdown-session-link::before,
+.chat-text :is(h1, h2) a.markdown-github-link::before,
 :is(.chat-text, .sidebar-markdown) :is(h1, h2) .markdown-link-favicon {
   display: none;
 }

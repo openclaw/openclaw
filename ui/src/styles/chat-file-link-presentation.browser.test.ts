@@ -437,7 +437,6 @@ const HEADING_LINKS = `
   <a class="markdown-file-link" data-file-kind="code" data-file-path="src/app.ts">app.ts:366</a>
   <a class="markdown-github-link markdown-github-item" data-github-kind="pull" href="https://github.com/openclaw/openclaw/pull/1">openclaw/openclaw#1</a>
   <a class="markdown-github-link" href="https://github.com/openclaw">github.com/openclaw</a>
-  <a class="markdown-session-link" href="#">agent:main</a>
   <a href="https://example.com"><img class="markdown-link-favicon is-loaded" width="16" height="16" alt="">example</a>
 `;
 
@@ -472,7 +471,7 @@ fixture.describe("chat heading link presentation", () => {
             );
           const inHeading = await paint(".in-heading > a");
           const inBody = await paint(".in-body > a");
-          expect(inHeading).toHaveLength(10);
+          expect(inHeading).toHaveLength(8);
           for (const link of inHeading) {
             expect(link.markPainted).toBe(false);
             expect(link.faviconShown).not.toBe(true);
@@ -480,10 +479,10 @@ fixture.describe("chat heading link presentation", () => {
             expect(link.paddingLeft).toBe(link.paddingRight);
           }
           // h3 and body links are untouched: every decorated anchor still paints its
-          // mark (GitHub marks are bubble-only, so the Detail Panel paints file and
-          // session marks): 4 + 2 per block, two blocks per renderer.
-          expect(inBody).toHaveLength(20);
-          expect(inBody.filter((link) => link.markPainted)).toHaveLength(12);
+          // mark (GitHub marks are bubble-only, so the Detail Panel paints only file
+          // marks): 3 + 1 per block, two blocks per renderer.
+          expect(inBody).toHaveLength(16);
+          expect(inBody.filter((link) => link.markPainted)).toHaveLength(8);
           expect(inBody.filter((link) => link.faviconShown)).toHaveLength(4);
         },
       );
