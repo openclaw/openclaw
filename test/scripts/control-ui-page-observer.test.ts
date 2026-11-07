@@ -9,6 +9,13 @@ import {
   resetControlUiPageObserver,
 } from "../../scripts/lib/control-ui-page-observer.ts";
 
+// SAFETY: Run the exact serialized observer and its callbacks in this DOM realm.
+const page = {
+  addInitScript: async () => {},
+  evaluate: async (expression: string | ((value?: unknown) => unknown), value?: unknown) =>
+    typeof expression === "string" ? runInThisContext(expression) : expression(value),
+} as unknown as Page;
+
 class TaskObserver {
   static supportedEntryTypes = ["longtask"];
   static current: TaskObserver;
@@ -41,13 +48,6 @@ afterEach(() => {
 it("excludes measurement setup from action long tasks without moving the initial DOM census", async () => {
   vi.stubGlobal("PerformanceObserver", TaskObserver);
   const clock = vi.spyOn(performance, "now").mockReturnValue(100);
-  // SAFETY: This adapter runs the exact serialized browser observer and its
-  // evaluate callbacks in jsdom; these are the only Page methods the API uses.
-  const page = {
-    addInitScript: async () => {},
-    evaluate: async (expression: string | ((value?: unknown) => unknown), value?: unknown) =>
-      typeof expression === "string" ? runInThisContext(expression) : expression(value),
-  } as unknown as Page;
   await installControlUiPageObserver(page);
   const before = document.querySelectorAll("*").length;
   await resetControlUiPageObserver(page);
@@ -97,12 +97,6 @@ it("counts only interval assets completed by route readiness and retains the lat
     resource("image.png", 240, 270),
     resource("after.js", 420, 450),
   ]);
-  // SAFETY: Execute the serialized observer and its evaluate callbacks in this test realm.
-  const page = {
-    addInitScript: async () => {},
-    evaluate: async (expression: string | ((value?: unknown) => unknown), value?: unknown) =>
-      typeof expression === "string" ? runInThisContext(expression) : expression(value),
-  } as unknown as Page;
   await installControlUiPageObserver(page);
   await resetControlUiPageObserver(page);
   // A navigation task begins before its own browser-local asset timestamp.
@@ -143,12 +137,6 @@ it("retains a shifted text node's row identity after virtualization removes it",
   }
   vi.stubGlobal("PerformanceObserver", LayoutObserver);
   const clock = vi.spyOn(performance, "now").mockReturnValue(100);
-  // SAFETY: Run the serialized browser observer and its callbacks in this DOM realm.
-  const page = {
-    addInitScript: async () => {},
-    evaluate: async (expression: string | ((value?: unknown) => unknown), value?: unknown) =>
-      typeof expression === "string" ? runInThisContext(expression) : expression(value),
-  } as unknown as Page;
   await installControlUiPageObserver(page);
   await resetControlUiPageObserver(page);
   const row = document.createElement("div");

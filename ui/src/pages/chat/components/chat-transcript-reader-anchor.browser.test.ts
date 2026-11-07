@@ -4,17 +4,17 @@ import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 import { TranscriptReaderAnchor } from "./chat-transcript-reader-anchor.ts";
 
-it.each(["settled", "scrolling", "start", "programmatic"] as const)(
+it.each(["settled", "scrolling", "start", "start-growth", "programmatic"] as const)(
   "reconciles first predecessor measurements while %s",
   async (phase) => {
-    const scrolling = phase !== "settled";
-    const offset = phase === "start" ? 0 : 500;
+    const estimate = phase === "start-growth" ? 60 : 120;
+    const offset = phase.startsWith("start") ? 0 : 500;
     const viewport = document.body.appendChild(document.createElement("div"));
     viewport.style.cssText = "height:400px;width:400px;overflow:auto;overflow-anchor:none";
     const content = viewport.appendChild(document.createElement("div"));
     content.style.cssText = "height:12000px;position:relative";
     const column = content.appendChild(document.createElement("div"));
-    column.style.cssText = `position:absolute;top:${offset + 240}px;width:400px`;
+    column.style.cssText = `position:absolute;top:${offset + 2 * estimate}px;width:400px`;
     const row = (index: number) => {
       const element = document.createElement("div");
       element.style.height = "80px";
@@ -26,7 +26,7 @@ it.each(["settled", "scrolling", "start", "programmatic"] as const)(
     viewport.scrollTop = offset;
     const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
       count: 100,
-      estimateSize: () => 120,
+      estimateSize: () => estimate,
       getItemKey: String,
       getScrollElement: () => viewport,
       initialRect: { width: 400, height: 400 },
@@ -41,7 +41,7 @@ it.each(["settled", "scrolling", "start", "programmatic"] as const)(
     virtualizer.targetWindow = window;
     virtualizer.elementsCache.set("2", retained);
     const offsetState = new TranscriptOffsetState();
-    offsetState.nativeInputActive = scrolling && phase !== "programmatic";
+    offsetState.nativeInputActive = phase !== "settled" && phase !== "programmatic";
     const anchor = new TranscriptReaderAnchor(
       {
         virtualizer,
@@ -71,7 +71,7 @@ it.each(["settled", "scrolling", "start", "programmatic"] as const)(
       ready.observe(retained);
     });
     const top = retained.getBoundingClientRect().top;
-    virtualizer.isScrolling = scrolling;
+    virtualizer.isScrolling = phase !== "settled";
     const predecessors = [row(0), row(1)];
     rows.push(...predecessors);
     const measured = new Promise<number>((resolve) => {
@@ -89,7 +89,7 @@ it.each(["settled", "scrolling", "start", "programmatic"] as const)(
     column.prepend(...predecessors);
     column.style.top = `${offset}px`;
     const measuredTop = await measured;
-    if (phase === "start") {
+    if (phase.startsWith("start")) {
       expect(viewport.scrollTop).toBe(0);
       expect(column.style.marginTop).toBe("");
       expect(predecessors[0]!.getBoundingClientRect().top).toBe(
@@ -98,7 +98,7 @@ it.each(["settled", "scrolling", "start", "programmatic"] as const)(
       return;
     }
     expect(measuredTop).toBe(top);
-    if (scrolling && phase !== "programmatic") {
+    if (phase === "scrolling") {
       expect(viewport.scrollTop).toBe(500);
       viewport.scrollTop = 40;
       anchor.settle();
