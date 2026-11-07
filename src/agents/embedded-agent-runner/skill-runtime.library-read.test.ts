@@ -11,6 +11,7 @@ import {
   loadSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { INTERNAL_PROJECT_REQUESTER } from "../../gateway/project-access.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import {
   listSkillCommandsForWorkspace,
@@ -349,6 +350,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
         );
         const child = await createInitialSubagentSession({
           cfg: config,
+          projectRequester: INTERNAL_PROJECT_REQUESTER,
           requesterAgentId: "main",
           targetAgentId: "main",
           childSessionKey: childKey,

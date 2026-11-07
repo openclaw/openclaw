@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
+import { INTERNAL_PROJECT_REQUESTER } from "../../../gateway/project-access.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 
@@ -71,6 +72,7 @@ it.each([
     const create = () =>
       createInitialSubagentSession({
         cfg: {},
+        projectRequester: INTERNAL_PROJECT_REQUESTER,
         requesterAgentId: "main",
         targetAgentId,
         requesterInternalKey: parentKey,

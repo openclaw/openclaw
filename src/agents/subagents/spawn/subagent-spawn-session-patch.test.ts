@@ -15,9 +15,18 @@ import {
   bindInProcessSessionRun,
   takeInProcessFreshChildSession,
 } from "../../../gateway/in-process-session-run.js";
+import {
+  INTERNAL_PROJECT_REQUESTER,
+  operatorProjectRequester,
+  resetProjectVisibilityCacheForTest,
+} from "../../../gateway/project-access.js";
+import { initializeRepository } from "../../../gateway/server-methods/projects.test-support.js";
+import * as sessionProjectSource from "../../../gateway/session-project-source.js";
+import { registerProjectRegistry } from "../../../projects/project-registry.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { resolveAgentWorkspaceDir } from "../../agent-scope-config.js";
 import { prepareSubagentSessionContext } from "./subagent-spawn-context.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 import * as spawnRuntime from "./subagent-spawn.runtime.js";
@@ -30,6 +39,7 @@ type SpawnInput = Parameters<typeof createInitialSubagentSession>[0];
 async function spawn(patch: Partial<SpawnInput> = {}) {
   const input = {
     cfg: {},
+    projectRequester: INTERNAL_PROJECT_REQUESTER,
     requesterAgentId: "main",
     targetAgentId: "main",
     childSessionKey,
@@ -51,6 +61,71 @@ async function spawn(patch: Partial<SpawnInput> = {}) {
     }));
   return createInitialSubagentSession({ ...input, parentTarget });
 }
+
+const INHERIT_REFUSAL = "The parent session's project is not available to this requester.";
+
+it.each([
+  { source: "an explicit private projectId", refusal: "unknown project id: org-private" },
+  { source: "an inherited private project checkout", refusal: INHERIT_REFUSAL },
+  { source: "an inherited agent-workspace worktree", refusal: undefined },
+] as const)("bounds a guest background spawn of $source", async ({ source, refusal }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const repo = await initializeRepository(
+      state.root,
+      "org-private",
+      "https://github.com/openclaw/openclaworg.git",
+    );
+    const project = await registerProjectRegistry({ path: repo, name: "Org private" });
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    await upsertSessionEntryCore(
+      { agentId: "main", storePath, sessionKey },
+      { sessionId: "project-parent", projectId: project.id, sessionRoot: repo, spawnedCwd: repo },
+    );
+    const workspaceWorktree = source.includes("agent-workspace");
+    // The parent's checkout read itself is covered by the visible-spawn suite.
+    using _ = vi.spyOn(sessionProjectSource, "resolveSpawnParentWorktreeSource").mockResolvedValue({
+      kind: "worktree",
+      workspace: workspaceWorktree ? resolveAgentWorkspaceDir({}, "main") : repo,
+      ...(workspaceWorktree ? {} : { projectId: project.id }),
+      source: { kind: "project", id: project.id },
+      withCurrent: async () => {
+        throw new Error("inherited source preparation reached");
+      },
+    });
+    resetProjectVisibilityCacheForTest();
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ visibility: "private" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchImpl);
+    try {
+      const result = await spawn({
+        projectRequester: operatorProjectRequester(["operator.sessions.write"]),
+        worktree: {
+          task: "Read README.md",
+          ...(source.includes("explicit") ? { projectId: project.id } : {}),
+        },
+      });
+      expect(readEntry(storePath, childSessionKey)).toBeUndefined();
+      if (refusal) {
+        expect(result).toEqual({
+          status: "error",
+          error: `child session patch failed: ${refusal}`,
+        });
+        expect(fetchImpl).toHaveBeenCalledOnce();
+      } else {
+        // Allowed: preparation proceeds to the inherited source instead of refusing it.
+        expect(JSON.stringify(result)).not.toContain(INHERIT_REFUSAL);
+        expect(fetchImpl).not.toHaveBeenCalled();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 it.each(["disabled", "disabled during preparation"])(
   "keeps an existing Draft usable without creating a child when Draft creation is %s",

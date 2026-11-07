@@ -50,6 +50,7 @@ export function resolvePaletteSessionSettings(options: SettingsOptions, search: 
     recents: [],
     projectQuery: "",
     freshWorkspace: place.freshWorkspace,
+    projectUnavailable: draft.browser.projectUnavailable,
   });
   const machines: {
     id: string;

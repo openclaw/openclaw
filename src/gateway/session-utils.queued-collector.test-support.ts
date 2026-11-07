@@ -26,6 +26,7 @@ import { markReplyOperationExecutionStarted } from "../sessions/session-controll
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { CallGatewayOptions } from "./call.js";
 import { registerChatAbortController } from "./chat-abort.js";
+import { INTERNAL_PROJECT_REQUESTER } from "./project-access.js";
 import { buildAgentSessionPatch } from "./server-methods/agent-session-patch.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { createChatAbortContext } from "./server-methods/chat.abort.test-helpers.js";
@@ -301,6 +302,7 @@ export function useQueuedCollectorFixture() {
     reserveSwarmRun({ runId, groupId, maxConcurrent: 1, activeRunIds: [] });
     const created = await createInitialSubagentSession({
       cfg: getRuntimeConfig(),
+      projectRequester: INTERNAL_PROJECT_REQUESTER,
       requesterAgentId: "main",
       targetAgentId: "main",
       childSessionKey,
