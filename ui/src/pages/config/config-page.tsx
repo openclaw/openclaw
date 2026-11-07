@@ -8,6 +8,7 @@ import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { localizedHintForPath } from "../../components/config-form.shared.ts";
 import {
+  SettingsPage,
   SettingsPageHeader,
   LearnMoreLink,
   SettingsToggleRow,
@@ -119,6 +120,16 @@ function ConfigBody(props: {
   const gatewayAuth = createConfigGatewayAuth(context());
   const renderSection = (editor: JSX.Element) => (
     <>
+      {/* Its own section above the schema form, not a row inside the form's card. */}
+      <Show when={props.config.activeSection === "gateway" && props.config.formValue}>
+        <SettingsPage>
+          <GatewayAuthSettings
+            auth={gatewayAuth.card(props.config.formValue)}
+            disabled={props.state.mutationDisabled()}
+            onPatch={(path, value) => gatewayAuth.stage(path, { value })}
+          />
+        </SettingsPage>
+      </Show>
       <Show
         when={props.pageId === "communications" && props.config.activeSection === "transcripts"}
         fallback={
@@ -163,13 +174,6 @@ function ConfigBody(props: {
           onChange={(enabled) =>
             props.config.onAppearanceChange({ openLinksInControlUiBrowser: enabled })
           }
-        />
-      </Show>
-      <Show when={props.config.activeSection === "gateway" && props.config.formValue}>
-        <GatewayAuthSettings
-          auth={gatewayAuth.card(props.config.formValue)}
-          disabled={props.state.mutationDisabled()}
-          onPatch={(path, value) => gatewayAuth.stage(path, { value })}
         />
       </Show>
     </>
