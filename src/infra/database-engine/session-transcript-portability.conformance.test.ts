@@ -393,10 +393,16 @@ for (const engine of ["sqlite", "postgres"] as const) {
 
         const full = withEngineStoreAdmission(() => readSessionTranscriptModelContext(scope));
         expect(modelMessages(full.events)).toEqual(expected);
-        const bounded = withEngineStoreAdmission(() =>
-          readSessionTranscriptModelContext(scope, undefined, { maxBytes: 100_000, maxEvents: 3 }),
-        );
-        expect(modelMessages(bounded.events)).toEqual(expected.slice(1));
+        const readBounded = () =>
+          withEngineStoreAdmission(() =>
+            readSessionTranscriptModelContext(scope, undefined, {
+              maxBytes: 100_000,
+              maxEvents: 3,
+            }),
+          );
+        expect(modelMessages(readBounded().events)).toEqual(expected.slice(1));
+        // The second bounded read reuses cached navigation pages.
+        expect(modelMessages(readBounded().events)).toEqual(expected.slice(1));
         const manager = await SessionManager.openModelContextAsync(scope);
         expect(manager.buildSessionContext().messages).toEqual(expected);
         expect(stored()).toEqual(before);

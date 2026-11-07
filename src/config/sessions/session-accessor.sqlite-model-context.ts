@@ -303,8 +303,6 @@ function withTranscriptContextSnapshot<T>(
           const db = getSessionKysely(database.db);
           // Compressed rows were validated before encoding; inspect raw identity only.
           const nativeJsonValid = jsonValid(database.db, sql`coalesce(event_json, '{}')`);
-          // PostgreSQL rows JSONB cannot decode; their payloads use the JavaScript projection owner.
-          const exceptionalSeqs = new Set<number>();
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
           const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
           if (through) {
@@ -378,9 +376,6 @@ function withTranscriptContextSnapshot<T>(
                         projectModelContextJson(raw, false, omitCheckpoint),
                         "utf8",
                       );
-                if (raw !== null) {
-                  exceptionalSeqs.add(row.seq);
-                }
                 const navigationJson =
                   raw === null ? row.navigation_json : projectModelContextJson(raw, true);
                 // SAFETY: SQL preserves entry discriminants; this fresh object has no other owner.
@@ -390,6 +385,8 @@ function withTranscriptContextSnapshot<T>(
                   entry,
                   bytes: bytes(row.model_bytes, false),
                   withoutCheckpointBytes: bytes(row.retained_bytes, true),
+                  // PostgreSQL rows JSONB cannot decode use the JavaScript projection owner.
+                  ...(raw === null ? {} : { exceptional: true as const }),
                 };
               }
             },
@@ -408,6 +405,9 @@ function withTranscriptContextSnapshot<T>(
                 parameter((row) => row.seq),
               ),
           );
+          // Cached navigation rows keep the classification when warm reads skip readRows.
+          const exceptional = (request: ModelContextRequest) =>
+            navigation.get(request.entry.seq)?.exceptional === true;
           const projectExceptional = (request: ModelContextRequest) =>
             projectModelContextJson(
               readPayload(request.entry).rows[0]!.event_json,
@@ -427,7 +427,7 @@ function withTranscriptContextSnapshot<T>(
             readModelEntrySizes: (requests) => {
               const sizes = new Map<ContextEntry, number>();
               for (const request of requests) {
-                if (exceptionalSeqs.has(request.entry.seq) && request.toolResultOmission) {
+                if (exceptional(request) && request.toolResultOmission) {
                   sizes.set(request.entry, Buffer.byteLength(projectExceptional(request), "utf8"));
                 } else if (!request.toolResultOmission) {
                   const row = navigation.get(request.entry.seq)!;
@@ -438,10 +438,7 @@ function withTranscriptContextSnapshot<T>(
                 }
               }
               for (const batch of chunkItems(
-                requests.filter(
-                  (request) =>
-                    request.toolResultOmission && !exceptionalSeqs.has(request.entry.seq),
-                ),
+                requests.filter((request) => request.toolResultOmission && !exceptional(request)),
                 MODEL_CONTEXT_PAYLOAD_BATCH_SIZE,
               )) {
                 const { bySeq, omitCheckpoint, omission } = modelContextBatchSql(batch);
@@ -485,7 +482,7 @@ function withTranscriptContextSnapshot<T>(
                 payloads.set(entry, hydrated);
               };
               const native = requests.filter((request) => {
-                if (!exceptionalSeqs.has(request.entry.seq)) {
+                if (!exceptional(request)) {
                   return true;
                 }
                 hydrate(request.entry, projectExceptional(request));
