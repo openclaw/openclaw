@@ -76,8 +76,8 @@ export function ChannelConfigFeedback(params: { channelId: string; props: Channe
       <div class="channels-detail__feedback" role="alert">
         <Show when={conflict()}>
           {(paths) => (
-            <div class="settings-save-indicator settings-save-indicator--danger">
-              <span>
+            <div class="settings-save-indicator">
+              <span class="settings-save-indicator__failure">
                 {t("channels.config.conflict", {
                   fields: paths()
                     .map((path) => channelConfigFieldLabel(params.props, path))
@@ -105,13 +105,14 @@ export function ChannelConfigFeedback(params: { channelId: string; props: Channe
         </Show>
         <Show when={message()}>
           {(current) => (
-            <div
-              class={[
-                "settings-save-indicator",
-                { "settings-save-indicator--danger": current().danger },
-              ]}
-            >
-              <span>{current().text}</span>
+            <div class="settings-save-indicator">
+              <span
+                class={{
+                  "settings-save-indicator__failure": current().danger,
+                }}
+              >
+                {current().text}
+              </span>
             </div>
           )}
         </Show>

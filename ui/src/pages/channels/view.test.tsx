@@ -567,6 +567,7 @@ describe("channel detail", () => {
 
       expect(alert?.textContent).toBe(message);
       expect(alert?.querySelector("img")).toBeNull();
+      expect(alert?.querySelector("span.settings-save-indicator__failure")).not.toBeNull();
     },
   );
 
