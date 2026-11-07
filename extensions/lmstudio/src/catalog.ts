@@ -106,6 +106,7 @@ export async function discoverLmstudioProvider(
             baseUrl,
             apiKey: resolvedDiscoveryApiKey ?? "",
             headers: resolvedHeaders,
+            allowPrivateNetwork: explicit?.request?.allowPrivateNetwork,
             quiet,
             ...(!quiet && options ? options : {}),
           });
