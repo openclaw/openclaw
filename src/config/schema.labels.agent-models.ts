@@ -44,6 +44,7 @@ export const AGENT_MODEL_FIELD_LABELS: Record<string, string> = {
   "agents.defaults.voiceModel.timeoutMs": "Voice Timeout (ms)",
   "agents.defaults.pdfModel.primary": "PDF Model",
   "agents.defaults.pdfModel.fallbacks": "PDF Model Fallbacks",
+  "agents.defaults.pdfNativeOpenai": "Native OpenAI PDF Input",
   "agents.defaults.pdfMaxMb": "PDF Max Size (MB)",
   "agents.defaults.pdfMaxPages": "PDF Max Pages",
   "agents.defaults.imageMaxDimensionPx": "Image Max Dimension (px)",

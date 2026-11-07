@@ -16,6 +16,8 @@ import type {
   AudioTranscriptionRequest,
   MediaUnderstandingProviderAuthResult,
   MediaUnderstandingProviderSyntheticAuthResult,
+  PdfAnalysisRequest,
+  PdfAnalysisResult,
   VideoDescriptionRequest,
 } from "./types.js";
 
@@ -108,5 +110,7 @@ export type MediaUnderstandingProvider = {
   describeVideo?: (req: VideoDescriptionRequest) => Promise<VideoDescriptionResult>;
   describeImage?: (req: ImageDescriptionRequest) => Promise<ImageDescriptionResult>;
   describeImages?: (req: ImagesDescriptionRequest) => Promise<ImagesDescriptionResult>;
+  /** Undefined means unsupported before upload. After submission, failures must throw. */
+  analyzePdf?: (req: PdfAnalysisRequest) => Promise<PdfAnalysisResult | undefined>;
   extractStructured?: (req: StructuredExtractionRequest) => Promise<StructuredExtractionResult>;
 };
