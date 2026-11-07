@@ -1178,6 +1178,25 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun talkMicrophoneMuteStaysAccessibleAlongsideEndTalkAndStop() {
+    val model = showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp }, talkActive = true)
+    assertComposerControlsVisible(talkActive = true)
+    captureComposerProof("talk-microphone-on")
+    composeRule.onNodeWithContentDescription(nativeString("Mute microphone")).assertIsDisplayed().performClick()
+    composeRule.runOnIdle { assertTrue(model.talkMicrophoneMuted.value) }
+    composeRule
+      .onNodeWithContentDescription(nativeString("Unmute microphone"))
+      .assertIsDisplayed()
+      .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Microphone muted")))
+    composeRule.onNodeWithText(nativeString("Talk · Microphone muted")).assertIsDisplayed()
+    assertComposerControlsVisible(talkActive = true)
+    captureComposerProof("talk-microphone-muted")
+    composeRule.onNodeWithContentDescription(nativeString("Unmute microphone")).performClick()
+    composeRule.runOnIdle { assertFalse(model.talkMicrophoneMuted.value) }
+    composeRule.onNodeWithContentDescription(nativeString("Mute microphone")).assertIsDisplayed()
+  }
+
+  @Test
   fun physicalEnterSendsTheDraftDuringANonTalkActiveRun() {
     assertPhysicalEnterDuringActiveRun(talkActive = false, expectedSends = 1)
   }
@@ -6493,6 +6512,10 @@ class ChatComposerLayoutTest {
             ),
         )
     val controlBounds = controls.map { it.getUnclippedBoundsInRoot() }.toMutableList()
+    if (talkActive) {
+      val mic = composeRule.onNode(hasContentDescription(nativeString("Mute microphone")) or hasContentDescription(nativeString("Unmute microphone")))
+      controlBounds += mic.assertIsDisplayed().assertHasClickAction().getUnclippedBoundsInRoot()
+    }
     val primary = primaryAction?.let { composeRule.onNodeWithContentDescription(nativeString(it)).getUnclippedBoundsInRoot() }
     val dictation =
       composeRule.onNode(

@@ -392,6 +392,7 @@ internal fun ChatScreen(
   val sessionCreating by viewModel.chatSessionCreating.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val talkStatusText by viewModel.talkModeStatusText.collectAsState()
+  val talkMicrophoneMuted by viewModel.talkMicrophoneMuted.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val selectedActiveRun by viewModel.chatSelectedActiveRunPresentation.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
@@ -959,7 +960,7 @@ internal fun ChatScreen(
       )
     }
     if (talkActive) {
-      ChatNotice(title = nativeString("Talk"), body = talkStatusText)
+      ChatNotice(title = if (talkMicrophoneMuted) nativeString("Talk · Microphone muted") else nativeString("Talk"), body = talkStatusText)
     }
     ChatSwarmProgress(groups = swarmGroups)
   }
@@ -1184,6 +1185,8 @@ internal fun ChatScreen(
       },
       talkActive = talkActive,
       onToggleTalk = onToggleTalk,
+      talkMicrophoneMuted = talkMicrophoneMuted,
+      onToggleTalkMicrophone = { viewModel.setTalkMicrophoneMuted(!talkMicrophoneMuted) },
       onFixConnection = onOpenGatewaySettings,
       onOpenProvidersModels = ::openProviderSignIn,
       onCopyDiagnostics = {
@@ -3232,6 +3235,8 @@ private fun ChatComposer(
   onToggleDictation: () -> Unit,
   talkActive: Boolean,
   onToggleTalk: () -> Unit,
+  talkMicrophoneMuted: Boolean,
+  onToggleTalkMicrophone: () -> Unit,
   onFixConnection: () -> Unit,
   onOpenProvidersModels: () -> Unit,
   onCopyDiagnostics: () -> Unit,
@@ -3451,6 +3456,7 @@ private fun ChatComposer(
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
               if (talkActive) {
+                TalkMicrophoneButton(muted = talkMicrophoneMuted, onClick = onToggleTalkMicrophone)
                 LiveTalkButton(active = true, onClick = { if (ownerReady) onToggleTalk() })
               } else {
                 Box {
