@@ -49,8 +49,17 @@ it.each([false, true])(
       const configBefore = fs.readFileSync(selectedConfig, "utf8");
       const databasePath = path.join(selectedRoot, "state", "openclaw.sqlite");
       const nativeRows = seedMacNodeWorkerProofState(databasePath);
+      const measured: string[] = [];
+      const ready = await runStartupConfigPreflight({
+        gateway: true,
+        observe: false,
+        measure: async (name, run) => {
+          measured.push(name);
+          return await run();
+        },
+      });
 
-      const ready = await runStartupConfigPreflight({ gateway: true, observe: false });
+      expect(measured).toContain("doctor.config-preflight.webhook-completion-read");
 
       expect(ready.snapshot.valid).toBe(true);
       expect(ready.snapshot.path).toBe(selectedConfig);

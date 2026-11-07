@@ -226,7 +226,11 @@ async function prepareStartupConfig(
       prepareUnwrittenWebhookCompletion,
       readWebhookCompletion,
     } = await import("./doctor/shared/legacy-webhook-pins.js");
-    const webhookCompletion = await readWebhookCompletion(read.snapshot.sourceConfig, env);
+    const webhookCompletion = await measureDoctorConfigPreflightStep(
+      "webhook-completion-read",
+      () => readWebhookCompletion(read.snapshot.sourceConfig, env),
+      measure,
+    );
     const pendingWebhookChannels =
       webhookCompletion === true
         ? []
