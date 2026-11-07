@@ -361,7 +361,27 @@ if (endpoint === "repos/openclaw/openclaw/actions/jobs/2/logs") {
         status: "completed",
       });
     expect(terminalPolicyPass(failed("productPerformance"), "2026.11.1")).toBe(true);
-    expect(terminalPolicyPass(failed("productPerformance"), "2026.11.2")).toBe(false);
+    expect(terminalPolicyPass(failed("productPerformance"), "2026.11.2")).toBe(true);
+    expect(terminalPolicyPass(failed("productPerformance"), "2026.11.3")).toBe(false);
+    expect(terminalPolicyPass(failed("releaseChecksCandidate"), "2026.11.2")).toBe(false);
+  });
+
+  it("keeps unrelated failures and incomplete Kova jobs blocking for 2026.11.2", () => {
+    for (const conclusion of ["cancelled", "timed_out"]) {
+      const observed = child("productPerformance", {
+        conclusion,
+        status: "completed",
+        jobs: [job("Kova mock provider performance", 1, { conclusion })],
+      });
+      expect(terminalPolicyPass(observed, "2026.11.2")).toBe(false);
+    }
+    const observed = child("productPerformance", {
+      conclusion: "failure",
+      status: "completed",
+      jobs: [job("Kova mock provider performance", 1), job("Correctness integrity", 2)],
+    });
+    expect(terminalPolicyPass(observed, "2026.11.2")).toBe(false);
+    expect(observed.jobs[0].conclusion).toBe("failure");
   });
 
   it("does not accept a waived leaf without its required aggregate", async () => {
