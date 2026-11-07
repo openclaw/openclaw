@@ -424,7 +424,10 @@ async function navigate(page: Page, routeId: RouteId) {
           : "",
     },
   );
-  await waitForControlUiRoute(page, { routeId: routeId === "config" ? "appearance" : routeId });
+  await waitForControlUiRoute(page, {
+    routeId:
+      routeId === "config" ? "appearance" : routeId === "model-setup" ? "model-providers" : routeId,
+  });
   await frames(page);
 }
 
