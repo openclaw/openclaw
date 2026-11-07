@@ -21,6 +21,7 @@ import {
   untouched,
   descriptor,
   addSession,
+  reconcileConfig,
 } from "./retained-repair-test-support.mjs";
 
 function git(directory, ...args) {
@@ -345,6 +346,7 @@ assert.ok(prepareOwner);
 const quote = (value) => "'" + String(value).replaceAll("'", "'\\''") + "'";
 for (const scenario of [
   "success",
+  "reviewed-config",
   "fetch-fails",
   "build-fails",
   "timer-active",
@@ -357,6 +359,7 @@ for (const scenario of [
     (t) => {
       const f = ready(t),
         trace = join(f.root, "prepare-events");
+      const configHash = scenario === "reviewed-config" ? reconcileConfig(f) : "";
       if (scenario === "foreign-origin")
         git(f.mirror, "remote", "set-url", "origin", "https://example.invalid/foreign.git");
       const program = `set -Eeuo pipefail
@@ -365,6 +368,7 @@ serving_root=${quote(f.serving)};releases_root="$serving_root/releases"
 current_link="$serving_root/current";requested_sha=${quote(f.request.target.sha)}
 operator_expected_sha=${quote(f.record.candidate.sha)};operator_expected_pid=${f.pid};operator_expected_generation=${quote(f.start)}
 repair_operation=${quote(f.request.operation)};repair_journal_hash=${quote(f.request.source.sha256)}
+repair_config_hash=${quote(configHash)}
 mirror=${quote(f.mirror)};frozen_main=""
 exec 9>"$OPENCLAW_TEAM_LOCK_FILE";flock -n 9
 fail(){ printf '%s\\n' "$*" >&2;return 1; }
@@ -386,7 +390,7 @@ prepare_retained_repair
         timeout: 30000,
       });
       const observed = existsSync(trace) ? readFileSync(trace, "utf8") : "";
-      if (scenario === "success") {
+      if (scenario === "success" || scenario === "reviewed-config") {
         assert.equal(result.status, 0, result.stderr);
         assert.match(result.stdout, /action=prepare-retained-repair restart=0 activation=0/);
         assert.ok(

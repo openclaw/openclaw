@@ -2,6 +2,50 @@
 
 The existing activation owner dispatches `--activate-retained-repair OPERATION BUILD_RECEIPT_SHA256` or `--resume-retained-repair OPERATION CURRENT_JOURNAL_SHA256` to the typed repair owner. It never calls the version-1 journal/rollback path. Both commands require the actual exclusive canonical FD9 lock. No Boolean enables repair.
 
+## Reviewed config replacement on the failed candidate
+
+A live selected candidate in `ROLLBACK_FAILED` may itself fail readiness while
+an operator's native config write prevents ordinary rollback. After reviewing
+the exact replacement config and original journal, prepare a distinct,
+same-schema target containing the product fix:
+
+```sh
+/usr/local/sbin/openclaw-release-deploy --prepare-retained-repair \
+  "$OPERATION" "$TARGET" "$CURRENT" "$PID" "$START" "$JOURNAL_SHA256" "$CONFIG_SHA256"
+/usr/local/sbin/openclaw-release-deploy --activate-retained-repair \
+  "$OPERATION" "$BUILD_RECEIPT_SHA256"
+```
+
+`OPERATION` is a new UUIDv4. `TARGET` is the exact official main frozen by
+preparation, `CURRENT` is the failed selected candidate, and `PID`/`START` bind
+its live process generation. `JOURNAL_SHA256` and optional `CONFIG_SHA256` are
+the reviewed files' SHA-256 digests. Use the `completed.sha256` from successful
+preparation as `BUILD_RECEIPT_SHA256`; activation consumes that exact receipt,
+including its config approval, without another config argument. Omit the final
+config digest when no reconciliation is needed.
+
+Reconciliation uses the same config snapshot and native atomic-replacement audit
+as `--recover --reconcile-config`, including the separate backup, unchanged
+SQLite identity, live process, pointer, and journal bindings. Preparation does
+not require the failed candidate to pass readiness. Activation still requires
+the existing fresh maintenance lease, complete history evidence, and full target
+acceptance. Neither a config digest nor a successful build waives those gates.
+The original journal bytes remain archived unchanged as the existing typed
+repair transaction takes over the canonical journal slot. Changed config or
+incident evidence refuses continuation.
+
+After an interrupted activation, use the same operation with the observed
+canonical journal hash:
+
+```sh
+/usr/local/sbin/openclaw-release-deploy --resume-retained-repair \
+  "$OPERATION" "$CURRENT_JOURNAL_SHA256"
+```
+
+These commands require the reviewed controller closure to be adopted through
+the retained-incident procedure below. Publication of a PR does not authorize
+controller installation or a deployment.
+
 ## Durable protocol
 
 Canonical sequence: REPAIR_PREPARED, REPAIR_EVIDENCE_VERIFIED, REPAIR_BOUND, REPAIR_SUSPENDED, REPAIR_STOP_INTENT, REPAIR_STOPPED, REPAIR_SELECT_INTENT, REPAIR_SELECTED, REPAIR_START_INTENT, REPAIR_STARTED, REPAIR_VERIFIED, REPAIR_COMPLETED. Each transition has an exact-byte/inode intent and per-event artifact. Original failed journal, original floor, build receipt and transition evidence remain retained. No database copy, restore, rewind, successful-journal deletion or generic cleanup is added.
