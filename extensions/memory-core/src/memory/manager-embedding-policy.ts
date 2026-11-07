@@ -273,6 +273,8 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
 }): Promise<T> {
   const profile = MEMORY_EMBEDDING_RETRY_PROFILES[params.profile];
   let remainingWaitMs = profile.maxTotalWaitMs;
+  // The scheduler consumes this attempt's budget synchronously before the retry wait.
+  let retryBudget: MemoryEmbeddingRetryBudget | undefined;
   return await retryAsync(params.run, {
     attempts: profile.rateLimit.attempts,
     minDelayMs: profile.transient.baseDelayMs,
@@ -285,16 +287,15 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
       if (params.signal?.aborted) {
         return false;
       }
-      const retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);
+      retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);
       return retryBudget !== undefined && attempt < retryBudget.attempts;
     },
-    delayMs: ({ attempt, err }) => {
-      const retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);
+    delayMs: ({ attempt }) => {
       return retryBudget
         ? Math.min(retryBudget.maxDelayMs, retryBudget.baseDelayMs * 2 ** (attempt - 1))
         : 0;
     },
-    retryAfterMs: (err) => resolveMemoryEmbeddingRetryBudget(profile, err)?.retryAfterMs,
+    retryAfterMs: () => retryBudget?.retryAfterMs,
     sleep: async (delayMs) => {
       const boundedDelayMs = Math.min(delayMs, remainingWaitMs);
       remainingWaitMs -= boundedDelayMs;
