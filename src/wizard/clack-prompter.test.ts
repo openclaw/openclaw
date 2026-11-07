@@ -354,6 +354,17 @@ describe("createClackPrompter", () => {
     expect(stdoutWriteSpy).not.toHaveBeenCalled();
   });
 
+  it("passes localized confirmation labels to Clack", async () => {
+    vi.stubEnv("OPENCLAW_LOCALE", "pt-PT");
+    clackMocks.confirm.mockResolvedValueOnce(false);
+
+    await expect(createClackPrompter().confirm({ message: "Continue?" })).resolves.toBe(false);
+
+    expect(clackMocks.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ active: "Sim", inactive: "Não" }),
+    );
+  });
+
   describe.each(["select", "multiselect"] as const)("%s request routing", (method) => {
     it.each([
       { searchable: false, withNavigation: false },
@@ -587,6 +598,7 @@ describe("createClackPrompter", () => {
   it.each([false, true])(
     "keeps Ctrl-C cancellation on Clack's canonical path (navigation: %s)",
     async (navigation) => {
+      vi.stubEnv("OPENCLAW_LOCALE", "pt-PT");
       const mock = navigation
         ? navigationPromptMocks.confirmWithNavigationFooter
         : clackMocks.confirm;
@@ -604,9 +616,12 @@ describe("createClackPrompter", () => {
       ).rejects.toBeInstanceOf(WizardCancelledError);
 
       expect(clackMocks.cancel).toHaveBeenCalledOnce();
-      expect(clackMocks.cancel).toHaveBeenCalledWith(expect.any(String), {
-        output: process.stdout,
-      });
+      expect(clackMocks.cancel).toHaveBeenCalledWith(
+        expect.stringContaining("Configuração cancelada."),
+        {
+          output: process.stdout,
+        },
+      );
       expect(clackMocks.settings.actions).toEqual(new Set(["left", "right"]));
     },
   );
