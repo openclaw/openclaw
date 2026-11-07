@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
@@ -32,8 +33,9 @@ async function runChatAction(
       params.service = service;
     }
   }
-  const cliPath = opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
-  const dbPath = opts.dbPath?.trim() || account.config.dbPath?.trim();
+  const cliPath =
+    readNonBlankString(opts.cliPath) ?? readNonBlankString(account.config.cliPath) ?? "imsg";
+  const dbPath = readNonBlankString(opts.dbPath) ?? readNonBlankString(account.config.dbPath);
   const remoteHost = await resolveIMessageRemoteHost({
     cliPath,
     remoteHost: opts.remoteHost ?? account.config.remoteHost,

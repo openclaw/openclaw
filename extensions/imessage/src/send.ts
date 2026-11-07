@@ -22,7 +22,10 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString as stringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString as stringValue,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import {
   convertMarkdownTables,
@@ -154,7 +157,7 @@ function normalizeResolvedMessageGuid(value: unknown): string | null {
 }
 
 function canResolveLatestSentMessageGuidFromChatDb(dbPath?: string): boolean {
-  const normalizedDbPath = dbPath?.trim();
+  const normalizedDbPath = readNonBlankString(dbPath);
   if (!normalizedDbPath) {
     return false;
   }
@@ -172,7 +175,7 @@ async function resolveFallbackSentMessageGuid(params: {
   text: string;
   sentAfterMs?: number;
 }): Promise<string | null> {
-  const dbPath = params.dbPath?.trim();
+  const dbPath = readNonBlankString(params.dbPath);
   if (!dbPath || !canResolveLatestSentMessageGuidFromChatDb(dbPath)) {
     return null;
   }
@@ -221,9 +224,7 @@ function resolveIMessageSendFailure(result: Record<string, unknown>): string | n
   if (result.success !== false) {
     return null;
   }
-  return typeof result.error === "string" && result.error.trim()
-    ? result.error.trim()
-    : "iMessage action failed";
+  return stringValue(result.error) ?? "iMessage action failed";
 }
 
 function isIMessageRpcSendTimeout(error: unknown): boolean {
@@ -276,8 +277,9 @@ async function sendMessageIMessageForAccount(
   cfg: OpenClawConfig,
   account: ResolvedIMessageAccount,
 ): Promise<IMessageSendResult> {
-  const cliPath = opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
-  const dbPath = opts.dbPath?.trim() || account.config.dbPath?.trim();
+  const cliPath =
+    readNonBlankString(opts.cliPath) ?? readNonBlankString(account.config.cliPath) ?? "imsg";
+  const dbPath = readNonBlankString(opts.dbPath) ?? readNonBlankString(account.config.dbPath);
   const remoteHost = await resolveIMessageRemoteHost({
     cliPath,
     remoteHost: account.config.remoteHost,
@@ -332,8 +334,7 @@ async function sendMessageIMessageForAccount(
     : text;
   const protectedRoles = protectIMessageFencedRoleMarkers(message);
   message = protectedRoles.text;
-  let filePath: string | undefined;
-  let mediaContentType: string | undefined;
+  let filePath: string | undefined, mediaContentType: string | undefined;
 
   if (opts.mediaUrl?.trim()) {
     const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
@@ -426,7 +427,7 @@ async function sendMessageIMessageForAccount(
     if (!guid) {
       const rowId = resolvedId?.trim();
       if (rowId && isNumericMessageRowId(rowId)) {
-        const lookupPath = chatDbLookupPath?.trim();
+        const lookupPath = readNonBlankString(chatDbLookupPath);
         if (lookupPath) {
           guid = normalizeResolvedMessageGuid(
             await withIMessageReceiptGuidReader(lookupPath, (read) =>
@@ -591,8 +592,7 @@ async function sendMessageIMessageForAccount(
     }
     assertDirectAdapterHandoff?.();
 
-    let result: Record<string, unknown>;
-    let pendingEchoKey: string | undefined;
+    let result: Record<string, unknown>, pendingEchoKey: string | undefined;
     try {
       pendingEchoKey = await rememberPersistedIMessageEcho({
         scope: echoScope,
@@ -758,9 +758,8 @@ async function sendMessageIMessageForAccount(
     }
     return response;
   };
-  let result: Record<string, unknown>;
+  let result: Record<string, unknown>, pendingEchoKey: string | undefined;
   const sendStartedAtMs = Date.now();
-  let pendingEchoKey: string | undefined;
   try {
     try {
       pendingEchoKey = await rememberPersistedIMessageEcho({

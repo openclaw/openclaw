@@ -19,13 +19,21 @@ const available: IMessagePrivateApiStatus = {
 };
 
 describe("invalidateCachedIMessagePrivateApiStatus", () => {
-  it("normalizes the cli path the same way the setter does", () => {
-    setCachedIMessagePrivateApiStatus("imsg", available);
-    expect(getCachedIMessagePrivateApiStatus("  imsg  ")?.available).toBe(true);
+  it("keeps literal and trimmed cli paths as separate cache entries", () => {
+    // A configured path is literal: the trimmed spelling is a different
+    // executable, so both verdicts must be able to live in the cache at once.
+    const literal = "/opt/homebrew/bin/imsg ";
+    const trimmed = "/opt/homebrew/bin/imsg";
+    setCachedIMessagePrivateApiStatus(literal, { ...available, selectors: { literal: true } });
+    setCachedIMessagePrivateApiStatus(trimmed, { ...available, selectors: { trimmed: true } });
 
-    invalidateCachedIMessagePrivateApiStatus("  imsg  ");
+    expect(getCachedIMessagePrivateApiStatus(literal)?.selectors).toEqual({ literal: true });
+    expect(getCachedIMessagePrivateApiStatus(trimmed)?.selectors).toEqual({ trimmed: true });
 
-    expect(getCachedIMessagePrivateApiStatus("imsg")).toBeUndefined();
+    invalidateCachedIMessagePrivateApiStatus(literal);
+
+    expect(getCachedIMessagePrivateApiStatus(literal)).toBeUndefined();
+    expect(getCachedIMessagePrivateApiStatus(trimmed)?.selectors).toEqual({ trimmed: true });
   });
 
   it("leaves other cli paths alone", () => {

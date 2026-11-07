@@ -1,0 +1,4 @@
+# Literal trailing-space cliPath/dbPath must keep its own executable, database, cache
+# key, and recovery-cursor slot. These are upgrade-state and spawn-boundary regression
+# pairs (literal vs trimmed `it.each`), not redundant duplicates.
+127
