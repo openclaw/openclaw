@@ -37,6 +37,11 @@ answered. An interrupted tool result does not hide a reply whose final delivery
 was already recorded. Progress updates and ordinary delivery bookkeeping are
 excluded from this restored context.
 
+For an ordinary reply, if the selected context already contains the same message
+ID and displayed text, the current-message header uses `Replying to #<id>` instead
+of repeating its body. Selected text quotes, external replies, and reply text
+missing from the final history window retain their quoted text.
+
 <Note>
   **Upgrade note: Telegram's default preview changed in 2026.8.1.** With `channels.telegram.streaming` unset, Telegram keeps one editable status draft during the turn (the agent's current status plus its tool lines) and sends the final answer as a normal message. It previously streamed the answer text itself into the preview. No config becomes invalid and no `doctor --fix` is needed; to keep the previous behavior, set:
 

@@ -267,7 +267,10 @@ function isTelegramInboundContext(ctx: TemplateContext): boolean {
   );
 }
 
-function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | undefined {
+function formatTelegramCurrentMessageContext(
+  ctx: TemplateContext,
+  replyBodyInHistory = false,
+): string | undefined {
   if (!isTelegramInboundContext(ctx)) {
     return undefined;
   }
@@ -280,9 +283,18 @@ function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | und
     normalizePromptMetadataString(ctx.MessageSid) ??
     normalizePromptMetadataString(ctx.MessageSidFull);
   const header = messageId ? `#${messageId}:` : undefined;
-  return ["Current message:", `[Replying to: ${JSON.stringify(quote)}]`, header]
-    .filter((line) => line !== undefined)
-    .join("\n");
+  // External replies can reuse a local message ID; selected quotes carry intent
+  // even when their source message is already visible.
+  const replyToId = normalizePromptMetadataString(ctx.ReplyToId);
+  const reply =
+    replyBodyInHistory &&
+    replyToId &&
+    !ctx.ReplyToIsExternal &&
+    !ctx.ReplyToIsQuote &&
+    !ctx.ReplyToQuoteText
+      ? `[Replying to #${replyToId}]`
+      : `[Replying to: ${JSON.stringify(quote)}]`;
+  return ["Current message:", reply, header].filter((line) => line !== undefined).join("\n");
 }
 
 export function resolveInboundUserContextPromptJoiner(ctx: TemplateContext): " " | undefined {
@@ -427,6 +439,9 @@ export function buildInboundUserContextPrefix(
     }) ?? [];
   const structuredContext = ctx.ChannelStructuredContext ?? [];
   const chatWindowMessageIds = new Set<string>();
+  const replyToId = normalizePromptMetadataString(ctx.ReplyToId);
+  const renderedReplyBody = sanitizeTranscriptText(ctx.ReplyToBody, "body");
+  let replyBodyInHistory = false;
   for (const entry of structuredContext) {
     if (!isChatWindowStructuredContext(entry)) {
       continue;
@@ -439,10 +454,18 @@ export function buildInboundUserContextPrefix(
       const id = normalizePromptMetadataString(message["message_id"]);
       if (id) {
         chatWindowMessageIds.add(id);
+        // Compare the emitted text, not just cache membership: clipped or edited
+        // history must not hide reply content that the model has not received.
+        if (
+          id === replyToId &&
+          renderedReplyBody &&
+          sanitizeTranscriptText(message["body"], "body") === renderedReplyBody
+        ) {
+          replyBodyInHistory = true;
+        }
       }
     }
   }
-  const replyToId = normalizePromptMetadataString(ctx.ReplyToId);
   const chatWindowCoversReplyContext =
     replyChainPayload.length > 0
       ? replyChainPayload.every((entry) => {
@@ -451,7 +474,14 @@ export function buildInboundUserContextPrefix(
         })
       : Boolean(replyToId && chatWindowMessageIds.has(replyToId));
   const chatWindowCoversHistory = structuredContext.some(isChatWindowHistoryContext);
-  const currentMessageContext = formatTelegramCurrentMessageContext(ctx);
+  if (!chatWindowCoversHistory && replyToId && renderedReplyBody) {
+    replyBodyInHistory ||= boundedHistory.some(
+      (entry) =>
+        normalizePromptMetadataString(entry.messageId) === replyToId &&
+        sanitizeTranscriptText(entry.body, "body") === renderedReplyBody,
+    );
+  }
+  const currentMessageContext = formatTelegramCurrentMessageContext(ctx, replyBodyInHistory);
   const senderId = normalizePromptMetadataString(ctx.SenderId);
   const senderE164 = normalizePromptMetadataString(ctx.SenderE164);
   const senderIdDigits = senderId?.replace(/\D/gu, "");

@@ -110,40 +110,62 @@ it.each([
   },
 );
 
-it("keeps Telegram reply text beside its marker", async () => {
-  const threadNote = "[Thread starter - for context]\nPlanning the picnic next month.";
-  const sessionCtx = context("Tldr", {
-    Provider: "telegram",
-    ChatType: "group",
-    MessageSid: "42",
-    ReplyToId: "41",
-    ReplyToBody: "The restore finished.",
-    ReplyToSender: "Example Bot",
-    InboundEventKind: "user_request",
-  });
-  const envelope = await envelopeFor(
-    sessionCtx,
-    { opts: { sourceReplyDeliveryMode: "message_tool_only" } },
-    { threadContextNote: threadNote, systemEventBlocks: ["System: Scheduled digest."] },
-  );
-  const prompt = currentPrompt(envelope);
-  expect(prompt).toContain('[Replying to: "The restore finished."]\n#42: Tldr');
-  expect(envelope.transcriptCommandBody).toBe("Tldr");
-  expect(prompt).not.toContain("PR attribution:");
-  expect(prompt.indexOf(threadNote)).toBeGreaterThanOrEqual(0);
-  expect(prompt.indexOf(threadNote)).toBeLessThan(prompt.indexOf("System: Scheduled digest."));
-  expect(prompt.indexOf("System: Scheduled digest.")).toBeLessThan(
-    prompt.indexOf(CURRENT_MESSAGE_MARKER),
-  );
-  expect(envelope.currentInboundContext?.fragments).toContainEqual({
-    kind: "runtime-instruction",
-    text: CURRENT_MESSAGE_MARKER,
-  });
-  for (const text of ["System: Scheduled digest.", MESSAGE_TOOL_ONLY_DELIVERY_HINT]) {
-    expect(prompt).toContain(text);
-    expect(prompt.indexOf(text)).toBeLessThan(prompt.indexOf("Current message:"));
-  }
-});
+it.each([false, true])(
+  "keeps Telegram reply context beside its marker with history=%s",
+  async (withHistory) => {
+    const threadNote = "[Thread starter - for context]\nPlanning the picnic next month.";
+    const sessionCtx = context("Tldr", {
+      Provider: "telegram",
+      ChatType: "group",
+      MessageSid: "42",
+      ReplyToId: "41",
+      ReplyToBody: "The restore finished.",
+      ReplyToSender: "Example Bot",
+      InboundEventKind: "user_request",
+      ChannelStructuredContext: withHistory
+        ? [
+            {
+              label: "Conversation context",
+              source: "telegram",
+              type: "chat_window",
+              payload: {
+                messages: [
+                  { message_id: "41", sender: "Example Bot", body: "The restore finished." },
+                ],
+              },
+            },
+          ]
+        : undefined,
+    });
+    const envelope = await envelopeFor(
+      sessionCtx,
+      { opts: { sourceReplyDeliveryMode: "message_tool_only" } },
+      { threadContextNote: threadNote, systemEventBlocks: ["System: Scheduled digest."] },
+    );
+    const prompt = currentPrompt(envelope);
+    expect(prompt).toContain(
+      withHistory
+        ? "[Replying to #41]\n#42: Tldr"
+        : '[Replying to: "The restore finished."]\n#42: Tldr',
+    );
+    expect(prompt.match(/The restore finished\./g)).toHaveLength(1);
+    expect(envelope.transcriptCommandBody).toBe("Tldr");
+    expect(prompt).not.toContain("PR attribution:");
+    expect(prompt.indexOf(threadNote)).toBeGreaterThanOrEqual(0);
+    expect(prompt.indexOf(threadNote)).toBeLessThan(prompt.indexOf("System: Scheduled digest."));
+    expect(prompt.indexOf("System: Scheduled digest.")).toBeLessThan(
+      prompt.indexOf(CURRENT_MESSAGE_MARKER),
+    );
+    expect(envelope.currentInboundContext?.fragments).toContainEqual({
+      kind: "runtime-instruction",
+      text: CURRENT_MESSAGE_MARKER,
+    });
+    for (const text of ["System: Scheduled digest.", MESSAGE_TOOL_ONLY_DELIVERY_HINT]) {
+      expect(prompt).toContain(text);
+      expect(prompt.indexOf(text)).toBeLessThan(prompt.indexOf("Current message:"));
+    }
+  },
+);
 
 it.each(["message_tool_only", "automatic"] as const)(
   "projects raw room events separately from resumable history with %s delivery",

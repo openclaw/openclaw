@@ -2263,7 +2263,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replyContext();
-    expect(payload.ReplyChain?.[0]).toMatchObject({ messageId: "9003" });
+    expect([payload.ReplyToIsExternal, payload.ReplyChain?.[0]?.messageId]).toEqual([true, "9003"]);
     expect(payload.ReplyChain?.[0]?.mediaPath).toBeTypeOf("string");
     expect(getFileSpy).toHaveBeenCalledWith("external-photo-1", expect.any(AbortSignal));
     expect(mediaFetch).toHaveBeenCalledTimes(1);
