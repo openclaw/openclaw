@@ -499,6 +499,55 @@ function isEmptyShellParameterExpansionTail(token: string): boolean {
   return /^[-=?+]\}$/.test(token);
 }
 
+// Redaction replaces a captured value chunk with `***`. When the chunk is only the *opener* of
+// a shell expansion - `$(cat ` or `${MY_TOKEN`, as captured by value classes that stop at
+// whitespace or a quote - masking deletes the `$( `/`${` but keeps the untouched closing
+// `)`/`}` from the rest of the line. The result is no longer valid shell syntax: redacted
+// command text that any surface re-emits or replays (tool lifecycle events, progress lines,
+// approval previews, transcripts, follow-up turns that copy a command back into exec) then
+// fails in bash with `syntax error near unexpected token` / `unexpected EOF while looking for
+// matching ...`, long before the secret would have been resolved. This exemption is applied
+// only to the shell/env assignment rules (shellReferencePreservingPatterns), which are the
+// rules whose captured chunk is shell syntax rather than credential material: partial openers
+// there carry no literal secret by definition - the value is resolved by the shell at run time
+// from a file, variable, or subprocess - and everything after the first space was never masked
+// anyway, so preserving them leaks nothing the old output did not already show. Balanced forms
+// (quoted `TOKEN="***"` captures, complete `$(...)` chunks) still mask exactly as before and
+// render as syntactically valid `***`, and opaque-credential rules (URL userinfo, connection
+// strings, structured auth headers, operator patterns) keep masking their captured value whole
+// even when it begins with `$(`, because there the capture is the credential itself. Known
+// secret *values* remain protected by the registered-value exact pass and the vendor-token
+// grammars, which run independently of this branch.
+function isPartialShellExpansion(token: string): boolean {
+  const body = token.replace(/^\\+/u, "");
+  const first = body[0];
+  if (first === '"' || first === "'" || first === "`") {
+    return false;
+  }
+  if (body.startsWith("$(")) {
+    return !body.includes(")");
+  }
+  if (body.startsWith("${")) {
+    return !body.includes("}");
+  }
+  return false;
+}
+
+// An unbalanced `${NAME` (optionally with a `:-`/`:?`/`:+`/`-` default operator) is a variable
+// *name*, not credential material: the characters are an identifier, so masking it discloses
+// nothing that preserving it would hide. Credential value classes exclude `}` (see
+// HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN), so a header capture such as `Authorization: Bearer
+// ${MY_TOKEN}` is exactly this shape, and masking it deletes the opener while leaving the closing
+// `}` behind - the same orphan-delimiter corruption this file repairs for assignments. Balanced
+// forms (`${NAME}`) and command substitutions (`$(cat`) are excluded here: the former are masked
+// whole with no orphan left behind, the latter can carry opaque literal credentials in rules such
+// as URL userinfo, so they stay gated on shellReferencePreservingPatterns below.
+const PARTIAL_SHELL_VARIABLE_REFERENCE_RE = /^\$\{[A-Za-z_][A-Za-z0-9_]*(?::?[-=?+][^}]*)?$/u;
+
+function isPartialShellVariableReference(token: string): boolean {
+  return PARTIAL_SHELL_VARIABLE_REFERENCE_RE.test(token.replace(/^\\+/u, ""));
+}
+
 function prepareRedactionCapture(
   { match, groups, input, offset, replacement: policyReplacement }: RedactMatch,
   pattern: ResolvedRedactPattern,
@@ -548,6 +597,23 @@ function prepareRedactionCapture(
         isShellReferencePattern &&
         (shouldPreserveShellReferenceMatch(match, token) ||
           isEmptyShellParameterExpansionTail(token))
+      ) {
+        return undefined;
+      }
+      // Shell-grammar guard. Two deliberately different widths:
+      //  - shell/env assignment rules (shellReferencePreservingPatterns) keep the full
+      //    partial-expansion exemption, so `TOKEN=$(cat ~/.openclaw/secrets/key)` survives masking
+      //    with its `)` still matched;
+      //  - every other rule only exempts an unbalanced `${NAME` variable reference, which cannot
+      //    hold literal credential material and would otherwise leave an orphan `}` behind
+      //    (e.g. `Authorization: Bearer ${MY_TOKEN}`).
+      // Opaque-credential captures (URL userinfo, connection strings, structured auth headers,
+      // operator-configured patterns) therefore stay masked when the capture is `$(`-shaped:
+      // there the chunk is the credential itself even when it begins with the opener.
+      if (
+        isShellReferencePattern
+          ? isPartialShellExpansion(token)
+          : isPartialShellVariableReference(token)
       ) {
         return undefined;
       }
