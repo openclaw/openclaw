@@ -50,6 +50,7 @@ import {
 } from "./openai-completions-stream.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
+import { createCompletionsPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
 import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
@@ -440,6 +441,13 @@ export function streamOpenAICompletionsRequest(
           assertOpenAICompletionsPayloadHasConversationTurn(params, model);
         }
       }
+      // Forensic presence check: observe the FINAL pre-submission request object
+      // (after onPayload replacement), before encodeBody serializes it. Fact-only.
+      const observePromptPresence = createCompletionsPromptEgressObserver(
+        options,
+        context.systemPrompt,
+      );
+      observePromptPresence?.(params);
       const contextOutputBudget = resolveCompletionsContextOutputBudget(builtParams, params);
       const emitReasoning = shouldEmitOpenAICompletionsReasoning(model, options, mode);
       firstEventAbort = createFirstStreamEventAbortController(options?.signal);

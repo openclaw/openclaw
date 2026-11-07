@@ -4,7 +4,10 @@ import {
   modelRequestBodyState,
 } from "@openclaw/ai/internal/model-request-body";
 import {
+  promptPresenceExpectations,
+  promptPresenceRequestToken,
   responsesPromptObserver,
+  type PromptPresenceExpectation,
   type ResponsesPromptObservation,
 } from "@openclaw/ai/internal/openai";
 import { stableStringify } from "@openclaw/normalization-core";
@@ -47,6 +50,18 @@ type ProviderPromptSnapshot = {
 export type ProviderPromptState = {
   lastAttempt?: ProviderPromptSnapshot;
   lastRejected?: ProviderPromptSnapshot;
+  /**
+   * Frozen expectation set of the CURRENT attempt prompt assembly (set by the
+   * prompt-build phase; memory-only; never a global latest-value cache).
+   */
+  pendingInjectedExpectations?: PromptPresenceExpectation[];
+  /** Entries the producer dropped at its own collection cap (visibility fact). */
+  pendingInjectedExpectationsOverflow?: number;
+  /**
+   * Monotonic per-run logical model request ordinal, assigned at the streamFn
+   * invocation boundary (outermost wrapper layer) — not at assembly time.
+   */
+  logicalRequestCount?: number;
 };
 
 const PROVIDER_PROMPT_STATES_KEY = Symbol.for("openclaw.providerPromptStates");
@@ -207,6 +222,21 @@ export function wrapStreamFnWithProviderPromptState(params: {
     params.state.lastAttempt = undefined; // Custom transports must not leave a stale candidate.
     let attempts = 0;
     let promptObservation: ResponsesPromptObservation | undefined;
+    // Presence forensics: bind the current attempt's frozen expectation set to this
+    // request's options so the transport checkpoint observes exactly what was assembled.
+    // Logical request ordinal binds to the streamFn invocation boundary: the
+    // OUTERMOST wrapper layer (whose options carry no token yet) assigns it once
+    // per invocation; inner layers observe the incoming token and propagate, so
+    // wrapper stacking cannot over-count and retries keep one requestIndex.
+    const outerToken = promptPresenceRequestToken.get(options);
+    let requestIndex: number;
+    if (outerToken && typeof outerToken.requestIndex === "number") {
+      requestIndex = outerToken.requestIndex;
+    } else {
+      params.state.logicalRequestCount = (params.state.logicalRequestCount ?? 0) + 1;
+      requestIndex = params.state.logicalRequestCount;
+    }
+    const pendingExpectations = params.state.pendingInjectedExpectations;
     const originalOnPayload = options?.onPayload;
     const observedOptions: NonNullable<Parameters<StreamFn>[2]> = {
       ...options,
@@ -277,9 +307,19 @@ export function wrapStreamFnWithProviderPromptState(params: {
       }
       return encoded!;
     };
+    promptPresenceRequestToken.set(observedOptions, { requestIndex });
+    if (pendingExpectations && pendingExpectations.length > 0) {
+      promptPresenceExpectations.set(observedOptions, {
+        expectations: pendingExpectations,
+        overflowCount: params.state.pendingInjectedExpectationsOverflow,
+      });
+    }
     responsesPromptObserver.set(observedOptions, (observation) => {
       promptObservation = observation;
-      params.recordEvent?.("provider.prompt.observed", { ...observation });
+      params.recordEvent?.("provider.prompt.observed", {
+        ...observation,
+        ...(requestIndex !== undefined ? { requestIndex } : {}),
+      });
     });
     return params.streamFn(model, context, observedOptions);
   };

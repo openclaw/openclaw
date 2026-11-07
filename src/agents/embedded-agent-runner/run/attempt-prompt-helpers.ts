@@ -97,6 +97,10 @@ export async function resolvePromptBuildHookResult(params: {
       : {}),
     prependContext: joinContext("prependContext"),
     appendContext: joinContext("appendContext"),
+    // Presence forensics: pass through the plugin-frozen expectation set for this
+    // prompt build (validated shape; body text stays in memory only).
+    injectedExpectations: promptBuildResult?.injectedExpectations,
+    injectedExpectationsOverflow: promptBuildResult?.injectedExpectationsOverflow,
     prependSystemContext: wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
     appendSystemContext: wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
   };
