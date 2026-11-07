@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
+  type PackageDistImportOccurrence,
   preparePackageDistJavaScript,
 } from "../../scripts/lib/package-dist-imports.mjs";
 import { collectPackageRootImports } from "../../src/infra/package-root-imports.js";
@@ -96,6 +97,71 @@ describe("collectPackageDistImportErrors", () => {
 });
 
 describe("collectPackageDistImports", () => {
+  it("retains occurrence provenance without changing packaging edges or legacy callbacks", () => {
+    const statements = [
+      'require("./same.mjs");',
+      'import "./same.mjs";',
+      'export * from "./same.mjs";',
+      'function deferred() { return import("./same.mjs"); }',
+      'import("node:fs");',
+      "import(`./template.mjs`);",
+      "require(target);",
+      "import(target);",
+      'new URL("./worker.mjs", import.meta.url);',
+      'new URL("./asset.png", import.meta.url);',
+    ];
+    const source = statements.join("\n");
+    const occurrences: PackageDistImportOccurrence[] = [];
+    const legacy: string[] = [];
+    const options = { files: ["dist/index.js"], readText: () => source };
+    const edges = collectPackageDistImports({
+      ...options,
+      onStaticImport: (specifier) => legacy.push(specifier),
+      onImportOccurrence: (occurrence) => occurrences.push(occurrence),
+    });
+    expect(edges).toEqual([
+      { importerPath: "dist/index.js", importedPath: "dist/same.mjs", kind: "require" },
+      ...Array.from({ length: 3 }, () => ({
+        importerPath: "dist/index.js",
+        importedPath: "dist/same.mjs",
+      })),
+      { importerPath: "dist/index.js", importedPath: "dist/template.mjs" },
+      { importerPath: "dist/index.js", importedPath: "dist/worker.mjs" },
+    ]);
+    expect(legacy).toEqual(["./same.mjs", "./same.mjs", "./same.mjs", "node:fs"]);
+    expect(
+      occurrences.map(({ kind, specifier, importedPath }) => [kind, specifier, importedPath]),
+    ).toEqual([
+      ["require", "./same.mjs", "dist/same.mjs"],
+      ["static-import", "./same.mjs", "dist/same.mjs"],
+      ["static-export", "./same.mjs", "dist/same.mjs"],
+      ["dynamic-import", "./same.mjs", "dist/same.mjs"],
+      ["dynamic-import", "node:fs", undefined],
+      ["dynamic-import", "./template.mjs", "dist/template.mjs"],
+      ["require", undefined, undefined],
+      ["dynamic-import", undefined, undefined],
+      ["import-meta-url", "./worker.mjs", "dist/worker.mjs"],
+      ["import-meta-url", "./asset.png", undefined],
+    ]);
+    expect(occurrences.every(({ importerPath }) => importerPath === "dist/index.js")).toBe(true);
+    expect(occurrences.map(({ start, end }) => source.slice(start, end))).toEqual([
+      statements[0]!.slice(0, -1),
+      statements[1],
+      statements[2],
+      'import("./same.mjs")',
+      ...statements.slice(4).map((statement) => statement.slice(0, -1)),
+    ]);
+    const rejected: PackageDistImportOccurrence[] = [];
+    expect(() =>
+      collectPackageDistImports({
+        files: ["dist/invalid.mjs"],
+        readText: () => 'import "./seen.mjs"; const =;',
+        onImportOccurrence: (occurrence) => rejected.push(occurrence),
+      }),
+    ).toThrow(SyntaxError);
+    expect(rejected).toEqual([]);
+  });
+
   it("carries raw string import specifiers without adding templates, require calls, or URLs", () => {
     const specifiers: string[] = [];
     collectPackageDistImports({
