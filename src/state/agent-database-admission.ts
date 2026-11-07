@@ -36,7 +36,10 @@ export type AgentDatabaseAdmissionRefusal = {
 } & (
   | { code: "agent-database-ownership-mismatch"; embeddedOwnerId: string }
   | {
-      code: "agent-database-inspection-pending" | "agent-database-inspection-failed";
+      code:
+        | "agent-database-inspection-pending"
+        | "agent-database-inspection-failed"
+        | "agent-deletion";
       embeddedOwnerId?: undefined;
     }
 );
@@ -191,7 +194,7 @@ export function createAgentDatabaseDeletionRefusal(
   return {
     agentId: refusal.agentId,
     paths: refusal.paths,
-    code: "agent-database-inspection-failed",
+    code: "agent-deletion",
     reason: `Agent ${refusal.agentId} was deleted during startup inspection`,
     repairHint:
       "Deletion has closed this agent's admission. If cleanup remains pending, resolve its reported failure and retry agents.delete. Database repair is not required.",
