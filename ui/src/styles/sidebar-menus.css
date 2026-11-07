@@ -29,11 +29,9 @@
   padding: 2px 8px;
 }
 
-.session-menu__communication-heading {
-  margin: 4px 0 2px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: var(--control-ui-font-weight-semibold);
+/* The section already insets its rows, so its heading starts on that inset. */
+.oc-menu-heading.session-menu__communication-heading {
+  padding-inline: 0;
 }
 
 .session-menu__communication-row {
@@ -436,14 +434,9 @@
   height: 26px;
 }
 
-.session-menu__appearance--mobile .session-menu__icon-section-label {
-  text-transform: none;
-  letter-spacing: normal;
-  margin: 0 12px 8px;
-  padding: 0;
-  font-size: var(--control-ui-text-xs);
-  font-weight: 400;
-  color: var(--muted);
+.session-menu__appearance--mobile .oc-menu-heading.session-menu__icon-section-label {
+  margin-inline: 12px;
+  padding-inline: 0;
 }
 
 .session-actions-page .session-menu__appearance--mobile .session-menu__colors,
@@ -542,15 +535,6 @@
   overflow-y: auto;
 }
 
-.sidebar-customize-menu__title {
-  padding: 6px 8px 8px;
-  font-size: var(--control-ui-text-xs);
-  font-weight: var(--control-ui-font-weight-semibold);
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
 /* Keep expanded state separate from :hover so hover media scoping preserves
    the parent highlight for keyboard and touch navigation too. */
 .sidebar-customize-menu__item:hover,
@@ -585,15 +569,6 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.sidebar-session-sort-menu__title {
-  padding: 4px 8px 2px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: var(--control-ui-font-weight-semibold);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
 }
 
 .session-menu__info {
@@ -682,14 +657,9 @@
   gap: 3px;
 }
 
-.session-menu__icon-section-label {
-  padding: 4px 4px 2px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  line-height: 1;
-  text-transform: uppercase;
+/* The label starts on the swatch grid's edge rather than a row's text inset. */
+.oc-menu-heading.session-menu__icon-section-label {
+  padding-inline: 4px;
 }
 
 .session-menu__icon-choice {
@@ -1093,7 +1063,7 @@
 }
 
 .sidebar-agent-menu > .sidebar-customize-menu__item,
-.sidebar-agent-menu > .sidebar-customize-menu__title {
+.sidebar-agent-menu > .oc-menu-heading {
   flex: none;
 }
 
@@ -1320,28 +1290,14 @@
   display: grid;
 }
 
-.sidebar-session-menu-section + .sidebar-session-menu-section,
-.sidebar-session-menu-footer {
-  margin-block-start: var(--space-2);
-  padding-block-start: var(--space-2);
-  border-block-start: 1px solid var(--border);
-}
-
-/* The header keeps its height with or without Reset, so its label never moves. */
-.sidebar-session-menu-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: var(--sidebar-filter-row-height);
-  padding: 0 var(--sidebar-filter-row-inset);
-}
-
-.sidebar-session-menu-heading h3 {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: var(--control-ui-font-weight-semibold);
-  text-transform: uppercase;
+/* Sections meet at the menu divider: a hairline on the rows' text inset. */
+.sidebar-session-menu-section + .sidebar-session-menu-section::before,
+.sidebar-session-menu-footer::before {
+  content: "";
+  display: block;
+  height: 1px;
+  margin: var(--space-1) var(--sidebar-filter-row-inset);
+  background: var(--border);
 }
 
 .sidebar-session-menu-row,
@@ -1420,8 +1376,7 @@
 }
 
 .sidebar-session-menu-switch,
-.sidebar-session-filter-footer,
-.sidebar-session-menu-reset {
+.sidebar-session-filter-footer {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -1435,8 +1390,7 @@
 }
 
 .sidebar-session-menu-switch:hover,
-.sidebar-session-filter-footer:hover,
-.sidebar-session-menu-reset:hover {
+.sidebar-session-filter-footer:hover {
   background: var(--bg-hover);
 }
 
@@ -1471,16 +1425,6 @@
 
 .sidebar-session-menu-switch .settings-toggle {
   pointer-events: none;
-}
-
-/* Reset's text ends on the controls' edge; its padded hover surface extends past it. */
-.sidebar-session-menu-reset {
-  width: auto;
-  min-height: 0;
-  margin-inline-end: calc(-1.5 * var(--space-1));
-  padding: var(--space-1) calc(1.5 * var(--space-1));
-  border-radius: var(--menu-item-radius);
-  font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-session-filter-footer > span {
@@ -1599,4 +1543,66 @@
 
 .sidebar-identity-menu [data-value^="gateway:"] > .oc-menu-item__check {
   display: none;
+}
+
+/* OpenClaw ID uses the same columns and type scale as every sidebar menu. */
+.sidebar-openclaw-id__initial {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--bg-accent);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+}
+
+.sidebar-openclaw-id__status {
+  display: flex;
+  flex-shrink: 0;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 4px;
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
+.sidebar-openclaw-id__lines {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.4;
+}
+
+.sidebar-openclaw-id__detail {
+  color: var(--muted);
+  font-size: calc(12px * var(--control-ui-text-scale));
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.sidebar-openclaw-id__pill,
+.sidebar-openclaw-id__count {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-openclaw-id__pill {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+}
+
+.sidebar-openclaw-id__pill[data-online="true"] {
+  color: var(--ok);
+}
+
+.sidebar-openclaw-id__sign-in {
+  flex: none;
+  width: 100%;
+  margin-block: 4px;
 }

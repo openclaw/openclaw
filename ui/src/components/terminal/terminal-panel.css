@@ -42,7 +42,7 @@ openclaw-terminal-panel {
     height: 15px;
     stroke-width: 1.6px;
   }
-  .tp-header .tp-icon svg {
+  .tp-header .tp-icon:not(.oc-icon-button) svg {
     width: var(--rail-header-action-glyph-size);
     height: var(--rail-header-action-glyph-size);
     stroke-width: 1.6px;

@@ -313,6 +313,87 @@
   font-weight: var(--control-ui-font-weight-semibold);
 }
 
+/* One section label for every menu and popover. Calm, not shouty: small caps
+   in the muted ink with modest tracking. Its inline inset matches the row
+   content, so labels, rows and trailing slots share both edges. */
+.oc-menu-heading {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  margin: 0;
+  padding-inline: var(--oc-menu-item-padding-inline, 8px);
+}
+
+.oc-menu-heading__label {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Trailing slot: an action is a quiet text button that inks up on hover; a
+   value reads in full ink and never responds. */
+.oc-menu-heading__action,
+.oc-menu-heading__value {
+  flex: none;
+  font-family: var(--font-body);
+  font-size: var(--control-ui-text-sm);
+  font-weight: var(--control-ui-font-weight-normal);
+  line-height: 1.2;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.oc-menu-heading__action {
+  width: auto;
+  min-height: 0;
+  margin-inline-end: -6px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--muted);
+  text-decoration: none;
+  cursor: var(--cursor-action);
+}
+
+.oc-menu-heading__action:is(:hover, :focus-visible) {
+  background: var(--menu-hover);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.oc-menu-heading__value {
+  color: var(--text);
+  font-weight: var(--control-ui-font-weight-semibold);
+}
+
+/* An action that is also a menu row keeps the row's keyboard order, not its box. */
+.oc-menu-item.oc-menu-heading__action {
+  min-height: 0;
+  padding: 3px 6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.2;
+}
+
+.oc-menu-item.oc-menu-heading__action:is(:hover, :focus-visible) {
+  background: var(--menu-hover);
+  color: var(--text);
+}
+
 .oc-popover {
   padding: var(--oc-popover-padding, 1.5rem);
 }
@@ -607,7 +688,7 @@ a.oc-menu-item[href] {
   .session-menu__item,
   .sidebar-session-filter-footer,
   .sidebar-session-filter-panel .picker-select--submenu .picker-select__trigger,
-  .sidebar-session-menu-reset,
+  .oc-menu-heading__action,
   .sidebar-session-menu-row,
   .sidebar-session-menu-switch,
   .sidebar-session-sort-menu__item,

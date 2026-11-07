@@ -672,7 +672,8 @@ These are intentionally guarded by the `ci-workflow-guards`,
   exceeded the existing memory reserve before the three resource-gated cases ran.
 - Numbered tooling measurements in `toolingFileSeconds` drive file packing with
   native profile costs; a hosted fallback scales measured Blacksmith costs.
-  The daily refit samples the newest five contributing successful PR CI runs.
+  The daily refit samples successful jobs from the newest five contributing
+  completed PR CI runs, including workflows where other jobs failed.
   Those measurements describe the PR merge-ref and update exact compact and tooling identities;
   main compact and release sampling retain their existing provenance. Preserve
   independent-run medians, runner profiles and partial-plan history. An explicit
