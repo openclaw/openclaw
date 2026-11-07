@@ -56,6 +56,21 @@ const deliveryQueueMocks = vi.hoisted(() => ({
   drainPendingDeliveries: vi.fn(async (_opts: unknown) => undefined),
 }));
 
+const heartbeatLogRecords = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    getChildLogger: (...args: Parameters<typeof actual.getChildLogger>) => {
+      const logger = actual.getChildLogger(...args);
+      if (args[0]?.module === "web-heartbeat") {
+        logger.attachTransport({ format: () => "", write: heartbeatLogRecords });
+      }
+      return logger;
+    },
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
   drainPendingDeliveries: deliveryQueueMocks.drainPendingDeliveries,
 }));
@@ -512,6 +527,33 @@ it("keeps quiet linked-device sessions open when transport frames keep arriving"
     expect(scripted.getListenerCount()).toBe(1);
   });
 });
+
+it.each([false, true])(
+  "bases heartbeat severity on transport activity with prior inbound=%s",
+  async (seedInbound) => {
+    setLoggerOverride({ level: "trace" });
+    await withWatchdog(
+      {
+        seedInbound,
+        heartbeatSeconds: 1,
+        transportTimeoutMs: 1_000,
+        watchdogCheckMs: 60 * 60_000,
+      },
+      async () => {
+        vi.setSystemTime(Date.now() + 31 * 60_000);
+        getLastWebAutoReplySessionSocket().ws.emit("frame");
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(heartbeatLogRecords.mock.lastCall?.[0]).toMatchObject({
+          _meta: { logLevelName: "INFO" },
+        });
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(heartbeatLogRecords.mock.lastCall?.[0]).toMatchObject({
+          _meta: { logLevelName: "WARN" },
+        });
+      },
+    );
+  },
+);
 
 it("reconnects on transport stall before the long app-silence window", async () => {
   await withWatchdog(

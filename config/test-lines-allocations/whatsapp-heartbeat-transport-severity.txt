@@ -1,0 +1,2 @@
+# Monitor-level heartbeat severity with absent/old inbound messages and timeout-boundary transport activity.
+42
