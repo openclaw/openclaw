@@ -86,6 +86,7 @@ struct OpenClawChatSwarmActivityState: Equatable {
 enum OpenClawChatSwarmDotStatus: Int, Comparable, Sendable {
     case running
     case queued
+    case paused
     case failed
     case done
 
@@ -97,6 +98,7 @@ enum OpenClawChatSwarmDotStatus: Int, Comparable, Sendable {
         switch self {
         case .running: String(localized: "Running")
         case .queued: String(localized: "Queued")
+        case .paused: String(localized: "Paused")
         case .failed: String(localized: "Failed")
         case .done: String(localized: "Done")
         }
@@ -120,6 +122,7 @@ struct OpenClawChatSwarmGroup: Identifiable, Sendable {
     let id: String
     let label: String
     let running: Int
+    let paused: Int
     let done: Int
     let failed: Int
     let narrator: String?
@@ -184,13 +187,15 @@ func buildOpenClawChatSwarmGroups(
             id: groupID,
             label: groupID.split(separator: ":").last.map(String.init) ?? groupID,
             running: dots.count { $0.status == .running },
+            paused: dots.count { $0.status == .paused },
             done: dots.count { $0.status == .done },
             failed: dots.count { $0.status == .failed },
             narrator: entries.compactMap(\.log).first { !$0.isEmpty },
             phases: phases)
     }.filter { group in
+        // A paused child still owes its task, so its group stays listed.
         group.phases.contains { phase in
-            phase.dots.contains { $0.status == .queued || $0.status == .running }
+            phase.dots.contains { [.queued, .running, .paused].contains($0.status) }
         }
     }.sorted { $0.id < $1.id }
 }
@@ -202,6 +207,11 @@ enum SelfContainedSwarmHelpers {
         }
         if row.status == "running" || row.hasActiveRun == true {
             return .running
+        }
+        // ui/src/pages/chat/chat-subagent-wait.ts isPausedChild: a child yielded on
+        // sessions_yield keeps its terminal status; its own running descendants read as running.
+        if row.subagentRunState == "paused" {
+            return row.hasActiveSubagentRun == true ? .running : .paused
         }
         if row.status == "done" {
             return .done
@@ -405,11 +415,18 @@ private struct OpenClawChatSwarmGroupView: View {
                 Text(verbatim: self.group.label)
                     .font(OpenClawChatTypography.captionSemiBold)
                     .lineLimit(1)
-                Text(verbatim: String(
-                    format: String(localized: "%1$lld Running · %2$lld Done · %3$lld Failed"),
-                    Int64(self.group.running),
-                    Int64(self.group.done),
-                    Int64(self.group.failed)))
+                Text(verbatim: self.group.paused > 0
+                    ? String(
+                        format: String(localized: "%1$lld Running · %2$lld Paused · %3$lld Done · %4$lld Failed"),
+                        Int64(self.group.running),
+                        Int64(self.group.paused),
+                        Int64(self.group.done),
+                        Int64(self.group.failed))
+                    : String(
+                        format: String(localized: "%1$lld Running · %2$lld Done · %3$lld Failed"),
+                        Int64(self.group.running),
+                        Int64(self.group.done),
+                        Int64(self.group.failed)))
                     .font(OpenClawChatTypography.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -478,6 +495,8 @@ private struct OpenClawChatSwarmDotView: View {
             Circle().stroke(OpenClawChatTheme.muted, lineWidth: 1)
         case .running:
             Circle().fill(OpenClawChatTheme.accent)
+        case .paused:
+            Circle().stroke(OpenClawChatTheme.accent, lineWidth: 1.5)
         case .done:
             Circle().fill(OpenClawChatTheme.success)
         case .failed:

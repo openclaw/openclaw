@@ -19,12 +19,13 @@ internal fun projectWearAgentPulse(
     put(
       "swarm",
       buildJsonObject {
+        val activeGroups = activeSwarmGroups(swarmGroups)
         when {
           !gatewayConnected || !swarmAvailable -> {
             put("state", "unavailable")
           }
 
-          swarmGroups.isEmpty() -> {
+          activeGroups.isEmpty() -> {
             put("state", "idle")
             put("scope", "selected-session")
           }
@@ -32,7 +33,7 @@ internal fun projectWearAgentPulse(
           else -> {
             val phaseBuckets = MutableList(MAX_PHASE_BUCKETS) { MutablePhaseCounts() }
             var morePhases = false
-            swarmGroups.forEach { group ->
+            activeGroups.forEach { group ->
               if (group.phases.size > MAX_PHASE_BUCKETS) morePhases = true
               group.phases.take(MAX_PHASE_BUCKETS).forEachIndexed { index, phase ->
                 val bucket = phaseBuckets[index]
@@ -40,7 +41,7 @@ internal fun projectWearAgentPulse(
                   when (dot.status) {
                     ChatSwarmDotStatus.Queued -> bucket.queued += 1
                     ChatSwarmDotStatus.Running -> bucket.running += 1
-                    ChatSwarmDotStatus.Done -> bucket.done += 1
+                    ChatSwarmDotStatus.Done, ChatSwarmDotStatus.Paused -> bucket.done += 1
                     ChatSwarmDotStatus.Failed -> bucket.failed += 1
                   }
                 }
@@ -49,10 +50,10 @@ internal fun projectWearAgentPulse(
             }
             put("state", "active")
             put("scope", "selected-session")
-            put("groups", swarmGroups.size)
-            put("running", swarmGroups.sumOf(ChatSwarmGroup::running))
-            put("done", swarmGroups.sumOf(ChatSwarmGroup::done))
-            put("failed", swarmGroups.sumOf(ChatSwarmGroup::failed))
+            put("groups", activeGroups.size)
+            put("running", activeGroups.sumOf(ChatSwarmGroup::running))
+            put("done", activeGroups.sumOf { it.done + it.paused })
+            put("failed", activeGroups.sumOf(ChatSwarmGroup::failed))
             put(
               "phases",
               JsonArray(
@@ -88,6 +89,15 @@ internal fun projectWearAgentPulse(
         if (state == "ready") put("pending", pendingApprovalCount.coerceAtLeast(0))
       },
     )
+  }
+
+// The watch protocol has no paused state: it keeps receiving only groups with queued or
+// running work and counting paused children as done, as before the phone listed them.
+private fun activeSwarmGroups(groups: List<ChatSwarmGroup>): List<ChatSwarmGroup> =
+  groups.filter { group ->
+    group.phases.any { phase ->
+      phase.dots.any { it.status == ChatSwarmDotStatus.Queued || it.status == ChatSwarmDotStatus.Running }
+    }
   }
 
 private data class MutablePhaseCounts(

@@ -402,7 +402,7 @@ extension OpenClawChatView {
             resolveInputModel: self.resolveComposerModel)
     }
 
-    /// The turn has ended, but a helper it started is still running.
+    /// The turn has ended, but a helper it started is still running or paused.
     @ViewBuilder
     private var subagentWaitRow: some View {
         if let wait = self.viewModel.subagentWait {
@@ -413,15 +413,30 @@ extension OpenClawChatView {
                         .font(OpenClawChatTypography.caption)
                         .foregroundStyle(.secondary)
                     if let child = wait.child {
-                        Button {
-                            self.viewModel.switchSession(to: child.key)
-                        } label: {
-                            Text(child.name)
-                                .font(OpenClawChatTypography.caption)
-                                .underline()
+                        HStack(spacing: 4) {
+                            Button {
+                                self.viewModel.switchSession(to: child.key)
+                            } label: {
+                                Text(child.name)
+                                    .font(OpenClawChatTypography.caption)
+                                    .underline()
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("chat-subagent-wait-child")
+                            if child.paused {
+                                Text(verbatim: "·")
+                                    .font(OpenClawChatTypography.caption)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityHidden(true)
+                                Text("Paused")
+                                    .font(OpenClawChatTypography.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("chat-subagent-wait-child")
+                    } else if wait.pausedCount > 0 {
+                        Text(verbatim: String(format: String(localized: "%lld paused"), Int64(wait.pausedCount)))
+                            .font(OpenClawChatTypography.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 Spacer(minLength: 0)
