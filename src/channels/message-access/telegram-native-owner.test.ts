@@ -69,6 +69,16 @@ it.each([
     }, authority === "asserted"),
 );
 
+it("drops a native command from a sender outside the DM allowlist without replying", () =>
+  withTelegramNativeOwners(async ({ cfg, invoke, handler, driver }) => {
+    cfg.channels!.telegram!.dmPolicy = "allowlist";
+    cfg.channels!.telegram!.allowFrom = ["999999"];
+    await invoke(300);
+    expect(handler).not.toHaveBeenCalled();
+    expect(driver.sentMessages()).toEqual([]);
+    expect(driver.deliveries()).toEqual([]);
+  }));
+
 it("rejects stale native plugin owner authority after demotion", () =>
   withTelegramNativeOwners(async ({ invoke, handler, admins, driver }) => {
     const entered = createDeferredCore();

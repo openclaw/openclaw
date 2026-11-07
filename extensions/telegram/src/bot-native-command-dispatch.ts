@@ -331,6 +331,7 @@ async function resolveTelegramCommandAuth(params: {
     authorized: commandAuthorized,
     senderIsOwner,
     assertOwnerCurrent,
+    silentDmDenial,
   } = await resolveTelegramCommandIngressAuthorization({
     ...ingressParams,
     dmPolicy: effectiveDmPolicy,
@@ -341,6 +342,12 @@ async function resolveTelegramCommandAuth(params: {
     ownerContext,
   });
   if (requireAuth && !commandAuthorized) {
+    if (silentDmDenial) {
+      logVerbose(
+        `Blocked telegram command in DM ${chatId}: sender is outside dmPolicy ${effectiveDmPolicy ?? "pairing"}`,
+      );
+      return null;
+    }
     return await rejectNotAuthorized();
   }
   return {

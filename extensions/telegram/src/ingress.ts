@@ -113,6 +113,7 @@ export async function resolveTelegramCommandIngressAuthorization(params: {
       senderIsOwner: ownerAccess.senderIsOwner,
       assertOwnerCurrent: ownerAccess.assertOwnerCurrent,
       shouldBlockControlCommand,
+      silentDmDenial: false,
       reasonCode: shouldBlockControlCommand
         ? ("control_command_unauthorized" as const)
         : ("command_authorized" as const),
@@ -150,7 +151,27 @@ export async function resolveTelegramCommandIngressAuthorization(params: {
     authorizedByConfig,
     senderIsOwner: ownerAccess.senderIsOwner,
     assertOwnerCurrent: ownerAccess.assertOwnerCurrent,
+    // A DM sender dmPolicy does not admit is dropped for ordinary messages.
+    // A native command must not answer them either: the refusal text tells a
+    // stranger that a bot is listening. Pairing still replies, so a first
+    // contact can complete the challenge. commands.allowFrom denials stay
+    // above and still explain themselves.
+    silentDmDenial: telegramDmCommandShouldStaySilent({
+      isGroup: params.isGroup,
+      reasonCode: result.senderAccess.reasonCode,
+    }),
   };
+}
+
+export function telegramDmCommandShouldStaySilent(params: {
+  isGroup: boolean;
+  reasonCode?: string;
+}): boolean {
+  return (
+    !params.isGroup &&
+    (params.reasonCode === "dm_policy_not_allowlisted" ||
+      params.reasonCode === "dm_policy_disabled")
+  );
 }
 
 export async function resolveTelegramNativeCommandAdmission(
