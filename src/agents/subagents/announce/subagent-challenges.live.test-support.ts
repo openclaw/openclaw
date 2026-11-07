@@ -211,11 +211,11 @@ export function commandOutcomes(messages: Record<string, unknown>[]) {
   });
 }
 
-export function gateTask(url: string): string {
+export function gateTask(url: string, timeoutSeconds = 300): string {
   const script = `const response = await fetch(${JSON.stringify(url)}); const text = await response.text(); if (!response.ok) { console.error(text); process.exitCode = 1; } else { console.log(text); }`;
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   return [
-    `Run this command with exec and allow up to 300 seconds: ${[process.execPath, "--input-type=module", "-e", script].map(quote).join(" ")}.`,
+    `Run this command with exec and allow up to ${timeoutSeconds} seconds: ${[process.execPath, "--input-type=module", "-e", script].map(quote).join(" ")}.`,
     "If it runs in the background, use process to wait for its result. Do not read files, spawn work, retry requests, or replace the command.",
     "When the command finishes, report its actual result. For success reply with its exact stdout only; for failure report the nonzero exit code and exact stderr without claiming a successful result.",
   ].join(" ");

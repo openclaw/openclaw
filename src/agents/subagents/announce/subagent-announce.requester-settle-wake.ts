@@ -51,8 +51,10 @@ import {
   selectCurrentRequesterCompletionRows,
 } from "./subagent-announce-output.js";
 import { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
+import { isRequesterSettleWatchdogFailure } from "./subagent-announce.requester-settle-fallback.js";
 import { buildRequesterSettleWakeMessage } from "./subagent-announce.requester-settle-message.js";
 import { createRequesterSettleReceiptAdmission } from "./subagent-announce.requester-settle-receipt.js";
+import { settleRequesterStallFallback } from "./subagent-announce.requester-settle-recovery.js";
 import {
   readSharedBatchState,
   createRequesterSettleBatchCompletion,
@@ -239,7 +241,12 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     await completeBatch(settledBatch, selectedState, {
       delivered: false,
       path: "none",
-      error: selectedState.lastError ?? "requester settle wake attempts exhausted",
+      ...(selectedState.requesterStallFallback
+        ? { disposition: "permanent_failure" as const }
+        : {}),
+      error: selectedState.requesterStallFallback
+        ? `Requester-stall recovery exhausted; child results retained. ${selectedState.lastError ?? "Delivery attempts exhausted."}`
+        : (selectedState.lastError ?? "requester settle wake attempts exhausted"),
     });
     return false;
   }
@@ -488,20 +495,22 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     const dispatchState = parentOnly
       ? { ...state, privateInput: { runId: directIdempotencyKey, message: wakeMessage } }
       : state;
-    controllerInput = await reserveSubagentControllerSource(
-      settledBatch[0]!,
-      batchKey,
-      directIdempotencyKey,
-      continuationCaller,
-      { requester },
-    );
-    if (!controllerInput) {
-      return false;
-    }
-    params.onControllerInput(controllerInput);
-    // A live settle check may find this same input waiting in the mailbox.
-    if (controllerInput.custody.rpcAdopted) {
-      return false;
+    if (!state.requesterStallFallback) {
+      controllerInput = await reserveSubagentControllerSource(
+        settledBatch[0]!,
+        batchKey,
+        directIdempotencyKey,
+        continuationCaller,
+        { requester },
+      );
+      if (!controllerInput) {
+        return false;
+      }
+      params.onControllerInput(controllerInput);
+      // A live settle check may find this same input waiting in the mailbox.
+      if (controllerInput.custody.rpcAdopted) {
+        return false;
+      }
     }
     const retireUnadoptedInput = () => {
       if (controllerInput && !controllerInput.custody.rpcAdopted) {
@@ -542,6 +551,31 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       }
       return true;
     };
+    const deliverStallFallback = () =>
+      settleRequesterStallFallback({
+        requesterSessionKey,
+        requesterSessionId: requesterEntry.sessionId,
+        requesterLifecycleRevision: requesterEntry.lifecycleRevision,
+        requesterAgentId,
+        requesterStorePath: currentSettledEntry.requesterStorePath,
+        idempotencyKey: `${batchKey}:watchdog-fallback`,
+        // A yield may publish the parent's own answer, never its private child input.
+        findings: privateRows.length > 0 ? undefined : preparedFindings.text,
+        cfg,
+        requesterDepth,
+        origin: directOrigin,
+        signal: params.signal,
+        state: readSharedBatchState(settledBatch),
+        isCurrent: () => isSourceSessionEffectsAllowed() && isRequesterCurrent(),
+        settleRevoked: settleRevokedBatch,
+        transition: (nextWakeState) =>
+          params.transitionBatch(settledBatch, nextWakeState, refreshBatch),
+        complete: (nextWakeState, fallbackDelivery) =>
+          completeBatch(settledBatch, nextWakeState, fallbackDelivery, requesterEntry.sessionId),
+      });
+    if (state.requesterStallFallback) {
+      return await deliverStallFallback();
+    }
     if (
       isSourceSessionEffectsAllowed() &&
       !pauseNotice &&
@@ -643,6 +677,9 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       if (await settleRevokedBatch()) {
         return false;
       }
+      if (!hasAnnounceSendEvidence(error) && isRequesterSettleWatchdogFailure(error)) {
+        return await deliverStallFallback();
+      }
       // A transport exception can follow admission; it is recorded once and never replayed.
       await completeBatch(settledBatch, state, {
         delivered: false,
@@ -672,6 +709,9 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       // No turn accepted this attempt. Keep the live obligation for its next attempt.
       await params.transitionBatch(settledBatch, state, refreshBatch);
       return false;
+    }
+    if (delivery.reason === "requester_stalled") {
+      return await deliverStallFallback();
     }
     const retryState = resolveRequesterSettleRetryState({
       state: dispatchState,

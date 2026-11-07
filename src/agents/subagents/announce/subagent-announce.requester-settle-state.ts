@@ -29,7 +29,8 @@ export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean 
 
 /**
  * Only a known missing result, or an effect-free run whose transcript write was
- * rejected, may mint another public continuation; private retries reconcile.
+ * rejected, may mint another public continuation. A stall fallback retries
+ * delivery only; private retries reconcile.
  */
 export function resolveRequesterSettleRetryState(params: {
   state: RequesterSettleWakeBatchState;
@@ -140,6 +141,9 @@ export function readSharedBatchState(
     status: source?.status ?? "pending",
     attemptCount: Math.max(0, ...states.map((state) => state.attemptCount ?? 0)),
     ...(source?.privateInput ? { privateInput: source.privateInput } : {}),
+    ...(source?.requesterStallFallback
+      ? { requesterStallFallback: source.requesterStallFallback }
+      : {}),
     ...(source?.nextAttemptAt !== undefined ? { nextAttemptAt: source.nextAttemptAt } : {}),
     ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
     ...(source?.progressOperationId ? { progressOperationId: source.progressOperationId } : {}),

@@ -21,6 +21,7 @@ export function resetRequesterSettleWakeRetry(
     status: "pending",
     attemptCount: 0,
     privateInput: undefined,
+    requesterStallFallback: undefined,
     nextAttemptAt: undefined,
     lastError: undefined,
   };

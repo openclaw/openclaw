@@ -60,6 +60,7 @@ import {
 } from "./subagent-announce-dispatch.js";
 import { resolveExactSubagentCompletionEvent } from "./subagent-announce-handoff.js";
 import { resolveCompletionDeliveryOrigins } from "./subagent-announce-origin.js";
+import { isRequesterSettleWatchdogFailure } from "./subagent-announce.requester-settle-fallback.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 /** Another owner (a yielded requester or an idle cron turn) settles this completion. */
@@ -519,6 +520,9 @@ async function sendSubagentAnnounceDirectlyBound(
       }
       if (params.signal?.aborted) {
         return { delivered: false, path: "none" };
+      }
+      if (sourceToolId === "subagent_settle" && isRequesterSettleWatchdogFailure(err)) {
+        return { delivered: false, path: "none", reason: "requester_stalled" };
       }
       const directCompletionFallbackKind = hasFailedTrustedSubagentCompletion
         ? "failed_notice"

@@ -10,6 +10,7 @@ import {
 import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { taskCompletionEvents } from "../../subagent-test-fixtures.test-helpers.js";
 import { deliverCompletionDirect } from "./subagent-announce-completion-delivery.js";
+import { deliverRequesterStallFallback } from "./subagent-announce.requester-settle-fallback.js";
 
 const content = "Long child result. ".repeat(180).trim();
 // Each completion is a distinct delivery; a reused identity is deduplicated by design.
@@ -105,3 +106,32 @@ it.each(["history", "report"] as const)("keeps delivery after %s rejects", async
   expect(fixture.received.join(" ")).toBe(content);
   expect(fixture.onDeliveryResult).toHaveBeenCalledOnce();
 });
+
+it.each([
+  ["ECONNREFUSED", "connect", "retryable"],
+  ["ECONNRESET", "read", undefined],
+] as const)(
+  "retries stall recovery only after proven no-send (%s/%s)",
+  async (code, syscall, disposition) => {
+    const sendText = vi.fn(async () => {
+      throw Object.assign(new Error("transport failed"), { code, syscall });
+    });
+    const outbound = { deliveryMode: "direct" as const, sendText };
+    const plugin = createOutboundTestPlugin({ id: "discord", outbound });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+    const deliveryTarget = { deliver: true, channel: "discord", to: "dm:U123" };
+    const result = await deliverRequesterStallFallback({
+      requesterSessionKey: "agent:main:discord:dm:U123",
+      requesterSessionId: "requester-session",
+      idempotencyKey: `stall-fallback-${code}`,
+      directDelivery: { cfg: {}, deliveryTarget },
+      assertCurrent: () => {},
+    });
+    expect(sendText).toHaveBeenCalled();
+    expect(result).toMatchObject({ delivered: false, path: "direct" });
+    expect([result.disposition, result.reason]).toEqual([
+      disposition,
+      disposition && "visible_reply_missing",
+    ]);
+  },
+);
