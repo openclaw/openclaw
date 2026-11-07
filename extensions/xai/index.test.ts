@@ -35,12 +35,9 @@ function registerXaiAutoEnableProbe(): XaiAutoEnableProbe {
 
 type XaiBilledToolName = "code_execution" | "x_search";
 
-function billedToolFactory(name: XaiBilledToolName, clientVersion?: string) {
+function billedToolFactory(name: XaiBilledToolName) {
   const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
   const api = createTestPluginApi({ registerTool });
-  if (clientVersion) {
-    api.runtime.version = clientVersion;
-  }
   plugin.register(api);
   const factory = registerTool.mock.calls.find(([, opts]) => opts?.name === name)?.[0];
   assert(typeof factory === "function", `Expected ${name} to register a tool factory`);
@@ -454,41 +451,6 @@ describe("xai provider plugin", () => {
 
     expect(transportSignal?.reason).toBe(reason);
   });
-
-  it.each(["x_search", "code_execution"] as const)(
-    "uses the vendor CLI identity and selected subscription auth through registered %s",
-    async (name) => {
-      const factory = billedToolFactory(name, "2026.11.7-fixture");
-      const tool = factory({
-        ...xaiToolContext(name, undefined, true),
-        resolveAuthForProvider: async () => ({ apiKey: "synthetic-oauth", mode: "oauth" }),
-      });
-      assert(tool && !Array.isArray(tool));
-      const mockFetch = vi.fn<typeof fetch>(async (url, init) => {
-        const request = new Request(url, init);
-        expect(request.url).toBe("https://cli-chat-proxy.grok.com/v1/responses");
-        const headers = request.headers;
-        const body = await request.json();
-        expect(headers.get("authorization")).toBe("Bearer synthetic-oauth");
-        expect(headers.get("x-xai-token-auth")).toBe("xai-grok-cli");
-        expect(headers.get("x-grok-client-version")).toBe("1.0.13");
-        expect(headers.get("x-grok-model-override")).toBe(body.model);
-        expect(body.tools).toEqual([
-          { type: name === "x_search" ? "x_search" : "code_interpreter" },
-        ]);
-        return Response.json({ output_text: "Registered subscription answer", citations: [] });
-      });
-      vi.stubGlobal("fetch", mockFetch);
-      const result = await tool.execute(`registered-${name}`, {
-        query: "fixture",
-        task: "fixture",
-      });
-      expect(result.details).toMatchObject({
-        content: expect.stringContaining("Registered subscription answer"),
-      });
-      expect(mockFetch).toHaveBeenCalledOnce();
-    },
-  );
 
   describe.each(["code_execution", "x_search"] as const)("%s exposure", (toolName) => {
     it.each([

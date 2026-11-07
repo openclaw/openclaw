@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { expect, expectTypeOf, it, vi } from "vitest";
+import { afterEach, expect, expectTypeOf, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import {
   captureGatewayToolCallerAssertion,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import { loadPluginInstanceForTest } from "../plugin-sdk/plugin-test-runtime.js";
+import { withFetchPreconnect } from "../plugin-sdk/test-env.js";
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { InvocationFrame } from "./plugin-instance-invocation.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
@@ -227,31 +229,25 @@ it.each([
     for (const closeAt of ["never", "before", "during"] as const) {
       const entered = createDeferred();
       const release = createDeferred();
-      const result =
-        callback === "resolveAuthForProvider"
-          ? { apiKey: "synthetic-key", mode: "oauth" as const, profileId: "xai:synthetic" }
-          : "synthetic-key";
+      const selectedAuth = {
+        apiKey: "synthetic-key",
+        mode: "oauth" as const,
+        profileId: "xai:synthetic",
+      };
+      const result = callback === "resolveAuthForProvider" ? selectedAuth : selectedAuth.apiKey;
       const lookup = vi.fn(async (providerId: string) => {
         expect(providerId).toBe("xai");
         entered.resolve();
         await release.promise;
-        return result;
+        return selectedAuth;
       });
       let current = true;
       const { context, registry } = register(
         contextVersion === 2 ? { contextVersion: 2, create: () => null } : () => null,
         {
           context: {
-            resolveAuthForProvider: async (providerId) => {
-              const value = await lookup(providerId);
-              assert(typeof value !== "string");
-              return value;
-            },
-            resolveApiKeyForProvider: async (providerId) => {
-              const value = await lookup(providerId);
-              assert(typeof value === "string");
-              return value;
-            },
+            resolveAuthForProvider: lookup,
+            resolveApiKeyForProvider: async (providerId) => (await lookup(providerId)).apiKey,
           },
           assertInvocationCurrent: hostAuthority
             ? () => assert(current, "host invocation retired")
@@ -401,5 +397,136 @@ it.each(["allowed", "owner-close", "run-close", "plugin-close"] as const)(
       expect(() => tool.prepareArguments?.({})).toThrow(/closed|no longer active/);
     }
     expect(effect).toHaveBeenCalledTimes(mode === "allowed" ? 1 : 0);
+  },
+);
+
+const subscriptionBase = "https://cli-chat-proxy.grok.com/v1";
+const citation = "https://x.com/openclaw/status/1";
+type Case = {
+  label: string;
+  name?: "x_search" | "code_execution";
+  state?: "plugin retired" | "operation closed";
+  mode?: "oauth" | "api-key";
+  baseUrl?: string;
+  providerEndpoint?: boolean;
+};
+afterEach(() => vi.unstubAllGlobals());
+
+it.each<Case>([
+  { label: "default subscription route" },
+  { label: "explicit subscription route", baseUrl: subscriptionBase, providerEndpoint: true },
+  { label: "provider subscription route", providerEndpoint: true },
+  { label: "registered code execution", name: "code_execution" },
+  { label: "plugin retired during auth", state: "plugin retired" },
+  { label: "operation closed during auth", state: "operation closed" },
+  { label: "public API key", baseUrl: "https://api.x.ai/v1", mode: "api-key" },
+  { label: "custom API key", baseUrl: "https://search-proxy.example/v1", mode: "api-key" },
+  { label: "explicit API key on subscription host", baseUrl: subscriptionBase, mode: "api-key" },
+  { label: "custom OAuth proxy", baseUrl: "https://search-proxy.example/v1" },
+])(
+  "preserves registered xAI tool authority and routing: $label",
+  async ({ name = "x_search", state, mode = "oauth", baseUrl, providerEndpoint }) => {
+    const model = "grok-4.3";
+    const config: OpenClawPluginToolContext["config"] = {
+      plugins: {
+        allow: ["xai"],
+        entries: {
+          xai: {
+            enabled: true,
+            config: {
+              [name === "x_search" ? "xSearch" : "codeExecution"]:
+                name === "x_search" ? { model, baseUrl, cacheTtlMinutes: 0 } : { model },
+            },
+          },
+        },
+      },
+      ...(providerEndpoint
+        ? {
+            models: {
+              providers: {
+                xai: {
+                  baseUrl: subscriptionBase,
+                  api: "openai-responses",
+                  auth: "oauth",
+                  models: [],
+                },
+              },
+            },
+          }
+        : {}),
+    };
+    const { registry, dispose } = await loadPluginInstanceForTest({ config, pluginId: "xai" });
+    onTestFinished(dispose);
+    const entry = registry.tools.find((tool) => tool.names.includes(name));
+    assert(entry, "expected the actual registered xAI tool factory");
+    const auth =
+      createDeferred<
+        Awaited<ReturnType<NonNullable<OpenClawPluginToolContext["resolveAuthForProvider"]>>>
+      >();
+    const resolving = createDeferred();
+    let operationCurrent = true;
+    const assertCurrent = () => assert(operationCurrent, "Owning operation is closed");
+    const context = createPluginToolFactoryContext({
+      entry,
+      registry,
+      assertInvocationCurrent: assertCurrent,
+      context: {
+        config,
+        activeModel: { provider: "xai" },
+        hasAuthForProvider: (provider) => provider === "xai",
+        resolveAuthForProvider: async () => {
+          resolving.resolve();
+          return auth.promise;
+        },
+      },
+    });
+    const raw = entry.factory(context);
+    assert(raw && !Array.isArray(raw), "expected one registered xAI tool");
+    const tool = bindPluginToolCallbacks(entry, registry, raw, assertCurrent);
+    const transport = vi.fn<typeof fetch>(async (input, init) => {
+      const request = new Request(input, init);
+      expect(request.url).toBe(`${baseUrl ?? subscriptionBase}/responses`);
+      expect(request.headers.get("authorization")).toBe("Bearer synthetic-subscription");
+      const subscription = mode === "oauth" && (!baseUrl || baseUrl === subscriptionBase);
+      for (const [header, value] of Object.entries({
+        "x-xai-token-auth": "xai-grok-cli",
+        "x-grok-client-version": "1.0.13",
+        "x-grok-model-override": model,
+      })) {
+        expect(request.headers.get(header)).toBe(subscription ? value : null);
+      }
+      expect(await request.json()).toMatchObject({
+        model,
+        tools: [{ type: name === "x_search" ? "x_search" : "code_interpreter" }],
+      });
+      return Response.json({ output_text: "Synthetic cited answer", citations: [citation] });
+    });
+    vi.stubGlobal("fetch", withFetchPreconnect(transport));
+    const pending = tool.execute("lifecycle-proof", {
+      query: `subscription lifecycle: ${state}`,
+      task: "fixture",
+    });
+    await resolving.promise;
+    if (state === "plugin retired") {
+      markPluginRegistryRetired(registry);
+    }
+    operationCurrent = state !== "operation closed";
+    auth.resolve({ apiKey: "synthetic-subscription", mode });
+    if (state) {
+      await expect(pending).rejects.toThrow(/no longer active|operation is closed/);
+      expect(transport).not.toHaveBeenCalled();
+    } else {
+      const result = await pending;
+      expect(result.details).toMatchObject({
+        content: expect.stringContaining("Synthetic cited answer"),
+      });
+      if (name === "x_search") {
+        expect(result.details).toMatchObject({
+          citations: [citation],
+          externalContent: { source: "x_search", provider: "xai", untrusted: true, wrapped: true },
+        });
+      }
+      expect(transport).toHaveBeenCalledOnce();
+    }
   },
 );
