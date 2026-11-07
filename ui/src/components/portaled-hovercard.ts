@@ -1,4 +1,3 @@
-import { getElementPolygon, isPointInPolygon } from "@zag-js/rect-utils";
 import { onSettled } from "solid-js";
 import { composedAncestors, composedParent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -15,6 +14,31 @@ const AIM_APEX_SLACK = 4;
 const AIM_REST_MS = 150;
 
 type PortaledHovercardPlacement = "horizontal" | "vertical";
+type Point = { x: number; y: number };
+// Zag's ray-casting `isPointInPolygon`. Importing it from @zag-js/rect-utils
+// brings that module's unused rect helpers into the boot chunk.
+function isPointInPolygon(polygon: Point[], { x, y }: Point): boolean {
+  let inside = false;
+  let previous = polygon.at(-1);
+  for (const current of polygon) {
+    if (
+      previous &&
+      current.y > y !== previous.y > y &&
+      x < ((previous.x - current.x) * (y - current.y)) / (previous.y - current.y) + current.x
+    ) {
+      inside = !inside;
+    }
+    previous = current;
+  }
+  return inside;
+}
+
+type HovercardAim = {
+  apex: Point;
+  path: EventTarget[];
+  pending: { target: Element; run: () => void } | null;
+  restTimer: number | null;
+};
 
 // Hold flags stay synchronous: callers write them and immediately decide whether to open or close.
 export function createPortaledHovercardOwner(
@@ -32,13 +56,8 @@ export function createPortaledHovercardOwner(
   let presentationObserver: MutationObserver | undefined;
   let unmountCardContents: (() => void) | null = null;
   let cardAnchor: HTMLElement | null = null;
-  let lastPoint: { x: number; y: number } | null = null;
-  let aim: {
-    apex: { x: number; y: number };
-    path: EventTarget[];
-    pending: { target: Element; run: () => void } | null;
-    restTimer: number | null;
-  } | null = null;
+  let lastPoint: Point | null = null;
+  let aim: HovercardAim | null = null;
   const handleCardPointerEnter = (event: PointerEvent) => {
     if (event.currentTarget === portal.card) {
       portal.pointerOverCard = true;
@@ -85,36 +104,35 @@ export function createPortaledHovercardOwner(
     portal.scheduleClose();
   }
 
-  // Zag's submenu corridor: the exit point plus the card's polygon on its side.
-  function aimsAtCard(event: PointerEvent): boolean {
+  // Zag's submenu corridor: the apex, then the card's corners from its near edge.
+  function aimsAtCard(current: HovercardAim, event: PointerEvent): boolean {
     const card = portal.card;
-    if (!aim || !card) {
+    if (!card) {
       return false;
     }
-    const side = card.dataset.side ?? "right";
-    const { x, y } = aim.apex;
-    const apex =
-      side === "right"
-        ? { x: x - AIM_APEX_SLACK, y }
-        : side === "left"
-          ? { x: x + AIM_APEX_SLACK, y }
-          : side === "bottom"
-            ? { x, y: y - AIM_APEX_SLACK }
-            : { x, y: y + AIM_APEX_SLACK };
-    const polygon = getElementPolygon(card.getBoundingClientRect(), side);
-    return Boolean(
-      polygon && isPointInPolygon([apex, ...polygon], { x: event.clientX, y: event.clientY }),
-    );
+    const side = card.dataset.side;
+    const { x, y } = current.apex;
+    const { left, top, right, bottom } = card.getBoundingClientRect();
+    const tl = { x: left, y: top };
+    const tr = { x: right, y: top };
+    const br = { x: right, y: bottom };
+    const bl = { x: left, y: bottom };
+    const polygon =
+      side === "left"
+        ? [{ x: x + AIM_APEX_SLACK, y }, br, bl, tl, tr]
+        : side === "bottom"
+          ? [{ x, y: y - AIM_APEX_SLACK }, tr, br, bl, tl]
+          : side === "top"
+            ? [{ x, y: y + AIM_APEX_SLACK }, bl, tl, tr, br]
+            : [{ x: x - AIM_APEX_SLACK, y }, tl, tr, br, bl];
+    return isPointInPolygon(polygon, { x: event.clientX, y: event.clientY });
   }
 
-  function armAimRest(): void {
-    if (!aim) {
-      return;
+  function armAimRest(current: HovercardAim): void {
+    if (current.restTimer !== null) {
+      window.clearTimeout(current.restTimer);
     }
-    if (aim.restTimer !== null) {
-      window.clearTimeout(aim.restTimer);
-    }
-    aim.restTimer = aim.pending ? window.setTimeout(finishAim, AIM_REST_MS) : null;
+    current.restTimer = current.pending ? window.setTimeout(finishAim, AIM_REST_MS) : null;
   }
 
   const handlePointerMove = (event: PointerEvent) => {
@@ -127,8 +145,8 @@ export function createPortaledHovercardOwner(
       if (aim.pending && !aim.path.includes(aim.pending.target)) {
         aim.pending = null;
       }
-      if (aimsAtCard(event)) {
-        armAimRest();
+      if (aimsAtCard(aim, event)) {
+        armAimRest(aim);
       } else {
         finishAim();
       }
@@ -310,11 +328,11 @@ export function createPortaledHovercardOwner(
       // the corridor, even across other triggers. Leaving the window has no
       // later moves to judge, so it keeps the timed close.
       const anchor = cardAnchor?.getBoundingClientRect();
-      if (event && event.pointerType !== "touch" && event.relatedTarget && portal.card && anchor) {
+      if (event && event.pointerType !== "touch" && event.relatedTarget && anchor) {
         // Aim from the pointer's last point inside the trigger: fast moves land
         // the exit event well past the edge, off the line toward the card.
         const from = lastPoint ?? { x: event.clientX, y: event.clientY };
-        aim = {
+        const next: HovercardAim = {
           apex: {
             x: Math.min(Math.max(from.x, anchor.left), anchor.right),
             y: Math.min(Math.max(from.y, anchor.top), anchor.bottom),
@@ -323,11 +341,11 @@ export function createPortaledHovercardOwner(
           pending: null,
           restTimer: null,
         };
-        if (aimsAtCard(event)) {
+        if (aimsAtCard(next, event)) {
+          aim = next;
           portal.clearClose();
           return;
         }
-        stopAim();
       }
       // Otherwise keep the grace period: without an exit point the pointer may
       // still be crossing to a card clamped diagonally from its trigger.
@@ -337,12 +355,12 @@ export function createPortaledHovercardOwner(
     // Another trigger hovered on the way to the open card waits until the
     // pointer rests on it or leaves the corridor.
     deferPointerSwitch(event: PointerEvent, target: Element, run: () => void): boolean {
-      if (!aim || !aimsAtCard(event)) {
+      if (!aim || !aimsAtCard(aim, event)) {
         return false;
       }
       aim.path = event.composedPath();
       aim.pending = { target, run };
-      armAimRest();
+      armAimRest(aim);
       return true;
     },
 
