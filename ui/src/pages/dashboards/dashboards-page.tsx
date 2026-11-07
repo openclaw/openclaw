@@ -14,7 +14,7 @@ export function DashboardsPage(props: { routeData?: DashboardsRouteData }) {
   // Display (view, ordering, grouping) is remembered per browser, like other view preferences.
   const [filters, setFilters] = createStore<DashboardGalleryFilters>({
     query: "",
-    ownerId: "",
+    ownerIds: [],
     ...(loadSettings().dashboardsDisplay ?? DASHBOARDS_DISPLAY_DEFAULTS),
   });
   // Loader data is an initial seed; session publications own subsequent updates.

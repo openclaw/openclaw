@@ -3,7 +3,7 @@ import type { DashboardsDisplay } from "../../app/settings-contract.ts";
 
 export type DashboardGalleryFilters = DashboardsDisplay & {
   query: string;
-  ownerId: string;
+  ownerIds: string[];
 };
 
 export type DashboardGalleryHandlers = {

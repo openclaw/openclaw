@@ -1,5 +1,6 @@
 .dashboards-gallery {
   width: 100%;
+  padding-top: var(--space-6);
 }
 
 .dashboards-loading {
@@ -8,10 +9,6 @@
 
 .dashboards-loading__control {
   height: var(--settings-control-height);
-}
-
-.dashboards-loading__select {
-  min-width: 156px;
 }
 
 .dashboards-loading .dashboard-preview {
@@ -31,99 +28,230 @@
   height: 14px;
 }
 
-.dashboards-toolbar {
-  display: grid;
-  grid-template-columns: minmax(240px, 1fr) max-content;
-  gap: var(--space-3);
-  align-items: end;
-  margin-bottom: var(--space-3);
-}
-
-.dashboards-search {
-  position: relative;
+.dashboards-tools {
   display: flex;
   align-items: center;
-}
-
-.dashboards-search > span[aria-hidden="true"] {
-  position: absolute;
-  left: var(--space-3);
-  z-index: 1;
-  display: inline-flex;
-  width: 17px;
-  color: var(--muted);
-  pointer-events: none;
-}
-
-.dashboards-search svg {
-  width: 17px;
-  height: 17px;
-}
-
-.dashboards-search input {
-  width: 100%;
-  min-height: var(--settings-control-height);
-  padding: 0 var(--space-3) 0 40px;
-  border: 1px solid var(--field-border);
-  border-radius: var(--field-radius);
-  background-color: var(--field-bg);
-  font-size: var(--field-font-size);
-  outline: none;
-}
-
-.dashboards-select {
-  display: grid;
   gap: var(--space-1);
 }
 
-.dashboards-select > span,
-.dashboards-results {
+/* Search starts as an icon and becomes the field. */
+.dashboards-search {
+  display: flex;
+  align-items: center;
+  width: min(280px, calc(100vw - 140px));
+  height: 36px;
+  padding-inline-end: 4px;
+  border-radius: var(--field-radius);
+  background: var(--field-bg);
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  cursor: text;
 }
 
-.dashboards-select > span {
-  font-weight: 600;
+.dashboards-search__icon {
+  display: grid;
+  flex: none;
+  width: 36px;
+  place-items: center;
 }
 
-.dashboards-select select {
-  min-width: 156px;
+.dashboards-search__icon svg {
+  width: 14px;
+  height: 14px;
 }
 
-.dashboards-results {
-  margin-bottom: var(--space-3);
+.dashboards-search .header-search__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
 }
 
-/* Phone widths only; wider layouts keep the labeled selects. */
-.dashboards-filter {
+.dashboards-search .header-search__input::-webkit-search-cancel-button {
   display: none;
 }
 
-.dashboards-filter__popover {
-  --oc-popover-padding: var(--menu-padding);
-
-  min-width: min(224px, calc(100dvw - 16px));
-  font-size: calc(13px * var(--control-ui-text-scale));
-  user-select: none;
+.dashboards-tools__trigger.active {
+  background: var(--bg-hover);
+  color: var(--text-strong);
 }
 
-.dashboards-filter__heading {
-  flex: none;
-  margin: 0.25em 0;
-  padding: 0.25em 0.75em;
+.dashboards-authors {
+  --oc-popover-padding: 0;
+
+  width: min(300px, calc(100dvw - 16px));
+  overflow: hidden;
+  font-size: var(--control-ui-text-md);
+}
+
+.dashboards-authors__search,
+.dashboards-authors__bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 44px;
+  padding: 0 10px 0 14px;
+  color: var(--text-tertiary);
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+
+.dashboards-authors__bar {
+  justify-content: flex-end;
+  height: 36px;
+}
+
+.dashboards-authors__search > span {
+  display: inline-flex;
+}
+
+.dashboards-authors__search svg {
+  width: 14px;
+  height: 14px;
+}
+
+.dashboards-authors__search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-strong);
+  font: inherit;
+}
+
+.dashboards-authors__search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.dashboards-authors__clear {
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
   color: var(--muted);
-  font-family: var(--font-body);
-  font-size: round(calc(1em / 1.125), 1px);
+  font-size: var(--control-ui-text-sm);
+  cursor: pointer;
+}
+
+.dashboards-authors__clear:hover {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+/* Long lists scroll inside the popover; the global scrollbar draws the thumb only. */
+.dashboards-authors__list {
+  max-height: calc(32px * 8.5 + 12px);
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.dashboards-authors__row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text-strong);
+  cursor: pointer;
+}
+
+.dashboards-authors__row:hover,
+.dashboards-authors__row:focus-within {
+  background: var(--bg-hover);
+}
+
+.dashboards-authors__row--after-pinned {
+  margin-top: 7px;
+}
+
+.dashboards-authors__row > openclaw-session-owner-chip,
+.dashboards-chip openclaw-session-owner-chip {
+  display: inline-flex;
+  flex: none;
+}
+
+.dashboards-authors__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+}
+
+.dashboards-authors__name b {
+  font-weight: 650;
+}
+
+.dashboards-authors__count {
+  color: var(--text-tertiary);
+  font-size: var(--control-ui-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboards-authors__none {
+  padding: 22px 12px 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.dashboards-chips {
+  display: flex;
+  gap: 6px;
+  margin-bottom: var(--space-4);
+}
+
+.dashboards-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 2px 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  color: var(--text-strong);
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: var(--control-ui-font-weight-semibold);
 }
 
-.dashboards-filter__authors + .dashboards-filter__heading {
-  margin-top: var(--space-2);
+.dashboards-chip:not(:has(openclaw-session-owner-chip)) {
+  padding-inline-start: 11px;
 }
 
-.dashboards-filter__authors {
-  max-height: calc(var(--menu-item-height) * 5.85);
-  overflow-y: auto;
+.dashboards-chip__prefix {
+  color: var(--muted);
+  font-weight: var(--control-ui-font-weight-normal);
+}
+
+.dashboards-chip .session-owner-chip {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  box-shadow: none;
+  font-size: 8px;
+  font-weight: 600;
+}
+
+.dashboards-chip__stack {
+  display: inline-flex;
+}
+
+.dashboards-chip__stack > openclaw-session-owner-chip + openclaw-session-owner-chip {
+  margin-inline-start: -2px;
+}
+
+.dashboards-chip__stack .session-owner-chip {
+  box-shadow: 0 0 0 2px var(--bg-hover);
+}
+
+.dashboards-chip .dashboards-chip__remove {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
 }
 
 .dashboards-display {
@@ -551,20 +679,6 @@ a.dashboard-row__main:hover {
   }
 }
 
-@media (max-width: 768px) {
-  .dashboards-toolbar {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-  .dashboards-search {
-    grid-column: 1 / -1;
-  }
-  .dashboards-select select,
-  .dashboards-loading__select {
-    width: 100%;
-    min-width: 0;
-  }
-}
-
 @media (max-width: 560px) {
   .dashboards-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -597,35 +711,6 @@ a.dashboard-row__main:hover {
   .dashboard-row__updated {
     grid-area: updated;
     font-size: calc(13px * var(--control-ui-text-scale));
-  }
-  .dashboards-toolbar {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: var(--space-2);
-  }
-  .dashboards-search {
-    grid-column: auto;
-  }
-  .dashboards-select,
-  .dashboards-results {
-    display: none;
-  }
-  .dashboards-filter {
-    display: block;
-  }
-  .dashboards-filter__trigger,
-  .dashboards-loading__filter {
-    width: var(--settings-control-height);
-    min-width: 0;
-    height: var(--settings-control-height);
-    padding: 0;
-    border-radius: var(--field-radius);
-  }
-  .dashboards-filter__trigger {
-    justify-content: center;
-  }
-  .dashboards-filter__trigger svg {
-    width: 14px;
-    height: 14px;
   }
   /* The preview is inert and the card already names it, so its widgets drop the title bar. */
   .dashboard-preview .board-widget {

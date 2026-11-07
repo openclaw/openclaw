@@ -11,7 +11,7 @@ import { DashboardsView, type DashboardsRouteData } from "./view.tsx";
 
 const filters: DashboardGalleryFilters = {
   query: "",
-  ownerId: "",
+  ownerIds: [],
   sort: "updated",
   view: "grid",
   group: "none",
@@ -98,14 +98,14 @@ it.each([
 });
 
 it.each([
-  [{ ownerId: "" }, false],
-  [{ ownerId: "riley" }, true],
+  [{ ownerIds: [] }, false],
+  [{ ownerIds: ["riley"] }, true],
 ] as const)("marks the phone filter trigger for %j", (selected, active) => {
   const { container } = mountSolid(() => (
     <DashboardsView
       data={routeData([dashboard])}
       readReady={() => undefined}
-      filters={{ ...filters, ...selected }}
+      filters={{ ...filters, ownerIds: [...selected.ownerIds] }}
       handlers={handlers}
     />
   ));
