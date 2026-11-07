@@ -1,0 +1,2 @@
+# Restricted-role private repository access: regression coverage for picker, sessions.create, background spawn, inherited checkout, commands.list and scope gates.
+592
