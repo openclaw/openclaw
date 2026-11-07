@@ -35,14 +35,13 @@ export function createLocalWorkspaceCheckpointRejection(params: {
     rejection: Omit<LocalWorkspaceRejectedResult, "ref">,
   ) => Promise<void>;
 }) {
+  const repairTarget = (selected: LocalWorkspaceProjection) =>
+    !isLocalWorkspaceBaseRefreshRef(selected.pending_ref) && params.removedAt === undefined
+      ? pendingLocalWorkspaceDirection(selected.pending_target)
+      : undefined;
   const rejection = (reason: string) => {
     const selected = params.current();
-    return new RejectedLocalWorkspaceResultError(
-      reason,
-      selected.pending_target === "canonical" &&
-        !isLocalWorkspaceBaseRefreshRef(selected.pending_ref) &&
-        params.removedAt === undefined,
-    );
+    return new RejectedLocalWorkspaceResultError(reason, repairTarget(selected) === "canonical");
   };
   const assertNotRejected = () => {
     const selected = params.current();
@@ -65,7 +64,10 @@ export function createLocalWorkspaceCheckpointRejection(params: {
         if (selected.pending_ref && selected.pending_target && !selected.journal_json) {
           const reason =
             error.message +
-            " Pending workspace changes were preserved. Move disposable build outputs to checkout-root .openclaw/tmp/ or remove unneeded outputs, then checkpoint the corrected workspace.";
+            " Pending workspace changes were preserved. Move disposable build outputs to checkout-root .openclaw/tmp/ or remove unneeded outputs" +
+            (selected.pending_target === "projection"
+              ? " in the canonical workspace, then retry workspace preparation."
+              : ", then checkpoint the corrected workspace.");
           await params.reject(selected, { reason, manifestRef });
           throw rejection(reason);
         }
@@ -81,17 +83,15 @@ export function createLocalWorkspaceCheckpointRejection(params: {
       ) => Promise<void>;
       scan: (target: LocalWorkspaceSyncTarget) => Promise<LocalWorkspaceManifestCheckpoint>;
     }) => {
-      const rejected = params.current().rejectedResult;
+      const selected = params.current();
+      const rejected = selected.rejectedResult;
       const replacedRejected = Boolean(
-        input.captureRejected &&
-        input.target === "canonical" &&
-        rejected &&
-        rejection(rejected.reason).repairable,
+        input.captureRejected && rejected && input.target === repairTarget(selected),
       );
       if (!replacedRejected) {
         await input.settle();
       }
-      // Only changed agent work can replace rejection. Its Git ref and guest
+      // Only changed source files can replace rejection. Its Git ref and guest
       // files remain recoverable; background settlement never retries it.
       const snapshot = await input.scan(input.target);
       if (replacedRejected && rejected && snapshot.currentManifestRef === rejected.manifestRef) {
@@ -163,11 +163,19 @@ export async function stageLocalWorkspaceCheckpoint(
 
 export async function prepareLocalWorkspaceCheckpoint(params: {
   baselineRef: string | null;
-  synchronize: (target: LocalWorkspaceSyncTarget) => Promise<void>;
+  synchronize: (
+    target: LocalWorkspaceSyncTarget,
+    options?: { captureRejected?: true },
+  ) => Promise<void>;
   current: () => LocalWorkspaceProjection;
   signal: AbortSignal;
 }) {
   await assertLocalWorkspaceDirectory(params.current().projection_path);
+  const selected = params.current();
+  if (selected.rejectedResult && selected.pending_target === "projection") {
+    // Preparation can import a corrected host source before exporting guest edits.
+    await params.synchronize("projection", { captureRejected: true });
+  }
   if (params.baselineRef) {
     try {
       await timeWorktreePreparationPhase("synchronizeCanonical", () =>

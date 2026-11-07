@@ -26,12 +26,19 @@ const expectMissing = async (root: string, relative: string) => {
   await expect(fs.stat(path.join(root, relative))).rejects.toMatchObject({ code: "ENOENT" });
 };
 
-export async function proveRejectedWorkspaceCheckpoint(owner: LocalWorkspaceOwner) {
+export async function proveRejectedWorkspaceCheckpoint(
+  owner: LocalWorkspaceOwner,
+  target: "canonical" | "projection",
+) {
   const prepare = () => withLocalWorkspaceProjection(owner, (state) => state.prepare());
   const settle = () => withLocalWorkspaceProjection(owner, (state) => state.settle());
   const readProjection = () => readLocalWorkspaceProjection(owner.worktree.id);
   const projection = await prepare();
-  await writeText(projection, "result.txt", "retained rejected result\n");
+  const source = target === "canonical" ? projection : owner.worktree.path;
+  const destination = target === "canonical" ? owner.worktree.path : projection;
+  const resultPath = target === "canonical" ? "result.txt" : "source.txt";
+  const retry = () => (target === "canonical" ? checkpointLocalWorkspace(owner) : prepare());
+  await writeText(source, resultPath, "retained rejected result\n");
   const { workerWorkspaceResultStaging: staging, hasWorkerWorkspaceResultRef } =
     await import("./workspace-result-staging.js");
   const stage = staging.stageWorkerWorkspaceResult;
@@ -47,7 +54,7 @@ export async function proveRejectedWorkspaceCheckpoint(owner: LocalWorkspaceOwne
         },
       );
     });
-  await expect(checkpointLocalWorkspace(owner)).rejects.toThrow("add build outputs to .gitignore");
+  await expect(retry()).rejects.toThrow("add build outputs to .gitignore");
   admission.mockRestore();
   const pending = (await readProjection())!;
   expect(pending.rejectedResult).toMatchObject({
@@ -62,20 +69,40 @@ export async function proveRejectedWorkspaceCheckpoint(owner: LocalWorkspaceOwne
       stagedResultRef: pending.pending_ref!,
     }),
   ).toBe(true);
-  await expectMissing(owner.worktree.path, "result.txt");
+  if (target === "canonical") {
+    await expectMissing(destination, resultPath);
+  } else {
+    await expectText(destination, resultPath, "original\n");
+  }
+  if (target === "projection") {
+    await writeText(projection, "guest-only.txt", "guest work while host result is parked\n");
+  }
   // A fresh owner consumes durable rejection instead of reapplying the staged
   // payload. Preparation preserves guest bytes for agent repair.
   for (let attempt = 0; attempt < 2; attempt++) {
     await expect(settle()).rejects.toThrow("add build outputs to .gitignore");
-    expect(await prepare()).toBe(projection);
+    if (target === "canonical") {
+      expect(await prepare()).toBe(projection);
+    } else {
+      await expect(prepare()).rejects.toThrow("add build outputs to .gitignore");
+    }
     expect((await readProjection())!.pending_ref).toBe(pending.pending_ref);
   }
-  await expect(checkpointLocalWorkspace(owner)).rejects.toThrow("add build outputs to .gitignore");
+  await expect(retry()).rejects.toThrow("add build outputs to .gitignore");
   expect((await readProjection())!.pending_ref).toBe(pending.pending_ref);
-  await expectText(projection, "result.txt", "retained rejected result\n");
-  await writeText(projection, "result.txt", "corrected result\n");
-  await checkpointLocalWorkspace(owner);
-  await expectText(owner.worktree.path, "result.txt", "corrected result\n");
+  await expectText(source, resultPath, "retained rejected result\n");
+  await writeText(source, resultPath, "corrected result\n");
+  await retry();
+  await expectText(destination, resultPath, "corrected result\n");
+  if (target === "projection") {
+    await expectText(projection, "guest-only.txt", "guest work while host result is parked\n");
+    await checkpointLocalWorkspace(owner);
+    await expectText(
+      owner.worktree.path,
+      "guest-only.txt",
+      "guest work while host result is parked\n",
+    );
+  }
   expect(await readProjection()).toMatchObject({ pending_ref: null, pending_target: null });
   expect(
     await hasWorkerWorkspaceResultRef({

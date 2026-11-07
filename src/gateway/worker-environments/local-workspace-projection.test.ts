@@ -184,8 +184,10 @@ afterEach(async () => {
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
 
-it("quarantines rejected checkpoints while allowing new agent work", () =>
-  proveRejectedWorkspaceCheckpoint(owner));
+it.each(["canonical", "projection"] as const)(
+  "quarantines rejected checkpoints while allowing new agent work: %s",
+  (target) => proveRejectedWorkspaceCheckpoint(owner, target),
+);
 
 it("reuses warm workspaces and reconciles edits", () => proveWarmWorkspaceReuse(owner));
 
