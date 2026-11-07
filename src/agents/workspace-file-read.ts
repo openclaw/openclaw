@@ -12,6 +12,7 @@ import { exactWorkspaceEntryExists } from "../memory/root-memory-files.js";
 import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
 import {
+  DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_USER_FILENAME,
   WORKSPACE_BOOTSTRAP_FILENAMES,
@@ -19,8 +20,9 @@ import {
   type WorkspaceBootstrapFileName,
 } from "./workspace-bootstrap-policy.js";
 import {
-  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+  projectWorkspaceBootstrapFileForPrompt,
   readWorkspaceBootstrapFile,
+  workspaceBootstrapFileReadLimit,
 } from "./workspace-bootstrap-read.js";
 import { readWorkspaceFileCache, writeWorkspaceFileCache } from "./workspace-file-cache.js";
 
@@ -101,9 +103,17 @@ export async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
   useCache?: boolean;
+  /** Raw publication and cache reads must retain the original inline avatar. */
+  projectForPrompt?: boolean;
   /** Identity-scoped files must not alias another profile through parent symlinks. */
   rejectAliases?: boolean;
 }): Promise<WorkspaceGuardedReadResult> {
+  const name = path.basename(params.filePath);
+  const maxBytes = workspaceBootstrapFileReadLimit(name);
+  const project = (content: string) =>
+    params.projectForPrompt && name === DEFAULT_IDENTITY_FILENAME
+      ? projectWorkspaceBootstrapFileForPrompt(content, name)
+      : content;
   const access = getAgentWorkspaceAccess(params.workspaceDir);
   if (access) {
     if (!access.bridge.readFileWithSource) {
@@ -119,19 +129,19 @@ export async function readWorkspaceFileWithGuards(params: {
       const { data, canonicalPath, workspaceRelativePath } = await access.bridge.readFileWithSource(
         {
           filePath,
-          maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+          maxBytes,
         },
       );
       assertCurrent();
       if (params.rejectAliases && workspaceRelativePath !== filePath.replaceAll(path.sep, "/")) {
         return { ok: false, reason: "validation" };
       }
-      if (data.length > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+      if (data.length > maxBytes) {
         throw new RangeError(`Workspace bootstrap file exceeds its read bound: ${filePath}`);
       }
       return {
         ok: true,
-        content: data.toString("utf-8"),
+        content: project(data.toString("utf-8")),
         sourceIdentity: [canonicalPath, undefined, workspaceRelativePath],
       };
     } catch (error) {
@@ -168,14 +178,28 @@ export async function readWorkspaceFileWithGuards(params: {
 
       const identity = workspaceFileIdentity(opened.stat, opened.exactIdentity, opened.path);
       const sourceIdentity = [opened.path, opened.exactIdentity] as const;
-      const cached =
-        params.useCache === false ? undefined : readWorkspaceFileCache(opened.path, identity);
       try {
-        const content = cached ?? (await readWorkspaceBootstrapFile(opened.fd));
-        if (cached === undefined && params.useCache !== false) {
-          writeWorkspaceFileCache({ filePath: opened.path, content, identity });
+        // Aliases can share a raw cache entry but retain the selected file's bound.
+        if (opened.stat.size > maxBytes) {
+          throw new RangeError(`File exceeds ${maxBytes} bytes`);
         }
-        return { ok: true, content, sourceIdentity };
+        const promptFileName = params.projectForPrompt ? name : undefined;
+        const cached =
+          params.useCache === false
+            ? undefined
+            : readWorkspaceFileCache(opened.path, identity, promptFileName);
+        if (cached !== undefined) {
+          return { ok: true, content: cached, sourceIdentity };
+        }
+        const content = await readWorkspaceBootstrapFile(opened.fd, name);
+        if (params.useCache !== false) {
+          writeWorkspaceFileCache({ filePath: opened.path, content, identity });
+          const prepared = readWorkspaceFileCache(opened.path, identity, promptFileName);
+          if (prepared !== undefined) {
+            return { ok: true, content: prepared, sourceIdentity };
+          }
+        }
+        return { ok: true, content: project(content), sourceIdentity };
       } finally {
         syncFs.closeSync(opened.fd);
       }
@@ -232,6 +256,7 @@ export async function loadWorkspaceBootstrapFiles(
       const loaded = await readWorkspaceFileWithGuards({
         filePath: entry.filePath,
         workspaceDir: resolvedDir,
+        projectForPrompt: true,
       });
       return { entry, loaded };
     }),
