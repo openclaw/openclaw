@@ -62,7 +62,7 @@ function mount(held: string[] = [], failing: string[] = []) {
     document.body.replaceChildren();
   });
   const release = (name: string) => gates.get(name)?.resolve();
-  return { calls, release, gates };
+  return { calls, release, gates, request };
 }
 
 const $ = (selector: string) => document.querySelector<HTMLElement>(selector);
@@ -74,8 +74,15 @@ const shows = (text: string) =>
   vi.waitFor(() => expect($(".knowledge-content")!.textContent).toContain(text));
 
 it("checks status beside store facts and shows both tab counts at once", async () => {
-  const { calls, release } = mount(["stores_snapshot", "status", "scribes"]);
+  const { calls, release, request } = mount(["stores_snapshot", "status", "scribes"]);
   await vi.waitFor(() => expect(calls.toSorted()).toEqual(["status", "stores_snapshot"]));
+  expect(request).toHaveBeenCalledWith(
+    "plugins.sessionAction",
+    expect.objectContaining({
+      actionId: "stores_snapshot",
+      payload: { includeRecordCounts: false },
+    }),
+  );
   expect($(".knowledge-status")!.hidden).toBe(true);
   expect($(".knowledge-copy-pending")).not.toBeNull();
   release("stores_snapshot");

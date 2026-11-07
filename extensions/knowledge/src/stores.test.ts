@@ -8,6 +8,7 @@ import { expect, it, vi } from "vitest";
 import type { Principal } from "./access.js";
 import { contract } from "./contract.js";
 import { createKnowledgeService } from "./service.js";
+import { StorageClient } from "./storage-client.js";
 import { StoreRegistry } from "./store-registry.js";
 import { parsePolicy, storesRevision, type StoresSection } from "./stores-config.js";
 import { Stores } from "./stores.js";
@@ -308,6 +309,24 @@ it("switching named stores leaves one assignment and the former store untouched"
   expect(stores.b!.agents).toStrictEqual(["ops", "main"]);
   expect(await f.titles("main")).toStrictEqual(["Beta"]);
   expect(await f.titles("research")).toStrictEqual(["Alpha"]);
+});
+
+it("browse inventory skips vault reads while settings retain live record counts", async () => {
+  const f = await fixture();
+  await f.save("main", "Main note");
+  await f.save("research", "Research note");
+  const calls = vi.spyOn(StorageClient.prototype, "call");
+  try {
+    const inventory = await f.service.stores_snapshot({ includeRecordCounts: false }, f.admin);
+    expect(inventory.stores.filter((s) => s.state === "ready")).toHaveLength(2);
+    expect(inventory.stores.every((s) => s.records === null)).toBe(true);
+    expect(calls).not.toHaveBeenCalled();
+    const settings = await f.service.stores_snapshot({}, f.admin);
+    expect(settings.stores.filter((s) => s.records === 1)).toHaveLength(2);
+    expect(calls.mock.calls.map(([operation]) => operation)).toEqual(["catalog", "catalog"]);
+  } finally {
+    calls.mockRestore();
+  }
 });
 
 it("store counts follow the operator's live agent role and shared-Gateway policy", async () => {
