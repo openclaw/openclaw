@@ -20,6 +20,7 @@ import type { OutboundSessionRoute } from "../infra/outbound/outbound-session.js
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
+import { shouldIncludeCronInspectLink, type CronInspectLinkKind } from "./inspect-links.js";
 import {
   buildDirectCronDeliveryIdempotencyKey,
   DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
@@ -63,6 +64,8 @@ export async function sendCronAnnouncePayloadStrict(params: {
   bestEffort?: boolean;
   tts?: { auto?: TtsAutoMode };
   inspectionUrl?: string;
+  /** Whether the inspection link belongs to a successful completion or a failure alert. */
+  inspectionLinkKind?: CronInspectLinkKind;
   sessionGeneration?: SessionDeliveryGeneration;
   transcriptRoute?: OutboundSessionRoute;
   transcriptExpectedGeneration?: { sessionId: string; lifecycleRevision?: string };
@@ -127,7 +130,9 @@ export async function sendCronAnnouncePayloadStrict(params: {
     : normalized.payload;
   const payloads = appendCronRunInspectionLink(
     prepared.filter((payload) => hasReplyPayloadContent(payload, { trimText: true })),
-    params.inspectionUrl,
+    shouldIncludeCronInspectLink(params.cfg, params.inspectionLinkKind ?? "completion")
+      ? params.inspectionUrl
+      : undefined,
     channelId,
   );
   if (payloads.length === 0) {

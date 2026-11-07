@@ -13,6 +13,7 @@ import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { commitCronConversationResult } from "../cron/conversation-result.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
+import { shouldIncludeCronInspectLink } from "../cron/inspect-links.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import { createCronExecutionId } from "../cron/run-id.js";
@@ -518,13 +519,16 @@ async function sendGatewayCronFailureAlertUnderAdmission(
               runtimeConfig,
             ),
           },
-          inspectionUrl: resolveControlUiAutomationRunUrl(runtimeConfig, {
-            jobId: params.job.id,
-            runId:
-              params.runAtMs === undefined
-                ? undefined
-                : createCronExecutionId(params.job.id, params.runAtMs),
-          }),
+          inspectionUrl: shouldIncludeCronInspectLink(runtimeConfig, "error")
+            ? resolveControlUiAutomationRunUrl(runtimeConfig, {
+                jobId: params.job.id,
+                runId:
+                  params.runAtMs === undefined
+                    ? undefined
+                    : createCronExecutionId(params.job.id, params.runAtMs),
+              })
+            : undefined,
+          inspectionLinkKind: "error",
           abortSignal: abortController.signal,
           onDeliveryAttempt,
         });
