@@ -60,7 +60,6 @@ export function resolveStrandedReplyRecovery(params: {
       prompt: buildStrandedReplyRetryPrompt(params.finalText),
       summaryLine: STRANDED_REPLY_RETRY_MARKER,
       strandedReplyRetry: true,
-      stoppedByUser: undefined,
       disableCollectBatching: true,
       toolsAllow: isRuntimeToolAllowed("message", params.base.toolsAllow) ? ["message"] : [],
       transcriptPrompt: undefined,

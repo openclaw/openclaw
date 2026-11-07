@@ -629,8 +629,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     systemEventBlocks?: string[];
     /** Facts whose model-facing projection is already present in the supplied body. */
     media?: readonly MediaFact[];
-    /** This turn claimed a user's Stop; the queued body carries it as a flag, never as text. */
-    stoppedByUser?: boolean;
   }) => {
     const base = buildReplyPromptEnvelopeBase();
     const generatedMedia = buildInboundMediaNoteProjection(ctx);
@@ -651,20 +649,11 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     }
     const annotateBody = (body: string) =>
       annotateInterSessionPromptText(prependMediaNote(body), sessionCtx.InputProvenance);
-    const stoppedByUser = additions.stoppedByUser === true;
     return {
       inboundMediaIndexes: generatedMedia.mediaIndexes,
       ...(media.length > 0 ? { media } : {}),
-      prefixedCommandBody: annotateBody(
-        applySessionHints({
-          baseBody: additions.prefixedBody ?? base.effectiveBaseBody,
-          abortedLastRun: false,
-          stoppedByUser,
-          abortKey: command.abortKey,
-        }),
-      ),
+      prefixedCommandBody: annotateBody(additions.prefixedBody ?? base.effectiveBaseBody),
       queuedBody: annotateBody(base.effectiveBaseBody),
-      stoppedByUser,
       transcriptCommandBody:
         inboundEventKind === "room_event"
           ? base.transcriptBody
@@ -677,15 +666,15 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   };
 
   const promptEnvelopeBase = buildReplyPromptEnvelopeBase();
-  // A recorded Stop is stated, and claimed, only once the turn is admitted
-  // (prepareReplyRunAdmission); until then it is never an interruption to continue.
-  const recordedStop = resolveUserStoppedAt(sessionEntry) !== undefined;
-  // Without a row, abortedLastRun comes from the abort memory only a Stop sets; admission
-  // states it with a claimed Stop, after the think hint is read.
-  const stoppedWithoutRow = !sessionEntry && abortedLastRun;
+  // A Stop is claimed and stated only by the turn admitted to run (claimUserStopForAdmittedTurn);
+  // until then it is never an interruption to continue. Without a row, abortedLastRun comes
+  // from the abort memory only a Stop sets.
+  const pendingStop = sessionEntry
+    ? resolveUserStoppedAt(sessionEntry) !== undefined
+    : abortedLastRun;
   const prefixedBodyBase = applySessionHints({
     baseBody: promptEnvelopeBase.effectiveBaseBody,
-    abortedLastRun: abortedLastRun && !recordedStop && !stoppedWithoutRow,
+    abortedLastRun: abortedLastRun && !pendingStop,
     abortKey: command.abortKey,
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
@@ -721,7 +710,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     shouldInjectGroupIntro,
     typingMode,
     prefixedBodyBase,
-    stoppedWithoutRow,
     sessionEntry,
     isMainSession,
     buildPromptBodies,

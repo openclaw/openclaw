@@ -2,16 +2,11 @@ import "./get-reply-run.runtime-mocks.test-support.js";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import {
-  baseParams,
-  createInboundBody,
-  createSessionBody,
-  nonReasoningModelState,
-} from "./get-reply-run.test-support.js";
+import { baseParams } from "./get-reply-run.test-support.js";
 import { writeSessionStore } from "./test/session.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -36,144 +31,36 @@ async function promptOf(overrides: Parameters<typeof baseParams>[0]) {
 }
 
 it.each([
-  { name: "a user's Stop", entry: stopOf("stopped", 5), aborted: false, stop: true },
-  { name: "an interruption", entry: {}, aborted: true, stop: false },
+  { name: "a user's Stop", entry: stopOf("stopped", 5), aborted: false, interrupted: false },
+  { name: "an interruption", entry: {}, aborted: true, interrupted: true },
   {
     name: "an interruption, past a Stop carried from another incarnation",
     entry: { ...stopOf("earlier", 5), sessionId: "stopped" },
     aborted: true,
-    stop: false,
+    interrupted: true,
   },
-  { name: "a Stop with no session row", entry: undefined, aborted: true, stop: true },
-])("prefixes the next prompt after $name", async ({ entry, aborted, stop }) => {
+  { name: "a Stop with no session row", entry: undefined, aborted: true, interrupted: false },
+])("leaves the note to the turn that runs after $name", async ({ entry, aborted, interrupted }) => {
   const prompt = await promptOf({
     abortedLastRun: aborted,
     sessionEntry: entry && { sessionId: "stopped", updatedAt: 1, ...entry },
   });
-  expect(prompt?.includes(STOPPED)).toBe(stop);
-  expect(prompt?.includes("continue the unfinished work")).toBe(!stop);
-  // Queued, the turn keeps the user's text and carries the Stop for the prompt that runs.
-  const { followupRun } = vi.mocked(runReplyAgent).mock.calls[0]?.[0] ?? {};
-  expect(followupRun?.stoppedByUser === true).toBe(stop);
-  expect(followupRun?.prompt).not.toContain(STOPPED);
+  // A Stop is never an interruption to continue; the turn admitted to run states it.
+  expect(prompt?.includes("continue the unfinished work")).toBe(interrupted);
+  expect(prompt).not.toContain(STOPPED);
+  // A Stop with no row is claimed later from the command's abort memory.
+  expect(vi.mocked(runReplyAgent).mock.calls[0]?.[0].followupRun.abortKey).toBe("session-key");
 });
 
-it.each([
-  { name: "the Stop it read", stored: stopOf("stopped", 5), says: true, left: undefined },
-  // A Stop the row no longer holds is not this turn's to say, nor an interruption to continue.
-  { name: "not a newer Stop", stored: stopOf("stopped", 6), says: false, left: 6 },
-  { name: "not a replacement's Stop", stored: stopOf("replacement", 5), says: false, left: 5 },
-  { name: "not a Stop whose row is gone", stored: undefined, says: false, left: undefined },
-])("claims $name before the prompt says it", async ({ stored, says, left }) => {
-  const storePath = storeOf();
-  const sessionKey = "agent:main:main";
-  const rows = Object.fromEntries(stored ? [[sessionKey, { ...stored, updatedAt: 1 }]] : []);
-  await writeSessionStore(storePath, rows);
-  const sessionEntry = { updatedAt: 1, ...stopOf("stopped", 5) };
-  // The in-memory map holds its own copy of the row, as after a concurrent write.
-  const sessionStore = structuredClone(rows);
-  const prompt = await promptOf({
-    abortedLastRun: true,
-    sessionKey,
-    storePath,
-    sessionStore,
-    sessionEntry,
-  });
-  expect(prompt?.includes(STOPPED)).toBe(says);
-  expect(prompt).not.toContain("continue the unfinished work");
-  expect(sessionEntry.userStoppedAt).toBeUndefined();
-  expect(sessionStore[sessionKey]?.userStoppedAt).toBe(left);
-  expect(loadSessionEntry({ storePath, sessionKey })?.userStoppedAt).toBe(left);
-});
-
-it.each([
-  { name: "one says it", row: true, saying: 1 },
-  { name: "none says a Stop whose row is gone", row: false, saying: 0 },
-])("two turns admitted from the same Stop: $name", async ({ row, saying }) => {
-  const storePath = storeOf();
-  const sessionKey = "agent:main:main";
-  const stored = { [sessionKey]: { ...stopOf("stopped", 5), updatedAt: 1 } };
-  await writeSessionStore(storePath, row ? stored : {});
-  const turn = () =>
-    runPreparedReply(
-      baseParams({
-        sessionKey,
-        storePath,
-        sessionStore: {},
-        sessionEntry: { updatedAt: 1, ...stopOf("stopped", 5) },
-      }),
-    );
-  await Promise.all([turn(), turn()]);
-  const bodies = vi.mocked(runReplyAgent).mock.calls.map((call) => call[0].commandBody);
-  expect(bodies).toHaveLength(2);
-  expect(bodies.filter((body) => body.includes(STOPPED))).toHaveLength(saying);
-});
-
-it("keeps a recorded Stop for the next turn when one is refused before any model", async () => {
+it("admits a turn without claiming its recorded Stop", async () => {
   const storePath = storeOf();
   const scope = { agentId: "main", storePath, sessionKey: "agent:main:main" };
   await writeSessionStore(storePath, {
     [scope.sessionKey]: { ...stopOf("stopped", 5), updatedAt: 1 },
   });
-  const turn = (overrides: Parameters<typeof baseParams>[0] = {}) =>
-    promptOf({
-      ...scope,
-      abortedLastRun: true,
-      sessionStore: {},
-      sessionEntry: loadSessionEntry(scope),
-      ...overrides,
-    });
-  // Admission answers an unsupported explicit thinking level itself; no model runs.
-  const refused = await turn({
-    provider: "openai",
-    model: "chat-latest",
-    modelState: nonReasoningModelState(),
-    resolvedThinkLevel: "xhigh",
-    opts: { thinkingLevelOverride: "xhigh" },
-  });
-  expect(refused).toBeUndefined();
+  // Routing may still answer, refuse, skip or steer this turn without running its prompt.
+  await promptOf({ ...scope, sessionStore: {}, sessionEntry: loadSessionEntry(scope) });
   expect(loadSessionEntry(scope)?.userStoppedAt).toBe(5);
-  const prompt = await turn();
-  expect(prompt).toContain(STOPPED);
-  expect(prompt).not.toContain("continue the unfinished work");
-  expect(loadSessionEntry(scope)?.userStoppedAt).toBeUndefined();
-});
-
-it.each([
-  { name: "a recorded Stop", stop: { sessionEntry: { updatedAt: 1, ...stopOf("stopped", 5) } } },
-  { name: "a Stop with no session row", stop: { sessionEntry: undefined, abortedLastRun: true } },
-])("reads the think hint ahead of $name's note", async ({ stop }) => {
-  // The note joins the body only at admission, after the hint was read and removed.
-  await runPreparedReply(
-    baseParams({
-      ctx: createInboundBody("low Run this"),
-      sessionCtx: createSessionBody("low Run this"),
-      resolvedThinkLevel: undefined,
-      ...stop,
-    }),
-  );
-  const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
-  expect(call?.followupRun.run.thinkLevel).toBe("low");
-  expect(call?.commandBody).toMatch(new RegExp(`^Note: ${STOPPED}\\..*\\n\\nRun this$`, "su"));
-});
-
-it("claims a global session's Stop from the store its agent recorded it in", async () => {
-  // A fixed shared locator gives each agent its own file; the `global` key names no agent.
-  const storePath = storeOf("shared-sessions.json");
-  const work = { agentId: "work", storePath, sessionKey: "global" };
-  await replaceSessionEntry(work, { ...stopOf("stopped", 5), updatedAt: 1 });
-  const sessionEntry = loadSessionEntry(work);
-  expect(sessionEntry?.userStoppedAt).toBe(5);
-  const prompt = await promptOf({
-    agentId: "work",
-    abortedLastRun: true,
-    sessionKey: "global",
-    storePath,
-    sessionStore: {},
-    sessionEntry,
-  });
-  expect(prompt).toContain(STOPPED);
-  expect(loadSessionEntry(work)?.userStoppedAt).toBeUndefined();
 });
 
 it("keeps an old-shaped stored row's interruption a run to continue", async () => {

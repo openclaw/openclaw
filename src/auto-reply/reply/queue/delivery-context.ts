@@ -421,7 +421,7 @@ export function createOverflowSummaryRetrySource(source: InternalFollowupRun): I
     controllerInput: source.controllerInput,
     ambientOverflowContext: source.ambientOverflowContext,
     prompt: source.prompt,
-    stoppedByUser: source.stoppedByUser,
+    abortKey: source.abortKey,
     sourceTurnId: source.sourceTurnId,
     createChannelCronAuthority: source.createChannelCronAuthority,
     readAdmissionConfig: source.readAdmissionConfig,

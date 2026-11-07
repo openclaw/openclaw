@@ -262,8 +262,6 @@ async function executeClaim(
         ? { currentInboundContext: collectCurrentInboundContext(summarizedSources) }
         : {}),
       prompt,
-      // A batch states a claimed Stop once, whichever of its sources claimed it.
-      stoppedByUser: sources.some((item) => item.stoppedByUser),
       transcriptPrompt: claim.summary ? prompt : buildCollectTranscriptInput(sources).text,
       userTurnTranscriptRecorder: recorder,
       run: resolveCollectedRun(sources, source.run),

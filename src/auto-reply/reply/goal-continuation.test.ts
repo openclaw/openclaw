@@ -337,12 +337,9 @@ describe("Goal queue custody", () => {
     const f = fixture();
     f.params.base.sourceTurnId = "accepted-source";
     f.params.base.turnAdoptionLifecycle = { onAdopted: () => {} };
-    f.params.base.stoppedByUser = true;
     expect(await enqueueGoalContinuation(f.params)).toBe(true);
     const queued = vi.mocked(enqueueFollowupRun).mock.calls[0]![1];
     expect(queued.prompt).toContain("Advance");
-    // The user's next turn already stated the Stop; the goal step must not say it again.
-    expect(queued.stoppedByUser).toBeUndefined();
     expect(queued.goalContinuation).toEqual(identity);
     expect(queued.sourceTurnId).toBeUndefined();
     expect(queued.turnAdoptionLifecycle).toBeUndefined();

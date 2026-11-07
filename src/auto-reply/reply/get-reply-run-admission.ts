@@ -44,7 +44,6 @@ import { removeDirectiveSpan } from "./directive-parsing.js";
 import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
 import {
   finishReplyPreparation,
-  loadAbortCutoffRuntime,
   loadAgentRunnerRuntime,
   loadEmbeddedAgentRuntime,
   loadSessionUpdatesRuntime,
@@ -231,14 +230,13 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       }
     }
   };
-  const rebuildPromptBodies = (stoppedByUser: boolean) =>
+  const rebuildPromptBodies = () =>
     traceRunPhase("reply.build_prompt_bodies", () =>
       context.buildPromptBodies({
         prefixedBody: prefixedBodyBase,
         threadContextNote,
         systemEventBlocks: drainedSystemEventBlocks,
         media: opts?.media,
-        stoppedByUser,
       }),
     );
   const skillResult = isFastTestRuntimeEnv()
@@ -569,17 +567,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     }
   }
   await traceRunPhase("reply.drain_system_events", () => drainSystemEventBlocks());
-  // Like system events, a recorded Stop is consumed only by an admitted turn: a turn refused
-  // above leaves its note for the next one. An automated turn states it too.
-  const { claimUserStopInSessionRuntime } = await loadAbortCutoffRuntime();
-  const stopClaimed = await claimUserStopInSessionRuntime({
-    agentId,
-    sessionEntry: context.sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-  });
-  const promptBodies = await rebuildPromptBodies(stopClaimed || context.stoppedWithoutRow);
+  const promptBodies = await rebuildPromptBodies();
 
   return {
     kind: "ready",

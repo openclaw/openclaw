@@ -35,41 +35,38 @@ export async function clearAbortCutoffInSessionRuntime(params: {
 }
 
 /**
- * Claims the Stop recorded on the reply's session row, never a newer one: true only for the caller
- * whose write retired it, so one admitted turn states it.
+ * Claims the Stop recorded on the session row, never a newer one: true only for the caller whose
+ * serialized write retired it, so one turn states it. A missing row retires nothing; without a
+ * store the caller's own copy decides.
  */
 export async function claimUserStopInSessionRuntime(params: {
-  /** The reply's agent: a key without one (`global`) cannot name the store the Stop was recorded in. */
+  /** The turn's agent: a key without one (`global`) cannot name the store the Stop was recorded in. */
   agentId: string;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
+  sessionEntry: SessionEntry;
   sessionKey?: string;
   storePath?: string;
 }): Promise<boolean> {
-  const { agentId, sessionEntry, sessionStore, sessionKey, storePath } = params;
-  const stoppedAt = resolveUserStoppedAt(sessionEntry);
-  if (!sessionEntry || stoppedAt === undefined) {
+  const { agentId, sessionEntry, sessionKey, storePath } = params;
+  if (!holdsUserStopOf(sessionEntry, sessionEntry)) {
     return false;
-  }
-  const { sessionId } = sessionEntry;
-  const stated = (entry: SessionEntry) =>
-    entry.sessionId === sessionId && resolveUserStoppedAt(entry) === stoppedAt;
-  const retired = { userStoppedAt: undefined, userStoppedSessionId: undefined };
-  // The map may hold another object by now; each copy clears only if it still holds this Stop.
-  for (const entry of [sessionEntry, sessionKey ? sessionStore?.[sessionKey] : undefined]) {
-    if (entry && stated(entry)) {
-      Object.assign(entry, retired);
-    }
   }
   if (!storePath || !sessionKey) {
     return true;
   }
-  // The durable row decides: its serialized write retires the Stop for exactly one caller, and
-  // a missing row retires nothing.
   let claimed = false;
   await patchSessionEntryCore({ agentId, storePath, sessionKey }, (current) => {
-    claimed = stated(current);
-    return claimed ? retired : null;
+    claimed = holdsUserStopOf(current, sessionEntry);
+    return claimed ? { userStoppedAt: undefined, userStoppedSessionId: undefined } : null;
   });
   return claimed;
+}
+
+/** Whether `entry` still holds the Stop the turn read in `read`. */
+export function holdsUserStopOf(entry: SessionEntry | undefined, read: SessionEntry): boolean {
+  const stoppedAt = resolveUserStoppedAt(read);
+  return (
+    stoppedAt !== undefined &&
+    entry?.sessionId === read.sessionId &&
+    resolveUserStoppedAt(entry) === stoppedAt
+  );
 }

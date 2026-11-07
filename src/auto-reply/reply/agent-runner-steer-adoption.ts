@@ -32,7 +32,6 @@ import {
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
-import { stateUserStop } from "./body.js";
 import {
   admitFollowupRunLifecycle,
   reserveSteerCandidate,
@@ -348,7 +347,7 @@ export async function runActiveReplySteer(
         throw new Error("Steering tool authority changed");
       }
     };
-    const text = stateUserStop(followupRun.prompt, followupRun.stoppedByUser);
+    const text = followupRun.prompt;
     const assertLegacyPolicyCurrent = () => assertPolicy(steeringAuthority.toolAuthority.read());
     const injectionAttempt = await beginReplyMessageInjectionTarget(injectionTarget, text, {
       currentInboundContext: followupRun.currentInboundContext,

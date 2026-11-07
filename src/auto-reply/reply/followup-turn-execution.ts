@@ -387,7 +387,7 @@ export async function executeFollowupTurn(params: {
         executeAgentTurn({
           recoveryMemoryFlushAttempted: turn.memoryFlushAttempted,
           completionSource: gatewayOwnsCompletion ? "reply-dispatch" : undefined,
-          commandBody: stateUserStop(turn.queued.prompt, turn.queued.stoppedByUser),
+          commandBody: stateUserStop(turn.queued.prompt, turn.userStopClaimed),
           transcriptCommandBody: turn.queued.transcriptPrompt,
           followupRun: turn.queued,
           sessionCtx,

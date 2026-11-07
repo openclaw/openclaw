@@ -47,6 +47,7 @@ import {
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import { touchQueuedReplySessionActivity } from "./agent-runner-session-activity.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
+import { stateUserStop } from "./body.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
@@ -561,6 +562,7 @@ export async function runReplyAgent(
       const executePrepared = () =>
         executePreparedReplyAgentRun({
           ...params,
+          commandBody: stateUserStop(params.commandBody, turn.userStopClaimed),
           activeSessionStore,
           admitUserTurn,
           recordPendingDelivery,

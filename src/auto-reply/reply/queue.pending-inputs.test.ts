@@ -9,6 +9,7 @@ import {
 import {
   appendTranscriptMessage,
   listSessionPendingInputs,
+  loadSessionEntry,
   loadTranscriptEvents,
   readSessionSubmittedInput,
   upsertSessionEntryCore,
@@ -303,6 +304,45 @@ describe("followup queue durable input consumption", () => {
     expectWrites(first, second);
   });
 
+  it("states a recorded Stop once, in the collected batch that runs", async () => {
+    const stop = { userStoppedAt: 5, userStoppedSessionId: sessionId };
+    await upsertSessionEntryCore(scope(), { sessionId, updatedAt: 1, ...stop });
+    const sessionEntry = { sessionId, updatedAt: 1, ...stop };
+    vi.mocked(runMemoryFlushIfNeeded).mockImplementation(async (params) => ({
+      sessionEntry: params.sessionEntry,
+      outcome: "skipped",
+    }));
+    vi.mocked(runSessionCompactionIfNeeded).mockImplementation(async (p) => p.sessionEntry);
+    vi.mocked(executeAgentTurn).mockResolvedValue({
+      runId: "collected-run",
+      outcome: { kind: "rejected", payload: { text: "done" } },
+    });
+    const typing = createTypingController({});
+    enqueue(...(await pair()).map((source) => source.run));
+    const runner = createFollowupRunner({
+      typing,
+      typingMode: "never",
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath: fixture.storePath(),
+      defaultModel: "gpt-test",
+    });
+    try {
+      // The real runner prepares, claims and executes the batch, beyond the plain drain helper's wait.
+      scheduleFollowupDrain(sessionKey, runner);
+      await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined(), {
+        timeout: 15_000,
+      });
+    } finally {
+      typing.cleanup();
+    }
+    const commandBody = vi.mocked(executeAgentTurn).mock.calls[0]?.[0].commandBody;
+    expect(executeAgentTurn).toHaveBeenCalledOnce();
+    expect(commandBody?.split("The user stopped the previous agent run")).toHaveLength(2);
+    expect(loadSessionEntry(scope())?.userStoppedAt).toBeUndefined();
+  });
+
   it("keeps unstaged input out of an already-approved collect group", async () => {
     const staged = await createStagedRun("staged");
     const unstaged: FollowupRun = {
@@ -328,8 +368,6 @@ describe("followup queue durable input consumption", () => {
       const [first, second] = await pair();
       first.run.prompt = "first private source";
       second.run.prompt = "second private source";
-      // A claimed Stop rides on its source; the batch states it once, outside the transcript.
-      first.run.stoppedByUser = true;
       enqueue(first.run, second.run);
       const calls: FollowupRun[] = [];
       const failures: unknown[] = [];
@@ -402,10 +440,6 @@ describe("followup queue durable input consumption", () => {
       expect(executeAgentTurn).toHaveBeenCalledTimes(abortDuringPreparation ? 0 : 1);
       const expected = collected("first approved", "second approved");
       expect(calls[0]).toMatchObject({ prompt: expected, transcriptPrompt: expected });
-      const commandBody = vi.mocked(executeAgentTurn).mock.calls[0]?.[0].commandBody;
-      expect(commandBody?.split("The user stopped the previous agent run").length).toBe(
-        abortDuringPreparation ? undefined : 2,
-      );
       expect(calls[0]?.currentInboundContext?.text).toBe(
         "Queued #1 context:\nfirst runtime context\n\nQueued #2 context:\nsecond runtime context",
       );
