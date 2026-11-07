@@ -1,5 +1,7 @@
 /** Shared durable channel-ingress admission, pump, retention, and shutdown lifecycle. */
+import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
@@ -57,6 +59,43 @@ export const CHANNEL_INGRESS_RETENTION_DEFAULTS = Object.freeze({
 export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetadata = unknown>(
   options: CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata>,
 ) {
+  // Bounded debug observations; never record queue keys, payloads, or errors.
+  const diagnosticId = randomUUID();
+  const diagnosticLog = createSubsystemLogger("channels/ingress");
+  let diagnosticCount = 0;
+  const observe = (phase: string, facts: Record<string, string | number | boolean> = {}) => {
+    if (diagnosticCount >= 96) {
+      return;
+    }
+    try {
+      if (!diagnosticLog.isEnabled("debug")) {
+        return;
+      }
+      diagnosticCount += 1;
+      diagnosticLog.debug(
+        "ingress monitor " +
+          JSON.stringify({
+            monitor: diagnosticId,
+            sequence: diagnosticCount,
+            phase,
+            running,
+            stopped,
+            aborted: drainAbortSignal.aborted,
+            restartAborted: getGatewayRestartDrainSignal().aborted,
+            restarting: isGatewayRestartDraining(),
+            suspend: getGatewaySuspendAdmissionPhase(),
+            requested,
+            pumping: pumping !== undefined,
+            inspections: activeInspections.size,
+            deliveries: activeDeliveries.size,
+            ...facts,
+            exhausted: diagnosticCount === 96,
+          }),
+      );
+    } catch {
+      // Observations cannot change admission or delivery.
+    }
+  };
   const now = options.now ?? Date.now;
   const waitForDeliveryIdleBeforeRepump = options.waitForDeliveryIdleBeforeRepump ?? false;
   const retention =
@@ -180,6 +219,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         },
         formatError: options.drain?.formatError ?? formatErrorMessage,
         dispatchClaimedEvent: async (claim, lifecycle, admittedLaneKey) => {
+          observe("claim-entered");
           // Preparation owns cancellation settlement as well as the inspection read.
           const inspection = (async () => {
             if (shouldStopDispatch() || lifecycle.abortSignal.aborted) {
@@ -314,6 +354,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
               if (!running || isAborted() || lifecycle.abortSignal.aborted) {
                 return wrappedLifecycle.onCancelled?.();
               }
+              observe("deliver-entered");
               return options.deliver(raw, wrappedLifecycle, claim);
             })
             .finally(() => {
@@ -333,6 +374,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           let result: ChannelIngressMonitorDeliveryResult | void;
           try {
             result = await delivery;
+            observe("deliver-returned", { outcome: result?.kind ?? "void" });
           } catch (error) {
             if (deferredHandoff && deferredClaim && !deferredClaimSettled) {
               await wrappedLifecycle.onFailed?.(error);
@@ -426,10 +468,13 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   };
 
   const runPump = async (): Promise<void> => {
+    observe("pump-entered");
     try {
       for (;;) {
         requested = false;
+        observe("prune-entered");
         await pruneIfDue("pump");
+        observe("prune-returned");
         // Stop may win the async prune race; keep lazy drain creation behind this fence.
         if (!running || isAborted()) {
           break;
@@ -437,7 +482,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         const activeDrain = getDrain();
         // Claiming and durable admission are mutually exclusive so a row cannot
         // dispatch before its transport-owned post-append acknowledgement finishes.
+        observe("claim-lock-wait");
         const { started } = await withAdmissionClaimLock(() => {
+          observe("drain-entered");
           const recoverStaleClaims = recoveryRequested;
           recoveryRequested = false;
           return activeDrain.drainOnce({
@@ -449,6 +496,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
               activeDeliveries.size + activeInspections.size - deferredStartCapacity >= startLimit,
           });
         });
+        observe("drain-returned", { started });
         if (waitForDeliveryIdleBeforeRepump) {
           await waitForActiveDeliveries();
           await activeDrain.waitForIdle();
@@ -503,6 +551,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   );
 
   const requestDrain = (): void => {
+    observe("drain-requested");
     if (!running || isAborted() || getGatewayRestartDrainSignal().aborted) {
       // A stale request here makes waitForIdle busy-spin on resolved awaits.
       requested = false;
@@ -607,6 +656,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     work: (admitOptions: ChannelIngressAdmissionContext) => Promise<T>,
     admitOptions?: { receivedAt?: number },
   ): Promise<T> => {
+    observe("admission-entered");
     assertAdmissionOpen();
     const receivedAt = admitOptions?.receivedAt ?? now();
     let needsDrain = false;
@@ -626,7 +676,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       () => undefined,
     );
     try {
-      return await admission;
+      const result = await admission;
+      observe("admission-returned", { needsDrain });
+      return result;
     } finally {
       // A lost transport acknowledgement must not strand an already durable row.
       if (needsDrain) {
@@ -650,6 +702,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     admitBatch: (rawEvents: readonly TRaw[], admitOptions?: { receivedAt?: number }) =>
       scheduleAdmission((sharedOptions) => admitRawBatch(rawEvents, sharedOptions), admitOptions),
     start: () => {
+      observe("start-requested");
       if (running || stopped || isAborted()) {
         return;
       }
@@ -690,6 +743,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     pause,
     stop: () => {
       stopTask ??= (async () => {
+        observe("stop-entered");
         stopped = true;
         running = false;
         requested = false;

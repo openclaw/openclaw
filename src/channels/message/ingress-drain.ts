@@ -4,7 +4,9 @@
  * Owns claim recovery, per-lane serialization, adoption-time complete, retry /
  * dead-letter disposition, pre-adoption stall watchdog, and optional supersede.
  */
+import { randomUUID } from "node:crypto";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   GatewayDrainingError,
   retainGatewayRootWorkAdmissionContinuation,
@@ -605,6 +607,32 @@ export function createChannelIngressDrainOwner<
     return state;
   };
 
+  const diagnosticId = randomUUID();
+  const diagnosticLog = createSubsystemLogger("channels/ingress");
+  let diagnosticCount = 0;
+  const observe = (phase: string, facts: Record<string, number | boolean> = {}) => {
+    if (diagnosticCount >= 48) {
+      return;
+    }
+    try {
+      if (!diagnosticLog.isEnabled("debug")) {
+        return;
+      }
+      diagnosticCount += 1;
+      diagnosticLog.debug(
+        "ingress drain " +
+          JSON.stringify({
+            drain: diagnosticId,
+            sequence: diagnosticCount,
+            phase,
+            ...facts,
+            exhausted: diagnosticCount === 48,
+          }),
+      );
+    } catch {
+      // Snapshot-only diagnostics cannot change claim selection.
+    }
+  };
   const recoverStaleClaims = async (): Promise<number> => {
     const activeLanes = new Set(laneOwnerByKey.keys());
     return await queue.recoverStaleClaims({
@@ -652,7 +680,13 @@ export function createChannelIngressDrainOwner<
       await recoverStaleClaims();
     }
 
+    observe("snapshot-entered");
     const { pending, claims } = await readUnsettled();
+    observe("snapshot-returned", {
+      pending: pending.length,
+      claims: claims.length,
+      active: activeByClaim.size,
+    });
     const activeLaneKeys = new Set(laneOwnerByKey.keys());
     const claimedLaneKeys = new Set(
       claims
@@ -710,12 +744,18 @@ export function createChannelIngressDrainOwner<
     }
 
     let started = 0;
+    let skippedBlocked = 0;
+    let claimMisses = 0;
+    let laneConflicts = 0;
+    let stoppedSelection = false;
     for (const [index, event] of pending.entries()) {
       if (shouldStop() || started >= startLimit) {
+        stoppedSelection = true;
         break;
       }
       const selectedLaneKey = laneKeyFor(event);
       if (retryDelayed[index] === 1 || blockedLaneKeys.has(selectedLaneKey)) {
+        skippedBlocked += 1;
         continue;
       }
       // The drain already selected this ordered lane head. The pending-only
@@ -733,11 +773,13 @@ export function createChannelIngressDrainOwner<
         laneKey: claimLaneKey,
       });
       if (!claimed) {
+        claimMisses += 1;
         // A competing owner may still hold the head; its tail waits for the next pass.
         blockedLaneKeys.add(selectedLaneKey);
         continue;
       }
       if (shouldStop()) {
+        stoppedSelection = true;
         await queue.release(claimed, { recordAttempt: false });
         break;
       }
@@ -748,6 +790,7 @@ export function createChannelIngressDrainOwner<
           blockedLaneKeys.delete(laneKey);
         }
         if (laneOwnerByKey.has(laneKey)) {
+          laneConflicts += 1;
           await queue.release(claimed, { recordAttempt: false });
           blockedLaneKeys.add(laneKey);
           continue;
@@ -757,6 +800,16 @@ export function createChannelIngressDrainOwner<
       blockedLaneKeys.add(laneKey);
       started += 1;
     }
+    observe("selection-returned", {
+      started,
+      skippedBlocked,
+      claimMisses,
+      laneConflicts,
+      stoppedSelection,
+      activeLanes: activeLaneKeys.size,
+      claimedLanes: claimedLaneKeys.size,
+      retryDelayedLanes: retryDelayedLaneKeys.size,
+    });
     return { started };
   };
 

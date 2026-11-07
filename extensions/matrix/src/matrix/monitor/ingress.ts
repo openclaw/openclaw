@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
@@ -10,6 +11,7 @@ import type { MatrixSyncIngressHandler } from "../client/file-sync-store.js";
 import { isPollEventType } from "../poll-types.js";
 import type { MatrixClient, MatrixRawEvent } from "../sdk.js";
 import { getMatrixEventProjection } from "../sdk/event-helpers.js";
+import { emitMatrixLog } from "../sdk/logger.js";
 import { EventType } from "./types.js";
 
 type MatrixIngressEvent = {
@@ -48,6 +50,27 @@ export function createMatrixIngressMonitor(params: {
   onError?: (error: unknown) => void;
   queue?: ChannelIngressQueue<MatrixIngressPayload>;
 }) {
+  const diagnosticId = randomUUID();
+  let diagnosticCount = 0;
+  const observe = (phase: string, facts: Record<string, string | number | boolean> = {}) => {
+    if (diagnosticCount >= 64) {
+      return;
+    }
+    diagnosticCount += 1;
+    try {
+      emitMatrixLog("debug", "MatrixIngress", [
+        JSON.stringify({
+          monitor: diagnosticId,
+          sequence: diagnosticCount,
+          phase,
+          ...facts,
+          exhausted: diagnosticCount === 64,
+        }),
+      ]);
+    } catch {
+      // Diagnostics cannot change ingress settlement.
+    }
+  };
   let queue = params.queue;
   const getQueue = () =>
     (queue ??= getMatrixRuntime().state.openChannelIngressQueue<MatrixIngressPayload>({
@@ -79,16 +102,21 @@ export function createMatrixIngressMonitor(params: {
         ),
     },
     deliver: async ({ roomId, event, historical }, lifecycle) => {
+      observe("deliver-entered", { historical: historical === true });
       if (historical) {
+        observe("historical-skipped");
         return;
       }
       if (event.type === EventType.RoomMessageEncrypted && !params.client.crypto) {
+        observe("crypto-unavailable");
         // The existing event listener explains how to enable encryption.
         return;
       }
       // Persist ciphertext before the sync cursor, then decrypt from local SDK
       // state on every attempt so a late room key can recover a queued message.
+      observe("hydrate-entered");
       const [hydrated] = await params.client.hydrateEvents(roomId, [event]);
+      observe("hydrate-returned", { hydrated: Boolean(hydrated) });
       if (
         !hydrated ||
         hydrated.type === EventType.RoomMessageEncrypted ||
@@ -96,7 +124,10 @@ export function createMatrixIngressMonitor(params: {
       ) {
         throw new Error("Matrix ingress event is waiting for decryption");
       }
-      return await params.dispatch(roomId, hydrated, lifecycle);
+      observe("dispatch-entered");
+      const result = await params.dispatch(roomId, hydrated, lifecycle);
+      observe("dispatch-returned", { outcome: result?.kind ?? "void" });
+      return result;
     },
     pollIntervalMs: 1_000,
     retention: "standard",
@@ -150,7 +181,9 @@ export function createMatrixIngressMonitor(params: {
     if (events.length === 0) {
       return;
     }
+    observe("sync-selected", { count: events.length, hasSavedSync });
     await (initializeOrder ??= (async () => {
+      observe("order-load-entered");
       const ingressQueue = getQueue();
       const { pending, claims } = ingressQueue.listUnsettled
         ? await ingressQueue.listUnsettled()
@@ -158,6 +191,7 @@ export function createMatrixIngressMonitor(params: {
             pending: await ingressQueue.listPending({ limit: "all" }),
             claims: await ingressQueue.listClaims(),
           };
+      observe("order-load-returned", { pending: pending.length, claims: claims.length });
       for (const row of [...pending, ...claims]) {
         lastReceivedAt = Math.max(lastReceivedAt, row.receivedAt);
       }
@@ -165,8 +199,12 @@ export function createMatrixIngressMonitor(params: {
     // Sync-store callbacks are serialized. Matrix IDs do not encode order, so
     // continue the queued receipt order instead of tying a whole batch on time.
     for (const event of events) {
+      observe("admit-entered", { historical: event.historical === true });
       const result = await monitor.admit(event, {
         receivedAt: Math.max(Date.now(), lastReceivedAt + 1),
+      });
+      observe("admit-returned", {
+        outcome: result.kind === "durable" ? result.queueResult.kind : result.kind,
       });
       if (result.kind === "durable") {
         const admitted = result.queueResult;
