@@ -152,6 +152,10 @@ export function truncateSqliteWal(database: DatabaseSync, sqlitePath: string): v
   }
 }
 
+// A sustained block whose WAL stays bounded (for example behind a replication
+// reader that checkpoints the WAL itself) repeats its report at this interval.
+const SUSTAINED_BLOCK_REPORT_INTERVAL_NS = 60n * 60n * 1_000_000_000n;
+
 /** The maintenance lifecycle owns this checkpoint result and its last observation. */
 export function createSqliteWalCheckpoint(
   database: DatabaseSync,
@@ -159,6 +163,34 @@ export function createSqliteWalCheckpoint(
   journalSizeLimitBytes: number,
 ) {
   let snapshot: SqliteWalCheckpointSnapshot | undefined;
+  let reportedBlock:
+    | { atNs: bigint; walBytes: number; lastCompletedAtMs: number | null }
+    | undefined;
+
+  // The first report after each completed checkpoint, WAL growth, and the
+  // oversized ceiling always log; an unchanged bounded WAL logs once per interval.
+  const shouldReportBlocked = (
+    observation: SqliteWalHealth,
+    observedAtNs: bigint,
+    oversized: boolean,
+  ): boolean => {
+    const walBytes = observation.walBytes ?? 0;
+    if (
+      !oversized &&
+      reportedBlock !== undefined &&
+      observation.lastCompletedAtMs === reportedBlock.lastCompletedAtMs &&
+      walBytes <= reportedBlock.walBytes &&
+      observedAtNs - reportedBlock.atNs < SUSTAINED_BLOCK_REPORT_INTERVAL_NS
+    ) {
+      return false;
+    }
+    reportedBlock = {
+      atNs: observedAtNs,
+      walBytes,
+      lastCompletedAtMs: observation.lastCompletedAtMs,
+    };
+    return true;
+  };
 
   const checkpointObservation = (): SqliteWalHealth => ({
     state: "error",
@@ -203,6 +235,7 @@ export function createSqliteWalCheckpoint(
     const observedAtNs = process.hrtime.bigint();
     const observation = checkpointObservation();
     let busy: boolean;
+    let oversized: boolean;
     let sizeError: unknown;
     try {
       const { busy: busyResult, logFrames, checkpointedFrames } = readCheckpointResult(row);
@@ -227,12 +260,12 @@ export function createSqliteWalCheckpoint(
         }
       }
       // Allow the existing retained-WAL ceiling or two database images before warning early.
+      oversized =
+        observation.walBytes !== null &&
+        observation.databaseBytes !== null &&
+        observation.walBytes > Math.max(2 * observation.databaseBytes, journalSizeLimitBytes);
       observation.warning =
-        observation.state === "blocked" &&
-        (observation.consecutiveBlocked >= 2 ||
-          (observation.walBytes !== null &&
-            observation.databaseBytes !== null &&
-            observation.walBytes > Math.max(2 * observation.databaseBytes, journalSizeLimitBytes)));
+        observation.state === "blocked" && (observation.consecutiveBlocked >= 2 || oversized);
       snapshot = {
         observedAtNs,
         lastCompletedAtNs:
@@ -254,7 +287,11 @@ export function createSqliteWalCheckpoint(
     // Frequent checkpoint ticks expect readers to block some passes; only an
     // observation that reaches the warning policy reports them, while the
     // health snapshot still records every blocked pass.
-    if (observation.warning && !quiet) {
+    if (
+      observation.warning &&
+      !quiet &&
+      shouldReportBlocked(observation, observedAtNs, oversized)
+    ) {
       const label = options.databaseLabel ?? "sqlite database";
       options.onCheckpointError?.(
         new Error(
