@@ -266,7 +266,7 @@ it("classifies a rate-limited catalog when the connection dies mid-body and clos
         response.setHeader("retry-after", "2");
         response.on("close", () => closed.resolve());
         response.write("synthetic-router-key private evidence");
-        response.socket.destroy();
+        response.destroy();
       } else {
         response.end(JSON.stringify(catalog()));
       }
