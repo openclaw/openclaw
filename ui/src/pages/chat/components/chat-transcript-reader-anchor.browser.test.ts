@@ -4,7 +4,7 @@ import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 import { TranscriptReaderAnchor } from "./chat-transcript-reader-anchor.ts";
 
-it.each(["settled", "scrolling", "start"] as const)(
+it.each(["settled", "scrolling", "start", "programmatic"] as const)(
   "reconciles first predecessor measurements while %s",
   async (phase) => {
     const scrolling = phase !== "settled";
@@ -40,11 +40,13 @@ it.each(["settled", "scrolling", "start"] as const)(
     virtualizer.scrollElement = viewport;
     virtualizer.targetWindow = window;
     virtualizer.elementsCache.set("2", retained);
+    const offsetState = new TranscriptOffsetState();
+    offsetState.nativeInputActive = scrolling && phase !== "programmatic";
     const anchor = new TranscriptReaderAnchor(
       {
         virtualizer,
         layout: new TranscriptLayoutOwner(() => {}),
-        offsetState: new TranscriptOffsetState(),
+        offsetState,
         renderer: { columnElement: column, queueAfterCommit: () => {} },
         initialRange: { pending: false },
         prependAnchor: { messageKey: null },
@@ -96,12 +98,14 @@ it.each(["settled", "scrolling", "start"] as const)(
       return;
     }
     expect(measuredTop).toBe(top);
-    if (scrolling) {
+    if (scrolling && phase !== "programmatic") {
       expect(viewport.scrollTop).toBe(500);
       viewport.scrollTop = 40;
       anchor.settle();
       expect(viewport.scrollTop).toBe(0);
       expect(column.style.marginTop).toBe("");
+    } else if (phase === "programmatic") {
+      expect(viewport.scrollTop).toBe(420);
     }
   },
 );

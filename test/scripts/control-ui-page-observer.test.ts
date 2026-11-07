@@ -135,7 +135,7 @@ it("counts only interval assets completed by route readiness and retains the lat
 it("retains a shifted text node's row identity after virtualization removes it", async () => {
   let deliver: ((entries: unknown[]) => void) | undefined;
   class LayoutObserver extends TaskObserver {
-    static supportedEntryTypes = ["layout-shift"];
+    static override supportedEntryTypes = ["layout-shift"];
     constructor(callback: (list: { getEntries(): unknown[] }) => void) {
       super();
       deliver = (entries) => callback({ getEntries: () => entries });

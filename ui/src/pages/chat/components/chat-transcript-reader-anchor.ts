@@ -105,7 +105,10 @@ export class TranscriptReaderAnchor {
 
   /** Native writes can stop a gesture; hold the correction in the column until it ends. */
   private holdsNativeOffset(): boolean {
-    return this.host.virtualizer.isScrolling || this.host.offsetState.touchActive;
+    return (
+      (this.host.virtualizer.isScrolling && this.host.offsetState.nativeInputActive) ||
+      this.host.offsetState.touchActive
+    );
   }
 
   private readonly resized = (entries: ResizeObserverEntry[]): void => {
