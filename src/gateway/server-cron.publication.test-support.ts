@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createRequireRecord } from "../../test/helpers/record.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronServiceState } from "../cron/service/state.js";
@@ -83,6 +84,75 @@ export function registerGatewayCronPublicationTests({
       },
       { broadcast },
     );
+  });
+
+  it("carries run liveness facts on cron-binding session pushes", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const cfg = createCronConfig("server-cron-binding-liveness");
+      cfg.agents = {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {} },
+      };
+      // The session accessor resolves its store from the published runtime
+      // snapshot; the cron service publishes it only once withCronService starts.
+      setRuntimeConfigSnapshot(cfg);
+      // The projection hydrates admitted store rows, not a raw sessions.json fixture.
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:probe" },
+        { sessionId: "sess-probe", updatedAt: 1 },
+      );
+
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const broadcast = vi.fn();
+      let context: GatewayRequestContext | undefined;
+      try {
+        context = bindSessionRowProjection(
+          Object.assign(createSessionMutationTestContext(cfg), {
+            resolveGatewayContext: () => context,
+          }),
+          () => projection,
+        );
+        await withCronService(
+          cfg,
+          async (state) => {
+            await state.cron.start();
+            await addAgentTurnJob(state, "bound schedule", "ping", {
+              schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
+              sessionTarget: "session:agent:main:probe",
+            });
+            // The binding push is the session's idle announcement: without
+            // top-level run liveness a delta client stays at the wake's
+            // phase-end hasActiveRun forever (issue #192398).
+            const binding = await vi.waitFor(
+              () => {
+                const call = broadcast.mock.calls.findLast(
+                  ([event, payload]) =>
+                    event === "sessions.changed" && payload?.reason === "cron-binding",
+                );
+                const record = requireRecord(call?.[1], "binding payload");
+                if (typeof record.hasActiveRun !== "boolean") {
+                  throw new Error("binding payload not enriched with run liveness yet");
+                }
+                return record;
+              },
+              { timeout: 15_000 },
+            );
+            expect(binding.sessionKey).toBe("agent:main:probe");
+            expect(binding.hasActiveRun).toBe(false);
+            expect(binding.activeRunIds).toEqual([]);
+            expect(binding.session).toMatchObject({
+              key: "agent:main:probe",
+              hasActiveRun: false,
+            });
+          },
+          { broadcast, resolveGatewayContext: () => context },
+        );
+      } finally {
+        projection.dispose();
+        context = undefined;
+      }
+    });
   });
 
   it("delivers global binding changes only to currently authorized physical-session viewers", async () => {
