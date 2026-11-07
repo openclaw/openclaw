@@ -150,6 +150,7 @@ const result = {
     clockTicks: Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" })),
     pageBytes: Number(execFileSync("getconf", ["PAGESIZE"], { encoding: "utf8" })),
   },
+  warmups: [],
   samples: [],
   status: "failed",
 };
@@ -295,13 +296,40 @@ async function stopJava() {
   assert.deepEqual(javaProcesses(), [], "Every sample must start with fresh Java processes.");
 }
 
+async function buildAndVerify() {
+  await run("preflight", "./gradlew", [
+    ...metadata,
+    ...result.executionFlags,
+    ":app:validateSigningPlayRelease",
+    ":wear:validateSigningRelease",
+    ...flags,
+  ]);
+  const tasks = [":wear:bundleRelease", ":app:bundlePlayRelease"];
+  await run("build", "./gradlew", [...metadata, ...result.executionFlags, ...tasks, ...flags]);
+  for (const [name, artifact] of [
+    ["wear", "wear/build/outputs/bundle/release/wear-release.aab"],
+    ["phone", "app/build/outputs/bundle/playRelease/app-play-release.aab"],
+  ]) {
+    current.artifactBytes[name] = fs.statSync(path.join(android, artifact)).size;
+    await run(`verify-${name}`, "jarsigner", [
+      "-J-Duser.language=en",
+      "-J-Duser.country=US",
+      "-verify",
+      path.join(android, artifact),
+    ]);
+    assert.match(
+      fs.readFileSync(path.join(current.output, `verify-${name}.log`), "utf8"),
+      /jar verified\./,
+    );
+  }
+}
+
 try {
   assert.equal(git("rev-parse", "HEAD"), sourceSha);
   assert.equal(git("status", "--porcelain", "--untracked-files=all"), "");
   assert.equal(gitAt(candidate, "rev-parse", "HEAD"), candidateSha);
   assert.equal(gitAt(candidate, "status", "--porcelain", "--untracked-files=all"), "");
   assert.deepEqual(javaProcesses(), [], "Fresh runner must have no Java processes.");
-  assert.ok(fs.existsSync(path.join(gradleHome, "caches/modules-2")), "Dependency cache must hit.");
   result.host.cpuMax = readOptional("/sys/fs/cgroup/cpu.max");
   result.host.memoryMax = readOptional("/sys/fs/cgroup/memory.max");
   result.host.cpuset = readOptional("/sys/fs/cgroup/cpuset.cpus.effective");
@@ -309,7 +337,6 @@ try {
   // sample; task outputs and live JVMs never carry into the next build.
   copy(source, sourceSeeds.baseline);
   copy(candidate, sourceSeeds.candidate);
-  copy(gradleHome, cacheSeed);
   execFileSync(
     "keytool",
     [
@@ -336,6 +363,36 @@ try {
     ],
     { stdio: "ignore" },
   );
+  // A Gradle manifest change can miss the production cache. Hydrate both source
+  // variants before taking one common seed; these builds are not measured samples.
+  for (const variant of ["baseline", "candidate"]) {
+    fs.rmSync(source, { recursive: true });
+    copy(sourceSeeds[variant], source);
+    assert.equal(git("rev-parse", "HEAD"), result.variants[variant]);
+    current = {
+      pair: "warmup",
+      variant,
+      output: path.join(output, "warmup", variant),
+      stages: {},
+      artifactBytes: {},
+      status: "failed",
+    };
+    fs.mkdirSync(current.output, { recursive: true });
+    result.warmups.push(current);
+    try {
+      await buildAndVerify();
+      assert.equal(git("status", "--porcelain", "--untracked-files=all"), "");
+      current.status = "passed";
+    } finally {
+      await stopJava();
+      fs.writeFileSync(path.join(current.output, "result.json"), JSON.stringify(current, null, 2));
+    }
+  }
+  assert.ok(
+    fs.existsSync(path.join(gradleHome, "caches/modules-2")),
+    "Both variants must hydrate the common dependency cache before measurement.",
+  );
+  copy(gradleHome, cacheSeed);
   for (let index = 0; index < 10; index++) {
     const pair = String(Math.floor(index / 2) + 1).padStart(2, "0");
     const baselineFirst = Math.floor(index / 2) % 2 === 0;
@@ -357,7 +414,6 @@ try {
     fs.mkdirSync(current.output, { recursive: true });
     // Both variants keep production task scheduling; only the source/dependency
     // selection changes. Metadata stays fixed to avoid unrelated BuildConfig churn.
-    const executionFlags = result.executionFlags;
     result.samples.push(current);
     resources = [snapshot()];
     assert.ok(Number.isFinite(resources[0].hostOomKills), "Host OOM counter must be available.");
@@ -367,31 +423,7 @@ try {
     }, 1000);
     let sampleFailure;
     try {
-      await run("preflight", "./gradlew", [
-        ...metadata,
-        ...executionFlags,
-        ":app:validateSigningPlayRelease",
-        ":wear:validateSigningRelease",
-        ...flags,
-      ]);
-      const tasks = [":wear:bundleRelease", ":app:bundlePlayRelease"];
-      await run("build", "./gradlew", [...metadata, ...executionFlags, ...tasks, ...flags]);
-      for (const [name, artifact] of [
-        ["wear", "wear/build/outputs/bundle/release/wear-release.aab"],
-        ["phone", "app/build/outputs/bundle/playRelease/app-play-release.aab"],
-      ]) {
-        current.artifactBytes[name] = fs.statSync(path.join(android, artifact)).size;
-        await run(`verify-${name}`, "jarsigner", [
-          "-J-Duser.language=en",
-          "-J-Duser.country=US",
-          "-verify",
-          path.join(android, artifact),
-        ]);
-        assert.match(
-          fs.readFileSync(path.join(current.output, `verify-${name}.log`), "utf8"),
-          /jar verified\./,
-        );
-      }
+      await buildAndVerify();
       assert.equal(git("status", "--porcelain", "--untracked-files=all"), "");
       const log = fs.readFileSync(path.join(current.output, "build.log"), "utf8");
       for (const stage of ["preflight", "build"]) {
