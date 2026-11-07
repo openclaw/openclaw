@@ -3,7 +3,7 @@ import path from "node:path";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { openClawMascotStyles, renderOpenClawMascot } from "../shared/openclaw-mascot.js";
-import { OPENCLAW_WORDMARK_SVG, OPENCLAW_WORDMARK_TEXT_SVG } from "../shared/openclaw-wordmark.js";
+import { openClawWordmarkSvg, openClawWordmarkTextSvg } from "../shared/openclaw-wordmark.js";
 import {
   applyControlUiSecurityHeaders,
   buildControlUiCspHeader,
@@ -81,10 +81,9 @@ function railIcon(body: string): string {
 
 // The sidebar header carries the full lockup; the phone header carries only the text, since the
 // page's own mascot stands right below it. The sidebar's aria-hidden covers its label.
-const SIDEBAR_WORDMARK_SVG = OPENCLAW_WORDMARK_SVG.replace(
-  'class="wordmark" role="img" aria-label="OpenClaw"',
-  'class="side-brand"',
-).replaceAll("openclaw-wordmark-shell", "openclaw-sidebar-shell");
+const SIDEBAR_WORDMARK_SVG = openClawWordmarkSvg
+  .replace('class="wordmark" role="img" aria-label="OpenClaw"', 'class="side-brand"')
+  .replaceAll("openclaw-wordmark-shell", "openclaw-sidebar-shell");
 
 // Decorative copy of the Control UI's disconnected shell, so the app replaces it without a jump.
 const SHELL_SIDEBAR = `<aside class="sidebar" aria-hidden="true" data-window-drag><div class="rail" data-window-drag>
@@ -149,7 +148,7 @@ p{margin:6px 0 0;color:var(--muted);font-size:14px;line-height:21px;text-wrap:pr
 ${MASCOT_STYLES}
 </style></head><body>
 <div class="shell" data-window-drag>${SHELL_SIDEBAR}
-<div class="content" data-window-drag><header class="topbar" data-window-drag>${OPENCLAW_WORDMARK_TEXT_SVG}</header>
+<div class="content" data-window-drag><header class="topbar" data-window-drag>${openClawWordmarkTextSvg}</header>
 <main id="openclaw-maintenance" data-window-drag><div class="body" data-window-drag>
 <h1>${MASCOT}${escapeHtml(title)}</h1>
 <p role="status" aria-live="polite">Hang on while the Gateway gets ready.</p>
