@@ -901,7 +901,10 @@ describe("openclaw path CLI", () => {
       expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 
-    it.runIf(process.platform !== "win32").each<[string, { json?: boolean; human?: boolean }]>([
+    // Root and DAC-override containers ignore the 0o444 mode, so the write would
+    // succeed; match the permission-fixture guard used by root-memory-files.test.ts.
+    const canDenyWrites = process.platform !== "win32" && process.getuid?.() !== 0;
+    it.runIf(canDenyWrites).each<[string, { json?: boolean; human?: boolean }]>([
       ["json", { json: true }],
       ["human", { human: true }],
     ])("CLI-S11 reports a failed write inside the %s error envelope", async (_mode, mode) => {

@@ -1,4 +1,4 @@
 # oc-path CLI: cover fs read/write failures that must stay inside the documented
 # error envelope (OC_PATH_FILE_UNREADABLE / OC_PATH_WRITE_FAILED) plus the
 # quoted-literal slice split out of cli.test.ts to respect the max-lines cap.
-70
+73
