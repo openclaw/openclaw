@@ -183,11 +183,18 @@ const GEMINI_INCOMPLETE_TURN_PROVIDER_IDS = new Set([
 ]);
 const GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN = /^gemini(?:[.-]|$)/;
 // Ollama native `/api/chat` can finish with only thinking/internal blocks when constrained.
+// Match the API too: a custom provider id on it (llmman) behaves the same.
 const OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN = /^ollama(?:-|$)/;
 
-export function isOllamaIncompleteTurnProvider(provider?: string): boolean {
-  return OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
-    normalizeLowercaseStringOrEmpty(provider ?? ""),
+export function isOllamaIncompleteTurnProvider(params: {
+  provider?: string;
+  modelApi?: string;
+}): boolean {
+  return (
+    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "ollama" ||
+    OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
+      normalizeLowercaseStringOrEmpty(params.provider ?? ""),
+    )
   );
 }
 // Model APIs eligible for the non-visible turn retry guard.  OpenAI Responses
@@ -223,7 +230,7 @@ export function shouldApplyNonVisibleTurnRetryGuard(params: {
     ) &&
       GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(params.modelId ?? ""))) ||
     RETRY_GUARD_MODEL_APIS.has(normalizeLowercaseStringOrEmpty(params.modelApi ?? "")) ||
-    isOllamaIncompleteTurnProvider(params.provider)
+    isOllamaIncompleteTurnProvider(params)
   );
 }
 
