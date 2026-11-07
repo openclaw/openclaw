@@ -129,8 +129,14 @@ export function createRuntimeConfigCapability(
   let pluginGeneration = gateway.snapshot.pluginCapabilities?.generation;
   // The same state holds display snapshots before the editor takes custody.
   const stopGateway = gateway.subscribe((snapshot) => {
+    if (state.client !== snapshot.client || (state.connected && snapshot.phase !== "connected")) {
+      pendingSchema = null;
+    }
     if (updateEditorConnection) {
       updateEditorConnection(snapshot);
+      if (pendingSchema && !editor?.schemaRead && state.connected) {
+        void loadSchema(false);
+      }
       return;
     }
     const nextCanRead = hasOperatorReadAccess(snapshot.hello?.auth ?? null);
@@ -150,7 +156,6 @@ export function createRuntimeConfigCapability(
       state.configSnapshot = null;
       displayRead = null;
       displayRefresh.cancel();
-      pendingSchema = null;
       state.configLoading = false;
       state.configSchemaLoading = false;
     }
@@ -315,37 +320,37 @@ export function createRuntimeConfigCapability(
     }
     return editor;
   };
+  const loadEditorSchema = (loaded: RuntimeConfigEditor, refresh: boolean) => {
+    if (refresh) {
+      return loaded.refreshSchema();
+    }
+    const loading = loaded.ensureSchemaLoaded();
+    // A reconnect can replace schemaRead before this caller's read settles.
+    const receipt = loaded.schemaRead;
+    // Preserve pre-hello demand until admission, including when the editor is already active.
+    pendingSchema = receipt ? null : loading.then(() => ({ ok: true, value: undefined }) as const);
+    return loading.then(() => receipt ?? { ok: true as const, value: undefined });
+  };
   const loadSchema = (refresh: boolean): Promise<Result<void, string>> => {
     if (editor) {
-      const loaded = editor;
-      if (refresh) {
-        return loaded.refreshSchema();
-      }
-      const loading = loaded.ensureSchemaLoaded();
-      // A reconnect can replace schemaRead before this caller's read settles.
-      const receipt = loaded.schemaRead;
-      return loading.then(() => receipt ?? { ok: true, value: undefined });
+      return loadEditorSchema(editor, refresh);
     }
     if (pendingSchema) {
       return pendingSchema;
     }
-    pendingSchema = invoke<Result<void, string>>(
-      async (loaded) => {
-        if (refresh) {
-          return loaded.refreshSchema();
-        }
-        const loading = loaded.ensureSchemaLoaded();
-        const receipt = loaded.schemaRead;
-        await loading;
-        return receipt ?? { ok: true as const, value: undefined };
-      },
-      { ok: true as const, value: undefined },
+    const requested: Promise<Result<void, string>> = activate().then(
+      (loaded) =>
+        loaded?.schemaRead ??
+        (loaded && pendingSchema === requested
+          ? loadEditorSchema(loaded, refresh)
+          : { ok: true, value: undefined }),
     );
+    pendingSchema = requested;
     if (state.client && state.connected && canRead && !disposed) {
       state.configSchemaLoading = true;
       publish();
     }
-    return pendingSchema;
+    return requested;
   };
   return {
     get state() {

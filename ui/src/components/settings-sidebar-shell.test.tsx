@@ -7,7 +7,7 @@ import { createDeferred } from "../../../test/helpers/promise.ts";
 import { ShellOwner } from "../app/app-host.tsx";
 import { bootstrapApplication } from "../app/bootstrap.ts";
 import { mountRouterOutlet } from "../app/router-outlet.test-support.tsx";
-import { i18n } from "../i18n/index.ts";
+import { i18n, t } from "../i18n/index.ts";
 import { configSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { createGatewayHarness } from "../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
@@ -15,6 +15,7 @@ import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
@@ -25,6 +26,133 @@ beforeEach(async () => {
   await i18n.setLocale("en");
 });
 afterEach(() => vi.unstubAllGlobals());
+
+function mountSearchSidebar(
+  gateway: Parameters<typeof createRuntimeConfigCapability>[0],
+  runtimeConfig: ReturnType<typeof createRuntimeConfigCapability>,
+) {
+  const runtime = bootstrapApplication();
+  Object.assign(runtime.context, { gateway, runtimeConfig });
+  let owner!: ShellOwner;
+  const view = mountSolid(() => {
+    owner = new ShellOwner(document.createElement("openclaw-app-shell"), runtime);
+    onSettled(() => runtimeConfig.subscribe(() => owner.invalidate()));
+    return (
+      <ShellSettingsSidebar
+        host={owner}
+        sidebarProps={{
+          activeRouteId: "appearance",
+          connectionStatus: null,
+          onExit: () => {},
+          canAdmin: true,
+        }}
+      />
+    );
+  });
+  return { runtime, owner, view };
+}
+
+it("keeps known search results with pending schema and retains its failure after config settles", async () => {
+  const config = createDeferred<unknown>();
+  const schema = createDeferred<unknown>();
+  const retrySchema = createDeferred<unknown>();
+  const refreshSchema = createDeferred<unknown>();
+  let attempts = 0;
+  const request = vi.fn<GatewayRequestHandler>(async (method) =>
+    method === "config.get"
+      ? config.promise
+      : ++attempts === 1
+        ? schema.promise
+        : attempts === 2
+          ? retrySchema.promise
+          : attempts === 3
+            ? refreshSchema.promise
+            : { schema: { type: "object" }, uiHints: {}, version: "recovered" },
+  );
+  const { gateway, publish } = createGatewayHarness(createTestGatewayClient(request));
+  publish(false, undefined, null);
+  const runtimeConfig = createRuntimeConfigCapability(gateway);
+  const { runtime, owner, view } = mountSearchSidebar(gateway, runtimeConfig);
+  let reading = owner.handleSettingsSearchQueryChange("Unmatched schema field");
+  owner.invalidate();
+  try {
+    await waitForSolid(() =>
+      expect(view.container.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe(
+        "Unmatched schema field",
+      ),
+    );
+    expect(view.queryByText(t("common.loading"))).not.toBeNull();
+    expect(view.queryByText(t("nav.settingsSearchNoResults"))).toBeNull();
+    reading = Promise.all([reading, owner.handleSettingsSearchQueryChange("Appearance")]).then(
+      () => undefined,
+    );
+    owner.invalidate();
+    await waitForSolid(() => expect(view.queryByText("Appearance")).not.toBeNull());
+    publish(true);
+    await waitForSolid(() => expect(request).toHaveBeenCalledWith("config.schema", {}));
+    schema.reject(new Error("Synthetic schema unavailable"));
+    await waitForSolid(() => expect(view.queryByRole("alert")).not.toBeNull());
+    config.resolve(configSnapshot({ count: 1 }, "initial", '{"count":1}'));
+    await reading;
+    flush();
+    expect(view.getByRole("alert").textContent).toContain(t("nav.settingsLoadFailed"));
+    expect(view.queryByText("Appearance")).not.toBeNull();
+    view.getByText(t("common.retry")).click();
+    await waitForSolid(() => expect(view.queryByText(t("common.loading"))).not.toBeNull());
+    expect(view.queryByRole("alert")).toBeNull();
+    retrySchema.resolve({ schema: { type: "object" }, uiHints: {}, version: "ready" });
+    await waitForSolid(() => expect(view.queryByRole("alert")).toBeNull());
+    await waitForSolid(() => expect(view.queryByText(t("common.loading"))).toBeNull());
+    expect(attempts).toBe(2);
+    expect(view.queryByText(t("common.loading"))).toBeNull();
+    const refreshing = runtimeConfig.refreshSchema();
+    refreshSchema.reject(new Error("Synthetic refresh failure"));
+    await refreshing;
+    await waitForSolid(() => expect(view.queryByRole("alert")).not.toBeNull());
+    expect(view.queryByText("Appearance")).not.toBeNull();
+    view.getByText(t("common.retry")).click();
+    await waitForSolid(() => expect(view.queryByRole("alert")).toBeNull());
+    expect(attempts).toBe(4);
+    await owner.handleSettingsSearchQueryChange("Unmatched schema field");
+    owner.invalidate();
+    await waitForSolid(() =>
+      expect(view.queryByText(t("nav.settingsSearchNoResults"))).not.toBeNull(),
+    );
+  } finally {
+    schema.resolve({ schema: {}, uiHints: {}, version: "ready" });
+    retrySchema.resolve({ schema: {}, uiHints: {}, version: "ready" });
+    refreshSchema.resolve({ schema: {}, uiHints: {}, version: "ready" });
+    config.resolve(configSnapshot({}, "cleanup", "{}"));
+    await reading;
+    view.unmount();
+    runtimeConfig.dispose();
+    runtime.stop();
+  }
+});
+
+it("completes static search when schema read access is intentionally unavailable", async () => {
+  const request = vi.fn<GatewayRequestHandler>(async () => configSnapshot({}, "initial", "{}"));
+  const client = createTestGatewayClient(request);
+  const hello = gatewayHelloForMethods(["config.schema"], ["operator.pairing"]);
+  vi.spyOn(client, "auth", "get").mockReturnValue(hello.auth);
+  const { gateway, publish } = createGatewayHarness(client);
+  publish(true, client, hello);
+  const runtimeConfig = createRuntimeConfigCapability(gateway);
+  const { runtime, owner, view } = mountSearchSidebar(gateway, runtimeConfig);
+  try {
+    await owner.handleSettingsSearchQueryChange("Unmatched schema field");
+    owner.invalidate();
+    await waitForSolid(() =>
+      expect(view.queryByText(t("nav.settingsSearchNoResults"))).not.toBeNull(),
+    );
+    expect(view.queryByText(t("common.loading"))).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+  } finally {
+    view.unmount();
+    runtimeConfig.dispose();
+    runtime.stop();
+  }
+});
 
 async function setup() {
   const held = createDeferred<unknown>();

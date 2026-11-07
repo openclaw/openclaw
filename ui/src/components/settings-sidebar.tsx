@@ -71,6 +71,9 @@ export type SettingsSidebarProps = {
   lastError: string | null;
   gatewayVersion: string;
   searchQuery: string;
+  searchSchemaReady?: () => boolean;
+  searchSchemaRequest?: Promise<unknown> | null;
+  onRetrySearchSchema?: () => void;
   searchBlockMatches?: readonly SettingsSearchBlock[];
   searchParams?: Parameters<
     typeof import("../pages/config/settings-search.ts").findSettingsSearchBlocks
@@ -496,6 +499,54 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       ];
       return items.length > 0 ? [{ labelKey: null, items }] : [];
     });
+    function SearchCompletion() {
+      return (
+        <Loading
+          on={props.searchSchemaRequest}
+          fallback={
+            <p class="settings-sidebar__empty" role="status">
+              {t("common.loading")}
+            </p>
+          }
+        >
+          <Errored
+            fallback={(_error, retry) => (
+              <p class="settings-sidebar__empty" role="alert">
+                {t("nav.settingsLoadFailed")}
+                <button
+                  type="button"
+                  class="btn btn--sm"
+                  onClick={() => {
+                    props.onRetrySearchSchema?.();
+                    retry();
+                  }}
+                >
+                  {t("common.retry")}
+                </button>
+              </p>
+            )}
+          >
+            <Show
+              when={props.searchSchemaReady?.() !== false}
+              fallback={
+                <p class="settings-sidebar__empty" role="status">
+                  {t("common.loading")}
+                </p>
+              }
+            >
+              <Show when={groups().length === 0}>
+                <div class="settings-sidebar__empty settings-sidebar__empty--search">
+                  <p role="status">{t("nav.settingsSearchNoResults")}</p>
+                  <button type="button" class="btn btn--sm" onClick={clearSearch}>
+                    {t("nav.settingsSearchClear")}
+                  </button>
+                </div>
+              </Show>
+            </Show>
+          </Errored>
+        </Loading>
+      );
+    }
     return (
       <nav
         class="settings-sidebar__nav"
@@ -524,42 +575,33 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
               </p>
             }
           >
-            <Show
-              when={groups().length > 0}
-              fallback={
-                <div class="settings-sidebar__empty settings-sidebar__empty--search">
-                  <p role="status">{t("nav.settingsSearchNoResults")}</p>
-                  <button type="button" class="btn btn--sm" onClick={clearSearch}>
-                    {t("nav.settingsSearchClear")}
-                  </button>
+            <For each={groups()} keyed={false}>
+              {(group) => (
+                <div class="settings-sidebar__group">
+                  <Show when={group().labelKey}>
+                    {(label) => <div class="settings-sidebar__group-label">{t(label())}</div>}
+                  </Show>
+                  <For each={group().items} keyed={false}>
+                    {(item) => (
+                      <>
+                        <Show when={item().showPage}>
+                          <SettingsNavigationItem
+                            sidebar={props}
+                            routeId={item().routeId}
+                            branding={branding.read()}
+                          />
+                        </Show>
+                        <For each={item().blocks} keyed={false}>
+                          {(block) => <SettingsBlockItem sidebar={props} block={block()} />}
+                        </For>
+                      </>
+                    )}
+                  </For>
                 </div>
-              }
-            >
-              <For each={groups()} keyed={false}>
-                {(group) => (
-                  <div class="settings-sidebar__group">
-                    <Show when={group().labelKey}>
-                      {(label) => <div class="settings-sidebar__group-label">{t(label())}</div>}
-                    </Show>
-                    <For each={group().items} keyed={false}>
-                      {(item) => (
-                        <>
-                          <Show when={item().showPage}>
-                            <SettingsNavigationItem
-                              sidebar={props}
-                              routeId={item().routeId}
-                              branding={branding.read()}
-                            />
-                          </Show>
-                          <For each={item().blocks} keyed={false}>
-                            {(block) => <SettingsBlockItem sidebar={props} block={block()} />}
-                          </For>
-                        </>
-                      )}
-                    </For>
-                  </div>
-                )}
-              </For>
+              )}
+            </For>
+            <Show when={props.searchQuery.trim()}>
+              <SearchCompletion />
             </Show>
           </Loading>
         </Errored>

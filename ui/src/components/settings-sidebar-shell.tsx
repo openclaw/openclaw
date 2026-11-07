@@ -1,6 +1,7 @@
 import { createMemo, onSettled } from "solid-js";
 import { sameRouteLocation } from "../app-route-paths.ts";
 import type { ShellViewHost } from "../app/app-shell-view-state.ts";
+import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import { currentConfigConnectionEpoch } from "../lib/config/config-state-model.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import {
@@ -103,6 +104,29 @@ export function ShellSettingsSidebar(props: {
   sidebarProps: SettingsSidebarFallbackProps;
 }) {
   const saveIndicator = useSaveIndicatorProps(() => props.host);
+  const schemaReceipt = createMemo(
+    () => {
+      props.host.shellRevision();
+      return { result: props.host.context!.runtimeConfig.schemaRead };
+    },
+    { equals: (left, right) => left.result === right.result },
+  );
+  const schemaRead = createMemo(() =>
+    schemaReceipt().result?.then((result) => {
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+    }),
+  );
+  const searchSchemaReady = () => {
+    props.host.shellRevision();
+    const gateway = props.host.context!.gateway.snapshot;
+    if (gateway.phase === "connected" && !hasOperatorReadAccess(gateway.hello?.auth ?? null)) {
+      return true;
+    }
+    schemaRead();
+    return props.host.context!.runtimeConfig.state.configSchema !== null;
+  };
   const sidebarProps = createMemo<SettingsSidebarProps>(() => {
     const host = props.host;
     host.shellRevision();
@@ -123,6 +147,12 @@ export function ShellSettingsSidebar(props: {
       lastError: gatewaySnapshot.lastError,
       gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
       searchQuery: host.settingsSearchQuery,
+      searchSchemaReady,
+      searchSchemaRequest: schemaReceipt().result,
+      onRetrySearchSchema: () => {
+        // The receipt presents failure; consume unexpected activation rejection here too.
+        void context.runtimeConfig.refreshSchema().catch(() => {});
+      },
       searchParams: {
         query: host.settingsSearchQuery,
         openclawIdEnabled: config.openclawIdEnabled,
