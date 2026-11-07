@@ -32,6 +32,9 @@ export type PrepareEmbeddedAttemptStreamInput = {
     revokeApprovals: () => void,
   ) => Promise<void>;
   onModelUsage?: Parameters<typeof subscribeEmbeddedAgentSession>[0]["onModelUsage"];
+  getUserTranscriptContexts?: Parameters<
+    typeof subscribeEmbeddedAgentSession
+  >[0]["getUserTranscriptContexts"];
   readSessionForkBoundary?: () => LlmBoundaryOptions;
   projectSessionForkMessages?: (messages: AgentMessage[]) => AgentMessage[];
   runtimeChannel?: string;
