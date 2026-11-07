@@ -338,6 +338,11 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   **Remove access** for a browser. The confirmation lists any other devices that
   will also lose access. They disconnect immediately; use another approved owner
   browser or your recovery kit to restore access.
+- **Sign out of OpenClaw ID** on a remote browser ends its account session and
+  revokes the Gateway tokens issued to it, but the browser stays approved.
+  Signing back in on the same browser reconnects with the access it was
+  approved for, without a new device approval. Asking for more access than
+  that still needs approval.
 - There is no owner reset in this version: a claw keeps the recovery kit it was
   linked with, so store the kit safely.
 

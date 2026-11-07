@@ -510,6 +510,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
               (snapshot().phase === "connecting" || snapshot().phase === "reconnecting"),
             lastErrorCode: snapshot().lastErrorCode,
             lastErrorAuthReason: snapshot().lastErrorAuthReason,
+            lastErrorPairing: snapshot().lastErrorPairing,
             hasToken: Boolean(loginToken().trim()),
             hasPassword: Boolean(loginPassword().trim()),
             gatewayUrl: loginGatewayUrl(),
