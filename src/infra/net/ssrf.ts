@@ -414,8 +414,9 @@ function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
   results: readonly LookupAddress[],
   hostname: string,
   policy?: SsrFPolicy,
+  allowResolvedLoopback = false,
 ): void {
-  const isLoopbackAllowed = isExplicitLoopbackHostname(hostname);
+  const isLoopbackAllowed = allowResolvedLoopback || isExplicitLoopbackHostname(hostname);
   const isPodmanGatewayLinkLocalAllowed = hasTrustedHostPodmanGatewayLinkLocalExemption(policy);
 
   for (const entry of results) {
@@ -583,10 +584,15 @@ export async function resolvePinnedHostnameWithPolicy(
   if (!skipPrivateNetworkChecks) {
     // Phase 2: re-check DNS answers so public hostnames cannot pivot to private targets.
     assertAllowedResolvedAddressesOrThrow(results, params.policy);
-  } else if (!isPrivateNetworkAllowedByPolicy(params.policy)) {
-    // Exact-host trust may allow RFC1918/tailnet/private-DNS provider targets, but
-    // it must not turn metadata/link-local DNS rebinding into an implicit allow.
-    assertAllowedTrustedHostnameResolvedAddressesOrThrow(results, normalized, params.policy);
+  } else {
+    // Private allow keeps loopback and RFC1918 answers. Exact-host trust does not
+    // keep loopback rebinding. Metadata and non-exempt link-local answers stay blocked.
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(
+      results,
+      normalized,
+      params.policy,
+      isPrivateNetworkAllowedByPolicy(params.policy),
+    );
   }
 
   // Prefer addresses returned as IPv4 by DNS family metadata before other
@@ -638,8 +644,13 @@ function resolvePinnedDispatcherLookup(
   }));
   if (!shouldSkipPrivateNetworkChecks(pinned.hostname, policy)) {
     assertAllowedResolvedAddressesOrThrow(records, policy);
-  } else if (!isPrivateNetworkAllowedByPolicy(policy)) {
-    assertAllowedTrustedHostnameResolvedAddressesOrThrow(records, pinned.hostname, policy);
+  } else {
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(
+      records,
+      pinned.hostname,
+      policy,
+      isPrivateNetworkAllowedByPolicy(policy),
+    );
   }
   return createPinnedLookup({
     hostname: pinned.hostname,

@@ -17,10 +17,14 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   },
 }));
 
-// Import-resolution gating for this private helper is covered in sdk-alias.test.ts.
-vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
-  fetchConfiguredLocalOriginWithSsrFGuard: fetchConfiguredLocalOriginWithSsrFGuardMock,
-}));
+// Keep the real classifiers. Import-resolution gating stays in sdk-alias.test.ts.
+vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime-internal")>();
+  return {
+    ...actual,
+    fetchConfiguredLocalOriginWithSsrFGuard: fetchConfiguredLocalOriginWithSsrFGuardMock,
+  };
+});
 
 beforeEach(() => {
   fetchConfiguredLocalOriginWithSsrFGuardMock.mockReset();
