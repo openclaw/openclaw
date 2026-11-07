@@ -6,7 +6,8 @@ import {
   withSqliteWriteAdmissionService,
 } from "../../infra/sqlite-transaction.js";
 
-const COMMIT_DECISION_TIMEOUT_MS = 5_000;
+// Cold-start integrity work can occupy the owner beyond five seconds; its authority still gates commit.
+const COMMIT_DECISION_TIMEOUT_MS = 30_000;
 const WAITING = 0;
 const REJECTED = 2;
 const COMMITTING = 3;
