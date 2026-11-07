@@ -1,4 +1,5 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import { runOutsideSessionMcpToolCallAuthority } from "../agents/agent-bundle-mcp-request-context.js";
 import { readQuestionDispatchCapability } from "../agents/harness/host-private-capabilities.js";
 import { captureGatewayToolCallerAssertion } from "../agents/tools/gateway-caller-context.js";
 import {
@@ -137,7 +138,7 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
     run<T>(run: () => Promise<T>): Promise<T> {
       assertCurrent();
       return runWithoutOwnedSessionTranscriptWrites(() =>
-        runOutsideOperatorToolGatewayAuthority(run),
+        runOutsideSessionMcpToolCallAuthority(() => runOutsideOperatorToolGatewayAuthority(run)),
       );
     },
   };
@@ -186,7 +187,9 @@ async function withInProcessGatewayDispatch<T>(
     // the caller's tool authority after that invocation closes.
     return method === "agent"
       ? await runWithoutOwnedSessionTranscriptWrites(() =>
-          runOutsideOperatorToolGatewayAuthority(() => run(resolved)),
+          runOutsideSessionMcpToolCallAuthority(() =>
+            runOutsideOperatorToolGatewayAuthority(() => run(resolved)),
+          ),
         )
       : await run(resolved);
   } catch (error) {
