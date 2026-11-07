@@ -2,12 +2,18 @@ import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
   onceMessage,
   prepareGatewayReplyRuntimeForTest,
+  rpcReq,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -23,9 +29,12 @@ type AgentResponse = {
 };
 
 let harness: GatewayServerHarness;
+let kernel: Awaited<ReturnType<typeof captureGatewayKernel>>;
 
 beforeAll(async () => {
-  harness = await startGatewayServerHarness();
+  kernel = await captureGatewayKernel(async () => {
+    harness = await startGatewayServerHarness();
+  });
 });
 
 beforeEach(() => prepareGatewayReplyRuntimeForTest());
@@ -115,5 +124,45 @@ test("preserves a session-only WebChat reply across ordered final response and r
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
   } finally {
     await closeGatewayTestWebSocket(second.ws);
+  }
+});
+
+test("records the operator client's capabilities for later wakes of its session", async () => {
+  const sessionKey = "agent:main:cli-caps";
+  const cli = await harness.openClient({
+    client: { id: "cli", version: "1.0.0", platform: "test", mode: "cli" },
+    caps: ["tool-events", "no-question-input"],
+  });
+  // The later callers declare no caps; recording theirs would change the session's tool list.
+  const backend = await harness.openClient();
+  const turn = (ws: WebSocket, key: string, fields: Record<string, unknown> = {}) =>
+    rpcReq(ws, "agent", { sessionKey, message: "hi", idempotencyKey: key, ...fields });
+  try {
+    expect((await turn(cli.ws, "cli-caps-operator")).ok).toBe(true);
+    const wake = await turn(backend.ws, "cli-caps-wake", {
+      inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+    });
+    expect(wake.ok).toBe(true);
+    // A plugin's in-process turn, without provenance, runs under a synthetic client.
+    const context = kernel.gatewayRequestContext;
+    await withPluginRuntimeGatewayRequestScope(
+      {
+        client: createSyntheticPluginRuntimeClient(),
+        context,
+        resolveGatewayContext: () => context,
+        isWebchatConnect: () => false,
+      },
+      () =>
+        dispatchGatewayMethodInProcess("agent", {
+          sessionKey,
+          message: "hi",
+          idempotencyKey: "cli-caps-plugin",
+        }),
+    );
+    const { entry } = await loadSessionEntryAsync(sessionKey, { agentId: "main" });
+    expect(entry?.clientCapabilities).toEqual(["no-question-input", "tool-events"]);
+  } finally {
+    await closeGatewayTestWebSocket(cli.ws);
+    await closeGatewayTestWebSocket(backend.ws);
   }
 });

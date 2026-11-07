@@ -350,12 +350,13 @@ it("rejects blank --to selectors before local or Gateway dispatch", async () => 
   expectUncalled(callGateway, agentCommand);
 });
 
+// Delivered runs keep the delivery channel's question support; others ask in text.
 it.each([
-  { message: "hi", clientName: "cli", mode: "cli" },
-  { message: "/reset check status", clientName: "gateway-client", mode: "backend" },
+  { message: "hi", clientName: "cli", mode: "cli", caps: ["no-question-input"] },
+  { message: "/reset check status", clientName: "gateway-client", mode: "backend", deliver: true },
 ])(
-  "uses $mode authority with the local gateway for $message",
-  async ({ message, clientName, mode }) => {
+  "uses $mode authority with the local gateway for $message (deliver: $deliver)",
+  async ({ message, clientName, mode, deliver, caps }) => {
     mockConfig(testStore.store, { agents: { ownership: "explicit", entries: { solo: {} } } });
     const thinkingClamp =
       "Thinking level clamped to off for ollama/llama3.2 (requested high; preference retained).";
@@ -367,17 +368,14 @@ it.each([
       },
     });
 
-    await agentCliCommand({ message, to: "+1555", timeout: "20" }, runtime);
+    await agentCliCommand({ message, to: "+1555", timeout: "20", deliver }, runtime);
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     const request = gatewayRequest();
-    expect(request).toMatchObject({
-      clientName,
-      mode,
-      scopes: ["operator.admin"],
-      timeoutMs: null,
-      params: { message, agentId: "solo", timeout: 20 },
-    });
+    expect(request).toMatchObject({ clientName, mode, scopes: ["operator.admin"] });
+    expect(request.timeoutMs).toBeNull();
+    expect(request.params).toMatchObject({ message, agentId: "solo", timeout: 20 });
+    expect(request.caps).toEqual(caps);
     expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
     expectUncalled(agentCommand, agentModuleLoadCount);
     expect(runtime.log).toHaveBeenCalledWith("hello");

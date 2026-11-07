@@ -619,8 +619,8 @@ async function agentViaGatewayCommand(
 
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
   const modelOverride = normalizeOptionalString(opts.model);
-  const needsAdminGatewayIdentity = Boolean(modelOverride) || isSessionResetCommand(body);
-  const gatewayIdentity = resolveAgentGatewayIdentity(needsAdminGatewayIdentity, remoteGateway);
+  const needsAdmin = Boolean(modelOverride) || isSessionResetCommand(body);
+  const gatewayIdentity = resolveAgentGatewayIdentity(needsAdmin, remoteGateway, opts.deliver);
 
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;
