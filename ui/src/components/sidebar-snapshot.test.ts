@@ -25,7 +25,6 @@ import {
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import { readSidebarSnapshotCaptureDiagnostics } from "./sidebar-snapshot-diagnostics.ts";
 import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
 
@@ -204,25 +203,14 @@ describe("sidebar snapshot lifecycle", () => {
     test.snapshotOwner.connect();
     test.publish();
     await capture(test.snapshotOwner);
-    expect(readSidebarSnapshotCaptureDiagnostics(test.snapshotOwner)).toMatchObject({
-      lastCapture: "unsettled",
-      scheduled: false,
-      captured: false,
-      settled: false,
-    });
+    expect(test.snapshotOwner.read()).toMatchObject({ captureStatus: "unsettled", saved: false });
     void test.settle();
     test.snapshotOwner.capture();
-    expect(readSidebarSnapshotCaptureDiagnostics(test.snapshotOwner).scheduled).toBe(true);
     await vi.advanceTimersByTimeAsync(500);
-    expect(readSidebarSnapshotCaptureDiagnostics(test.snapshotOwner)).toMatchObject({
-      lastCapture: "writing",
-      scheduled: false,
-      captured: true,
-      saved: false,
-    });
+    expect(test.snapshotOwner.read()).toMatchObject({ captureStatus: "writing", saved: false });
     write.resolve(false);
     await vi.dynamicImportSettled();
-    expect(readSidebarSnapshotCaptureDiagnostics(test.snapshotOwner).lastCapture).toBe("rejected");
+    expect(test.snapshotOwner.read().captureStatus).toBe("rejected");
     expect(persist).toHaveBeenCalledOnce();
   });
 

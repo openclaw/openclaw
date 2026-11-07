@@ -123,8 +123,8 @@ suite.define(() => {
         expect(
           await page
             .locator("openclaw-app-sidebar")
-            .evaluate((element: AppSidebarElement) => element.snapshotDiagnostics()),
-        ).toMatchObject({ saved: true, captured: true });
+            .evaluate((element: AppSidebarElement) => element.snapshotCaptureStatus()),
+        ).toBe("saved");
 
         const appearance = () =>
           pane

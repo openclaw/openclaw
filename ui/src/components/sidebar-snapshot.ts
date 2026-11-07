@@ -360,20 +360,7 @@ export function createSidebarSnapshot(host: {
   }
 
   return {
-    read: () => ({ pending, saved, model: host.sidebarSnapshot }),
-    diagnostics: () =>
-      [
-        lastCapture,
-        Boolean(cancelCapture),
-        cleanup.length > 0,
-        pending,
-        saved,
-        scope !== null,
-        scope?.profileId === null || gateway?.snapshot.selfUser !== undefined,
-        host.sidebarSnapshot !== null,
-        captured !== null,
-        host.sidebarSnapshotSettled(),
-      ] as const,
+    read: () => ({ pending, saved, model: host.sidebarSnapshot, captureStatus: lastCapture }),
     subscribe,
     connect,
     disconnect,

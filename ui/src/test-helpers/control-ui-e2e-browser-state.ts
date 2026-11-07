@@ -4,7 +4,7 @@ import type { TooltipElement } from "../components/tooltip.ts";
 import type { ControlUiMockGateway } from "./control-ui-e2e-contract.ts";
 
 // Playwright serializes this function; keep runtime dependencies inside its body.
-export async function readControlUiE2eBrowserState() {
+export function readControlUiE2eBrowserState() {
   const copy = (value: unknown): unknown => {
     try {
       return structuredClone(value) as unknown;
@@ -86,10 +86,19 @@ export async function readControlUiE2eBrowserState() {
   const groupMode = groupElement("mode-dropdown");
   const groupMenu = groupElement("mode-menu", groupMode);
   const groupFolderPicker = groupElement("folder-popover");
-  const sidebarSnapshot = await document
-    .querySelector<AppSidebarElement>("openclaw-app-sidebar")
-    ?.snapshotDiagnostics?.()
-    .catch(() => null);
+  const sidebar = document.querySelector<AppSidebarElement>("openclaw-app-sidebar");
+  const sidebarView = sidebar?.querySelector("aside.sidebar");
+  const sidebarSnapshot = sidebar
+    ? {
+        captureStatus: sidebar.snapshotCaptureStatus?.() ?? null,
+        saved: sidebarView?.getAttribute("data-snapshot-saved") === "true",
+        display: sidebarView?.getAttribute("data-snapshot-state") ?? null,
+        connected: sidebar.connected,
+        connectionPending: sidebar.connectionPending,
+        rosterReady: readiness?.rosterReady ?? null,
+        agentsLoading: agentsState?.agentsLoading ?? null,
+      }
+    : null;
   return {
     failureSummary: {
       sidebarSnapshot: sidebarSnapshot ?? null,
