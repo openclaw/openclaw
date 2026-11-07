@@ -1,0 +1,2 @@
+# Preserve configured image ref resolution and fallback-first ambiguity errors.
+36
