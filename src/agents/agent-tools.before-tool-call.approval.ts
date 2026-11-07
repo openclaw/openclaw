@@ -393,7 +393,7 @@ async function requestPluginToolApprovalDecision(
       notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
       return pluginApprovalFailure(
         params.baseParams,
-        approval.description || "Plugin approval request failed",
+        "Plugin approval request failed",
         "failed",
       );
     }
@@ -553,7 +553,7 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
     notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
     return pluginApprovalFailure(
       baseParamsSnapshot,
-      approval.description || approval.title || "Plugin approval required",
+      "Plugin approval required",
       "blocked",
     );
   }
