@@ -117,6 +117,8 @@ const COMMON_AUTH_ERROR_PATTERNS = [
   AUTH_HTTP_STATUS_RE,
   "no credentials found",
   "no api key found",
+  // OpenClaw route preflight refusal: an explicit auth.order left no usable profile.
+  "no usable profiles",
   /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,
 ] as const satisfies readonly ErrorPattern[];
 
