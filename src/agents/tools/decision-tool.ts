@@ -28,27 +28,35 @@ export function createDecisionTool(
   const snapshot =
     options?.preparedModelRuntime?.metadataSnapshot ?? getGatewayPluginMetadataSnapshot();
   const models =
-    config.plugins?.enabled === false
-      ? []
-      : (options?.preparedModelRuntime?.modelCatalog.entries ??
-        (snapshot
-          ? listAvailableManifestContractPlugins({
-              snapshot,
-              config,
-              contract: "decisionProviders",
-            }).flatMap((plugin) =>
-              Object.entries(plugin.modelCatalog?.providers ?? {}).flatMap(([provider, catalog]) =>
-                catalog.models.map((model) => ({ ...model, provider })),
-              ),
-            )
-          : []));
+    config.plugins?.enabled === false ? [] : options?.preparedModelRuntime?.modelCatalog.entries;
+  const plugins = models
+    ? []
+    : snapshot
+      ? listAvailableManifestContractPlugins({ snapshot, config, contract: "decisionProviders" })
+      : [];
   const resolveCapabilities = (selection: ReturnType<typeof resolveDecisionModelSetting>) => {
     if (!selection) {
       return undefined;
     }
     const modelId = splitTrailingAuthProfile(selection.model).model;
-    return models.find((model) => model.provider === selection.provider && model.id === modelId)
-      ?.inference?.decision;
+    if (models) {
+      return models.find((model) => model.provider === selection.provider && model.id === modelId)
+        ?.inference?.decision;
+    }
+    for (const plugin of plugins) {
+      const providers = plugin.modelCatalog?.providers;
+      if (
+        !providers ||
+        !Object.prototype.propertyIsEnumerable.call(providers, selection.provider)
+      ) {
+        continue;
+      }
+      const model = providers[selection.provider]?.models.find((model) => model.id === modelId);
+      if (model) {
+        return model.inference?.decision;
+      }
+    }
+    return undefined;
   };
   const capabilities = resolveCapabilities(selected);
   return {
