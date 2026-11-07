@@ -334,8 +334,11 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
 Continuous gestures are opt-in with `--steps gestures`: pointer sweeps and wheel
 scrolling over Sidebar, Chat, Advanced Settings and Sessions; transcript selection
 across the virtual window and within a message; sidebar/split dividers; window
-resizing; and mobile portrait/landscape viewport changes. Fixtures use 100/2,000
-messages and 100/1,000 sessions (Sessions still renders its 100-row page, and
+resizing; and mobile portrait/landscape viewport changes. The window-resize
+scenario retains the Review panel; `gesture-window-resize-details-{realistic,large}`
+also explicitly opens the session Details inspector and checks that it stays open.
+Fixtures use 100/2,000 messages and 100/1,000 sessions (Sessions still renders its
+100-row page, and
 Advanced Settings has 303 fields in both variants). Pointer and wheel input target
 60 Hz; viewport commands serialize to preserve driver correctness. Each result
 records actual delivery cadence, rAF interval median/p95 and counts above 16.7/33 ms,
