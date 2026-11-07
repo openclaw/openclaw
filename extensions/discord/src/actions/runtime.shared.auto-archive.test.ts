@@ -4,9 +4,14 @@ import {
   readDiscordChannelEditParams,
 } from "./runtime.shared.js";
 
-it.each([[["tag-1"]], [[]]])("preserves applied channel tags %#", (appliedTags: string[]) => {
-  expect(readDiscordChannelEditParams({ channelId: "C1", appliedTags }).appliedTags).toEqual(
-    appliedTags,
+it.each([
+  { params: { appliedTags: ["tag-1"] }, expected: ["tag-1"] },
+  { params: { appliedTags: [] }, expected: [] },
+  { params: { applied_tags: [] }, expected: [] },
+  { params: { applied_tags: ["tag-1"] }, expected: ["tag-1"] },
+])("preserves applied channel tags %#", ({ params, expected }) => {
+  expect(readDiscordChannelEditParams({ channelId: "C1", ...params }).appliedTags).toEqual(
+    expected,
   );
 });
 

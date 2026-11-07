@@ -72,7 +72,7 @@ export function readDiscordChannelCreateParams(
 
 export function readDiscordChannelEditParams(params: Record<string, unknown>): DiscordChannelEdit {
   const parentId = readDiscordParentIdParam(params);
-  const appliedTags = readStringArrayParam(params, "appliedTags");
+  const appliedTags = readStringArrayParam(params, "appliedTags", { allowEmpty: true });
   return {
     channelId: readStringParam(params, "channelId", { required: true }),
     name: readStringParam(params, "name"),
@@ -85,9 +85,7 @@ export function readDiscordChannelEditParams(params: Record<string, unknown>): D
     locked: asBoolean(params.locked),
     autoArchiveDuration: readDiscordAutoArchiveDurationParam(params, "autoArchiveDuration"),
     availableTags: parseAvailableTags(params.availableTags),
-    appliedTags:
-      appliedTags ??
-      (Array.isArray(params.appliedTags) && params.appliedTags.length === 0 ? [] : undefined),
+    appliedTags,
   };
 }
 

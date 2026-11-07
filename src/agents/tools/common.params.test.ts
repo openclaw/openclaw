@@ -86,6 +86,16 @@ describe("readStringArrayParam", () => {
     ]);
   });
 
+  it("keeps an explicit empty array when allowEmpty is set", () => {
+    expect(readStringArrayParam({ itemIds: [] }, "itemIds", { allowEmpty: true })).toEqual([]);
+    expect(readStringArrayParam({ item_ids: [] }, "itemIds", { allowEmpty: true })).toEqual([]);
+    expect(readStringArrayParam({ itemIds: [" ", 7] }, "itemIds", { allowEmpty: true })).toEqual(
+      [],
+    );
+    expect(readStringArrayParam({}, "itemIds", { allowEmpty: true })).toBeUndefined();
+    expect(readStringArrayParam({ itemIds: " " }, "itemIds", { allowEmpty: true })).toBeUndefined();
+  });
+
   it("always trims and drops blanks despite scalar-string options", () => {
     expect(
       readStringArrayParam({ itemIds: [" first ", " "] }, "itemIds", {
