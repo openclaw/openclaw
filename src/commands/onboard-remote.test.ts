@@ -13,7 +13,6 @@ const detectBinary = vi.hoisted(() => vi.fn<(name: string) => Promise<boolean>>(
 const savedUrl = "wss://gateway.example/rpc";
 const replacementUrl = "wss://other.example/rpc";
 const remoteUrl = "wss://remote.example.com:18789";
-const discoveredUrl = "wss://gateway.tailnet.ts.net:18789";
 const INSECURE_WS_URL_MESSAGE =
   "Use wss:// for remote hosts, or ws://127.0.0.1/localhost via SSH tunnel. " +
   "Break-glass: OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 for trusted private networks.";
@@ -197,11 +196,15 @@ describe("promptRemoteGatewayConfig", () => {
     },
   );
 
-  it("pins a trusted discovery endpoint with a previously saved URL", async () => {
+  it.each([
+    ["gateway.tailnet.ts.net", "wss://gateway.tailnet.ts.net:18789"],
+    ["192.0.2.1", "wss://192.0.2.1:18789"],
+    ["2001:db8::1", "wss://[2001:db8::1]:18789"],
+  ])("pins a trusted discovery endpoint at %s with a previously saved URL", async (host, url) => {
     const { next } = await runRemotePrompt({
-      beacons: [createGatewayDiscoveryBeacon()],
+      beacons: [createGatewayDiscoveryBeacon({ host })],
       cfg: remoteConfig({
-        url: discoveredUrl,
+        url,
         transport: "ssh",
         sshTarget: "operator@old.example",
         tlsFingerprint: "sha256:old-pin",
@@ -211,57 +214,19 @@ describe("promptRemoteGatewayConfig", () => {
 
     expect(next.gateway).toMatchObject({
       mode: "remote",
-      remote: {
-        url: discoveredUrl,
-        transport: "direct",
-        token: "token-123",
-        tlsFingerprint: "sha256:abc123",
-      },
+      remote: { url, transport: "direct", token: "token-123", tlsFingerprint: "sha256:abc123" },
     });
-  });
-
-  it("keeps an IPv6 discovery host bracketed in the direct URL", async () => {
-    const { next } = await runRemotePrompt({
-      beacons: [createGatewayDiscoveryBeacon({ host: "2001:db8::1" })],
-      text: urlText((params) => String(params.initialValue), "token-123"),
-    });
-
-    expect(next.gateway).toMatchObject({
-      mode: "remote",
-      remote: {
-        url: "wss://[2001:db8::1]:18789",
-        transport: "direct",
-      },
-    });
-  });
-
-  it("keeps the raw IPv6 host as the OpenSSH destination in the SSH tunnel hint", async () => {
-    vi.stubEnv("OPENCLAW_LOCALE", "en");
-    try {
-      const { prompter } = await runRemotePrompt({
-        beacons: [
-          createGatewayDiscoveryBeacon({ host: "2001:db8::1", port: 18789, sshPort: 2222 }),
-        ],
-        connection: "ssh",
-        text: urlText(() => "ws://127.0.0.1:18789"),
-      });
-      expect(prompter.note).toHaveBeenCalledWith(
-        expect.stringContaining("ssh -N -L 18789:127.0.0.1:18789 <user>@2001:db8::1 -p 2222"),
-        "SSH tunnel",
-      );
-    } finally {
-      vi.unstubAllEnvs();
-    }
   });
 
   it.each([
-    { port: 18789, sshPort: undefined, url: "ws://127.0.0.1:18789" },
-    { port: 29443, sshPort: 2222, url: "ws://127.0.0.1:18789/" },
+    { host: "gateway.tailnet.ts.net", port: 18789, url: "ws://127.0.0.1:18789" },
+    { host: "gateway.tailnet.ts.net", port: 29443, sshPort: 2222, url: "ws://127.0.0.1:18789/" },
+    { host: "2001:db8::1", port: 18789, sshPort: 2222, url: "ws://127.0.0.1:18789" },
   ])(
-    "uses discovered Gateway port $port and SSH port $sshPort without retaining an old route",
-    async ({ port, sshPort, url }) => {
+    "uses discovered host $host, Gateway port $port and SSH port $sshPort without retaining an old route",
+    async ({ host, port, sshPort, url }) => {
       const { next, prompter } = await runRemotePrompt({
-        beacons: [createGatewayDiscoveryBeacon({ port, gatewayPort: 41111, sshPort })],
+        beacons: [createGatewayDiscoveryBeacon({ host, port, gatewayPort: 41111, sshPort })],
         connection: "ssh",
         cfg: remoteConfig({
           url: "ws://127.0.0.1:18789",
@@ -278,7 +243,7 @@ describe("promptRemoteGatewayConfig", () => {
       expect(next.gateway?.remote).toEqual({ url });
       expect(prompter.note).toHaveBeenCalledWith(
         expect.stringContaining(
-          `ssh -N -L 18789:127.0.0.1:${port} <user>@gateway.tailnet.ts.net${sshPort ? ` -p ${sshPort}` : ""}`,
+          `ssh -N -L 18789:127.0.0.1:${port} <user>@${host}${sshPort ? ` -p ${sshPort}` : ""}`,
         ),
         "SSH tunnel",
       );
