@@ -2082,7 +2082,7 @@ describe("TelegramPollingSession", () => {
     });
     vi.spyOn(bot.api, "deleteWebhook").mockResolvedValue(true);
     createTelegramBotMock.mockReturnValueOnce(bot);
-    const createWorker = vi.fn(() => makeWorker());
+    const { createWorker } = createIdleIngressWorker();
     const setStatus = vi.fn();
     const session = createPollingSession({
       abortSignal: abort.signal,

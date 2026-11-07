@@ -363,9 +363,11 @@ describe("browser control server", () => {
   it("refuses strict-policy Chrome MCP navigation before dispatching uninspectable redirects", async () => {
     setBrowserControlServerProfiles({ openclaw: { color: "#FF4500", driver: "existing-session" } });
     setBrowserControlServerSsrFPolicy({ dangerouslyAllowPrivateNetwork: false });
-    const response = await postResponse(await startServerAndBase(), "/navigate", {
-      url: "http://93.184.216.34/redirect",
-      targetId: "7",
+    const base = await startServerAndBase();
+    const response = await realFetch(`${base}/navigate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "http://93.184.216.34/redirect", targetId: "7" }),
     });
 
     expect(response.status).toBe(400);

@@ -107,17 +107,32 @@ describe("resolveDiscordChannelAllowlist", () => {
       "111/雑談-ops",
       "111/\u26A0\uFE0F",
     ];
-    const res = await resolve(entries, {
-      channels: [
-        channel("c1", "お知らせ"),
-        channel("c2", "雑談"),
-        channel("c3", "\u26A0\uFE0F-alerts"),
-        channel("c4", "общий-general"),
-        channel("c5", "чат-ops"),
-        channel("c6", "ops"),
-        channel("c7", "\u2757\uFE0F"),
-      ],
+    const channel = (id: string, name: string): DiscordChannel => ({
+      id,
+      name,
+      guild_id: "111",
+      type: ChannelType.GuildText,
     });
+    const channels = [
+      channel("c1", "お知らせ"),
+      channel("c2", "雑談"),
+      channel("c3", "\u26A0\uFE0F-alerts"),
+      channel("c4", "общий-general"),
+      channel("c5", "чат-ops"),
+      channel("c6", "ops"),
+      channel("c7", "\u2757\uFE0F"),
+    ];
+    const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = urlToString(input);
+      if (url.endsWith("/users/@me/guilds")) {
+        return jsonResponse([{ id: "111", name: "Test Server" }]);
+      }
+      if (url.endsWith("/guilds/111/channels")) {
+        return jsonResponse(channels);
+      }
+      return new Response("not found", { status: 404 });
+    });
+    const res = await resolveDiscordChannelAllowlist({ token: "test", entries, fetcher });
     // ASCII keys match by a name's ASCII letters, as before (the first such channel wins).
     // A key with other letters never matches by its ASCII part; an emoji-only key matches nothing.
     expect(res.map(({ resolved, channelId }) => ({ resolved, channelId }))).toEqual([

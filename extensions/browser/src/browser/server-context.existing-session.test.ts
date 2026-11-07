@@ -149,9 +149,9 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("refuses strict-policy network tabs because Chrome MCP cannot fence redirect hops", async () => {
-    const { live } = setup((state) => {
-      state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
-    });
+    const state = makeState();
+    state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
+    const live = createBrowserRouteContext({ getState: () => state }).forProfile("chrome-live");
 
     await expect(live.openTab("http://93.184.216.34/redirect")).rejects.toThrow(
       /requires redirect-hop inspection.*existing-session/,
