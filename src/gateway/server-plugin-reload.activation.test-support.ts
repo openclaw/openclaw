@@ -77,7 +77,8 @@ export async function verifyPreparedSidecarRecovery(
     expect(signals).toHaveLength(1);
     if (mode === "aborted-predecessor") {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-      stopping = manager.stopChannel(channelId);
+      // Exercise an aborted recovery predecessor, not an operator-requested stop.
+      stopping = manager.stopChannel(channelId, undefined, { manual: false });
       await vi.advanceTimersByTimeAsync(5_000);
       await stopping;
       vi.useRealTimers();
@@ -93,11 +94,12 @@ export async function verifyPreparedSidecarRecovery(
     expect(signals[0]?.aborted).toBe(mode === "aborted-predecessor");
     expect(
       manager.getRuntimeSnapshot({ channelId, inspectAccounts: false }).channels[channelId],
-    ).toMatchObject({
-      running: true,
-      connected: true,
-      lifecycle: "ready",
-    });
+    ).toMatchObject(
+      mode === "live"
+        ? { running: true, connected: true, lifecycle: "ready" }
+        : { running: false, connected: false, lifecycle: "recovering", restartPending: true },
+    );
+    expect(manager.isManuallyStopped(channelId, "default")).toBe(false);
     if (mode === "live") {
       expect(result).toMatchObject({ cause: preparationError });
     } else {
