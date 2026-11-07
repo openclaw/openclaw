@@ -1,0 +1,2 @@
+# Existing redaction fixtures cover fallback secrecy, reference controls and restoration.
+68
