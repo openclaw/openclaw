@@ -93,11 +93,12 @@ shell-completion metadata.
 ## Behavior
 
 - Use `--json` when the output feeds another command or script; text output otherwise.
-- Use `--provider` or `--model provider/model` to pin a specific backend.
+- Use `--provider` or `--model provider/model` to select a backend; see the command-specific fallback behavior below.
 - Explicitly empty or whitespace-only values for `--limit`, `--count`, `--duration`, and `--timeout-ms` are errors. Omit the flag to retain its default behavior.
 - `image edit` and `image describe-many` require at least one `--file`; `embedding create` requires at least one `--text`. Repeat the flag for multiple inputs. Omitting it is a usage error, not an empty successful result, and no inference request is sent.
 - Use `model run --thinking <level>` for a one-shot thinking/reasoning override: `off`, `minimal`, `low`, `medium`, `high`, `adaptive`, `xhigh`, or `max`.
 - For `image describe`, `audio transcribe`, and `video describe`, `--model` must use the form `<provider/model>`.
+- For `audio transcribe` and `video describe`, `--model` selects the first media model to attempt. Configured `tools.media.models` entries remain fallbacks: if the requested attempt fails, the file may be sent to another configured provider or CLI backend. The result reports the model that succeeded.
 - For `image describe`, `--file` accepts local paths and HTTP(S) URLs; remote URLs go through the normal media-fetch SSRF policy.
 - Stateless execution commands (`model run`, `image *`, `audio *`, `video *`, `web *`, `embedding *`) default to local. Gateway-managed state commands (`tts status`) default to gateway.
 - The local path never requires the gateway to be running.

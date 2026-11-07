@@ -134,6 +134,11 @@ JavaScript-only host export; its declarations are excluded from the package.
 
     Returns `{ text: undefined }` when no output is produced (e.g. skipped input).
 
+    `transcribeAudioFile(...)` and `describeVideoFile(...)` accept an optional
+    `modelOverride: { provider, model }` to try a media model first. Configured
+    media models remain fallbacks and may receive the file if that attempt fails.
+    This differs from `activeModel`, which is a conversation-model hint.
+
     `describeImageFileWithModel(...)` describes an already-known image through a specific provider/model, bypassing the default active-model resolution that `describeImageFile(...)` uses.
 
   </Accordion>
