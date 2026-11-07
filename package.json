@@ -1870,7 +1870,7 @@
     "check:temp-path-guardrails": "node --import ./scripts/tsx.mjs scripts/check-temp-path-guardrails.ts",
     "check:wrapper-shadowing": "node --import ./scripts/tsx.mjs scripts/check-wrapper-shadowing.mts",
     "check:test-lines-ratchet": "node --import ./scripts/tsx.mjs scripts/check-test-lines-ratchet.mts",
-    "check:test-mock-exports": "node --import ./scripts/tsx.mjs scripts/check-test-mock-exports.mts",
+    "check:test-mock-exports": "node scripts/check-test-mock-exports.mjs",
     "check:test-timeout-race-ratchet": "node --import ./scripts/tsx.mjs scripts/check-test-timeout-race-ratchet.mts",
     "check:test-types": "pnpm tsgo:test",
     "check:timed": "node --import ./scripts/tsx.mjs scripts/check-timed.mts",
