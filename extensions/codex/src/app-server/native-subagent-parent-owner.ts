@@ -22,6 +22,8 @@ import type {
   ParentState,
 } from "./native-subagent-monitor-types.js";
 import { matchesNativeAssignmentLifecycle } from "./native-subagent-pending-assignments.js";
+import type { ReceiptObservation } from "./native-subagent-receipt-observation.js";
+import { observeNativeReceiptsBeforeRetirement } from "./native-subagent-receipt-retirement.js";
 import type { CodexNativeSubagentSubmissionOwner } from "./native-subagent-submission-owner.js";
 import { isJsonObject, type CodexServerNotification } from "./protocol.js";
 
@@ -51,6 +53,8 @@ export type NativeParentRegistration = Pick<
     modelSource?: NativeModelSource;
     assertCurrent?: () => void;
     assertCurrentAsync?: () => Promise<void>;
+    /** Requester lifecycle validation after model execution has settled. */
+    assertReceiptObservationCurrent?: () => Promise<void>;
     unqualifiedModelExecution?: true;
     onUnqualifiedModelCancelled?: (reason: unknown) => void;
   };
@@ -68,6 +72,11 @@ type ParentDependencies = {
   >;
   closes: Pick<CodexNativeSubagentCloseOwner, "bind" | "prune" | "settlements">;
   deliverDetached: (state: ParentState) => void;
+  reconcileDelivered: (
+    state: ParentState,
+    owner: ParentOwner,
+    observation: ReceiptObservation,
+  ) => Promise<void>;
   drainAdmissions: (state: ParentState, owner: ParentOwner, turnId: string) => void;
   clearAdmissions: () => void;
   prune: (state: ParentState) => void;
@@ -364,30 +373,42 @@ export async function registerNativeSubagentParent(
         return settlement ?? Promise.resolve();
       }
       registered = false;
-      releaseRootModelBinding();
-      releaseCompletionCustody(owner);
-      owner.nativeReviewRequirement = undefined;
-      const current = dependencies.states.get(parentThreadId);
-      if (current === registeredState) {
-        current.owners.delete(ownerKey);
-        dependencies.closes.prune(current);
-        if (owner.turnId) {
-          current.turnIds.delete(owner.turnId);
-        }
-        if (current.owners.size === 0) {
-          current.turnIds.clear();
-          current.deliveryReceipts = new CodexNativeSubagentDeliveryReceipts();
-        }
-        if (![...current.owners.values()].some((candidate) => !candidate.turnId)) {
-          current.completedModelTurnsBeforeBinding = undefined;
-        }
-        dependencies.clearAdmissions();
-        dependencies.deliverDetached(current);
-      }
-      owner.modelSource?.release();
-      notifyNativeModelSourceWaiters(registeredState);
-      dependencies.prune(registeredState);
       settlement = (async () => {
+        const receiptObservation = observeNativeReceiptsBeforeRetirement({
+          state: registeredState,
+          owner,
+          ownerKey,
+          isCurrent,
+          assertLifecycleCurrent: params.assertReceiptObservationCurrent,
+          reconcile: (observation) =>
+            dependencies.reconcileDelivered(registeredState, owner, observation),
+        });
+        if (receiptObservation) {
+          await receiptObservation;
+        }
+        releaseRootModelBinding();
+        releaseCompletionCustody(owner);
+        owner.nativeReviewRequirement = undefined;
+        const current = dependencies.states.get(parentThreadId);
+        if (current === registeredState) {
+          current.owners.delete(ownerKey);
+          dependencies.closes.prune(current);
+          if (owner.turnId) {
+            current.turnIds.delete(owner.turnId);
+          }
+          if (current.owners.size === 0) {
+            current.turnIds.clear();
+            current.deliveryReceipts = new CodexNativeSubagentDeliveryReceipts();
+          }
+          if (![...current.owners.values()].some((candidate) => !candidate.turnId)) {
+            current.completedModelTurnsBeforeBinding = undefined;
+          }
+          dependencies.clearAdmissions();
+          dependencies.deliverDetached(current);
+        }
+        owner.modelSource?.release();
+        notifyNativeModelSourceWaiters(registeredState);
+        dependencies.prune(registeredState);
         // A confirmed close can enqueue writes after unregister starts.
         await Promise.allSettled([ready, ...dependencies.closes.settlements(registeredState)]);
         await Promise.allSettled([dependencies.submissions.drain(registeredState)]);
