@@ -773,28 +773,33 @@ export async function recoverNodeRuntime({
   ) {
     return false;
   }
-  const failure = nodeRuntimeFailure(
+  const currentNodeFailure = nodeRuntimeFailure(
     process.versions.node,
     await detectCurrentSqliteCapabilities(),
   );
   const securityWarning = formatNodeSecurityWarning(process.versions.node);
-  if (!failure && !securityWarning) {
+  if (!currentNodeFailure && !securityWarning) {
     return false;
   }
   // Certificate-only recovery may reuse a patched runtime, never download one.
   const selected = await findUsableNodeRuntime({
     homeDir,
-    allowInstall: Boolean(failure) && allowInstall,
+    allowInstall: Boolean(currentNodeFailure) && allowInstall,
     env,
-    acceptVersion: failure ? undefined : (version) => !formatNodeSecurityWarning(version),
+    acceptVersion: currentNodeFailure
+      ? undefined
+      : (version) => !formatNodeSecurityWarning(version),
   });
   const nodePath = selected?.nodePath;
   const reason = selected?.reason;
+  const retryReason = currentNodeFailure
+    ? `current Node failed runtime admission: ${currentNodeFailure}`
+    : "recommended security patch";
   if (!nodePath) {
     return false;
   }
   process.stderr.write(
-    `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; ${failure ? "current Node failed runtime admission" : "recommended security patch"}).\n`,
+    `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; ${retryReason}).\n`,
   );
   return await runRespawnedChild(
     resolveOpenClawCliRespawn({
