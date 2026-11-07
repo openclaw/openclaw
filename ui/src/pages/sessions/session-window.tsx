@@ -329,19 +329,21 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
             const target = event.target;
             // WebKit can reveal only the caret in tall details.
             requestAnimationFrame(() => {
-              if (target !== document.activeElement || !scroller) {
-                return;
-              }
-              const field = target.getBoundingClientRect();
-              const viewport = scroller.getBoundingClientRect();
-              // A newer scroll that hides the control wins over this queued reveal.
-              if (
-                field.bottom > viewport.top &&
-                field.top < viewport.bottom &&
-                (field.top < viewport.top || field.bottom > viewport.bottom)
-              ) {
-                target.scrollIntoView({ block: "nearest", inline: "nearest" });
-              }
+              requestAnimationFrame(() => {
+                if (target !== document.activeElement || !scroller) {
+                  return;
+                }
+                const field = target.getBoundingClientRect();
+                const viewport = scroller.getBoundingClientRect();
+                // A newer scroll that hides the control wins over this queued reveal.
+                if (
+                  field.bottom > viewport.top &&
+                  field.top < viewport.bottom &&
+                  (field.top < viewport.top || field.bottom > viewport.bottom)
+                ) {
+                  target.scrollIntoView({ block: "nearest", inline: "nearest" });
+                }
+              });
             });
           }
           if (focusedKey === item.entry.key) {
