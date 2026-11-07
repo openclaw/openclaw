@@ -129,6 +129,34 @@ function readMacOsAclEntries(filePath: string): string[] {
     .map((line) => line.replace(/^\d+:\s*/, ""));
 }
 
+/**
+ * Read the entries a new file inherits from its directory.
+ *
+ * macOS applies file_inherit entries to files created inside the directory;
+ * the staging inode strips them (so an ambient grant cannot expose the bytes
+ * while they are staged), and a fresh publication restores them so a
+ * protective denial - or any other inherited policy - survives creation the
+ * way the plain write's inherited behavior provided it. The inheritance
+ * flags are dropped from the re-applied form, matching chmod +a semantics.
+ */
+function readInheritedMacOsAclEntries(dirPath: string): string[] {
+  if (os.platform() !== "darwin") {
+    return [];
+  }
+  return readMacOsAclEntries(dirPath)
+    .filter((entry) => entry.includes("file_inherit"))
+    .map((entry) =>
+      entry
+        .replace(/\bfile_inherit\b/g, "")
+        .replace(/\bdir_inherit\b/g, "")
+        .replace(/\blimit_inherit\b/g, "")
+        .replace(/\bonlyinherit\b/g, "")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+    .filter((entry) => entry.length > 0);
+}
+
 /** Restore the captured access policy on the staged file before it is published. */
 function applyMacOsAclEntries(filePath: string, entries: string[], privileged: boolean): void {
   for (const entry of entries) {
@@ -203,6 +231,7 @@ function publishConfigFile(filePath: string, content: string): void {
   const target = resolvePublicationTarget(filePath);
   const existing = fs.statSync(target, { throwIfNoEntry: false });
   const aclEntries = existing ? readMacOsAclEntries(target) : [];
+  const inheritedEntries = existing ? [] : readInheritedMacOsAclEntries(path.dirname(target));
   replaceFileAtomicSync({
     filePath: target,
     content,
@@ -231,8 +260,10 @@ function publishConfigFile(filePath: string, content: string): void {
         fs.chmodSync(tempPath, existing.mode & 0o7777);
         return;
       }
-      // A fresh file keeps the umask-sensitive creation contract of the plain
-      // write it replaced (0666 filtered by the operator's umask).
+      // A fresh file keeps both contracts of the plain write it replaced:
+      // the inherited creation policy of its directory (a protective denial,
+      // for example) and the umask-sensitive 0666-filtered mode.
+      applyMacOsAclEntries(tempPath, inheritedEntries, false);
       fs.chmodSync(tempPath, 0o666 & ~process.umask());
     },
     syncTempFile: true,
@@ -328,6 +359,7 @@ function inspectPrivilegedDestination(filePath: string): {
 /** Publish through a privileged staging file when the operator's path is not writable. */
 function publishConfigFileWithSudo(filePath: string, content: string): void {
   const { target, existing, aclEntries } = inspectPrivilegedDestination(filePath);
+  const inheritedEntries = existing ? [] : readInheritedMacOsAclEntries(path.dirname(target));
   const tempPath = path.join(
     path.dirname(target),
     `.${path.basename(target)}.openclaw-${process.pid}.tmp`,
@@ -359,7 +391,7 @@ function publishConfigFileWithSudo(filePath: string, content: string): void {
     // the policy is in place before any permission is widened; restoring it
     // after the widening would expose the configuration to accounts the
     // operator had excluded.
-    applyMacOsAclEntries(tempPath, aclEntries, true);
+    applyMacOsAclEntries(tempPath, [...inheritedEntries, ...aclEntries], true);
     if (existing) {
       run("sudo", ["chmod", (existing.mode & 0o7777).toString(8), tempPath]);
     } else {
