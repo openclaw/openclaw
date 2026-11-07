@@ -199,16 +199,27 @@ export function HeaderSearch(props: HeaderSearchProps) {
       },
       true,
     );
+    // Retained fields do not remount when their host overlay opens again.
+    const releaseShow = listen(
+      ownerDocument,
+      "overlay-after-show",
+      (event) => {
+        if (
+          props.inputProps?.autofocus &&
+          props.open &&
+          event.target instanceof HTMLElement &&
+          event.target.contains(root)
+        ) {
+          input?.focus({ preventScroll: true });
+        }
+      },
+      true,
+    );
     const releaseClose = listen(
       ownerDocument,
       "overlay-after-hide",
       (event) => {
-        if (
-          event.target instanceof HTMLElement &&
-          event.target.contains(root) &&
-          props.open &&
-          !props.query
-        ) {
+        if (event.target instanceof HTMLElement && event.target.contains(root) && !props.query) {
           props.onOpenChange(false);
         }
       },
@@ -216,6 +227,7 @@ export function HeaderSearch(props: HeaderSearchProps) {
     );
     return () => {
       releaseTyping();
+      releaseShow();
       releaseClose();
     };
   });
@@ -232,7 +244,7 @@ export function HeaderSearch(props: HeaderSearchProps) {
           placeholder={props.placeholder}
           query={props.query}
           disabled={props.disabled}
-          focus={focusField}
+          focus={focusField || Boolean(props.inputProps?.autofocus)}
           class={props.inputClass}
           inputProps={props.inputProps}
           controlRef={props.controlRef}
