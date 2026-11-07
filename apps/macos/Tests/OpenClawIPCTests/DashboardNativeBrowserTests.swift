@@ -629,8 +629,12 @@ struct DashboardNativeBrowserFailureTests {
     func `deliberate interruptions keep the page without failure UI`(_ trigger: String) async throws {
         let server = try await Self.server()
         defer { server.stop() }
+        let requestReceived = AsyncTestGate()
+        let releaseResponse = AsyncTestGate()
+        defer { releaseResponse.open() }
         let stalled = try await DashboardHTTPFixture.start(beforeResponse: {
-            try? await Task.sleep(for: .seconds(60))
+            requestReceived.open()
+            await releaseResponse.wait()
         })
         defer { stalled.stop() }
         let controller = Self.controller(server)
@@ -647,16 +651,26 @@ struct DashboardNativeBrowserFailureTests {
             expectedPath = "/article"
         case "stop":
             try controller.nativeBrowser.navigate(tabId: "mac-article", url: stalled.url("/pending"))
-            try await TestWait.state("request reaches the stalled server") { stalled.activeConnectionCount > 0 }
+            // An accepted TCP connection can precede the HTTP request and navigation.
+            try await requestReceived.wait("HTTP request reaches the stalled server")
             try controller.nativeBrowser.perform(.stop, tabId: "mac-article")
             expectedPath = "/article"
         default:
             try controller.nativeBrowser.navigate(tabId: "mac-article", url: stalled.url("/pending"))
-            try await TestWait.state("request reaches the stalled server") { stalled.activeConnectionCount > 0 }
+            // An accepted TCP connection can precede the HTTP request and navigation.
+            try await requestReceived.wait("HTTP request reaches the stalled server")
             try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/plain"))
             expectedPath = "/plain"
         }
-        try await TestWait.state("\(trigger) settles") { !webView.isLoading && webView.url?.path == expectedPath }
+        do {
+            try await TestWait.state("\(trigger) settles") { !webView.isLoading && webView.url?.path == expectedPath }
+        } catch {
+            // Separate the conjunction on failure without changing the Stop contract.
+            print("Browser interruption \(trigger): loading=\(webView.isLoading), " +
+                "path=\(webView.url?.path ?? "nil"), title=\(webView.title ?? "nil"), " +
+                "failureUI=\(browser.failureView != nil), expectedPath=\(expectedPath)")
+            throw error
+        }
         #expect(browser.failureView == nil, "\(trigger)")
         #expect(controller.nativeBrowser.state.tabs.first?.url == webView.url?.absoluteString, "\(trigger)")
     }
