@@ -448,6 +448,7 @@ it("coalesces cold sidebar selection across row slices only for the same princip
     using _ = retainList(context);
     await initializeSessionReadContext(context);
     const projection = getSessionRowProjection(context)!;
+    const membership = vi.spyOn(projection, "hasMembership");
     await projection.withSelectionPreparation(async () => {
       await projection.prepareSelection();
       const read = (client: typeof alice, limit = 100) =>
@@ -469,6 +470,7 @@ it("coalesces cold sidebar selection across row slices only for the same princip
       expect(other.sessions[0]!.sessionId).toBe("cold-128");
       expect(other.owners).not.toBe(results[0]!.owners);
       expect((await read(alice, 1)).sessions).toHaveLength(1);
+      expect(membership).not.toHaveBeenCalled();
     });
   }));
 

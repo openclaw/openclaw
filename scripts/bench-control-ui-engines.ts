@@ -2,6 +2,7 @@
 // Uses their production HTTP server, synthetic Gateway, scenarios and assertions.
 // Long-tail sweep: --pages --engines chromium --cpu-throttle 4 --viewport both
 // Run Chromium at 1x and WebKit separately; --steps page-<route>-<phase> narrows follow-ups.
+// Continuous input: --steps gestures; --gesture-geometry adds diagnostic read stacks.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
@@ -65,6 +66,7 @@ import {
   resolveEngineConfigurations,
   type EngineConfiguration,
 } from "./lib/control-ui-engine-configurations.ts";
+import { createEngineGestureScenarios } from "./lib/control-ui-engine-gesture-scenarios.ts";
 import {
   createEngineIdleControls,
   createEngineIdleScenarios,
@@ -92,6 +94,13 @@ import {
 import { createEnginePluginMemoryScenarios } from "./lib/control-ui-engine-plugin-memory-scenarios.ts";
 import { createEngineStreamingScenarios } from "./lib/control-ui-engine-streaming-scenarios.ts";
 import { createEngineStyleScenarios } from "./lib/control-ui-engine-style-scenarios.ts";
+import {
+  addControlUiGestureProbe,
+  startControlUiGestureProbe,
+  stopControlUiGestureProbe,
+  summarizeGestureTrace,
+  type GestureProbeResult,
+} from "./lib/control-ui-gesture-probe.ts";
 import { frames } from "./lib/control-ui-interaction-navigation.ts";
 import {
   createScenarioFixture,
@@ -146,6 +155,8 @@ const { values } = parseArgs({
     output: { type: "string", default: ".artifacts/control-ui-engines" },
     engines: { type: "string", default: "chromium,webkit" },
     "network-profiles": { type: "string", default: "localhost" },
+    "rpc-delay-method": { type: "string" },
+    "rpc-delay-ms": { type: "string", default: "0" },
     configurations: { type: "string", default: "default" },
     viewport: { type: "string", default: "both" },
     steps: { type: "string" },
@@ -155,6 +166,7 @@ const { values } = parseArgs({
     pairs: { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
     "observer-origins": { type: "boolean", default: false },
+    "gesture-geometry": { type: "boolean", default: false },
     "cpu-only": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "native-audit": { type: "boolean", default: false },
@@ -171,6 +183,14 @@ const { values } = parseArgs({
   },
 });
 const pairs = Number(values.pairs);
+const rpcDelayMs = Number(values["rpc-delay-ms"]);
+if (
+  !Number.isFinite(rpcDelayMs) ||
+  rpcDelayMs < 0 ||
+  (rpcDelayMs > 0 && !values["rpc-delay-method"])
+) {
+  throw new Error("rpc-delay-ms must be nonnegative and needs rpc-delay-method when positive");
+}
 const configurations = resolveEngineConfigurations(values.configurations);
 const memorySoakRounds = Number(values["memory-soak-rounds"]);
 if (!Number.isInteger(memorySoakRounds) || memorySoakRounds < 1 || memorySoakRounds > 10) {
@@ -417,6 +437,8 @@ type Observation = {
   hostLoadAverage: number[];
   metrics?: EngineMetrics;
   pageMetrics?: ControlUiPageObservation;
+  gesture?: GestureProbeResult;
+  gestureNative?: ReturnType<typeof summarizeGestureTrace>;
   native?: ReturnType<typeof summarizeControlUiNativeTrace>;
   allocations?: ReturnType<typeof summarizeControlUiAllocations> & {
     mappedFrames: number;
@@ -521,6 +543,7 @@ try {
       Object.assign(scenario, { explicitOnly: true }),
     ),
     ...createEngineStyleScenarios(),
+    ...createEngineGestureScenarios(),
     ...createEngineMemoryScenarios(memorySoakRounds),
     ...createEnginePluginMemoryScenarios(),
     ...createEngineStreamingScenarios(),
@@ -539,18 +562,22 @@ try {
     ),
   ];
   const ids = requestedIds?.flatMap((id) =>
-    id === "remount-interactions"
+    id === "gestures"
       ? catalog
-          .filter(
-            (scenario) =>
-              scenario.id.startsWith("remount-") && !scenario.id.startsWith("remount-from-"),
-          )
+          .filter((scenario) => scenario.id.startsWith("gesture-"))
           .map((scenario) => scenario.id)
-      : id === "chat-actions"
+      : id === "remount-interactions"
         ? catalog
-            .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+            .filter(
+              (scenario) =>
+                scenario.id.startsWith("remount-") && !scenario.id.startsWith("remount-from-"),
+            )
             .map((scenario) => scenario.id)
-        : [id],
+        : id === "chat-actions"
+          ? catalog
+              .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+              .map((scenario) => scenario.id)
+          : [id],
   );
   const scenarios = catalog.filter(({ id, explicitOnly, memory }) =>
     ids
@@ -604,6 +631,8 @@ try {
         [
           "./bench-control-ui-engines.ts",
           "./lib/control-ui-engine-metrics.ts",
+          "./lib/control-ui-engine-gesture-scenarios.ts",
+          "./lib/control-ui-gesture-probe.ts",
           "./lib/control-ui-layer-audit.ts",
           "./lib/control-ui-native-trace.ts",
           "./lib/control-ui-mutation-audit.ts",
@@ -675,10 +704,14 @@ try {
     pairs,
     viewports,
     networkProfiles,
+    methodDelay: values["rpc-delay-method"]
+      ? { method: values["rpc-delay-method"], delayMs: rpcDelayMs }
+      : null,
     pageOrigin,
     configurations,
     trace: values.trace,
     observerOrigins: values["observer-origins"],
+    gestureGeometry: values["gesture-geometry"],
     cpuOnly: values["cpu-only"],
     cpuProfile: values["cpu-profile"],
     nativeAudit: values["native-audit"],
@@ -891,6 +924,7 @@ try {
               }
             });
             let tracingStarted = false;
+            let gestureRecording = false;
             let measurement: Awaited<ReturnType<typeof startEngineMeasurement>> | undefined;
             let cpuProfile: ColdLoadCpuProfile | undefined;
             let layerAudit: Awaited<ReturnType<typeof createControlUiLayerAudit>> | undefined;
@@ -939,6 +973,11 @@ try {
                 await throttle.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
               }
               await page.addInitScript("globalThis.__name = (fn) => fn");
+              if (scenario.id.startsWith("gesture-")) {
+                await addControlUiGestureProbe(page, {
+                  geometryReadStacks: values["gesture-geometry"],
+                });
+              }
               if (values["remount-audit"]) {
                 await page.addInitScript(
                   `window.openclawCreateRemountAudit = ${createControlUiRemountAudit.toString()};${scenario.navigation ? "window.openclawRemountAudit = window.openclawCreateRemountAudit(); window.openclawRemountAudit.start();" : ""}`,
@@ -1093,7 +1132,18 @@ try {
                 ? undefined
                 : await installNativePluginMockGateway(
                     page,
-                    { ...fixture, awaitInitialRoster: false },
+                    {
+                      ...fixture,
+                      awaitInitialRoster: false,
+                      ...(values["rpc-delay-method"]
+                        ? {
+                            methodDelays: {
+                              ...fixture.methodDelays,
+                              [values["rpc-delay-method"]]: rpcDelayMs,
+                            },
+                          }
+                        : {}),
+                    },
                     {
                       nativeAssetLatencyMs: networkProfile.httpLatencyMs,
                       requestHandlers: {
@@ -1265,6 +1315,10 @@ try {
                   Reflect.set(window, "openclawMemoryDocumentIdentity", identity);
                 }, artifactPrefix);
               }
+              if (scenario.id.startsWith("gesture-")) {
+                await startControlUiGestureProbe(page, scenario.id);
+                gestureRecording = true;
+              }
               observation.evidence =
                 (isEngineIdleControl(scenario)
                   ? await scenario.run()
@@ -1314,6 +1368,10 @@ try {
                           }
                         : undefined,
                     )) ?? undefined;
+              if (scenario.id.startsWith("gesture-")) {
+                observation.gesture = await stopControlUiGestureProbe(page);
+                gestureRecording = false;
+              }
               if (actionTiming) {
                 await actionTiming.evaluate((timing) => timing.endScenario());
               }
@@ -1337,6 +1395,14 @@ try {
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (observation.gesture && captured.timeline) {
+                const inputs = observation.gesture.totals.inputs;
+                observation.gestureNative = summarizeGestureTrace(
+                  captured.timeline,
+                  engine,
+                  inputs.pointermove + inputs.wheel + inputs.touchmove + inputs.resize,
+                );
+              }
               if (liveRegionAudit) {
                 observation.liveRegions = await liveRegionAudit.evaluate((audit) => audit.finish());
                 await liveRegionAudit.dispose();
@@ -1528,6 +1594,9 @@ try {
               phase = "capture";
               observation.errorEvents = errors;
               try {
+                if (gestureRecording) {
+                  observation.gesture = await stopControlUiGestureProbe(page);
+                }
                 await layerAudit?.dispose();
                 await memory?.dispose();
                 if (values.trace || values["observer-origins"]) {
@@ -1938,6 +2007,26 @@ await writeFile(
     "",
     "ResizeObserver loop errors are counted in every run, including without tracing or observer-origin diagnostics. Any browser error fails its observation and the command; completed timing intervals do not waive the zero-error requirement.",
     "",
+    ...(observations.some((row) => row.gesture)
+      ? [
+          "## Continuous gestures",
+          "",
+          "Native requestAnimationFrame callback intervals during physical input, not presentation timestamps or CPU time. Input timestamps and per-frame ResizeObserver counts are retained in observations. WebKit uses this same browser-local rAF clock; its Inspector has no compositor frame clock. Geometry/trace diagnostics add overhead and must not be compared with untraced timings. Each row is one gesture, not one input sample. Unsupported native diagnostics remain null.",
+          "",
+          "| Engine | Viewport | Gesture | Bundle | Pair | Frames | Median / p95 ms | >16.7 / >33 ms | RO deliveries / entries | Outcome |",
+          "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+          ...observations.flatMap((row) => {
+            if (!row.gesture) {
+              return [];
+            }
+            const sample = row.gesture.activeFrameSummary;
+            return [
+              `| ${row.engine} | ${row.viewport} | ${row.step} | ${row.bundle} | ${row.pair + 1} | ${sample.count} | ${sample.medianMs?.toFixed(2) ?? "—"} / ${sample.p95Ms?.toFixed(2) ?? "—"} | ${sample.over16_7Ms} / ${sample.over33Ms} | ${row.gesture.totals.resizeObserverDeliveries} / ${row.gesture.totals.resizeObserverEntries} | ${row.status} |`,
+            ];
+          }),
+          "",
+        ]
+      : []),
     "| Configuration | Viewport | Scenario | Network | Bundle | Engine | ResizeObserver errors | Affected / attempted observations |",
     "| --- | --- | --- | --- | --- | --- | ---: | ---: |",
     ...summary.map(
