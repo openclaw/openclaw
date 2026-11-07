@@ -122,9 +122,10 @@ it("reports a best-effort generation verification failure for its actual sources
   const file = agentFile(stateDir);
   const missing = agentFile(stateDir, "ops");
   createDatabase(file, "PRAGMA user_version=3;");
+  using writer = openNodeSqliteDatabase(file);
+  writer.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=3;");
   const preload = path.join(stateDir, "write-between-reads.cjs");
-  // Wait for the private image to close, then commit between the final generation
-  // reads. A write during provisional capture can instead fail snapshot acquisition.
+  // Retain WAL frames so private recovery precedes the write between final generation reads.
   const generationProbe = `
     const fs = require('node:fs'), path = require('node:path');
     const { DatabaseSync } = require('node:sqlite');
@@ -133,9 +134,8 @@ it("reports a best-effort generation verification failure for its actual sources
     let snapshotClosed = false, written = false;
     DatabaseSync.prototype.close = function(...args) {
       const snapshot = path.basename(this.location() ?? '') === 'database.sqlite';
-      const result = close.apply(this, args);
+      close.apply(this, args);
       snapshotClosed ||= snapshot;
-      return result;
     };
     fs.openSync = function(file, ...args) {
       if (snapshotClosed && String(file) === source + '-wal' && !written) {
