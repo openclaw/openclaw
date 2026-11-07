@@ -1,0 +1,2 @@
+# Registered Mantle auth regression for chat/decision and explicit-token precedence.
+25

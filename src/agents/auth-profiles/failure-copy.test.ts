@@ -23,6 +23,7 @@ const RECOVERY_BY_REASON = {
   overloaded: false,
   billing: true,
   server_error: false,
+  route_unavailable: false,
   timeout: false,
   tls_certificate: false,
   context_overflow: true,

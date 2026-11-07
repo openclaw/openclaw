@@ -15,80 +15,26 @@ minimumReleaseAgeExclude:
   - "@openai/codex-*"
   # Reviewed libterminal 0.3.11 release; remove after 2026-11-08T02:20:47.166Z.
   - "@openclaw/libterminal@0.3.11"
+  # Reviewed tokenjuice 0.10.0 release (#189997); remove after 2026-11-08T13:22:27.304Z.
+  - "tokenjuice@0.10.0"
   # Solid itself is exempt from the release-age gate (Peter, 2026-10-11).
   - "solid-js"
   - "@solidjs/*"
   # Peter approved 2026-10-24: solid-js rc.18 transitive SSR/hydration serialization dependencies.
   - "seroval@1.7.0"
   - "seroval-plugins@1.7.0"
-  # Reviewed pnpm security bump (#179992); remove after 2026-10-28T11:16:18.199Z.
-  - "pnpm@12.15.0"
-  - "@pnpm/exe.android-arm64@12.15.0"
-  - "@pnpm/exe.android-x64@12.15.0"
-  - "@pnpm/exe.darwin-arm64@12.15.0"
-  - "@pnpm/exe.darwin-x64@12.15.0"
-  - "@pnpm/exe.freebsd-x64@12.15.0"
-  - "@pnpm/exe.linux-arm64-musl@12.15.0"
-  - "@pnpm/exe.linux-arm64@12.15.0"
-  - "@pnpm/exe.linux-ppc64@12.15.0"
-  - "@pnpm/exe.linux-riscv64@12.15.0"
-  - "@pnpm/exe.linux-s390x@12.15.0"
-  - "@pnpm/exe.linux-x64-musl@12.15.0"
-  - "@pnpm/exe.linux-x64@12.15.0"
-  - "@pnpm/exe.win32-arm64@12.15.0"
-  - "@pnpm/exe.win32-x64@12.15.0"
-  # Reviewed Edge TTS 403 fix; remove after 2026-10-19T16:27:27.581Z.
-  - "node-edge-tts@1.2.11"
-  # Reviewed acpx 0.21.0 release (agent process env controls, openclaw/acpx#897); remove after 2026-10-31T00:42:33.101Z.
-  - "acpx@0.21.0"
-  # Reviewed fs-safe 0.27.0 release and native helpers; remove after 2026-11-06T23:51:48.523Z.
-  - "@openclaw/fs-safe-darwin-arm64@0.27.0"
-  - "@openclaw/fs-safe-darwin-x64@0.27.0"
-  - "@openclaw/fs-safe-freebsd-arm64@0.27.0"
-  - "@openclaw/fs-safe-freebsd-x64@0.27.0"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.27.0"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.27.0"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.27.0"
-  - "@openclaw/fs-safe-linux-x64-musl@0.27.0"
-  - "@openclaw/fs-safe-win32-arm64-msvc@0.27.0"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.27.0"
-  - "@openclaw/fs-safe@0.27.0"
-  # Reviewed fs-safe 0.26.15 release and native helpers; remove after 2026-11-06T18:45:32.211Z.
-  - "@openclaw/fs-safe@0.26.15"
-  - "@openclaw/fs-safe-darwin-arm64@0.26.15"
-  - "@openclaw/fs-safe-darwin-x64@0.26.15"
-  - "@openclaw/fs-safe-freebsd-arm64@0.26.15"
-  - "@openclaw/fs-safe-freebsd-x64@0.26.15"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.26.15"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.26.15"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.26.15"
-  - "@openclaw/fs-safe-linux-x64-musl@0.26.15"
-  - "@openclaw/fs-safe-win32-arm64-msvc@0.26.15"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.26.15"
-  # Reviewed proc-safe 0.4.2 release and native helpers; remove after 2026-10-26T00:51:31.079Z.
-  - "@openclaw/proc-safe@0.4.2"
-  - "@openclaw/proc-safe-darwin-arm64@0.4.2"
-  - "@openclaw/proc-safe-darwin-x64@0.4.2"
-  - "@openclaw/proc-safe-freebsd-arm64@0.4.2"
-  - "@openclaw/proc-safe-freebsd-x64@0.4.2"
-  - "@openclaw/proc-safe-linux-arm64-gnu@0.4.2"
-  - "@openclaw/proc-safe-linux-arm64-musl@0.4.2"
-  - "@openclaw/proc-safe-linux-x64-gnu@0.4.2"
-  - "@openclaw/proc-safe-linux-x64-musl@0.4.2"
-  - "@openclaw/proc-safe-win32-arm64-msvc@0.4.2"
-  - "@openclaw/proc-safe-win32-x64-msvc@0.4.2"
-  # Claude ACP adapter bump for CVE-2026-111497 (brotli fix in SDK 0.3.309 binaries); remove after 2026-10-30T20:00:57.929Z.
-  - "@agentclientprotocol/claude-agent-acp@0.95.0"
-  - "@agentclientprotocol/sdk@2.0.1"
-  - "@anthropic-ai/claude-agent-sdk@0.3.309"
-  - "@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.309"
-  - "@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.309"
-  - "@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.309"
-  - "@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.309"
-  - "@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.309"
-  - "@anthropic-ai/claude-agent-sdk-linux-x64@0.3.309"
-  - "@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.309"
-  - "@anthropic-ai/claude-agent-sdk-win32-x64@0.3.309"
+  # Reviewed fs-safe 0.28.0 release and native helpers; remove after 2026-11-14T08:53:17.239Z.
+  - "@openclaw/fs-safe-darwin-arm64@0.28.0"
+  - "@openclaw/fs-safe-darwin-x64@0.28.0"
+  - "@openclaw/fs-safe-freebsd-arm64@0.28.0"
+  - "@openclaw/fs-safe-freebsd-x64@0.28.0"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.28.0"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.28.0"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.28.0"
+  - "@openclaw/fs-safe-linux-x64-musl@0.28.0"
+  - "@openclaw/fs-safe-win32-arm64-msvc@0.28.0"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.28.0"
+  - "@openclaw/fs-safe@0.28.0"
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
@@ -106,20 +52,20 @@ overrides:
   "chevrotain>lodash-es": 4.18.1
   "@chevrotain/cst-dts-gen>lodash-es": 4.18.1
   "@chevrotain/gast>lodash-es": 4.18.1
-  "@agentclientprotocol/codex-acp@2.2.2>@openai/codex": 0.164.0
+  "@agentclientprotocol/codex-acp@2.3.0>@openai/codex": 0.164.0
   "@codemirror/commands@6.11.1>@codemirror/view": 6.43.15
   "@codemirror/view@6.43.15>@codemirror/state": 6.7.6
   "@anthropic-ai/sdk": 0.137.0
-  "@anthropic-ai/vertex-sdk@0.22.0>google-auth-library": 11.3.1
+  "@anthropic-ai/vertex-sdk@0.22.0>google-auth-library": 11.3.2
   "@opentelemetry/core": 2.12.0
   "@opentelemetry/propagator-jaeger": 2.12.0
-  "@aws-sdk/core": 3.978.4
-  "@aws-sdk/credential-provider-node": 3.972.88
-  "@aws-sdk/xml-builder": 3.972.41
+  "@aws-sdk/core": 3.979.1
+  "@aws-sdk/credential-provider-node": 3.972.92
+  "@aws-sdk/xml-builder": 3.972.42
   "@hono/node-server": 2.1.5
-  axios: 1.20.0
+  axios: 1.21.0
   fast-uri: 4.2.3
-  follow-redirects: 1.16.1
+  follow-redirects: 1.16.2
   defu: 6.1.7
   fast-xml-parser: 5.11.2
   request: "npm:@cypress/request@4.0.1"
@@ -128,13 +74,13 @@ overrides:
   brace-expansion: 5.0.12
   # GHSA-68fv-2mgg-jv7q: source-map-js <1.2.2 event-loop DoS (via css-tree).
   source-map-js: 1.2.2
-  file-type: 22.2.0
+  file-type: 22.3.0
   form-data: 4.0.6
-  ip-address: 10.7.4
+  ip-address: 10.7.5
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
   proxy-addr: 2.0.8
-  qs: 6.16.1
+  qs: 6.17.1
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
   typebox: 1.4.3
   tar: 7.5.22
@@ -185,12 +131,12 @@ packageExtensions:
 patchedDependencies:
   "apache-arrow@21.2.0": patches/apache-arrow@21.2.0.patch
   "@shinyoshiaki/binary-data@0.6.1": patches/@shinyoshiaki__binary-data@0.6.1.patch
-  "@openclaw/crabline@0.1.31": patches/@openclaw__crabline@0.1.31.patch
+  "@openclaw/crabline@0.2.0": patches/@openclaw__crabline@0.2.0.patch
   playwright-core@1.64.1: patches/playwright-core@1.64.1.patch
   minizlib@3.1.0: patches/minizlib@3.1.0.patch
   tar@7.5.22: patches/tar@7.5.22.patch
   "baileys@7.0.0-rc14": patches/baileys@7.0.0-rc14.patch
-  "matrix-js-sdk@43.0.0": patches/matrix-js-sdk@43.0.0.patch
+  "matrix-js-sdk@44.0.0": patches/matrix-js-sdk@44.0.0.patch
   "@novnc/novnc@1.7.0": patches/@novnc__novnc@1.7.0.patch
   vitest@5.0.5: patches/vitest@5.0.5.patch
   ghostty-web@0.4.0: patches/ghostty-web@0.4.0.patch

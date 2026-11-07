@@ -150,7 +150,6 @@ it.each([
 it.each(["denied", "oversized"])(
   "clears a retained annotation when its replacement is %s",
   async (reason) => {
-    vi.stubGlobal("IntersectionObserver", undefined);
     const fetchMock = fetchResponses(
       [commentResponse("Original passage")],
       Response.json({ available: false, reason: "Unavailable annotation", retryable: false }),

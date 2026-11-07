@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import photon from "@silvia-odwyer/photon-node";
 import { stopChild } from "../lib/gateway-bench-child.ts";
+import type { summarizeDetailsGeometry } from "./warm-reload-browser-probe.ts";
 
 type Arm = "base" | "candidate";
 type Census = {
@@ -19,9 +20,17 @@ type ComparisonRun = {
     helloHandledMs: number | null;
     fcpMs: number | null;
     firstPaintedRowsMs: number | null;
+    firstDetailsDomMs?: number | null;
+    firstDetailsPaintMs?: number | null;
+    detailsGeometry?: ReturnType<typeof summarizeDetailsGeometry>;
     finalRowsDomMs: number | null;
     loafBlockingMs: number;
     cls: number;
+    boardWidgetSkeletonMs?: number | null;
+    allBoardWidgetsVisibleMs?: number | null;
+    cachedBoardLayoutMs?: number | null;
+    firstTranscriptDomMs?: number | null;
+    firstDashboardContentDomMs?: number | null;
   };
   auditedPaint?: { main: { atMs: number }; dashboard: { atMs: number } | null };
   visual: Census & { unmasked: Census; visibleChangeCensus?: Census };
@@ -140,7 +149,11 @@ function distribution(values: number[]) {
   return { median: quantile(0.5), q1: quantile(0.25), q3: quantile(0.75), samples: values.length };
 }
 
-function metrics(run: ComparisonRun): Record<string, number | null> {
+function metrics(
+  run: ComparisonRun,
+  cachedEnvironmentHeight: number | null,
+): Record<string, number | null> {
+  const geometry = run.probe.detailsGeometry;
   return {
     visibleStates: run.visual.visibleChangeCensus?.distinctStates ?? null,
     visibleStateOccurrences: run.visual.visibleChangeCensus?.timeline.length ?? null,
@@ -150,11 +163,36 @@ function metrics(run: ComparisonRun): Record<string, number | null> {
     unmaskedPixelStateOccurrences: run.visual.unmasked.timeline.length,
     lastVisibleChangeMs: run.visual.visibleChangeCensus?.lastVisualChangeMs ?? null,
     lastPixelChangeMs: run.visual.lastVisualChangeMs,
+    boardWidgetSkeletonMs: run.probe.boardWidgetSkeletonMs ?? null,
+    allBoardWidgetsVisibleMs: run.probe.allBoardWidgetsVisibleMs ?? null,
+    cachedBoardLayoutMs: run.probe.cachedBoardLayoutMs ?? null,
+    visibleTranscriptMs: run.probe.firstTranscriptDomMs ?? null,
+    widgetContentReadyMs: run.probe.firstDashboardContentDomMs ?? null,
     helloHandledMs: run.probe.helloHandledMs,
     fcpMs: run.probe.fcpMs,
     auditedMainPaintMs: run.auditedPaint?.main.atMs ?? null,
     auditedDashboardPaintMs: run.auditedPaint?.dashboard?.atMs ?? null,
     firstPaintedRowsMs: run.probe.firstPaintedRowsMs,
+    firstDetailsDomMs: run.probe.firstDetailsDomMs ?? null,
+    firstDetailsPaintMs: run.probe.firstDetailsPaintMs ?? null,
+    detailsPaintLagMs:
+      run.probe.firstDetailsPaintMs != null && run.probe.firstPaintedRowsMs !== null
+        ? run.probe.firstDetailsPaintMs - run.probe.firstPaintedRowsMs
+        : null,
+    environmentFirstHeightErrorPx:
+      geometry?.firstEnvironmentHeightPx != null && cachedEnvironmentHeight !== null
+        ? Math.abs(geometry.firstEnvironmentHeightPx - cachedEnvironmentHeight)
+        : null,
+    environmentFirstBranchMissing:
+      geometry?.firstEnvironmentBranchVisible == null
+        ? null
+        : Number(!geometry.firstEnvironmentBranchVisible),
+    environmentHeightMovementPx:
+      geometry?.firstEnvironmentHeightPx == null ? null : geometry.environmentHeightMovementPx,
+    outputsTopMovementPx:
+      geometry?.firstEnvironmentHeightPx == null ? null : geometry.outputsTopMovementPx,
+    automationsTopMovementPx:
+      geometry?.firstEnvironmentHeightPx == null ? null : geometry.automationsTopMovementPx,
     finalRowsDomMs: run.probe.finalRowsDomMs,
     loafBlockingMs: run.probe.loafBlockingMs,
     cls: run.probe.cls,
@@ -247,11 +285,15 @@ export async function createWarmReloadComparison(results: ComparisonResult[], di
       throw new Error(`Comparison warm sample counts must match and be nonzero for ${route}`);
     }
     const pairs: ComparisonPair[] = [];
+    const cachedEnvironmentHeights = [base[0]!, candidate[0]!].map(
+      (entry) =>
+        entry.runs.find((run) => !run.warm)?.probe.detailsGeometry?.lastEnvironmentHeightPx ?? null,
+    );
     for (let index = 0; index < warm[0]!.length; index++) {
       const first = warm[0]![index]!;
       const second = warm[1]![index]!;
-      const a = metrics(first);
-      const b = metrics(second);
+      const a = metrics(first, cachedEnvironmentHeights[0]!);
+      const b = metrics(second, cachedEnvironmentHeights[1]!);
       const deltas = Object.fromEntries(
         Object.entries(a).map(([key, value]) => {
           const other = b[key];

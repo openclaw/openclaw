@@ -1,5 +1,12 @@
+import { url as inspectorUrl } from "node:inspector";
 import { performance } from "node:perf_hooks";
 import { isMainThread, MessageChannel, receiveMessageOnPort, Worker } from "node:worker_threads";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerThreadExecArgv,
+  resolveRuntimeWorkerUrl,
+} from "../infra/runtime-worker-url.js";
+import { hasProfilerConflict } from "./diagnostic-profile.js";
 
 type KernelSample = {
   at: number;
@@ -14,71 +21,20 @@ type KernelSample = {
   sched?: number[];
 };
 
-// Builtins only: this observer must start without importing the Gateway or its worker pools.
-const SOURCE = String.raw`
-const { workerData } = require('node:worker_threads');
-const { open } = require('node:fs/promises');
-const { performance } = require('node:perf_hooks');
-const { heartbeat, port } = workerData;
-const clock = new BigInt64Array(heartbeat);
-// Linux's thread-group leader is the process PID, not worker_threads.threadId.
-const task = '/proc/self/task/' + process.pid + '/';
-const buffer = Buffer.alloc(4096);
-async function read(path) {
-  try {
-    const file = await open(path, 'r');
-    try {
-      const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
-      return buffer.toString('utf8', 0, bytesRead);
-    } finally { await file.close(); }
-  } catch (error) { return '?' + error.code; }
-}
-const numbers = (text, pattern) => [...text.matchAll(pattern)].map(match => Number(match[1]));
-let observed = 0n, attempts = 0, nextAt = 0, pending = false;
-setInterval(async () => {
-  const beat = Atomics.load(clock, 0);
-  const at = performance.now();
-  if (beat !== observed) {
-    observed = beat;
-    attempts = 0;
-    nextAt = Number(beat) + 1000;
-  }
-  if (pending || attempts === 3 || at < nextAt) return;
-  pending = true;
-  attempts++;
-  nextAt = at + 1000;
-  try {
-    const stat = await read(task + 'stat');
-    const wchan = (await read(task + 'wchan')).trim().slice(0, 64);
-    // Retain only the syscall number, never arguments, pointers, or user data.
-    const syscall = (await read(task + 'syscall')).trim().split(/\s+/)[0];
-    const rawStack = await read(task + 'stack');
-    const stack = rawStack.startsWith('?') ? rawStack :
-      [...rawStack.matchAll(/\] ([\w.]+)/g)].slice(0, 3).map(match => match[1]).join(',').slice(0, 96);
-    const io = numbers(await read(task + 'io'), /:\s*(\d+)/g);
-    const status = await read('/proc/self/status');
-    const ctxt = numbers(status, /(?:^|\n)(?:non)?voluntary_ctxt_switches:\s*(\d+)/g);
-    const rssKb = numbers(status, /VmRSS:\s*(\d+)/g);
-    const psi = [];
-    for (const resource of ['io', 'memory', 'cpu']) {
-      psi.push(numbers(await read('/proc/pressure/' + resource), /total=(\d+)/g));
-    }
-    const sched = numbers(await read(task + 'schedstat'), /(?:^|\s)(\d+)/g).slice(0, 2);
-    if (Atomics.load(clock, 0) === beat) {
-      port.postMessage({ at, state: stat.startsWith('?') ? stat : stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3),
-        wchan, syscall, stack, io, ctxt, rssKb, psi, sched });
-    }
-  } finally { pending = false; }
-}, 250);
-`;
-
 /** Capture live kernel evidence without waiting for the main thread or blocking the observer. */
-export function createStallKernelRecorder(warn: (message: string) => void) {
-  if (process.platform !== "linux" || !isMainThread) {
+export function createStallKernelRecorder(
+  warn: (message: string) => void,
+  packageRoot: string | null,
+) {
+  if (!isMainThread) {
     return undefined;
   }
-  const heartbeat = new BigInt64Array(new SharedArrayBuffer(8));
-  const beat = () => Atomics.store(heartbeat, 0, BigInt(Math.floor(performance.now())));
+  const heartbeat = new BigInt64Array(new SharedArrayBuffer(16));
+  const profiling = hasProfilerConflict();
+  const beat = () => {
+    Atomics.store(heartbeat, 1, profiling || inspectorUrl() ? 1n : 0n);
+    Atomics.store(heartbeat, 0, BigInt(Math.floor(performance.now())));
+  };
   beat();
   const { port1, port2 } = new MessageChannel();
   let worker: Worker | undefined;
@@ -90,10 +46,15 @@ export function createStallKernelRecorder(warn: (message: string) => void) {
     void worker?.terminate();
   };
   try {
-    worker = new Worker(SOURCE, {
-      eval: true,
-      execArgv: [],
-      workerData: { heartbeat: heartbeat.buffer, port: port2 },
+    const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.stallObserver);
+    worker = new Worker(workerUrl, {
+      execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
+      workerData: {
+        heartbeat: heartbeat.buffer,
+        port: port2,
+        packageRoot,
+        timeOrigin: performance.timeOrigin,
+      },
       transferList: [port2],
     });
     worker.on("error", () => {

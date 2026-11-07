@@ -5,11 +5,11 @@
 ## Before any write
 
 1. Call `knowledge_status({})`. Sample mode is read-only.
-   A brand-new store reports `store: "unprovisioned"`, `writesEnabled: false`
-   and an empty `vault` until first use. That is normal: continue to step 2,
-   which creates the store, then call `knowledge_status` again. Stop only if a
-   provisioned store still reports `writesEnabled: false`. Keep the vault UUID
-   (`vault`) for `expectedVaultId`.
+   A brand-new store reports `store: "unprovisioned"` and an empty `vault`
+   until first use; `writesEnabled` already shows whether you may write. That is
+   normal: continue to step 2, which creates the store, then call
+   `knowledge_status` again. Stop only if `writesEnabled` is `false`. Keep the
+   vault UUID (`vault`) for `expectedVaultId`.
 2. Call `knowledge_ontology({})`, then
    `knowledge_ontology({view: "definitions", name: "<type>"})` for each type you
    will write. Use the canonical type name and only its declared fields. Keep the

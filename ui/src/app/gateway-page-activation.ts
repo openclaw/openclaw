@@ -8,7 +8,7 @@ export function startGatewayPageActivation(
   gateway: {
     readonly snapshot: Pick<
       ApplicationGatewaySnapshot,
-      "phase" | "restartPending" | "suspensionPhase" | "lastErrorCode"
+      "phase" | "restartPending" | "suspensionPhase" | "lastErrorCode" | "reconnectAt"
     > & {
       readonly client: Pick<
         GatewayBrowserClient,
@@ -87,12 +87,13 @@ export function startGatewayPageActivation(
         }
         if (
           reachable &&
+          (failedProbes > 0 || gateway.snapshot.reconnectAt === undefined) &&
           !controller.signal.aborted &&
           shouldProbe() &&
           gateway.snapshot.client === client &&
           client.needsReachabilityReconnect
         ) {
-          // The application owner retires the old client and preserves its outbox.
+          // A stale opening can recover; only restored reachability may cut short backoff.
           failedProbes = 0;
           gateway.connect();
         }
@@ -124,7 +125,7 @@ export function startGatewayPageActivation(
         return;
       }
       const { client } = gateway.snapshot;
-      failedProbes = 0;
+      failedProbes = Math.min(failedProbes, 1);
       clearTimeout(probeTimer);
       probeTimer = undefined;
       if (client && recoveryAllowed() && (forceQueuedRecovery || client.needsWakeReconnect)) {

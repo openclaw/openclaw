@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
+import { resolveOxlintShardConcurrency } from "../../scripts/run-oxlint-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const workflowPath = ".github/workflows/openclaw-npm-release.yml";
@@ -144,6 +145,18 @@ it("bounds every git fetch operation", () => {
   expect(
     gitFetchLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 120s")),
   ).toBe(true);
+});
+
+it("serializes source-check oxlint shards on the delivered 32-class host", () => {
+  // The 2026-09-01 probe and 2026.11.5-beta.1 logs both report 8 CPUs/31 GiB.
+  const env = { ...sourceStep("Check source, test types, and architecture").env, CI: "true" };
+  expect(
+    resolveOxlintShardConcurrency({
+      env,
+      platform: "linux",
+      hostResources: { logicalCpuCount: 8, totalMemoryBytes: 31 * 1024 ** 3 },
+    }),
+  ).toBe(1);
 });
 
 it("routes source history through the trusted ancestry owner", () => {

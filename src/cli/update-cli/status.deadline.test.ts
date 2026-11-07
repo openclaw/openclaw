@@ -23,7 +23,6 @@ const overrides = {
   "../../infra/update-check.js": {
     checkUpdateStatus: mocks.check,
     formatGitInstallLabel: () => undefined,
-    compareSemverStrings: () => 0,
   },
   "../../infra/update-run-status.js": { readUpdateRunStatus: mocks.run },
   "../../infra/update-recovery-backup-status.js": { inspectUpdateRecoveryBackups: async () => [] },

@@ -557,6 +557,7 @@ async function executeDetachedCronJob(
     delivery: res.delivery,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
+    agentTerminal: res.agentTerminal,
     diagnostics: res.diagnostics,
     failureNotificationDetail: res.failureNotificationDetail,
     model: res.model,

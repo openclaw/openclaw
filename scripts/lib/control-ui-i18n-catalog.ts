@@ -21,6 +21,7 @@ import { registerChatCommandResultsEnglish } from "../../ui/src/i18n/locales/en-
 import { registerChatComposerMenuEnglish } from "../../ui/src/i18n/locales/en-chat-composer-menu.ts";
 import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-composer.ts";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
+import { registerChatFailedMessageEditEnglish } from "../../ui/src/i18n/locales/en-chat-failed-message-edit.ts";
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMediaEnglish } from "../../ui/src/i18n/locales/en-chat-media.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
@@ -37,6 +38,7 @@ import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
 import { registerConnectionRecoveryEnglish } from "../../ui/src/i18n/locales/en-connection-recovery.ts";
+import { registerCronScheduleEnglish } from "../../ui/src/i18n/locales/en-cron-schedule.ts";
 import { registerCronEnglish } from "../../ui/src/i18n/locales/en-cron.ts";
 import { registerDashboardsEnglish } from "../../ui/src/i18n/locales/en-dashboards.ts";
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
@@ -48,6 +50,7 @@ import { registerGitHubConnectionsEnglish } from "../../ui/src/i18n/locales/en-g
 import { registerGitHubEnglish } from "../../ui/src/i18n/locales/en-github.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerLinkReaderEnglish } from "../../ui/src/i18n/locales/en-link-reader.ts";
+import { registerLocalErrorsEnglish } from "../../ui/src/i18n/locales/en-local-errors.ts";
 import { registerLogbookEnglish } from "../../ui/src/i18n/locales/en-logbook.ts";
 import { registerLoginEnglish } from "../../ui/src/i18n/locales/en-login.ts";
 import { registerLogsEnglish } from "../../ui/src/i18n/locales/en-logs.ts";
@@ -60,6 +63,9 @@ import { registerModelControlsEnglish } from "../../ui/src/i18n/locales/en-model
 import { registerModelSetupEnglish } from "../../ui/src/i18n/locales/en-model-setup.ts";
 import { registerNativeLinkMenuEnglish } from "../../ui/src/i18n/locales/en-native-link-menu.ts";
 import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new-session-setup.ts";
+import { registerOpenClawIdDialogsEnglish } from "../../ui/src/i18n/locales/en-openclaw-id-dialogs.ts";
+import { registerOpenClawIdEnglish } from "../../ui/src/i18n/locales/en-openclaw-id.ts";
+import { registerPermissionErrorsEnglish } from "../../ui/src/i18n/locales/en-permission-errors.ts";
 import { registerPersonalInstructionsEnglish } from "../../ui/src/i18n/locales/en-personal-instructions.ts";
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-plugin-management.ts";
@@ -116,6 +122,8 @@ const sourceFiles = [
   "en-native-link-menu.ts",
   "en-worker-capacity.ts",
   "en.ts",
+  "en-local-errors.ts",
+  "en-permission-errors.ts",
   "en-route-subtitles.ts",
   "en-agents.ts",
   "en-about.ts",
@@ -143,6 +151,7 @@ const sourceFiles = [
   "en-chat-details.ts",
   "en-chat-goals.ts",
   "en-chat-message-metadata.ts",
+  "en-chat-failed-message-edit.ts",
   "en-chat-media.ts",
   "en-chat-provider-review.ts",
   "en-chat-questions.ts",
@@ -155,6 +164,7 @@ const sourceFiles = [
   "en-command-palette.ts",
   "en-connection-recovery.ts",
   "en-cron.ts",
+  "en-cron-schedule.ts",
   "en-debug.ts",
   "en-desktop.ts",
   "en-devices.ts",
@@ -185,6 +195,8 @@ const sourceFiles = [
   "en-session-placement.ts",
   "en-new-session-runtime.ts",
   "en-new-session-setup.ts",
+  "en-openclaw-id.ts",
+  "en-openclaw-id-dialogs.ts",
   "en-plugin-consent.ts",
   "en-plugin-management.ts",
   "en-portals.ts",
@@ -268,9 +280,6 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   let menuIndex = 0;
   const appendSessionCopy = (key: string, value: TranslationMap[string]) => {
     sessionsView[key] = value;
-    if (key === "searchPlaceholder") {
-      Object.assign(sessionsView, registerCommandPaletteEnglish.catalog.sessionsView);
-    }
     if (key === "assignToMe") {
       Object.assign(sessionsView, registerSessionPeopleEnglish.catalog.sessionsView);
     }
@@ -546,6 +555,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         sidebar,
         clawhub: registerPluginManagementEnglish.catalog.chat.clawhub,
         ...registerChatSessionEnglish.catalog.chat,
+        ...registerChatFailedMessageEditEnglish.catalog.chat,
         ...registerChatSessionOptionalEnglish.catalog.chat,
         ...registerSessionNavigationEnglish.catalog.chat,
         workspaceConflict,
@@ -602,6 +612,8 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerTemplatesEnglish.catalog,
     registerAppsEnglish.catalog,
     registerLogbookEnglish.catalog,
+    registerPermissionErrorsEnglish.catalog,
+    registerLocalErrorsEnglish.catalog,
     registerLogsEnglish.catalog,
     registerApprovalsEnglish.catalog,
     registerSecretsStoreEnglish.catalog,
@@ -638,12 +650,15 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerMeetingsEnglish.catalog,
     registerMemoryImportEnglish.catalog,
     registerModelAccountsEnglish.catalog,
+    registerCronScheduleEnglish.catalog,
     registerModelControlsEnglish.catalog,
     registerModelSetupEnglish.catalog,
     registerPersonalInstructionsEnglish.catalog,
     registerSessionMachineEnglish.catalog,
     registerSessionPlacementEnglish.catalog,
     registerNewSessionSetupEnglish.catalog,
+    registerOpenClawIdEnglish.catalog,
+    registerOpenClawIdDialogsEnglish.catalog,
     registerPluginConsentEnglish.catalog,
     registerPluginManagementEnglish.catalog,
     registerPortalsEnglish.catalog,

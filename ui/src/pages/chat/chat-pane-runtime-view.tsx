@@ -16,6 +16,8 @@ import {
   availableLinkPreviewReaders,
 } from "../../app/link-reader-routing.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { isChatControlCommand } from "../../lib/chat/commands.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
@@ -40,6 +42,7 @@ import { installChatComposerPickerDismissal } from "./components/chat-picker-ove
 import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import { activeQueuedMessageEdit, subscribeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
+import { readChatSessionSnapshot } from "./session-message-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { waitForPrewarmedChatSnapshot } from "./session-snapshot-store.ts";
 
@@ -200,6 +203,13 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const theme = projectTheme(context.theme);
     // Startup attaches one host for this mounted pane's lifetime.
     const state = runtime.state;
+    // Snapshot admission is fixed for this pane; live refill must not turn a cold load warm.
+    const initialCachedSession = Boolean(
+      state &&
+      readChatSessionSnapshot(state.chatMessagesBySession, state, {
+        sessionKey: state.sessionKey,
+      }),
+    );
     const realtime = createMemo(() => {
       const owner = runtime.state?.realtimeTalk;
       return (
@@ -361,6 +371,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     // Importing its renderer here makes the optional runtime a required boot dependency.
     return (
       <openclaw-link-reader-hovercard-provider
+        data-cached-session={initialCachedSession ? "true" : "false"}
         prop:client={
           gateway.read().snapshot.phase === "connected" ? gateway.read().snapshot.client : null
         }
@@ -374,12 +385,12 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         <Show when={reviewVisited()}>
           <Errored
             fallback={(error, reset) => (
-              <div class="callout danger" role="alert">
+              <InlineAlert tone="danger" role="alert">
                 {formatUiError(error())}
                 <button class="btn btn--sm" type="button" onClick={reset}>
                   {t("common.retry")}
                 </button>
-              </div>
+              </InlineAlert>
             )}
           >
             <Loading>
@@ -403,7 +414,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   }
 
   return (
-    <Show when={ready()}>
+    <Show when={ready()} fallback={<LoadingState route composer={runtime.ownsRouteComposer} />}>
       <MountedPane />
     </Show>
   );

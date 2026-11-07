@@ -3,7 +3,7 @@ import { onSettled, Show, untrack } from "solid-js";
 import {
   formatDocumentTitle,
   isSettingsNavigationRoute,
-  titleForRoute,
+  pageTitleForRoute,
 } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import "../components/app-topbar-solid.tsx";
@@ -45,7 +45,9 @@ import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import type { SolidReadinessShell } from "./control-ui-readiness-solid.ts";
 import type { ControlUiReadiness, ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
+import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
+import { isNativeEmbedHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { RouteElements, type RouteElementEvent } from "./route-elements.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
@@ -139,10 +141,23 @@ export class ShellOwner
     return routeSearch === undefined ? this.onboarding : resolveOnboardingMode(routeSearch);
   }
 
+  /** A cold connection has no navigation yet, so the compact drawer stays closed. */
+  get initialConnectionPending(): boolean {
+    const runtime = this.runtime;
+    return Boolean(
+      runtime &&
+      this.routeState.routeId === undefined &&
+      !isNativeEmbedHost() &&
+      !runtime.warmBoot &&
+      !gatewayPresentationScope(runtime.context.gateway).readyOnce &&
+      runtime.context.gateway.snapshot.phase !== "connected",
+    );
+  }
+
   get workspaceChromeVisible(): boolean {
     const routeId = this.routeState.routeId;
     // Hidden workspace chrome must not preload its sidebar and panel graphs.
-    return routeId !== undefined && !isSettingsNavigationRoute(routeId) && !this.onboardingMode;
+    return (routeId === undefined || !isSettingsNavigationRoute(routeId)) && !this.onboardingMode;
   }
 
   storedOutboxScopeHost(context: ApplicationContext): StoredOutboxScopeHost {
@@ -459,7 +474,10 @@ export class ShellOwner
       return;
     }
     const outboxScopeHost = this.storedOutboxScopeHost(context);
-    let primaryContext = routeId === "custodian" ? askBrandLabel() : titleForRoute(routeId);
+    let primaryContext =
+      routeId === "custodian"
+        ? askBrandLabel()
+        : pageTitleForRoute(routeId, context.nativeDeviceSettings?.snapshot);
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     }
@@ -488,7 +506,11 @@ export class ShellOwner
           gatewayStatus: state.gatewayStatus,
           connectionRecovery: this.connectionRecovery,
           connectionFlagVisible: this.connectionFlagVisible,
-          connectionFlagAllowed: state.navCollapsed && !state.mobileNavLayout,
+          // The floating refresh notice speaks for the collapsed sidebar.
+          connectionFlagAllowed:
+            state.navCollapsed &&
+            !state.mobileNavLayout &&
+            !state.floatingUpdateCard.refreshRequired,
         });
       }
       this.syncNavigationPresentation(state);
@@ -550,6 +572,11 @@ export class ShellOwner
     if (chatPage) {
       chatPage.navDrawerOpen = state.navDrawerOpen;
       chatPage.gatewayStatus = this.mobileGatewayStatus;
+    }
+    const newSessionPage = this.routeOutlet?.renderedElement?.("openclaw-new-session-page");
+    if (newSessionPage) {
+      newSessionPage.navDrawerOpen = state.navDrawerOpen;
+      newSessionPage.gatewayStatus = this.mobileGatewayStatus;
     }
   }
 

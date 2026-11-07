@@ -4,6 +4,7 @@ import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { LOGBOOK_POSTGRES_SCHEMA_SQL } from "./src/logbook-postgres-schema.js";
 import { createLogbookDatabase } from "./src/store-schema-admission.js";
 import { LOGBOOK_SCHEMA_VERSION } from "./src/store-schema.js";
 
@@ -11,6 +12,7 @@ class LogbookPortSchemaError extends Error {}
 
 export const logbookDatabasePortApi = {
   LogbookPortSchemaError,
+  postgresSchema: LOGBOOK_POSTGRES_SCHEMA_SQL,
   inspectLogbookPortSource(db: DatabaseSync) {
     admitSqliteSchema(db);
     const version = getAdmittedSqliteSchemaFacts(db)?.userVersion ?? 0;

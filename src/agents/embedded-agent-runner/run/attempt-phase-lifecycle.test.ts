@@ -543,7 +543,7 @@ describe("embedded attempt phase lifecycle state", () => {
         },
       });
       expect(context?.config).toBe(config);
-      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
+      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].completedTurnSource).toEqual(
         sessionManager.getSessionTarget()
           ? { ...sessionManager.getSessionTarget(), entryId: terminalEntryId }
           : undefined,
@@ -752,6 +752,12 @@ describe("embedded attempt phase lifecycle state", () => {
         makeAgentAssistantMessage({ content: [{ type: "text", text: "Suppressed terminal." }] }),
       );
 
+      const executionState: Pick<EmbeddedAttemptExecutionState, "terminal" | "agentTerminal"> = {
+        terminal:
+          tail === "interrupted tool result"
+            ? { kind: "aborted", source: "external" }
+            : { kind: "ok" },
+      };
       await completeEmbeddedAttemptAfterTurn(
         {
           ...finalizationInput(prepared(sessionManager, true, [{ name: "skill_workshop" }])),
@@ -762,19 +768,19 @@ describe("embedded attempt phase lifecycle state", () => {
           } as never,
           agentDir: dir,
           setup: { effectiveWorkspace: dir, sessionAgentId: "main" },
-          state: {
-            terminal:
-              tail === "interrupted tool result"
-                ? { kind: "aborted", source: "external" }
-                : { kind: "ok" },
-          },
+          state: executionState,
         } as never,
         settled(target.sessionId) as never,
         prompt(transcriptLeafId),
       );
 
       expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
-      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
+      expect(executionState.agentTerminal).toMatchObject({
+        version: 1,
+        lastMessageRole: tail === "interrupted tool result" ? "tool_result" : "absent",
+        finalTextState: tail === "interrupted tool result" ? "not_assistant" : "unavailable",
+      });
+      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].completedTurnSource).toEqual(
         tail === "interrupted tool result"
           ? { ...sessionManager.getSessionTarget(), entryId: toolResultEntryId }
           : undefined,

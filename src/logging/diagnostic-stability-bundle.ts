@@ -7,6 +7,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import {
   DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
+  isMemoryPressureReason,
   type DiagnosticMemoryPressureFields,
 } from "../infra/diagnostic-process-types.js";
 import {
@@ -15,14 +16,21 @@ import {
   isMissingPathError,
 } from "../infra/errors.js";
 import { setFatalErrorHook } from "../infra/fatal-error-hooks.js";
+import { allowDrvfsRenameRecovery } from "../infra/fs-safe-drvfs.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { readMemoryUsage } from "./diagnostic-memory-bundle.js";
 import {
   assignOptionalFields,
+  readCodeString,
   readObject,
+  readOptionalCodeString,
   readOptionalNumber,
   readOptionalPositiveInteger,
   readRequiredNumber,
+  readRequiredString,
+  readTimestampMs,
+  readTimestampString,
+  SAFE_REASON_CODE,
 } from "./diagnostic-stability-readers.js";
 import {
   getDiagnosticStabilitySnapshot,
@@ -36,7 +44,6 @@ const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
 const DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
 export const MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES = 5 * 1024 * 1024;
 
-const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const BUNDLE_PREFIX = "openclaw-stability-";
 const BUNDLE_SUFFIX = ".json";
 const REDACTED_HOSTNAME = "<redacted-hostname>";
@@ -224,45 +231,6 @@ function resolveDiagnosticStabilityBundleDir(
 
 function isBundleFile(name: string): boolean {
   return name.startsWith(BUNDLE_PREFIX) && name.endsWith(BUNDLE_SUFFIX);
-}
-
-function readTimestampMs(value: unknown, label: string): number {
-  const timestamp = readRequiredNumber(value, label);
-  if (Number.isNaN(new Date(timestamp).getTime())) {
-    throw new Error(`Invalid stability bundle: ${label} must be a valid timestamp`);
-  }
-  return timestamp;
-}
-
-function readRequiredString(value: unknown, label: string): string {
-  if (typeof value !== "string") {
-    throw new Error(`Invalid stability bundle: ${label} must be a string`);
-  }
-  return value;
-}
-
-function readTimestampString(value: unknown, label: string): string {
-  const timestamp = readRequiredString(value, label);
-  if (Number.isNaN(new Date(timestamp).getTime())) {
-    throw new Error(`Invalid stability bundle: ${label} must be a valid timestamp`);
-  }
-  return timestamp;
-}
-
-function readCodeString(value: unknown, label: string): string {
-  const code = readRequiredString(value, label);
-  if (!SAFE_REASON_CODE.test(code)) {
-    throw new Error(`Invalid stability bundle: ${label} must be a safe diagnostic code`);
-  }
-  return code;
-}
-
-function readOptionalCodeString(value: unknown, label: string): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const code = readRequiredString(value, label);
-  return SAFE_REASON_CODE.test(code) ? code : undefined;
 }
 
 function readProcessBuildIdentity(source: Record<string, unknown>) {
@@ -730,17 +698,6 @@ function sanitizeSessionEvidenceFileName(fileName: string): string {
   return "<session>";
 }
 
-function isMemoryPressureReason(
-  reason: string,
-): reason is DiagnosticMemoryPressureFields["reason"] {
-  return (
-    reason === "rss_threshold" ||
-    reason === "heap_threshold" ||
-    reason === "worker_heap_threshold" ||
-    reason === "rss_growth"
-  );
-}
-
 function listDiagnosticStabilityBundleFilesSync(
   dir: string,
   statFailure: "throw" | "use-zero",
@@ -887,6 +844,7 @@ export function writeDiagnosticStabilityBundleForFailureSync(
       `${BUNDLE_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}-${normalizedReason}${BUNDLE_SUFFIX}`,
     );
     replaceFileAtomicSync({
+      allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(dir),
       filePath: file,
       content: `${JSON.stringify(bundle, null, 2)}\n`,
       dirMode: 0o700,

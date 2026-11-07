@@ -21,13 +21,11 @@ function completed(overrides: Partial<SpawnResult> = {}): SpawnResult {
 }
 
 it.each(["cancellation", "output failure"])(
-  "joins admitted Doctor work after %s before releasing the caller",
+  "cancels admitted Doctor work after %s and joins cleanup before releasing the caller",
   async (cause) => {
     const started = createDeferredCore();
     const finished = createDeferredCore<SpawnResult>();
-    const terminate = vi.fn(() =>
-      finished.resolve(completed({ code: null, termination: "signal" })),
-    );
+    const terminate = vi.fn();
     vi.mocked(runUtf8CommandWithTimeout).mockImplementation((_argv, options) => {
       assert(typeof options !== "number");
       processSignal(options.signal)?.addEventListener("abort", terminate, { once: true });
@@ -57,7 +55,7 @@ it.each(["cancellation", "output failure"])(
     try {
       await started.promise;
       await nextTurn();
-      expect([terminate.mock.calls.length, settled]).toEqual([0, false]);
+      expect([terminate.mock.calls.length, settled]).toEqual([1, false]);
     } finally {
       finished.resolve(completed());
     }

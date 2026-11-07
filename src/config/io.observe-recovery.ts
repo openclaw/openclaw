@@ -2,6 +2,7 @@ import type fs from "node:fs";
 import path from "node:path";
 import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import JSON5 from "json5";
+import { allowDrvfsRenameRecovery } from "../infra/fs-safe-drvfs.js";
 import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
 import {
   enqueueConfigAuditRecord,
@@ -89,6 +90,7 @@ function createRecoveryCommitEffect(params: {
   const options = {
     filePath: publicationPath,
     content: params.raw,
+    allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(path.dirname(publicationPath)),
     dirMode:
       stateRootDirectoryMode(
         path.dirname(publicationPath),

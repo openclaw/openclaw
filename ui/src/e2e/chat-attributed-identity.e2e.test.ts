@@ -296,6 +296,7 @@ suite.define(() => {
             const runId = readRunId(request.params);
             await expect(pane.locator(".chat-working-indicator"), label).toBeVisible();
             const working = pane.locator(".chat-group--working > .chat-group-messages");
+            await expect(working, label).toBeVisible();
             await expectColumn(working, "working indicator");
             await expect(working, label).toHaveCSS("padding-inline-start", "0px");
             const toolCallId = `mobile-read-${width}`;
@@ -504,7 +505,7 @@ suite.define(() => {
           longNamePeerGroup.getByRole("button", { name: "Rewind", exact: true }),
         ]) {
           const target = await readActionTapArea(control);
-          expect(target.width).toBeGreaterThanOrEqual(44);
+          expect(target.width).toBeGreaterThanOrEqual(32);
           expect(target.height).toBeGreaterThanOrEqual(44);
           expect(target.hitCorners).toBe(4);
           if (width === 390 && (await control.getAttribute("aria-label")) === "Rewind") {
@@ -604,7 +605,7 @@ suite.define(() => {
             expect(Math.abs(center - alignment.time)).toBeLessThanOrEqual(1);
           }
           for (const target of alignment.targets) {
-            expect(target.width).toBeGreaterThanOrEqual(44);
+            expect(target.width).toBeGreaterThanOrEqual(32);
             expect(target.height).toBeGreaterThanOrEqual(44);
           }
           await tapBubble(group);

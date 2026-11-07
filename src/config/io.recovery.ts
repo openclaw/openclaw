@@ -1,5 +1,6 @@
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
+import { allowDrvfsRenameRecovery } from "../infra/fs-safe-drvfs.js";
 import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
 import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
 import type { ConfigIoContext } from "./io.context.js";
@@ -144,6 +145,7 @@ async function recoverConfigJsonRootSuffixUnderLock(
   await replaceFileAtomic({
     filePath: publicationPath,
     content: suffixRecovery.raw,
+    allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(path.dirname(publicationPath)),
     dirMode:
       stateRootDirectoryMode(
         path.dirname(publicationPath),

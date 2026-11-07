@@ -85,7 +85,7 @@ suite.define(() => {
                 };
               }),
             );
-          expect(rows.every((row) => (width > 768 ? row.sideBySide : row.stacked))).toBe(true);
+          expect(rows.every((row) => (width > 640 ? row.sideBySide : row.stacked))).toBe(true);
           await page
             .locator(".settings-sidebar openclaw-agent-select")
             .waitFor({ state: "attached" });

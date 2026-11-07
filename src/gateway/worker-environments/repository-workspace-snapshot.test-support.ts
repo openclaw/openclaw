@@ -37,6 +37,7 @@ import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 export async function openRepositoryCaptureTransport(
   wire: Awaited<ReturnType<typeof openDiskCleanupTransport>>,
   retained = false,
+  executionMode: "worker-turn" | "remote-exec" = "worker-turn",
 ) {
   const assertCurrent = () => {};
   const records = await createWorkerEnvironmentStore({ database });
@@ -274,7 +275,7 @@ export async function openRepositoryCaptureTransport(
     await advancePlacementFixtureToActive(
       placements,
       database,
-      { ...sessionTarget, executionMode: "worker-turn" },
+      { ...sessionTarget, executionMode },
       {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: attached.ownerEpoch,

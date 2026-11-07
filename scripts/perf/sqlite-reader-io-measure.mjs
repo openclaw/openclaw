@@ -8,7 +8,6 @@
  * no >20% CPU/time regression for session scans; report tiny-query overhead separately.
  */
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, statfsSync } from "node:fs";
 import { Session } from "node:inspector/promises";
@@ -17,6 +16,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { parseArgs } from "node:util";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
+import { evictLinuxFilePageCache } from "../lib/linux-page-cache.ts";
 
 const { values } = parseArgs({
   options: {
@@ -25,17 +25,103 @@ const { values } = parseArgs({
     gib: { type: "string", default: "35" },
     samples: { type: "string", default: "5" },
     "owner-module": { type: "string" },
+    "metrics-only": { type: "boolean" },
   },
 });
-assert(values.root, "--root must name a task-owned synthetic fixture directory");
-const root = path.resolve(values.root);
+assert(
+  values.root || values["metrics-only"],
+  "--root must name a task-owned synthetic fixture directory",
+);
+const root = path.resolve(values.root ?? ".");
 const filename = path.join(root, "synthetic-reader.sqlite");
 const sessions = 5000;
 const payloadBytes = 1024 * 1024;
 const events = Math.ceil(Number(values.gib) * 1024);
 assert(events > 0 && events < 1024 * 1024);
 
-if (isMainThread) {
+if (values["metrics-only"]) {
+  // node --import ./scripts/tsx.mjs --expose-gc scripts/perf/sqlite-reader-io-measure.mjs --metrics-only
+  assert.equal(process.platform, "linux", "Counter overhead proof requires Linux procfs");
+  if (isMainThread) {
+    const worker = new Worker(new URL(import.meta.url), { argv: process.argv.slice(2) });
+    worker.on("message", (record) => console.log(JSON.stringify(record)));
+    await new Promise((resolve, reject) => {
+      worker.on("error", reject);
+      worker.on("exit", (code) => (code ? reject(new Error(`worker exit ${code}`)) : resolve()));
+    });
+  } else {
+    const { readThreadDiskReadBytes } = await import("../../src/infra/thread-disk-io.ts");
+    const { sqliteReaderCounter, observeSqliteReaderCounters } =
+      await import("../../src/infra/sqlite-reader-metrics.ts");
+    let registrations = 0;
+    const stop = observeSqliteReaderCounters(() => registrations++);
+    const run = (measured, count) => {
+      for (let index = 0; index < count; index++) {
+        const before = readThreadDiskReadBytes();
+        const counter = measured ? sqliteReaderCounter("sessions.usage.refresh") : undefined;
+        const after = readThreadDiskReadBytes();
+        assert(before !== undefined && after !== undefined);
+        if (counter) {
+          Atomics.add(counter.values, 0, 1n);
+          Atomics.add(counter.values, 1, BigInt(after - before));
+        }
+      }
+    };
+    const count = 10000;
+    run(true, 1000);
+    for (let sample = 0; sample < Number(values.samples); sample++) {
+      for (const label of ["A1", "B", "A2"]) {
+        global.gc?.();
+        const before = process.threadCpuUsage();
+        const started = performance.now();
+        run(label === "B", count);
+        const elapsedMs = performance.now() - started;
+        const cpu = process.threadCpuUsage(before);
+        parentPort.postMessage(
+          {
+            phase: "counter-timing",
+            sample,
+            label,
+            count,
+            usPerOp: (elapsedMs * 1000) / count,
+            cpuUsPerOp: (cpu.user + cpu.system) / count,
+            registrations,
+            loadavg: loadavg(),
+          },
+          [],
+        );
+      }
+    }
+    const heap = new Session();
+    heap.connect();
+    const sumHeap = (node) =>
+      node.selfSize + node.children.reduce((sum, child) => sum + sumHeap(child), 0);
+    for (let sample = 0; sample < Number(values.samples); sample++) {
+      for (const label of ["A1", "B", "A2"]) {
+        await heap.post("HeapProfiler.startSampling", {
+          samplingInterval: 512,
+          includeObjectsCollectedByMajorGC: true,
+          includeObjectsCollectedByMinorGC: true,
+        });
+        run(label === "B", count);
+        const { profile } = await heap.post("HeapProfiler.stopSampling");
+        parentPort.postMessage(
+          {
+            phase: "counter-allocation",
+            sample,
+            label,
+            count,
+            sampledBytesPerOp: sumHeap(profile.head) / count,
+          },
+          [],
+        );
+      }
+    }
+    assert.equal(registrations, 1, "Only initial operation registration sends a message");
+    stop();
+    heap.disconnect();
+  }
+} else if (isMainThread) {
   assert.equal(process.platform, "linux", "Physical read proof requires Linux procfs");
   if (values.prepare) {
     assert(!existsSync(root), "Refusing to replace existing fixture");
@@ -175,16 +261,7 @@ if (isMainThread) {
   }
   // Evict only this owned fixture from the OS cache, never global drop_caches.
   db.close();
-  const evict = spawnSync(
-    "python3",
-    [
-      "-c",
-      "import os,sys; f=os.open(sys.argv[1],os.O_RDONLY); os.fsync(f); os.posix_fadvise(f,0,0,os.POSIX_FADV_DONTNEED); os.close(f)",
-      workerData.filename,
-    ],
-    { encoding: "utf8" },
-  );
-  assert.equal(evict.status, 0, evict.stderr);
+  evictLinuxFilePageCache(workerData.filename);
   const cold = new DatabaseSync(workerData.filename, { readOnly: true });
   cold.exec("PRAGMA mmap_size=0; PRAGMA cache_size=-2048");
   const ownerModule = values["owner-module"] ? await import(values["owner-module"]) : undefined;

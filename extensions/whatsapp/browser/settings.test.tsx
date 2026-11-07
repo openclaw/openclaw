@@ -97,7 +97,7 @@ function fixture(patch: Partial<Snapshot> = {}) {
   };
 }
 it("keeps QR/relink actions and busy state tied to the shared login snapshot", () => {
-  const f = fixture();
+  const f = fixture({ status: { configured: true } });
   expect(f.button("Show QR").classList.contains("primary")).toBe(true);
   f.button("Show QR").click();
   expect(f.start).toHaveBeenCalledWith(false);
@@ -119,7 +119,6 @@ it("uses the declared default account for configured fallback and keeps absent s
     defaultAccountId: "selected",
   });
   f.expectFacts({ Configured: "Yes", Linked: "No", Running: "No", Connected: "No" });
-  expect(f.container.querySelector(".settings-count")?.textContent).toBe("2");
   f.update({ status: { configured: false } });
   f.expectFacts({ Configured: "No" });
   f.update({
@@ -128,23 +127,22 @@ it("uses the declared default account for configured fallback and keeps absent s
     accounts: [configuredAccount],
   });
   f.expectFacts({ Configured: "Yes" });
-  expect(f.container.querySelector(".settings-count")).toBeNull();
 });
 it("retains localized rows and login controls until the configuration slot is disposed", async () => {
-  const f = fixture({ login: qrLogin, locale: "de" });
-  await settle(() => f.expectFacts({ Konfiguriert: "k. A." }));
+  const f = fixture({ login: qrLogin, locale: "de", status: { configured: true } });
+  await settle(() => f.expectFacts({ Konfiguriert: "Ja" }));
   const expectOriginal = f.retainNodes("dt, dd, button, img");
   const qr = f.container.querySelector("img");
   f.update({ locale: "en", status: { configured: true, running: true } });
   expectOriginal();
   f.expectFacts({ Configured: "Yes", Running: "Yes" });
   f.update({ status: { configured: true, running: true, self: { e164: "+15555550123" } } });
-  const phone = f.container.querySelector("dt:nth-of-type(3)");
-  expect(phone?.nextElementSibling?.textContent).toBe("+15555550123");
-  expectOriginal([phone, phone?.nextElementSibling]);
+  const phone = () => f.container.querySelector(".settings-row__desc")?.textContent;
+  expect(phone()).toBe("+15555550123");
+  expectOriginal();
   const expectWithPhone = f.retainNodes("dt, dd, button, img");
   for (const [locale, facts, alt] of [
-    ["de", { Konfiguriert: "Ja", Läuft: "Ja", Telefonnummer: "+15555550123" }, "WhatsApp-QR"],
+    ["de", { Konfiguriert: "Ja", Läuft: "Ja" }, "WhatsApp-QR"],
     ["en", { Configured: "Yes", Running: "Yes" }, "WhatsApp QR"],
   ] as const) {
     f.update({ locale });
@@ -155,7 +153,7 @@ it("retains localized rows and login controls until the configuration slot is di
   expect(qr?.getAttribute("src")).toBe(qrLogin.qrDataUrl);
   expect(f.mountConfig).toHaveBeenCalledOnce();
   f.update({ status: { configured: true, running: true } });
-  expect(phone?.isConnected).toBe(false);
+  expect(phone()).toBe("No");
   expectOriginal();
   f.dispose();
   expect(f.configDispose).toHaveBeenCalledOnce();
@@ -181,8 +179,8 @@ it("requires the operator's confirmation before invoking the captured account lo
 it("ignores a superseded refresh failure and keeps command errors retryable", async () => {
   const f = fixture();
   const older = createDeferred<void>();
-  f.refresh.mockReturnValueOnce(older.promise);
-  const refresh = f.button("Refresh");
+  f.start.mockReturnValueOnce(older.promise);
+  const refresh = f.button("Show QR");
   refresh.click();
   refresh.click();
   await Promise.resolve();
@@ -190,18 +188,16 @@ it("ignores a superseded refresh failure and keeps command errors retryable", as
   await older.promise.catch(() => undefined);
   flush();
   expect(f.container.textContent).not.toContain("Superseded refresh failed");
-  f.refresh.mockRejectedValueOnce(new Error("Current refresh failed"));
+  f.start.mockRejectedValueOnce(new Error("Current refresh failed"));
   refresh.click();
   await settle(() => expect(f.container.textContent).toContain("Current refresh failed"));
   refresh.click();
   flush();
   expect(f.container.textContent).not.toContain("Current refresh failed");
-  expect(f.button("Refresh")).toBe(refresh);
+  expect(f.button("Show QR")).toBe(refresh);
   await Promise.resolve();
   flush();
   expect(f.container.textContent).not.toContain("Current refresh failed");
   f.update({ status: { lastError: "Gateway is disconnected" } });
-  expect(f.container.querySelector(".settings-row__desc")?.textContent).toBe(
-    "Gateway is disconnected",
-  );
+  expect(f.container.querySelector(".callout")?.textContent).toBe("Gateway is disconnected");
 });

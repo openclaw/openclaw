@@ -19,6 +19,13 @@ const workerRetentionPolicySchema = z.strictObject({
     .positive()
     .max(Math.floor(Number.MAX_SAFE_INTEGER / 1000)),
 });
+export const workerWorkspaceDurabilitySchema = z.discriminatedUnion("mode", [
+  z.strictObject({ mode: z.literal("mirrored") }),
+  z.strictObject({
+    mode: z.literal("retained-disk"),
+    computeWindowSeconds: workerRetentionPolicySchema.shape.computeWindowSeconds,
+  }),
+]);
 const workerRetentionOperationSchema = z.strictObject({
   id: identity,
   action: z.enum(["pause", "resume"]),

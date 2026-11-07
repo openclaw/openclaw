@@ -1,10 +1,12 @@
 /** Public security runtime helpers for plugin-side trust boundaries. */
 
+import path from "node:path";
 import {
   replaceFileAtomic as replaceFsSafeFileAtomic,
   type ReplaceFileAtomicFileSystem,
   type ReplaceFileAtomicOptions,
 } from "@openclaw/fs-safe/atomic";
+import { allowDrvfsRenameRecovery } from "../infra/fs-safe-drvfs.js";
 
 export {
   assertNoSymlinkParents,
@@ -71,7 +73,7 @@ export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 export { privateFileStoreSync } from "../infra/private-file-store.js";
 export { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
 
-// Keep the shipped, ignored adapter member source-compatible without wrapping the operation.
+// Keep the shipped, ignored adapter member source-compatible.
 export const replaceFileAtomic: (
   options: ReplaceFileAtomicOptions & {
     fileSystem?: {
@@ -81,7 +83,13 @@ export const replaceFileAtomic: (
       };
     };
   },
-) => ReturnType<typeof replaceFsSafeFileAtomic> = replaceFsSafeFileAtomic;
+) => ReturnType<typeof replaceFsSafeFileAtomic> = async (options) =>
+  replaceFsSafeFileAtomic({
+    ...options,
+    allowDrvfsRenameRecovery:
+      options.allowDrvfsRenameRecovery !== false &&
+      allowDrvfsRenameRecovery(path.dirname(options.filePath)),
+  });
 
 export { ensurePortAvailable } from "../infra/ports.js";
 

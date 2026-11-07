@@ -203,8 +203,14 @@ export function useRepositoryWorkspaceResultFixture() {
     async function finishTurn(
       owned: Awaited<ReturnType<typeof beginTurn>>,
       publishAcceptedWorkspace?: () => Promise<void>,
+      options: Partial<
+        Pick<
+          Parameters<typeof reconcileWorkspaceAfterTurn>[0],
+          "workspace" | "prepareAcceptedWorkspacePublication"
+        >
+      > = {},
     ) {
-      const workspace = await resolveWorkspace();
+      const workspace = options.workspace ?? (await resolveWorkspace());
       return withWorkerTurnTranscriptDatabase(
         { ...sessionTarget, sessionTarget },
         {
@@ -220,6 +226,7 @@ export function useRepositoryWorkspaceResultFixture() {
             transcriptTarget,
             tunnel,
             publishAcceptedWorkspace,
+            prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication,
           }),
       );
     }
@@ -230,6 +237,9 @@ export function useRepositoryWorkspaceResultFixture() {
       },
       assertPreparedIntentCurrent: vi.fn(),
       getPreparedCandidates: () => [],
+      refreshPreparedEnvironment: async () => {
+        throw new Error("unexpected prepared refresh");
+      },
       schedulePreparedRefill: vi.fn(),
       bindPreparedWorkspace: async () => {
         throw new Error("unexpected prepared binding");

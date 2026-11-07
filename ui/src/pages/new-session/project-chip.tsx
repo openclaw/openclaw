@@ -33,7 +33,15 @@ export function ProjectChip(props: ProjectChipProps) {
       kind="project"
       label={`${t("newSession.what")}: ${label()}`}
       value={label()}
-      icon={<Icon name={props.params.place.browser.projectId ? "gitBranch" : "folder"} />}
+      icon={
+        <Icon
+          name={
+            props.params.place.browser.projectId || props.params.place.browser.remoteProject
+              ? "book"
+              : "folder"
+          }
+        />
+      }
       triggerAttributes={{ "data-project-id": props.params.place.browser.projectId || undefined }}
       params={props.params}
     >

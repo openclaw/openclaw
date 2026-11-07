@@ -7,6 +7,7 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { allowDrvfsRenameRecovery } from "../infra/fs-safe-drvfs.js";
 import { createSqliteAuditRecordWriter } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { redactSecrets } from "../logging/redact.js";
@@ -25,6 +26,7 @@ const CONFIG_SET_VALUE_OPTIONS = new Set([
   "--batch-file",
   "--batch-json",
   "--container",
+  "--expect-current-json",
   "--log-level",
   "--profile",
   "--provider-allowlist",
@@ -110,14 +112,12 @@ function redactConfigAuditArgv(argv: readonly string[]): string[] {
       redacted[index] = "--batch-json=***";
     }
   }
-  const positionals = findConfigPositionals(redacted, setIndex + 1, 2);
-  if (positionals.length < 2) {
+  const [pathIndex, valueIndex] = findConfigPositionals(redacted, setIndex + 1, 2);
+  if (pathIndex === undefined || valueIndex === undefined) {
     return redacted;
   }
-  const pathIndex = positionals[0]!;
-  const valueIndex = positionals[1]!;
   const configPath = redacted[pathIndex];
-  if (typeof configPath === "string" && isSensitiveConfigPath(configPath)) {
+  if (configPath !== undefined && isSensitiveConfigPath(configPath)) {
     redacted[valueIndex] = "***";
   }
   return redacted;
@@ -468,6 +468,7 @@ export async function scrubConfigAuditLog(params: {
     await replaceFileAtomic({
       filePath: path.join(directory, path.basename(auditPath)),
       content: outLines.join("\n"),
+      allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(directory),
       mode: 0o600 & ~process.umask(),
       dirMode: "preserve",
       beforeRename: async ({ filePath }) => {

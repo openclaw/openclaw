@@ -6,6 +6,7 @@ export {
   GATEWAY_SERVICE_STOP_TIMEOUT_MS,
   isRespawnedByLauncher,
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
+  RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS,
   resolveLauncherStopTimeoutMs,
   resolveShutdownReserveMs,
   resolveSupervisorExitMarginMs,

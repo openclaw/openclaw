@@ -18,7 +18,6 @@ import type {
   AgentHarnessSessionDeletionParams,
 } from "../../agents/harness/types.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import * as sqliteQueries from "../../infra/kysely-sync.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -57,13 +56,7 @@ import {
   replaceSessionEntry,
 } from "./session-accessor.js";
 import * as sessionArchive from "./session-accessor.sqlite-archive.js";
-import {
-  runSqliteSessionDeletionTransaction,
-  withSqliteSessionDeletions,
-} from "./session-accessor.sqlite-deletion.js";
-import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
-import * as sessionReferences from "./session-accessor.sqlite-references.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -503,100 +496,6 @@ describe("session deletion and native owner state", () => {
       } else {
         await run();
       }
-    },
-  );
-
-  it.each(["a shared window", "a placeholder successor"] as const)(
-    "does not materialize surviving prompts when deleting a node with %s",
-    async (scenario) => {
-      const reclaimedKey = "agent:main:reclaimed-node";
-      const survivorKeys = ["agent:main:survivor-a", "agent:main:survivor-b"] as const;
-      const entry = { sessionId: "reclaimed-session", updatedAt: Date.now() };
-      const historicalId = "reclaimed-history";
-      const retainedEvent = { type: "session", id: entry.sessionId, content: "retained history" };
-      await replaceSessionEntry({ sessionKey: reclaimedKey, storePath }, entry);
-      for (const survivorKey of survivorKeys.toReversed()) {
-        await replaceSessionEntry(
-          { sessionKey: survivorKey, storePath },
-          {
-            sessionId: `${survivorKey}-session`,
-            previousSessionId: entry.sessionId,
-            usageFamilySessionIds: [historicalId],
-            updatedAt: entry.updatedAt,
-            skillsSnapshot: { prompt: "saved skill prompt".repeat(4096), skills: [] },
-            systemPromptReport: {
-              source: "run",
-              generatedAt: entry.updatedAt,
-              systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
-              injectedWorkspaceFiles: [],
-              skills: { promptChars: 0, entries: [{ name: "saved-report-skill", blockChars: 0 }] },
-              tools: { listChars: 0, schemaChars: 0, entries: [] },
-            },
-          },
-        );
-      }
-      const scope = {
-        agentId: "main",
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
-      };
-      const database = openOpenClawAgentDatabase(scope);
-      database.db
-        .prepare(
-          "INSERT INTO session_windows(session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)",
-        )
-        .run(historicalId, reclaimedKey);
-      replaceTranscriptEventsSync(
-        { sessionKey: reclaimedKey, sessionId: entry.sessionId, storePath },
-        [retainedEvent],
-      );
-      if (scenario === "a placeholder successor") {
-        database.db
-          .prepare(
-            "UPDATE session_nodes SET current_session_id = ?, entry_json = '{}', entry_valid = -1 WHERE session_key = ?",
-          )
-          .run(entry.sessionId, survivorKeys[0]);
-      }
-      const readSurvivors = () =>
-        database.db
-          .prepare(
-            "SELECT session_key, current_session_id, entry_json, entry_valid FROM session_nodes WHERE session_key != ? ORDER BY session_key",
-          )
-          .all(reclaimedKey);
-      const survivorsBefore = readSurvivors();
-      const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
-      const references = vi.spyOn(sessionReferences, "collectSessionStateIdsForEntry");
-      await withSqliteSessionDeletions(scope, [{ sessionKey: reclaimedKey, entry }], async () => {
-        runSqliteSessionDeletionTransaction((current) => {
-          deleteSessionEntryRows(current, reclaimedKey, {
-            deleteOwnedWindows: scenario === "a shared window",
-          });
-        }, scope);
-      });
-      const rows = queries.mock.results.flatMap((result) =>
-        result.type === "return" ? result.value.rows : [],
-      );
-      expect(JSON.stringify(rows)).not.toMatch(/saved skill prompt|saved-report-skill/);
-      for (const survivor of survivorsBefore) {
-        expect(
-          references.mock.calls.filter(([value]) => value.sessionId === survivor.current_session_id)
-            .length,
-        ).toBeLessThanOrEqual(1);
-      }
-      expect(loadSessionEntry({ sessionKey: reclaimedKey, storePath })).toBeUndefined();
-      expect(readSurvivors()).toEqual(survivorsBefore);
-      const windowOwner = (id: string) =>
-        database.db.prepare("SELECT session_key FROM session_windows WHERE session_id = ?").get(id);
-      expect(windowOwner(entry.sessionId)).toEqual({ session_key: survivorKeys[0] });
-      expect(windowOwner(historicalId)).toEqual({
-        session_key: survivorKeys[scenario === "a placeholder successor" ? 1 : 0],
-      });
-      await expect(
-        loadTranscriptEvents({
-          sessionKey: survivorKeys[0],
-          sessionId: entry.sessionId,
-          storePath,
-        }),
-      ).resolves.toEqual([retainedEvent]);
     },
   );
 

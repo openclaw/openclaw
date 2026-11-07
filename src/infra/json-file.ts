@@ -2,8 +2,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
-import { tryReadJsonSync, writeJsonSync } from "@openclaw/fs-safe/json";
+import { tryReadJsonSync } from "@openclaw/fs-safe/json";
 import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
+import { writeJsonSync } from "./json-files.js";
 
 function resolveJsonSaveTarget(pathname: string): string {
   if (!fs.lstatSync(pathname, { throwIfNoEntry: false })?.isSymbolicLink()) {
@@ -25,7 +26,7 @@ export function loadJsonFileThroughSymlink<T = unknown>(pathname: string): T | u
   try {
     resolved = fs.realpathSync(pathname);
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
+    if (["ENOENT", "ENOTDIR", "ELOOP"].some((code) => hasNodeErrorCode(error, code))) {
       return undefined;
     }
     throw error;

@@ -19,9 +19,14 @@ import {
   getMainThreadTaskName,
   runWithMainThreadTask,
 } from "../../src/infra/main-thread-stall.ts";
-import { createStallFlightRecorder } from "../../src/logging/diagnostic-stall-flight-recorder.ts";
+import { createStallFlightRecorder as createDefaultStallRecorder } from "../../src/logging/diagnostic-stall-flight-recorder.ts";
 
-const [mode = "phase", countText = "21", iterationsText = "200000"] = process.argv.slice(2);
+const [mode = "phase", countText = "21", iterationsText = "200000", recorderModule] =
+  process.argv.slice(2);
+// An explicit baseline snapshot avoids switching a checkout used by another proof.
+const createStallFlightRecorder = recorderModule
+  ? (await import(recorderModule)).createStallFlightRecorder
+  : createDefaultStallRecorder;
 // Linux: kernel 5 3600 (blocked) or kernel 5 0 (idle A/A control).
 // Compare pinned base/candidate builds in ABBA order; no operator data is needed.
 if (mode === "kernel") {
@@ -52,7 +57,10 @@ if (mode === "kernel") {
         }
       }),
     );
-    return heaps.reduce((sum, heap) => sum + heap.total_allocated_bytes, 0);
+    return {
+      allocated: heaps.reduce((sum, heap) => sum + heap.total_allocated_bytes, 0),
+      heapUsed: heaps.reduce((sum, heap) => sum + heap.used_heap_size, 0),
+    };
   };
   try {
     await pause(500);
@@ -74,7 +82,8 @@ if (mode === "kernel") {
       const usedMain = process.threadCpuUsage(mainCpu);
       const used = process.cpuUsage(cpu);
       const mainAllocated = getHeapStatistics().total_allocated_bytes - allocated;
-      const workerAllocated = (await workerAllocation()) - workerBefore;
+      const workerAfter = await workerAllocation();
+      const workerAllocated = workerAfter.allocated - workerBefore.allocated;
       console.log(
         JSON.stringify({
           sample,
@@ -85,6 +94,9 @@ if (mode === "kernel") {
           mainCpuMs: (usedMain.user + usedMain.system) / 1000,
           mainAllocated,
           workerAllocated,
+          workerHeapUsed: workerAfter.heapUsed,
+          mainHeapUsed: process.memoryUsage().heapUsed,
+          workers: workers.length,
           sessions: sessions.length,
           files: inventory.length,
           rss: process.memoryUsage().rss,

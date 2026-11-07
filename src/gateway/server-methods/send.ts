@@ -82,6 +82,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     respond,
     context,
     client,
+    signal,
     sessionMutationCommitGuard,
   }) => {
     if (!assertValidParams(request, validateMessageActionParams, "message.action", respond)) {
@@ -298,6 +299,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                 action: request.action as never,
                 cfg,
                 params: request.params,
+                abortSignal: signal,
                 reply: request.reply,
                 accountId,
                 // Only the model's message tool mints an agent-runtime turn context, and

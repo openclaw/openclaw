@@ -1,8 +1,8 @@
 import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import { matchesVitestCliSelection } from "../../test/vitest/vitest.pattern-file.ts";
-import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import {
+  includesRuntimeConfig,
   resolveVitestRuntimeConfigScopes,
   type VitestRuntimeTestSelection,
 } from "./vitest-build-prerequisites.mts";
@@ -79,19 +79,15 @@ export function shouldPrepareVitestCoreWorkers(
   ) {
     return true;
   }
-  const includesProject = (project: string) =>
-    config === project ||
-    config === "vitest.config.ts" ||
-    config === "test/vitest/vitest.config.ts" ||
-    fullSuiteVitestShards.some(
-      (shard) => shard.config === config && shard.projects.includes(project),
-    );
+  const configs = [config];
   const workers = [
-    ...(includesProject("test/vitest/vitest.infra.config.ts") ? databaseWorkerCoreTestFiles : []),
-    ...(includesProject("test/vitest/vitest.contracts-plugin.config.ts")
+    ...(includesRuntimeConfig(configs, "test/vitest/vitest.infra.config.ts")
+      ? databaseWorkerCoreTestFiles
+      : []),
+    ...(includesRuntimeConfig(configs, "test/vitest/vitest.contracts-plugin.config.ts")
       ? ["src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts"]
       : []),
-    ...(includesProject("test/vitest/vitest.e2e.config.ts")
+    ...(includesRuntimeConfig(configs, "test/vitest/vitest.e2e.config.ts")
       ? ["test/e2e/gateway-transcripts-discord-capture.e2e.test.ts"]
       : []),
   ];
@@ -106,12 +102,12 @@ export function shouldPrepareVitestCoreWorkers(
     ) ||
     // These focused startup selections need native stores before their watchdog starts.
     // Match their project directory so basename filters and exclusions keep working.
-    (includesProject("test/vitest/vitest.gateway-server.config.ts") &&
+    (includesRuntimeConfig(configs, "test/vitest/vitest.gateway-server.config.ts") &&
       gatewayStartupWorkers.some((file) =>
         matchesVitestCliSelection(file, [file], args, "src/gateway", env, includePatterns),
       )) ||
-    ((includesProject(agentVitestProjectOwners.core.config) ||
-      includesProject(agentVitestProjectOwners.all.config)) &&
+    ((includesRuntimeConfig(configs, agentVitestProjectOwners.core.config) ||
+      includesRuntimeConfig(configs, agentVitestProjectOwners.all.config)) &&
       matchesVitestCliSelection(
         codeModeWorker,
         [codeModeWorker],
