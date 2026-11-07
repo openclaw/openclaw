@@ -168,7 +168,9 @@ suite.define(() => {
     await page.locator(".topbar--navigation-locked").waitFor();
     const navigation = page.locator(".shell-nav");
     expect(await navigation.getAttribute("aria-hidden")).toBe("true");
-    expect(await navigation.evaluate((element) => element.inert)).toBe(true);
+    expect(
+      await navigation.evaluate((element) => element instanceof HTMLElement && element.inert),
+    ).toBe(true);
     await expect
       .poll(() => navigation.evaluate((element) => element.getBoundingClientRect().right))
       .toBeLessThanOrEqual(0);
