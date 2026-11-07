@@ -1,0 +1,2 @@
+# Windows backup lock diagnostics: busy/denied source names the file and the managed-browser stop step.
+29

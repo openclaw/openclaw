@@ -1,4 +1,6 @@
 import childProcess from "node:child_process";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { describeLockedBackupSource } from "./backup-locked-source.js";
 import { hasErrnoCode } from "./errno.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
@@ -29,6 +31,11 @@ function probeSqliteHeaderBatch(
       return;
     }
     throw result.error;
+  }
+  if (result.status === 3) {
+    throw Object.assign(new Error("Header probe could not read a source"), {
+      ...asOptionalRecord(JSON.parse(result.stderr)),
+    });
   }
   if (result.status !== 0) {
     throw new Error(`Header probe exited with status ${result.status}: ${result.stderr.trim()}`);
@@ -66,12 +73,15 @@ export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<str
     }
     return results;
   } catch (cause) {
+    const hint = describeLockedBackupSource(cause);
     throw new Error(
       hasErrnoCode(cause, "ETIMEDOUT")
         ? `SQLite header probe timed out after ${SQLITE_HEADER_PROBE_TIMEOUT_MS} ms while checking ${paths.length} backup paths. ` +
             "For a blocked update, preserve a verified backup and follow the manual package-manager hop: " +
             "https://docs.openclaw.ai/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun"
-        : "Could not determine whether backup files are SQLite databases. " +
+        : hint
+          ? `Could not determine whether backup files are SQLite databases.${hint}`
+          : "Could not determine whether backup files are SQLite databases. " +
             "Check that the backup worker can run and the source files are readable, then retry the backup.",
       { cause },
     );
