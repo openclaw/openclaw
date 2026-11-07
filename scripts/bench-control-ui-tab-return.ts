@@ -49,6 +49,7 @@ const { values } = parseArgs({
     tabs: { type: "string", default: "1,2,3,4,5" },
     modes: { type: "string", default: "stream,sessions,disconnect" },
     "idle-ms": { type: "string", default: "1000" },
+    "collect-garbage": { type: "boolean", default: false },
   },
 });
 const pairs = Number(values.pairs);
@@ -62,6 +63,10 @@ const minutes = values.minutes.split(",").map(Number);
 const tabCounts = values.tabs.split(",").map(Number);
 const modes = values.modes.split(",");
 const idleMs = Number(values["idle-ms"]);
+const collectGarbage = values["collect-garbage"];
+if (collectGarbage && engines.some((engine) => engine !== "chromium")) {
+  throw new Error("--collect-garbage requires --engines chromium; it is a retention diagnostic");
+}
 if (
   !Number.isInteger(pairs) ||
   pairs < 1 ||
@@ -222,6 +227,9 @@ async function read(page: Page, engine: ControlUiEngine) {
   let heap: unknown = null;
   if (engine === "chromium") {
     const session = await page.context().newCDPSession(page);
+    if (collectGarbage) {
+      await session.send("HeapProfiler.collectGarbage");
+    }
     heap = await session.send("Runtime.getHeapUsage");
     await session.detach();
   }
@@ -258,10 +266,11 @@ await write("manifest.json", {
   idleMs,
   engines,
   trace: values.trace,
-  contract:
-    "Production HTTP bundle with existing synthetic Gateway; same-origin tabs share browser storage. One delta per simulated second plus tool/session events each minute, delivered in distinct MessageChannel tasks without wall-clock waits. This scales event count/content, not real elapsed timers or server/network load. Chrome uses headless=new, a noDefaults context, and native tab activation or window minimization. WebKit uses native test-activity emulation through its page-proxy protocol; real document visibility and stopped animation frames are asserted, without JavaScript visibility overrides. WebKit service workers are blocked and their message count is unavailable. Chromium CPU is renderer threadTicks; heap is uncollected used heap, not a leak verdict. Longest task is the Long Tasks API (50ms threshold), not a full task trace. Full normalized fixture content and first return frame are sampled in the browser.",
-  acceptance:
-    "Before/after performance changes require 20 rotated pairs plus identical-base control, >=5% hidden CPU or return application-latency win, no visible streaming regression beyond 5% median/no worse p95 (confirm noisy cells). Unsupported engine metrics remain missing.",
+  collectGarbage,
+  contract: `Production HTTP bundle with existing synthetic Gateway; same-origin tabs share browser storage. One delta per simulated second plus tool/session events each minute, delivered in distinct MessageChannel tasks without wall-clock waits. This scales event count/content, not real elapsed timers or server/network load. Chrome uses headless=new, a noDefaults context, and native tab activation or window minimization. WebKit uses native test-activity emulation through its page-proxy protocol; real document visibility and stopped animation frames are asserted, without JavaScript visibility overrides. WebKit service workers are blocked and their message count is unavailable. Chromium CPU is renderer threadTicks; ${collectGarbage ? "heap is collected before every endpoint for retention diagnostics only" : "heap is uncollected used heap, not a leak verdict"}. Longest task is the Long Tasks API (50ms threshold), not a full task trace. Full normalized fixture content and first return frame are sampled in the browser.`,
+  acceptance: collectGarbage
+    ? "Retention diagnostic only: Chromium collects garbage before every resource/heap endpoint. These runs must not be used for timing acceptance."
+    : "Before/after performance changes require 20 rotated pairs plus identical-base control, >=5% hidden CPU or return application-latency win, no visible streaming regression beyond 5% median/no worse p95 (confirm noisy cells). Unsupported engine metrics remain missing.",
 });
 for (const engine of engines) {
   if (engine === "firefox") {
