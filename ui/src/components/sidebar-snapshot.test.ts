@@ -25,6 +25,7 @@ import {
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { readSidebarSnapshotCaptureDiagnostics } from "./sidebar-snapshot-diagnostics.ts";
 import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
 
@@ -172,6 +173,38 @@ describe("sidebar snapshot lifecycle", () => {
     await test.restored;
     return { ...test, store };
   }
+
+  it("diagnoses a blocked capture and an unfinished or rejected write", async () => {
+    const write = createDeferred<boolean>();
+    const persist = vi
+      .spyOn(SessionSnapshotStore.prototype, "writeSidebar")
+      .mockReturnValue(write.promise);
+    const test = fixture();
+    disposers.push(() => test.snapshotOwner.disconnect());
+    test.snapshotOwner.connect();
+    test.publish();
+    await capture(test.snapshotOwner);
+    expect(readSidebarSnapshotCaptureDiagnostics(test.snapshotOwner)).toMatchObject({
+      lastCapture: "unsettled",
+      scheduled: false,
+      captured: false,
+      settled: false,
+    });
+    void test.settle();
+    test.snapshotOwner.capture();
+    expect(readSidebarSnapshotCaptureDiagnostics(test.snapshotOwner).scheduled).toBe(true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(readSidebarSnapshotCaptureDiagnostics(test.snapshotOwner)).toMatchObject({
+      lastCapture: "writing",
+      scheduled: false,
+      captured: true,
+      saved: false,
+    });
+    write.resolve(false);
+    await vi.dynamicImportSettled();
+    expect(readSidebarSnapshotCaptureDiagnostics(test.snapshotOwner).lastCapture).toBe("rejected");
+    expect(persist).toHaveBeenCalledOnce();
+  });
 
   it("shares one boot read and prunes a deleted row without retiring unrelated sidebar display", async () => {
     const store = new SessionSnapshotStore();

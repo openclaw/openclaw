@@ -389,6 +389,12 @@ export type AppSidebarMethods = {
     sessionKey: string,
   ): ReturnType<AppSidebarOwner["findSidebarHovercardRowByKey"]> | undefined;
   promoteCreatedSession(sessionKey: string): void;
+  snapshotDiagnostics(): Promise<
+    | ReturnType<
+        (typeof import("./sidebar-snapshot-diagnostics.ts"))["readSidebarSnapshotDiagnostics"]
+      >
+    | undefined
+  >;
 };
 export type AppSidebarElement = SolidBridgeElement<AppSidebarProps, AppSidebarMethods>;
 
@@ -408,6 +414,13 @@ export const AppSidebar = defineSolidBridge<AppSidebarProps, AppSidebarMethods>(
       });
     },
     methods: {
+      snapshotDiagnostics: async (host) => {
+        const owner = sidebarOwners.get(host);
+        return (
+          owner &&
+          (await import("./sidebar-snapshot-diagnostics.ts")).readSidebarSnapshotDiagnostics(owner)
+        );
+      },
       activeNavigationViewElement: (host) => sidebarOwners.get(host)?.activeNavigationViewElement(),
       dismissTransientMenus: dismissSidebarTransientMenus,
       expandedAgentId: (host) => sidebarOwners.get(host)?.expandedAgentId() ?? "",

@@ -1,9 +1,10 @@
 import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import type { TooltipElement } from "../components/tooltip.ts";
 import type { ControlUiMockGateway } from "./control-ui-e2e-contract.ts";
 
 // Playwright serializes this function; keep runtime dependencies inside its body.
-export function readControlUiE2eBrowserState() {
+export async function readControlUiE2eBrowserState() {
   const copy = (value: unknown): unknown => {
     try {
       return structuredClone(value) as unknown;
@@ -85,8 +86,13 @@ export function readControlUiE2eBrowserState() {
   const groupMode = groupElement("mode-dropdown");
   const groupMenu = groupElement("mode-menu", groupMode);
   const groupFolderPicker = groupElement("folder-popover");
+  const sidebarSnapshot = await document
+    .querySelector<AppSidebarElement>("openclaw-app-sidebar")
+    ?.snapshotDiagnostics?.()
+    .catch(() => null);
   return {
     failureSummary: {
+      sidebarSnapshot: sidebarSnapshot ?? null,
       readiness: readiness
         ? {
             generation: readiness.generation,

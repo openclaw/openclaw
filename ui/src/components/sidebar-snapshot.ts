@@ -34,6 +34,7 @@ export function createSidebarSnapshot(host: {
   let publish: (() => void) | undefined;
   let pending = false;
   let saved = false;
+  let lastCapture = "none";
   const store = new SessionSnapshotStore();
   let gateway: ApplicationGateway | undefined;
   let revision = -1;
@@ -253,33 +254,48 @@ export function createSidebarSnapshot(host: {
     }
     cancelCapture();
     cancelCapture = undefined;
-    if (
-      !cleanup.length ||
-      pending ||
-      !scope ||
-      (scope.profileId !== null && gateway?.snapshot.selfUser === undefined) ||
-      host.sidebarSnapshot ||
-      !host.sidebarSnapshotSettled()
-    ) {
+    const blocked = !cleanup.length
+      ? "disconnected"
+      : pending
+        ? "boot-read"
+        : !scope
+          ? "missing-scope"
+          : scope.profileId !== null && gateway?.snapshot.selfUser === undefined
+            ? "identity"
+            : host.sidebarSnapshot
+              ? "cached-display"
+              : !host.sidebarSnapshotSettled()
+                ? "unsettled"
+                : null;
+    if (blocked || !scope) {
+      lastCapture = blocked ?? "missing-scope";
       return;
     }
     const model = host.captureSidebarSnapshot();
     if (!model) {
+      lastCapture = "model-unavailable";
       return;
     }
     const next = { model, serialized: JSON.stringify(model) };
     if (next.serialized === captured?.serialized) {
+      // Retain a failed/in-flight write's phase when an unchanged capture is skipped.
       return;
     }
     captured = next;
     saved = false;
     const current = captureScope();
     const key = sidebarSnapshotScopeKey(scope);
+    lastCapture = "retiring";
     void retirement.then(async () => {
       if (!current()) {
+        if (next === captured) lastCapture = "superseded";
         return;
       }
+      lastCapture = "writing";
       const written = await store.writeSidebar(key, model, parseSidebarSnapshot);
+      if (next === captured) {
+        lastCapture = !current() ? "superseded" : written ? "saved" : "rejected";
+      }
       if (written && current() && next === captured) {
         saved = true;
         notify();
@@ -332,6 +348,7 @@ export function createSidebarSnapshot(host: {
     cancelCapture = undefined;
     generation += 1;
     pending = saved = false;
+    lastCapture = "none";
     captured = null;
     host.clearSidebarSnapshot();
     notify();
@@ -339,6 +356,19 @@ export function createSidebarSnapshot(host: {
 
   return {
     read: () => ({ pending, saved, model: host.sidebarSnapshot }),
+    diagnostics: () =>
+      [
+        lastCapture,
+        Boolean(cancelCapture),
+        cleanup.length > 0,
+        pending,
+        saved,
+        scope !== null,
+        scope?.profileId === null || gateway?.snapshot.selfUser !== undefined,
+        host.sidebarSnapshot !== null,
+        captured !== null,
+        host.sidebarSnapshotSettled(),
+      ] as const,
     subscribe,
     connect,
     disconnect,
