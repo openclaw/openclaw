@@ -15,12 +15,17 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import {
+  readPersistedQuarantineRow,
+  seedOpenClawDatabaseQuarantine,
+} from "../state/openclaw-quarantine-store.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { readStableSqliteFileGeneration } from "./sqlite-file-generation.js";
 import * as integrityWorker from "./sqlite-integrity-worker.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import { migrateLegacyMediaPersistence as migrate } from "./state-migrations.media-persistence.js";
@@ -117,6 +122,73 @@ const media = (...entries: Record<string, unknown>[]) => ({
 });
 const expectNoMigration = async (env: NodeJS.ProcessEnv) =>
   expect(await migrate({ env })).toEqual({ changes: [], warnings: [] });
+
+it("clears a stale-generation quarantine only after a full integrity check", async () => {
+  const { env, databasePath } = fixture({}, OPENCLAW_AGENT_SCHEMA_VERSION);
+  const generation = readStableSqliteFileGeneration(databasePath);
+  seedOpenClawDatabaseQuarantine({
+    env,
+    generation,
+    kind: "agent",
+    path: databasePath,
+    reason: "historical corruption",
+  });
+  {
+    using database = openDatabase(databasePath);
+    database.exec("CREATE TABLE generation_changed (id INTEGER PRIMARY KEY) STRICT;");
+  }
+  const checks: string[] = [];
+  using _ = interceptStatements((_database, sql) => checks.push(sql));
+
+  await expectNoMigration(env);
+
+  expect(readPersistedQuarantineRow(databasePath, { env })).toBeUndefined();
+  expect(checks.some((sql) => /^PRAGMA\s+integrity_check/iu.test(sql))).toBe(true);
+});
+
+it("keeps a stale quarantine when full integrity verification fails", async () => {
+  const { env, databasePath } = fixture({}, OPENCLAW_AGENT_SCHEMA_VERSION);
+  const generation = readStableSqliteFileGeneration(databasePath);
+  seedOpenClawDatabaseQuarantine({
+    env,
+    generation,
+    kind: "agent",
+    path: databasePath,
+    reason: "historical corruption",
+  });
+  let fragmentCountOffset: number;
+  {
+    using database = openDatabase(databasePath);
+    database.exec("CREATE TABLE generation_changed (id INTEGER PRIMARY KEY) STRICT;");
+    database.exec("INSERT INTO generation_changed (id) VALUES (1);");
+    const rootpage = database
+      .prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'generation_changed'")
+      .get()?.rootpage;
+    const pageSize = database.prepare("PRAGMA page_size").get()?.page_size;
+    if (typeof rootpage !== "number" || typeof pageSize !== "number") {
+      throw new Error("generation_changed rootpage is unavailable");
+    }
+    // Misreport free-byte fragmentation so integrity_check fails while the file still opens.
+    fragmentCountOffset = (rootpage - 1) * pageSize + 7;
+  }
+  {
+    const fd = fs.openSync(databasePath, "r+");
+    try {
+      fs.writeSync(fd, Buffer.from([1]), 0, 1, fragmentCountOffset);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+  const quarantined = readPersistedQuarantineRow(databasePath, { env });
+  const checks: string[] = [];
+  using _ = interceptStatements((_database, sql) => checks.push(sql));
+
+  const result = await migrate({ env });
+
+  expect(checks.some((sql) => /^PRAGMA\s+integrity_check/iu.test(sql))).toBe(true);
+  expect(result.warnings.join("\n")).toMatch(/integrity/iu);
+  expect(readPersistedQuarantineRow(databasePath, { env })).toEqual(quarantined);
+});
 
 it.each([undefined, "full"] as const)("honors %s during pre-v17 media migration", async (mode) => {
   const message = { role: "user", content: "preserved", MediaPath: "/media/image.png" };

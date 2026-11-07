@@ -25,6 +25,56 @@ export type SqliteFileGeneration = {
   wal?: SqliteFileFingerprint;
 };
 
+type CurrentFingerprintStat =
+  | { status: "file"; value: fs.BigIntStats }
+  | { status: "invalid" | "missing" | "unknown" };
+
+function readCurrentFingerprintStat(pathname: string): CurrentFingerprintStat {
+  try {
+    const value = fs.statSync(pathname, { bigint: true });
+    return value.isFile() ? { status: "file", value } : { status: "invalid" };
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    return code === "ENOENT" || code === "ENOTDIR" ? { status: "missing" } : { status: "unknown" };
+  }
+}
+
+function hasDefiniteFileFingerprintMismatch(
+  expected: SqliteFileFingerprint | undefined,
+  current: CurrentFingerprintStat,
+): boolean {
+  if (current.status === "unknown") {
+    return false;
+  }
+  if (!expected) {
+    return current.status !== "missing";
+  }
+  return current.status !== "file" || !sameFileStatFingerprint(expected, current.value);
+}
+
+/** Reject a recorded generation before hashing when its file family cannot match. */
+export function hasDefiniteSqliteFileGenerationMismatch(
+  pathname: string,
+  expected: SqliteFileGeneration,
+): boolean {
+  if (
+    hasDefiniteFileFingerprintMismatch(expected.database, readCurrentFingerprintStat(pathname)) ||
+    hasDefiniteFileFingerprintMismatch(
+      expected.journal,
+      readCurrentFingerprintStat(`${pathname}-journal`),
+    )
+  ) {
+    return true;
+  }
+  const expectedWal = expected.wal?.size === 0n ? undefined : expected.wal;
+  const currentWal = readCurrentFingerprintStat(`${pathname}-wal`);
+  const normalizedCurrentWal =
+    currentWal.status === "file" && currentWal.value.size === 0n
+      ? ({ status: "missing" } as const)
+      : currentWal;
+  return hasDefiniteFileFingerprintMismatch(expectedWal, normalizedCurrentWal);
+}
+
 function canRetainDigest(stat: FileMutationFingerprint, observedAtNs: bigint): boolean {
   // Nanosecond fields can still describe a coarse filesystem clock. A digest
   // must start beyond the entire two-second timestamp quantum, including FAT.

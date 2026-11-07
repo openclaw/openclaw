@@ -14,6 +14,7 @@ import {
   revokeSqliteDatabaseAdmissionsForPath,
   readSqliteDatabaseIntegrityVerification,
 } from "../infra/sqlite-database-admission.js";
+import * as fileGenerationWorker from "../infra/sqlite-file-generation-worker.js";
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { assertSqliteDatabaseHeader } from "../infra/sqlite-integrity.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
@@ -93,6 +94,18 @@ const timestamp = expect.any(Number);
 function execDatabase(pathname: string, sql: string) {
   using database = openDatabase(pathname);
   database.exec(sql);
+}
+
+function rewriteByteInPlace(pathname: string, index: number) {
+  const fd = fs.openSync(pathname, "r+");
+  try {
+    const buf = Buffer.alloc(1);
+    fs.readSync(fd, buf, 0, 1, index);
+    buf.writeUInt8(buf.readUInt8(0) ^ 0xff, 0);
+    fs.writeSync(fd, buf, 0, 1, index);
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function openDatabase(pathname: string, readOnly = false) {
@@ -251,6 +264,96 @@ it("expires a persisted quarantine when the verified database generation changes
   expect(f.read()).toBeUndefined();
   expect(f.row()).toEqual(quarantineBefore);
 });
+
+it("expires a size-mismatched quarantine without hashing the database", () => {
+  const { env, databasePath } = f;
+  execDatabase(databasePath, "CREATE TABLE records (id INTEGER PRIMARY KEY) STRICT;");
+  const generation = readStableSqliteFileGeneration(databasePath);
+
+  seedOpenClawDatabaseQuarantine({
+    env,
+    generation,
+    kind: "agent",
+    path: databasePath,
+    reason: "corrupt generation",
+  });
+  expect(f.read()).toMatchObject({ name: "SqliteIntegrityError" });
+
+  fs.appendFileSync(databasePath, Buffer.alloc(1));
+  const quarantined = f.row();
+  using generationReads = vi.spyOn(fileGenerationWorker, "readSqliteFileGenerationSync");
+  expect(f.read()).toBeUndefined();
+  expect(f.read()).toBeUndefined();
+  expect(generationReads).not.toHaveBeenCalled();
+  expect(f.row()).toEqual(quarantined);
+});
+
+it("hashes a same-size database before admitting a changed generation", () => {
+  const { env, databasePath } = f;
+  execDatabase(databasePath, "CREATE TABLE records (id INTEGER PRIMARY KEY) STRICT;");
+  const generation = readStableSqliteFileGeneration(databasePath);
+  seedOpenClawDatabaseQuarantine({
+    env,
+    generation,
+    kind: "agent",
+    path: databasePath,
+    reason: "corrupt generation",
+  });
+  expect(f.read()).toMatchObject({ name: "SqliteIntegrityError" });
+
+  rewriteByteInPlace(databasePath, 120);
+  const quarantined = f.row();
+  using generationReads = vi.spyOn(fileGenerationWorker, "readSqliteFileGenerationSync");
+  expect(f.read()).toBeUndefined();
+  expect(generationReads).toHaveBeenCalled();
+  expect(f.row()).toEqual(quarantined);
+});
+
+it("still hashes and enforces quarantine when only timestamps change", () => {
+  const { env, databasePath } = f;
+  execDatabase(databasePath, "CREATE TABLE records (id INTEGER PRIMARY KEY) STRICT;");
+  const generation = readStableSqliteFileGeneration(databasePath);
+  seedOpenClawDatabaseQuarantine({
+    env,
+    generation,
+    kind: "agent",
+    path: databasePath,
+    reason: "corrupt generation",
+  });
+  const quarantined = f.row();
+  const future = new Date(Date.now() + 120_000);
+  fs.utimesSync(databasePath, future, future);
+
+  using generationReads = vi.spyOn(fileGenerationWorker, "readSqliteFileGenerationSync");
+  expect(f.read()).toMatchObject({ name: "SqliteIntegrityError" });
+  expect(generationReads).toHaveBeenCalled();
+  expect(f.row()).toEqual(quarantined);
+});
+
+it.each(["-journal", "-wal"])(
+  "expires a size-mismatched %s generation without hashing the database",
+  (suffix) => {
+    const { env, databasePath } = f;
+    execDatabase(databasePath, "CREATE TABLE records (id INTEGER PRIMARY KEY) STRICT;");
+    const sidecarPath = `${databasePath}${suffix}`;
+    fs.writeFileSync(sidecarPath, "recorded");
+    const generation = readStableSqliteFileGeneration(databasePath);
+
+    seedOpenClawDatabaseQuarantine({
+      env,
+      generation,
+      kind: "agent",
+      path: databasePath,
+      reason: "corrupt generation",
+    });
+    expect(f.read()).toMatchObject({ name: "SqliteIntegrityError" });
+
+    fs.appendFileSync(sidecarPath, "changed");
+    using generationReads = vi.spyOn(fileGenerationWorker, "readSqliteFileGenerationSync");
+    expect(f.read()).toBeUndefined();
+    expect(generationReads).not.toHaveBeenCalled();
+  },
+);
 
 it("reads schema-v1 quarantine rows and migrates them when clearing another path", () => {
   const { databasePath, storePath } = f;
