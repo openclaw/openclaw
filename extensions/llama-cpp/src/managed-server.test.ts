@@ -8,19 +8,57 @@ import { afterEach, expect, it, vi } from "vitest";
 const installMocks = vi.hoisted(() => ({
   ensureLlamaServerInstalled: vi.fn(),
   resolveManagedLlamaServerPaths: vi.fn(),
+  sha256File: undefined as
+    | undefined
+    | ((filePath: string, signal?: AbortSignal) => Promise<string>),
 }));
 
-vi.mock("./llama-server-install.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./llama-server-install.js")>()),
-  ensureLlamaServerInstalled: installMocks.ensureLlamaServerInstalled,
-}));
+vi.mock("./llama-server-install.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./llama-server-install.js")>();
+  return {
+    ...real,
+    ensureLlamaServerInstalled: installMocks.ensureLlamaServerInstalled,
+    // Delegate so a test can override sha256File; otherwise the real one runs.
+    sha256File: (...args: Parameters<typeof real.sha256File>) =>
+      (installMocks.sha256File ?? real.sha256File)(...args),
+  };
+});
 
 vi.mock("./llama-server-assets.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./llama-server-assets.js")>()),
   resolveManagedLlamaServerPaths: installMocks.resolveManagedLlamaServerPaths,
 }));
 
+// The shared-load fixture only needs the stat size check to pass; report the
+// catalog's expected size for our fixture path so we never materialize a
+// multi-GB sparse file (which is flaky on some filesystems). All other stat
+// calls behave normally.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:fs/promises")>();
+  const { resolveLlamaCppCatalogArtifact } = await import("./model-catalog.js");
+  const { DEFAULT_LLAMA_CPP_MODEL_URI } = await import("./defaults.js");
+  const expectedSize =
+    resolveLlamaCppCatalogArtifact(DEFAULT_LLAMA_CPP_MODEL_URI)?.expectedSize ?? 0;
+  const mocked = {
+    ...real,
+    stat: (filePath: string, ...rest: unknown[]) => {
+      if (typeof filePath === "string" && filePath.includes("llama-cpp-shared-abort")) {
+        return Promise.resolve({
+          isFile: () => true,
+          size: expectedSize,
+        } as unknown as import("node:fs").Stats);
+      }
+      return (real.stat as (...args: unknown[]) => unknown)(filePath, ...rest);
+    },
+  };
+  // managed-server imports the module via a default import (`import fsp from
+  // "node:fs/promises"`), so the default export must carry the overridden stat
+  // or the real stat (and thus the real on-disk size) is used instead.
+  return { ...mocked, default: mocked };
+});
+
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { DEFAULT_LLAMA_CPP_MODEL_URI } from "./defaults.js";
 import { selectLlamaServerAsset } from "./llama-server-assets.js";
 import { withHuggingFaceMetadataFixture } from "./managed-server-huggingface.test-support.js";
 import { inspectLlamaServerRuntime } from "./managed-server-inspection.js";
@@ -30,6 +68,11 @@ import {
   prepareManagedLlamaServer,
   reconcileManagedLlamaServer,
 } from "./managed-server.js";
+import { resolveLlamaCppCatalogArtifact } from "./model-catalog.js";
+
+afterEach(() => {
+  installMocks.sha256File = undefined;
+});
 
 const servers: http.Server[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -556,3 +599,67 @@ it.each(["metrics", "props"] as const)(
     });
   },
 );
+
+it("keeps a shared model load alive for the callers that did not abort", async () => {
+  const cacheDir = tempDirs.make("llama-cpp-shared-abort-");
+  const artifact = resolveLlamaCppCatalogArtifact(DEFAULT_LLAMA_CPP_MODEL_URI);
+  if (!artifact) {
+    throw new Error("default llama.cpp model artifact is missing");
+  }
+  const destination = path.join(cacheDir, artifact.fileName);
+  await fs.writeFile(destination, "GGUF");
+  if (artifact.expectedSize !== undefined) {
+    // Sparse file at the catalog size so the production size check admits it; its
+    // digest is wrong on purpose, so the verify settles with the honest cache error.
+    await fs.truncate(destination, artifact.expectedSize);
+  }
+  const hash = createDeferred<string>();
+  const reachedHash = createDeferred<true>();
+  const sha256 = vi.fn(() => {
+    reachedHash.resolve(true);
+    return hash.promise;
+  });
+  installMocks.sha256File = sha256;
+  const load = (signal: AbortSignal) =>
+    ensureLlamaCppModel({
+      source: DEFAULT_LLAMA_CPP_MODEL_URI,
+      cacheDir,
+      download: false,
+      signal,
+    });
+  const attach = () =>
+    new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+  const stopA = new Error("turn A user pressed stop");
+  const stopB = new Error("turn B user pressed stop");
+  const ctrlA = new AbortController();
+  const ctrlB = new AbortController();
+  const first = load(ctrlA.signal);
+  // Abort only once the shared population is genuinely pending in the hash stage.
+  await reachedHash.promise;
+
+  // A second caller joins the in-flight population before anyone aborts.
+  const joined = load(ctrlB.signal);
+  await attach();
+
+  // A cancelled caller must only affect itself.
+  ctrlA.abort(stopA);
+  await expect(first).rejects.toMatchObject({ cause: stopA });
+
+  // A caller arriving after the abort joins the pending verify instead of
+  // starting a second one.
+  const late = load(new AbortController().signal);
+  await attach();
+  ctrlB.abort(stopB);
+  await expect(joined).rejects.toMatchObject({ cause: stopB });
+
+  // Releasing the shared verify settles the remaining caller with the honest
+  // error, and the verify itself ran exactly once for all three callers.
+  hash.resolve("intentionally-wrong-digest");
+  await expect(late).rejects.toMatchObject({
+    message: expect.stringContaining("Model is not cached"),
+  });
+  expect(sha256).toHaveBeenCalledTimes(1);
+});

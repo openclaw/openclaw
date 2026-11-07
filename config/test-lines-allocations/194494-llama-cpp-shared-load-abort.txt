@@ -1,0 +1,6 @@
+114
+# Shared llama.cpp model-load abort isolation: per-caller races, retained shared
+# entry until settlement, and a third caller joining the still-pending verify.
+# 107 net lines added by this PR (111 added / 4 removed in managed-server.test.ts)
+# plus the 7-line ceiling debt already present at the base commit (base test
+# lines exceed the ceiling by 7).
