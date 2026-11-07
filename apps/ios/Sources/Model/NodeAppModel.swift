@@ -319,10 +319,10 @@ final class NodeAppModel {
     private let camera: any CameraServicing
     private(set) var preferredCameraFacing: OpenClawCameraFacing
     private let screenRecorder: any ScreenRecordingServicing
-    private var watchGatewayConnectionStatus: OpenClawWatchAppStatusCode?
+    private(set) var gatewayConnectionProgress: GatewayConnectionProgress?
     var gatewayStatusText: String = "Offline" {
         didSet {
-            self.watchGatewayConnectionStatus = nil
+            self.gatewayConnectionProgress = nil
         }
     }
 
@@ -3703,6 +3703,7 @@ extension NodeAppModel {
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
         self.gatewayStatusText = statusText
+        self.gatewayConnectionProgress = .verifyingTLS
     }
 
     func failGatewayPreconnectVerification(
@@ -6118,8 +6119,13 @@ extension NodeAppModel {
         if let problem = self.lastGatewayProblem {
             return Self.makeWatchGatewayProblemStatus(problem)
         }
-        if let watchGatewayConnectionStatus {
-            return OpenClawWatchAppStatus(code: watchGatewayConnectionStatus)
+        switch self.gatewayConnectionProgress {
+        case .connecting, .verifyingTLS:
+            return OpenClawWatchAppStatus(code: .gatewayConnecting)
+        case .reconnecting:
+            return OpenClawWatchAppStatus(code: .gatewayReconnecting)
+        case .awaitingTrust, nil:
+            break
         }
         let statusText = self.gatewayStatusText == "Connected"
             ? self.operatorStatusText
@@ -6132,9 +6138,12 @@ extension NodeAppModel {
 
     func setGatewayConnectionProgress(reconnecting: Bool) {
         self.gatewayStatusText = reconnecting ? "Reconnecting…" : "Connecting…"
-        self.watchGatewayConnectionStatus = reconnecting
-            ? .gatewayReconnecting
-            : .gatewayConnecting
+        self.gatewayConnectionProgress = reconnecting ? .reconnecting : .connecting
+    }
+
+    func awaitGatewayTrustDecision() {
+        self.gatewayStatusText = "Verify gateway TLS fingerprint"
+        self.gatewayConnectionProgress = .awaitingTrust
     }
 
     private static func makeWatchGatewayProblemStatus(
