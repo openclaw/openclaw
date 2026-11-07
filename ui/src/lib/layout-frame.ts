@@ -31,15 +31,13 @@ export function cancelLayout(owner: object): void {
 
 /** Resume after a render frame, without a timer fallback's background throttling. */
 export function yieldAfterLayout(owner?: object): Promise<void> | undefined {
-  const browser = globalThis as typeof globalThis & {
-    scheduler?: { yield?: () => Promise<void> };
-  };
-  const yieldTask = browser.scheduler?.yield?.bind(browser.scheduler);
+  // SAFETY: The native scheduler capability is checked before calling it below.
+  const scheduler = (window as Window & { scheduler?: { yield(): Promise<void> } }).scheduler;
   // This split wins in Chromium; Firefox's native queue delays first readiness.
-  if (document.hidden || !("chrome" in browser) || !yieldTask) {
+  if (document.hidden || !("chrome" in window) || !scheduler?.yield) {
     return undefined;
   }
-  return new Promise<void>((resolve) =>
-    scheduleLayout(owner ?? resolve, () => () => resolve(yieldTask())),
-  );
+  return new Promise<void>((resolve) => {
+    scheduleLayout(owner ?? resolve, () => resolve(scheduler.yield()));
+  });
 }

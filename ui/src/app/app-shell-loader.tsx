@@ -13,19 +13,20 @@ import {
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
 
-const LazyShell = lazy(
-  async () => {
-    const shell = await import("./app-host.tsx");
-    await yieldAfterLayout();
-    return shell;
-  },
-  { export: "OpenClawShell" },
-);
-
 type ShellLoaderProps = OpenClawShellProps & { fallback: SolidJSX.Element };
 
 /** Sign-in and standalone documents never acquire the workspace shell's graph. */
 export function ShellLoader(props: ShellLoaderProps): SolidJSX.Element {
+  const LazyShell = lazy(
+    async () => {
+      const shell = await import("./app-host.tsx");
+      if (!props.runtime.warmBoot) {
+        await yieldAfterLayout();
+      }
+      return shell;
+    },
+    { export: "OpenClawShell" },
+  );
   return (
     <Errored fallback={(error, reset) => <ShellLoadError error={error()} reset={reset} />}>
       <Loading fallback={props.fallback}>
