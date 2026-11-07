@@ -76,6 +76,7 @@ export function assertCanonicalAgentPersistenceVersion(
       "This agent store lives in PostgreSQL; set database.engine to postgres and configure database.postgres.connection.",
     );
   }
+  assertSupportedAgentSchemaVersion(db, pathname, userVersion);
   const isNewUnownedDatabase = userVersion === 0 && !hasAgentDatabaseApplicationSchema(db);
   if (userVersion < AGENT_MEDIA_SCHEMA_VERSION && !isNewUnownedDatabase) {
     throw new OpenClawAgentDatabaseMediaMigrationRequiredError(pathname, userVersion);

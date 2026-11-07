@@ -408,6 +408,8 @@ describe("Control UI build chunking", () => {
     const settingsSelect = modulePath("../components/solid/settings-select.tsx");
     const routeSubtitles = modulePath("../i18n/locales/en-route-subtitles.ts");
     const talk = modulePath("../pages/talk/talk-page.tsx");
+    const channels = modulePath("../pages/channels/channels-page.tsx");
+    const checkbox = modulePath("../components/solid/checkbox.tsx");
     const terminal = modulePath("../pages/terminal/terminal-page.tsx");
     const terminalRailStyle = modulePath("../styles/session-panel-rail.css");
     const terminalHelpers = [
@@ -594,6 +596,7 @@ describe("Control UI build chunking", () => {
     const helperPage = "\0helper-only-route";
     for (const [page, helpers, prefix, name, value] of [
       [helperPage, sharedHelpers, "helper", "helpers", "shared"],
+      [channels, [checkbox], "checkbox", "channels", "checkbox"],
       [terminal, terminalHelpers, "terminal", "terminal", "terminal-owner"],
     ] as const) {
       const imports = helpers
@@ -620,7 +623,9 @@ describe("Control UI build chunking", () => {
         // Exercise grouping below the production chunk-size floor.
         minSize: 0,
         ...(group.name === "control-ui-boot-chat"
-          ? { test: (id: string) => sharedHelpers.includes(id) || group.test(id) }
+          ? {
+              test: (id: string) => id === checkbox || sharedHelpers.includes(id) || group.test(id),
+            }
           : {}),
         ...(group.name === "control-ui-boot-shared"
           ? {
@@ -687,6 +692,7 @@ describe("Control UI build chunking", () => {
       [templates, [creatorPublication]],
       [security, [coreToolFacts, automationsName]],
       [helperPage, sharedHelpers],
+      [channels, [checkbox]],
       [terminal, terminalHelpers],
     ] as const) {
       const pageChunk = chunkFor(page);

@@ -31,6 +31,11 @@ import {
   removeAgentDeletionJournal,
 } from "../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createAgentDatabaseDeletionRefusal,
+  createAgentDatabaseInspectionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "./agent-database-admission.js";
 import { useAgentDeletionFixture } from "./agent-deletion.test-support.js";
 import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "./openclaw-agent-db-lease.js";
 import { closeDeletedAgentDatabases, reviveAgentDatabases } from "./openclaw-agent-db-readers.js";
@@ -86,6 +91,31 @@ function expectPublishedArchive(databasePath: string, sessionId: string, content
 }
 
 describe("agent deletion database cleanup authority", () => {
+  it("purges a retained database after startup refuses its deleting agent", async () => {
+    const f = fixture();
+    await f.withDeletion(async (deletion) => {
+      recordAgentDatabaseAdmissions(
+        [
+          createAgentDatabaseDeletionRefusal(
+            createAgentDatabaseInspectionRefusal({
+              agentId: "worker",
+              paths: [f.target.path],
+              reason: "inspection pending",
+              pending: true,
+            }),
+          ),
+        ],
+        { env: f.env, source: "startup" },
+      );
+      await expect(f.purgeStore(deletion)).resolves.toBe(false);
+      expect(readRow(f.target.path, "SELECT count(*) AS count FROM session_nodes")).toEqual({
+        count: 0,
+      });
+      expect(fs.existsSync(f.target.path)).toBe(true);
+      expect(() => f.open()).toThrow("deleted during startup inspection");
+    });
+  });
+
   it.each([false, true])(
     "purges through the live deletion owner without host SQLite (cold: %s)",
     async (cold) => {

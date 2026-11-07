@@ -143,7 +143,7 @@ export function checkpointLocalWorkspace(owner: LocalWorkspaceOwner): Promise<vo
     (beginCapture) =>
       withLocalWorkspaceProjection(owner, (state) => {
         beginCapture();
-        return state.synchronize("canonical");
+        return state.synchronize("canonical", { captureRejected: true });
       }),
   );
 }
