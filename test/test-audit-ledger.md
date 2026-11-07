@@ -217,6 +217,15 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
+Batch115 resumed on pinned main `230f05c7ca37` to qualify the read-coalescing
+recorder against actual returned sockets. The unchanged source still overrides
+methods on a subclass whose mock constructor returns a different socket instance.
+Prior overlapping wire signatures remain an unresolved lead, not a production
+verdict: request identity, connection, refresh and invalidation boundaries still
+require current runtime evidence. This ledger-only prerequisite enables isolated
+native dependency qualification; the primary is unchanged and no new runtime,
+repair, removal or source-census credit is claimed.
+
 Batches113–118, pinned main `a07facd84480`, used one native checkout and
 separate scoped proofs. Unchanged baselines passed: destinations6, History1,
 read coalescing1, fallback8, dictation33 and annotation lifetime11.
