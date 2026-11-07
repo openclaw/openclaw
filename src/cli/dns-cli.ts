@@ -162,11 +162,35 @@ function applyMacOsAclEntries(filePath: string, entries: string[], privileged: b
 function stagingFilesystem(): ReplaceFileAtomicSyncFileSystem {
   const fileSystem: ReplaceFileAtomicSyncFileSystem = {
     ...fs,
+    // Only the exclusive staging-file creation is intercepted. The atomic
+    // writer also opens the parent directory for mode application and
+    // synchronization; stripping grants there would permanently remove the
+    // operator's directory policy and expose sibling files.
     openSync(pathname, flags, mode?) {
       const fd =
         mode === undefined ? fs.openSync(pathname, flags) : fs.openSync(pathname, flags, mode);
-      if (process.platform === "darwin") {
-        spawnSync("chmod", ["-N", String(pathname)], { encoding: "utf-8" });
+      const stagedPath = String(pathname);
+      if (
+        process.platform === "darwin" &&
+        flags === "wx" &&
+        path.basename(stagedPath).startsWith(".openclaw-dns-config")
+      ) {
+        const stripped = spawnSync("chmod", ["-N", stagedPath], { encoding: "utf-8" });
+        if (stripped.status !== 0) {
+          // Configuration must not be written while an inherited grant may
+          // still allow an excluded principal to read the staging file.
+          fs.closeSync(fd);
+          try {
+            fs.unlinkSync(stagedPath);
+          } catch {
+            // The failed publication leaves the operator's file untouched.
+          }
+          throw new Error(
+            `could not clear inherited access grants on the staging file: ${
+              String(stripped.stderr ?? "").trim() || "chmod -N failed"
+            }`,
+          );
+        }
       }
       return fd;
     },

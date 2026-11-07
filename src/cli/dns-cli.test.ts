@@ -217,9 +217,13 @@ describe("dns-cli probe bounds", () => {
         if (mode === "+a") {
           return actualSpawnSync("chmod", args.slice(1), { encoding: "utf-8" });
         }
-        // The inherited-grant strip is a no-op off macOS (nothing inherited).
-        if (mode === "-N" && realPlatform !== "darwin") {
-          return spawnOk();
+        // The inherited-grant strip runs the real chmod on macOS; off macOS
+        // there is nothing inherited to strip.
+        if (mode === "-N") {
+          if (realPlatform !== "darwin") {
+            return spawnOk();
+          }
+          return actualSpawnSync("chmod", args.slice(1), { encoding: "utf-8" });
         }
         if (typeof mode === "string" && typeof target === "string") {
           fs.chmodSync(target, Number.parseInt(mode, 8));
@@ -385,6 +389,9 @@ describe("dns-cli probe bounds", () => {
           cmd === "sudo" &&
           args[0] === "chmod" &&
           typeof args[2] === "string" &&
+          // Only the final numeric mode-widening call: the earlier chmod -N
+          // runs on an empty inode before the bytes and policy exist.
+          /^\d+$/.test(args[1] ?? "") &&
           path.basename(args[2]).includes("openclaw-")
         ) {
           const staged = args[2];
