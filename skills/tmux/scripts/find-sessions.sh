@@ -60,7 +60,12 @@ list_sessions() {
   fi
 
   if [[ -n "$query" ]]; then
-    sessions="$(printf '%s\n' "$sessions" | grep -i -- "$query" || true)"
+    sessions="$(printf '%s\n' "$sessions" |
+      while IFS= read -r session; do
+        if printf '%s\n' "${session%%$'\t'*}" | grep -Fqi -- "$query"; then
+          printf '%s\n' "$session"
+        fi
+      done)"
   fi
 
   if [[ -z "$sessions" ]]; then
