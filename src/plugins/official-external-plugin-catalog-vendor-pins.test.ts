@@ -16,6 +16,17 @@ function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
 }
 
 describe("official external plugin catalog vendor pins", () => {
+  it("pins Fortytwo installs to the published npm artifact", () => {
+    const entry = expectCatalogEntry("fortytwo");
+    expect(resolveOfficialExternalPluginInstall(entry)).toEqual({
+      npmSpec: "fortytwo-openclaw@0.1.0",
+      defaultChoice: "npm",
+      expectedIntegrity:
+        "sha512-Mfr2j17wsGKHK6lJlciBarxCZ/W/aNTgtxUKohMQhLVtR7BZLY+LW5p/bBTqtkub2d69cJXU3obfsKL4mpiBFw==",
+      minHostVersion: ">=2026.10.9",
+    });
+  });
+
   it("pins the vendor-maintained Telnyx provider to the reviewed npm artifact", () => {
     const entry = expectCatalogEntry("telnyx");
 

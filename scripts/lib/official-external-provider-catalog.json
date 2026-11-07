@@ -1845,6 +1845,56 @@
       }
     },
     {
+      "name": "fortytwo-openclaw",
+      "description": "Fortytwo Chat Completions provider plugin for OpenClaw.",
+      "source": "external",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "fortytwo",
+          "label": "Fortytwo"
+        },
+        "providers": [
+          {
+            "id": "fortytwo",
+            "name": "Fortytwo",
+            "docs": "/providers/fortytwo",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "FORTYTWO_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "fortytwo-api-key",
+                "choiceLabel": "Fortytwo API key",
+                "choiceHint": "OpenAI-compatible Fortytwo Chat Completions endpoint",
+                "groupId": "fortytwo",
+                "groupLabel": "Fortytwo",
+                "groupHint": "OpenAI-compatible Fortytwo Chat Completions endpoint",
+                "optionKey": "fortytwoApiKey",
+                "cliFlag": "--fortytwo-api-key",
+                "cliOption": "--fortytwo-api-key <key>",
+                "cliDescription": "Fortytwo API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "npmSpec": "fortytwo-openclaw@0.1.0",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.9",
+          "expectedIntegrity": "sha512-Mfr2j17wsGKHK6lJlciBarxCZ/W/aNTgtxUKohMQhLVtR7BZLY+LW5p/bBTqtkub2d69cJXU3obfsKL4mpiBFw=="
+        }
+      }
+    },
+    {
       "name": "@openclaw/moonshot-provider",
       "description": "OpenClaw Moonshot provider plugin",
       "source": "official",
