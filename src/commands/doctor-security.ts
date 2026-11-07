@@ -22,6 +22,7 @@ import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { collectChannelSecurityFindingsCore } from "../security/audit-channel.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import { collectExecFilesystemPolicyDriftHits } from "../security/exec-filesystem-policy.js";
+import { collectEmptyToolAllowHints } from "./doctor-empty-tool-allow.js";
 
 function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   return [
@@ -237,6 +238,7 @@ export async function collectSecurityWarnings(
     findings.push(...collectExecPolicyConflictWarnings(cfg, approvals));
   }
   findings.push(...collectExecFilesystemPolicyWarnings(cfg));
+  findings.push(...collectEmptyToolAllowHints(cfg));
   findings.push(...collectPlaintextConfigSecretWarnings(cfg));
   const gatewayTokenRef = resolveSecretInputRef({
     value: cfg.gateway?.auth?.token,
