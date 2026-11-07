@@ -356,8 +356,14 @@ export async function analyzeReloadFrames(options: {
     throw new Error("Animation samples must have finite times in capture order");
   }
   const suppressedAnimationPairs: Array<{ atMs: number; rectangles: ReloadMask[] }> = [];
+  // Timing repetitions retain every raw frame; a separate full pass owns the visual census.
+  const endpointsOnly = process.env.L303_TIMING_ONLY === "1";
+  const analysisFrames =
+    endpointsOnly && options.frames.length > 1
+      ? [options.frames[0]!, options.frames.at(-1)!]
+      : options.frames;
   let lastTime = -Infinity;
-  for (const frame of options.frames) {
+  for (const frame of analysisFrames) {
     if (!Number.isFinite(frame.atMs) || frame.atMs < lastTime) {
       throw new Error("Frames must have finite, navigation-relative times in capture order");
     }
@@ -446,6 +452,10 @@ export async function analyzeReloadFrames(options: {
     width,
     height,
     capturedFrames: options.frames.length,
+    frameSampling: {
+      mode: endpointsOnly ? "endpoints-only; not a visual-state census" : "all",
+      analyzedFrames: analysisFrames.length,
+    },
     thresholds: threshold,
     comparison:
       "RGBA channel delta, against last accepted representative; unique states match any prior representative",

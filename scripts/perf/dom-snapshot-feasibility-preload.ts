@@ -11,6 +11,7 @@ if (!output.startsWith(`${path.resolve(".local")}${path.sep}`)) {
 await mkdir(output, { recursive: true });
 const aa = process.env.L303_AA === "1";
 let sequence = 0;
+const pendingVisual = new Set<Promise<void>>();
 
 function captureDom() {
   const started = performance.now();
@@ -75,10 +76,42 @@ function captureDom() {
   const styles = [...document.querySelectorAll('style,link[rel="stylesheet"]')]
     .filter((element) => !element.closest("openclaw-app"))
     .map((element) => element.outerHTML);
+  const fontRules: string[] = [];
+  const readFonts = (rules: CSSRuleList, base: string) => {
+    for (const rule of rules) {
+      if (rule instanceof CSSFontFaceRule)
+        fontRules.push(
+          rule.cssText.replace(
+            /url\((['"]?)(.*?)\1\)/g,
+            (_match, _quote, source: string) =>
+              `url(${JSON.stringify(new URL(source, base).href)})`,
+          ),
+        );
+      else if (rule instanceof CSSGroupingRule) readFonts(rule.cssRules, base);
+    }
+  };
+  for (const sheet of document.styleSheets) readFonts(sheet.cssRules, sheet.href ?? location.href);
+  const usedFonts = [...document.fonts]
+    .filter((face) => face.status === "loaded")
+    .map((face) => `${face.style} ${face.weight.split(" ")[0]} 16px ${face.family}`);
   const rect = app.getBoundingClientRect().toJSON();
+  const viewport = { width: innerWidth, height: innerHeight };
+  const background =
+    [document.body, document.documentElement, app]
+      .map((element) => getComputedStyle(element).backgroundColor)
+      .find((color) => color !== "rgba(0, 0, 0, 0)" && color !== "transparent") ?? "white";
+  const requiresDetails =
+    (app.querySelector(".chat-details")?.getBoundingClientRect().width ?? 0) > 0;
+  const requiresBoard = !!app.querySelector("openclaw-board-view iframe");
   return {
     markup,
+    viewport,
+    background,
+    requiresDetails,
+    requiresBoard,
     styles,
+    fontRules,
+    usedFonts,
     properties,
     scrolls,
     rect,
@@ -99,6 +132,7 @@ function replayDom(input: {
   replay: boolean;
   sequence: number;
   url: string;
+  hold: boolean;
 }) {
   if (window !== window.top || location.href !== input.url) return;
   const data = {
@@ -107,15 +141,18 @@ function replayDom(input: {
     insertedMs: null as number | null,
     parseMs: null as number | null,
     stylesReadyMs: null as number | null,
+    fontsReadyMs: null as number | null,
     restoreScrollMs: null as number | null,
     snapshotPaintMs: null as number | null,
     liveRowsPaintMs: null as number | null,
     liveDetailsPaintMs: null as number | null,
     swapMs: null as number | null,
-    images: [] as Array<{ complete: boolean; decoded: boolean; visible: boolean }>,
+    images: [] as Array<{ complete: boolean; hasIntrinsicSize: boolean; visible: boolean }>,
   };
   Reflect.set(window, "__l303", data);
-  let overlay: HTMLElement | undefined, root: ShadowRoot | undefined;
+  let overlay: HTMLElement | undefined,
+    root: ShadowRoot | undefined,
+    fontStyle: HTMLStyleElement | undefined;
   let reported = false;
   const report = () => {
     if (!reported) {
@@ -137,11 +174,18 @@ function replayDom(input: {
   const insert = async () => {
     if (!document.documentElement || overlay || !input.replay) return;
     const started = performance.now();
+    // Shadow styles do not register document fonts; preserve the old font metrics before reveal.
+    fontStyle = document.createElement("style");
+    fontStyle.textContent = input.snapshot.fontRules.join("\n");
+    document.documentElement.append(fontStyle);
+    const fontsReady = Promise.all(
+      input.snapshot.usedFonts.map((font) => document.fonts.load(font)),
+    );
     overlay = document.createElement("div");
     overlay.inert = true;
     overlay.setAttribute("aria-hidden", "true");
     const box = input.snapshot.rect;
-    overlay.style.cssText = `position:fixed;left:${box.x}px;top:${box.y}px;width:${box.width}px;height:${box.height}px;z-index:2147483647;overflow:hidden;pointer-events:none;visibility:hidden;background:${getComputedStyle(document.documentElement).backgroundColor}`;
+    overlay.style.cssText = `position:fixed;left:${box.x}px;top:${box.y}px;width:${box.width}px;height:${box.height}px;z-index:2147483647;overflow:hidden;pointer-events:none;visibility:hidden;background:${input.snapshot.background}`;
     // An empty scoped registry keeps inert custom-element markup from starting a second app.
     const registry = new CustomElementRegistry();
     root = overlay.attachShadow({
@@ -153,6 +197,9 @@ function replayDom(input: {
     } as ElementCreationOptions);
     for (const [name, value] of input.snapshot.htmlAttributes) html.setAttribute(name!, value!);
     for (const [name, value] of input.snapshot.properties) overlay.style.setProperty(name!, value!);
+    html.style.width = `${input.snapshot.viewport.width}px`;
+    html.style.height = `${input.snapshot.viewport.height}px`;
+    html.style.translate = `${-box.x}px ${-box.y}px`;
     root.append(html);
     // The parse context must carry the empty registry too: a global-registry
     // container would upgrade its descendants despite its scoped parent.
@@ -196,6 +243,9 @@ function replayDom(input: {
       ),
     );
     data.stylesReadyMs = performance.now();
+    await fontsReady;
+    await document.fonts.ready;
+    data.fontsReadyMs = performance.now();
     const scrollStarted = performance.now();
     for (const scroll of input.snapshot.scrolls)
       elements[scroll.index]?.scrollTo(scroll.left, scroll.top);
@@ -205,20 +255,22 @@ function replayDom(input: {
       ?.setAttribute("elementtiming", "l303-snapshot");
     overlay.style.visibility = "visible";
     requestAnimationFrame(() => {
-      data.images = [...root!.querySelectorAll("img")].map((image) => {
-        const rect = image.getBoundingClientRect();
-        return {
-          complete: image.complete,
-          decoded: image.naturalWidth > 0,
-          visible:
-            rect.width > 0 &&
-            rect.height > 0 &&
-            rect.bottom > 0 &&
-            rect.y < innerHeight &&
-            rect.right > 0 &&
-            rect.x < innerWidth,
-        };
-      });
+      data.images = elements
+        .filter((element): element is HTMLImageElement => element instanceof HTMLImageElement)
+        .map((image) => {
+          const rect = image.getBoundingClientRect();
+          return {
+            complete: image.complete,
+            hasIntrinsicSize: image.naturalWidth > 0,
+            visible:
+              rect.width > 0 &&
+              rect.height > 0 &&
+              rect.bottom > 0 &&
+              rect.y < innerHeight &&
+              rect.right > 0 &&
+              rect.x < innerWidth,
+          };
+        });
     });
   };
   const observer = new MutationObserver(() => {
@@ -231,20 +283,27 @@ function replayDom(input: {
   }
   let complete = false;
   const frame = () => {
-    const details = document.querySelector(".chat-details");
-    const needsDetails = !!details && details.getBoundingClientRect().width > 0;
+    const proof = Reflect.get(window, "__warmReloadProof");
+    const boardReady =
+      !input.snapshot.requiresBoard || (proof && Reflect.get(proof, "firstDashboardContentDomMs"));
     if (
-      (!input.replay || data.stylesReadyMs) &&
+      (!input.replay || data.fontsReadyMs) &&
       data.liveRowsPaintMs &&
-      (!needsDetails || data.liveDetailsPaintMs)
+      (!input.snapshot.requiresDetails || data.liveDetailsPaintMs) &&
+      boardReady
     ) {
       if (!complete) {
         complete = true;
-        requestAnimationFrame(() => {
+        const swap = () => {
           overlay?.remove();
+          fontStyle?.remove();
           data.swapMs = performance.now();
           requestAnimationFrame(report);
-        });
+        };
+        if (input.hold && input.replay) {
+          Reflect.set(window, "__l303Swap", swap);
+          console.debug("L303_READY:" + input.sequence);
+        } else requestAnimationFrame(swap);
       }
       return;
     }
@@ -259,6 +318,39 @@ async function instrument(page: Page) {
   const context = page.context();
   const session = await context.newCDPSession(page);
   await session.send("Page.enable");
+  const collectImages = process.env.L303_HOLD === "1";
+  let loaderId = "";
+  let imageResponses: Array<{
+    path: string;
+    status: number;
+    diskCache: boolean;
+    serviceWorker: boolean;
+    encodedBytes: number;
+  }> = [];
+  if (collectImages) {
+    await session.send("Network.enable");
+    const mainFrame = (await session.send("Page.getFrameTree")).frameTree.frame.id;
+    session.on("Network.requestWillBeSent", (event) => {
+      if (event.type === "Document" && event.frameId === mainFrame) {
+        loaderId = event.loaderId;
+        imageResponses = [];
+      }
+    });
+    session.on("Network.responseReceived", (event) => {
+      if (
+        event.type === "Image" &&
+        event.loaderId === loaderId &&
+        event.response.url.startsWith("http")
+      )
+        imageResponses.push({
+          path: new URL(event.response.url).pathname,
+          status: event.response.status,
+          diskCache: !!event.response.fromDiskCache,
+          serviceWorker: !!event.response.fromServiceWorker,
+          encodedBytes: event.response.encodedDataLength,
+        });
+    });
+  }
   const originalNewSession = context.newCDPSession.bind(context);
   context.newCDPSession = async (...args) => {
     const cdp = await originalNewSession(...args);
@@ -273,11 +365,48 @@ async function instrument(page: Page) {
   let script: string | undefined;
   page.on("console", (message) => {
     const text = message.text();
+    if (text.startsWith("L303_READY:")) {
+      const index = Number(text.slice("L303_READY:".length));
+      const work = (async () => {
+        const before = await session.send("Page.captureScreenshot", { format: "png" });
+        await writeFile(
+          path.join(output, `${index}.snapshot.png`),
+          Buffer.from(before.data, "base64"),
+        );
+        await page.evaluate(() => Reflect.get(window, "__l303Swap")());
+        await page.evaluate(
+          () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+        );
+        const after = await session.send("Page.captureScreenshot", { format: "png" });
+        await writeFile(path.join(output, `${index}.live.png`), Buffer.from(after.data, "base64"));
+        const regions = await page.evaluate(() =>
+          Object.entries({
+            sidebar: "aside.sidebar",
+            header: ".chat-pane__header",
+            transcript: ".chat-thread-viewport, .chat-thread",
+            details: ".chat-details",
+            composer: ".agent-chat__input, .agent-chat__disabled-banner--replacement",
+            dashboard: "openclaw-board-view",
+          }).flatMap(([name, selector]) => {
+            const element = document.querySelector(selector);
+            return element ? [{ name, ...element.getBoundingClientRect().toJSON() }] : [];
+          }),
+        );
+        await writeFile(path.join(output, `${index}.regions.json`), JSON.stringify(regions));
+      })().catch(async (error: unknown) => {
+        await writeFile(
+          path.join(output, `${index}.visual-error.json`),
+          JSON.stringify({ error: String(error) }),
+        );
+      });
+      pendingVisual.add(work);
+      void work.finally(() => pendingVisual.delete(work));
+    }
     if (text.startsWith("L303_RESULT:")) {
       const result = JSON.parse(text.slice("L303_RESULT:".length)) as { sequence: number };
       void writeFile(
         path.join(output, `${result.sequence}.result.json`),
-        JSON.stringify(result, null, 2),
+        JSON.stringify(collectImages ? { ...result, imageResponses } : result, null, 2),
       );
     }
   });
@@ -294,6 +423,7 @@ async function instrument(page: Page) {
     const index = sequence++;
     const replay = !aa && (index % 4 === 1 || index % 4 === 2);
     const { markup, metrics, rect } = snapshot;
+    const payload = JSON.stringify(snapshot);
     await writeFile(
       path.join(output, `${index}.capture.json`),
       JSON.stringify(
@@ -304,6 +434,10 @@ async function instrument(page: Page) {
           url: new URL(page.url()).pathname,
           metrics,
           rect,
+          requiresDetails: snapshot.requiresDetails,
+          requiresBoard: snapshot.requiresBoard,
+          payloadRawBytes: Buffer.byteLength(payload),
+          payloadGzipBytes: gzipSync(payload).byteLength,
           rawBytes: Buffer.byteLength(markup),
           gzipBytes: gzipSync(markup).byteLength,
         },
@@ -315,7 +449,7 @@ async function instrument(page: Page) {
       await session.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: script });
     script = (
       await session.send("Page.addScriptToEvaluateOnNewDocument", {
-        source: `const __name=(fn)=>fn;(${replayDom.toString()})(${JSON.stringify({ snapshot, replay, sequence: index, url })})`,
+        source: `const __name=(fn)=>fn;(${replayDom.toString()})(${JSON.stringify({ snapshot, replay, sequence: index, url, hold: process.env.L303_HOLD === "1" })})`,
       })
     ).identifier;
   };
@@ -334,9 +468,19 @@ async function instrument(page: Page) {
 const launch = chromium.launch.bind(chromium);
 chromium.launch = async (...args) => {
   const browser = await launch(...args);
+  const close = browser.close.bind(browser);
+  browser.close = async (...closeArgs) => {
+    await Promise.all([...pendingVisual]);
+    return close(...closeArgs);
+  };
   const newContext = browser.newContext.bind(browser);
   browser.newContext = async (...contextArgs) => {
     const context = await newContext(...contextArgs);
+    const closeContext = context.close.bind(context);
+    context.close = async (...closeArgs) => {
+      await Promise.all([...pendingVisual]);
+      return closeContext(...closeArgs);
+    };
     const newPage = context.newPage.bind(context);
     context.newPage = async (...pageArgs) => {
       const page = await newPage(...pageArgs);

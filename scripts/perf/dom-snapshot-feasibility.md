@@ -29,8 +29,9 @@ Each qualifying screencast-armed warm navigation follows AB/BA order: no overlay
 overlay, overlay, no overlay. Set `L303_AA=1` for the same instrumentation with no
 replay in either arm. Native active adds `--active-targets
 --details-subagent-activity --route chat`; archived covers chat and dashboard.
-Team uses the existing bench with `--paint-holding --runs 24`, and active/archive
-flags from the L300 report. All five workloads use the same built source.
+Team uses two balanced six-pair blocks with `--paint-holding --runs 12`
+(its maximum is twenty), and active/archive flags from the L300 report. All five
+workloads use the same built source.
 
 The replay uses an inert, aria-hidden, closed shadow overlay with an empty scoped
 custom-element registry, excluding scripts, inline handlers, script URLs and
@@ -41,3 +42,32 @@ animation frame after live rows and populated Details report Element Timing.
 Inspect native PNGs around snapshot paint and swap; marker times alone are not
 visible-state or pixel-parity evidence. No screenshot/HTML upload is part of this
 experiment. A product implementation requires separate storage approval.
+
+For a separate pixel-attribution pass, set `L303_HOLD=1` and use only two reloads.
+The rig captures a synthetic snapshot PNG after the live complete marker, removes
+the overlay, and captures the app PNG and region boxes. This adds screenshot work
+and holds the overlay: exclude this mode from all timing comparisons. Timed mode
+has neither capture. Required Details/board surfaces come from the captured old
+page, so a late mounting surface cannot be mistaken for a closed one. Image
+metadata records completion and intrinsic size in the first replay animation
+frame; actual image paint and font parity still require inspecting compositor
+pixels. Raw/gzip app markup and the full injection envelope are reported apart.
+
+Font-face declarations must register in the document: shadow-root declarations
+do not make a document font available in the Chromium control. The replay
+registers the captured rules early, loads the old page's used fonts, and restores
+scroll after stylesheet/font readiness. Fallback-font pilots are setup evidence,
+not complete-snapshot timing comparisons.
+
+The held pixel-attribution mode also records CDP image cache/worker flags for
+that new main document. This Network observer is disabled in timing mode and
+does not alter either serialized browser function. Cache flags describe those
+requests, while compositor pixels decide whether an image was present at first
+paint. The native custom-root fixture revalidates assets; do not infer bundled
+asset-cache behavior from its HTTP status alone.
+
+For Team timing repetitions, `L303_TIMING_ONLY=1` limits post-capture pixel
+classification to the first and last frames. All compositor frames and Element
+Timing entries are still captured. The report explicitly records endpoint
+sampling; its state counts are not a visual-state census. Leave this unset for
+the separate full visual audit. Both A/B and A/A use the same setting and cadence.
