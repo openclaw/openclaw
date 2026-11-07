@@ -1,2 +1,2 @@
-# Failed-session alert dismissal: mark-as-read flow, hovercard and Subagents panel controls, retry clears the rejection toast (dismiss-by-id), e2e across both surfaces.
+# Failed-session alert dismissal: mark-as-read flow, hovercard and Subagents panel controls, retry replaces the rejection toast (shared toast dedupeKey), e2e across both surfaces.
 668

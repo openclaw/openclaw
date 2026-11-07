@@ -1,7 +1,7 @@
 import type { AgentIdentity } from "./identity-avatar-view.ts";
 import { listen } from "./reactive/listener.ts";
 
-export type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
+type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
 
 /** One signal per variant: the leading icon's color. Neutral toasts explicitly use undefined. */
 export type ToastSeverity = "success" | "info" | "warning" | "error" | "progress";
@@ -320,13 +320,6 @@ class ToastOwner {
     this.publish();
   }
 
-  dismissShown(options: ToastOptions, reason: ToastDismissReason) {
-    const toast = this.live.find((candidate) => candidate.options === options);
-    if (toast) {
-      this.dismiss(toast.id, reason);
-    }
-  }
-
   dismissAll(reason: ToastDismissReason) {
     for (const toast of this.live.slice()) {
       this.finish(toast, reason);
@@ -480,18 +473,4 @@ export function showToast(options: ToastOptions): boolean {
   }
   host.show(options);
   return true;
-}
-
-/** The options object passed to showToast is its handle: this removes exactly that toast,
- * shown or still queued for a host, and does nothing once it is gone. */
-export function dismissToast(options: ToastOptions, reason: ToastDismissReason) {
-  const queued = queuedToasts.indexOf(options);
-  if (queued >= 0) {
-    queuedToasts.splice(queued, 1);
-    options.onDismiss?.(reason);
-    return;
-  }
-  for (const host of connectedHosts) {
-    toastOwnerFor(host).dismissShown(options, reason);
-  }
 }

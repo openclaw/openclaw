@@ -5,7 +5,7 @@ import "../components/modal-dialog.tsx";
 import { setToastInNavDrawer } from "../app/navigation-surface.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { dismissToast, showToast, type ToastOptions } from "./toast.ts";
+import { showToast, type ToastOptions } from "./toast.ts";
 import "./toast-host.tsx";
 
 // Dismissed and timed-out toasts fade out before they report.
@@ -95,42 +95,6 @@ describe("shared toast", () => {
     await settleHost(host);
     expect(firstDismiss).toHaveBeenCalledExactlyOnceWith("replaced");
     expect(titles(host)).toEqual(["First", "Second"]);
-  });
-
-  it("dismisses exactly the toast whose options it is given, once", async () => {
-    const host = await mountHost();
-    const onDismiss = vi.fn();
-    const target: ToastOptions = { severity: "error", message: "Target", onDismiss };
-    showToast({ severity: undefined, message: "Older" });
-    showToast(target);
-    showToast({ severity: undefined, message: "Newer" });
-    await settleHost(host);
-    expect(titles(host)).toEqual(["Newer", "Target", "Older"]);
-
-    dismissToast(target, "replaced");
-    await settleHost(host);
-    expect(titles(host)).toEqual(["Newer", "Older"]);
-    expect(onDismiss).toHaveBeenCalledExactlyOnceWith("replaced");
-
-    dismissToast(target, "replaced");
-    dismissToast({ severity: undefined, message: "Newer" }, "replaced");
-    await settleHost(host);
-    expect(titles(host)).toEqual(["Newer", "Older"]);
-    expect(onDismiss).toHaveBeenCalledOnce();
-  });
-
-  it("dismisses a toast still queued for a host", async () => {
-    const onDismiss = vi.fn();
-    const queued: ToastOptions = { severity: undefined, message: "Queued", onDismiss };
-    expect(showToast(queued)).toBe(false);
-    expect(showToast({ severity: undefined, message: "Kept" })).toBe(false);
-    dismissToast(queued, "replaced");
-    expect(onDismiss).toHaveBeenCalledExactlyOnceWith("replaced");
-    const host = await mountHost();
-    await settleHost(host);
-    expect(titles(host)).toEqual(["Kept"]);
-    dismissToast(queued, "replaced");
-    expect(onDismiss).toHaveBeenCalledOnce();
   });
 
   it("keeps equal copy distinct by key and replaces only the matching notice", async () => {
