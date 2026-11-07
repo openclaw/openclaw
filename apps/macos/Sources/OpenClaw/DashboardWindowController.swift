@@ -109,6 +109,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var browserProfileImportOfferRequestIsInFlight = false
     private var browserProfileImportOfferRetryPending = false
     private var nativeCommandsReady = false
+    /// Native document retirement keeps the same WebView's origin-scoped storage for reopening.
+    private var retiredDocumentURL: URL?
     /// The document whose finish arrived while a newer load was pending.
     private var deferredFinishSourceID: String?
     private(set) var gatewayHealth: DashboardGatewayHealth?
@@ -382,8 +384,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             newURL: url,
             currentAuth: self.auth,
             newAuth: auth,
-            hasUsableDocument: self.documentHost.hasLiveContent || self.webView.isLoading || self.documentHost
-                .pendingLoad != nil,
+            hasUsableDocument: self.retiredDocumentURL == nil &&
+                (self.documentHost.hasLiveContent || self.webView.isLoading || self.documentHost.pendingLoad != nil),
             isShowingFailurePage: self.isShowingFailurePage)
         self.currentURL = url
         self.auth = auth
@@ -392,7 +394,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
         if shouldReload {
             self.refreshNativeScripts()
-            let route = restoringRoute
+            let route = (restoringRoute ?? self.retiredDocumentURL)
                 .flatMap { ControlUIDocumentHost.isTrustedLinkSource($0, dashboardURL: url) ? $0 : nil }
             self.load(route ?? url)
         }
@@ -444,6 +446,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     func show() {
+        if let route = self.retiredDocumentURL { self.load(route) }
         (self.window as? DashboardWindow)?.isHiddenForExperience = false
         (self.window as? DashboardWindow)?.isUnshownPreload = false
         self.window?.isExcludedFromWindowsMenu = false
@@ -479,7 +482,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.browserSignInRoute = nil
         self.documentHost.retirePendingLoad()
         self.deviceSettingsMessageHandler.stopObserving()
-        self.webView.stopLoading()
+        self.retireDashboardDocument()
         self.nativeBrowser.dispose()
         self.documentHost.hasLiveContent = false
         self.invalidateGatewayHealth()
@@ -492,7 +495,19 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return window
     }
 
+    private func retireDashboardDocument() {
+        guard self.retiredDocumentURL == nil else { return }
+        self.webView.stopLoading()
+        guard self.auth.usesNativeDevice, self.isTrustedDashboardDocument else { return }
+        self.retiredDocumentURL = self.webView.url ?? self.currentURL
+        // stopLoading only cancels navigation; a retained closed page otherwise keeps reconnecting
+        // even though its native auth owner has already withdrawn this window's authority.
+        self.documentHost.retireDocument()
+        self.webView.loadHTMLString("", baseURL: nil)
+    }
+
     private func load(_ url: URL) {
+        self.retiredDocumentURL = nil
         self.invalidateGatewayHealth()
         self.nativeCommandsReady = false
         self.documentHost.load(url)
@@ -773,6 +788,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
 extension DashboardWindowController {
     private func prepareForFailure(preservingPendingCommands: Bool = false) {
+        self.retiredDocumentURL = nil
         self.finishDocumentLoad(.failure(URLError(.cannotLoadFromNetwork)))
         self.deferredFinishSourceID = nil
         self.documentHost.retirePendingLoad()
@@ -991,8 +1007,7 @@ extension DashboardWindowController {
     /// cancelled load with no successor, needs a reload before dispatch —
     /// otherwise queued ⌘N/⌘K would wait on a `didFinish` that never comes.
     var canDeliverNativeCommands: Bool {
-        !self
-            .isShowingFailurePage &&
+        self.retiredDocumentURL == nil && !self.isShowingFailurePage &&
             (self.documentHost.hasLiveContent || self.webView.isLoading || self.documentHost.pendingLoad != nil)
     }
 
@@ -1113,7 +1128,7 @@ extension DashboardWindowController {
         self.pendingNativeCommands = []
         self.pendingNativeNavigation = nil
         self.pendingGatewaySwitch = nil
-        self.webView.stopLoading()
+        self.retireDashboardDocument()
         self.nativeBrowser.dispose()
         self.onClosed?()
     }
@@ -1462,6 +1477,7 @@ extension DashboardWindowController {
     }
 
     private func finishDocument() {
+        guard self.retiredDocumentURL == nil else { return }
         self.deferredFinishSourceID = nil
         // A finished sign-in document is usable but never receives native
         // commands. Keep pending intent until the verified dashboard returns.

@@ -57,7 +57,7 @@ func scopeNativeDashboardIdentity(_ document: ControlUIDocumentHost, stateDirect
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardNativeGatewayAuthBridgeTests {
     @Test(arguments: ["subframe", "untrusted-path", "browser-identity"])
@@ -119,12 +119,16 @@ struct DashboardNativeGatewayAuthBridgeTests {
         "socket",
         "browser-identity",
         "close",
+        "replacement",
+        "immediate-reopen",
     ])
     func `WK challenge replies are owned by the native socket and current dashboard document`(
         _ transition: String) async throws
     {
         _ = AppKitTestSupport.application
-        let server = try await DashboardHTTPFixture.start()
+        let server = try await DashboardHTTPFixture.start(
+            html: "<html><script>window.nativeAuthDocument = crypto.randomUUID();</script></html>",
+            contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
         defer { server.stop() }
         let controller = DashboardWindowController(
             url: server.url("/control/"),
@@ -164,6 +168,27 @@ struct DashboardNativeGatewayAuthBridgeTests {
             #expect(bootstrap["password"] == nil)
         }
         #expect(controller.currentURL.fragment == nil)
+        let sourceDocument = try #require(try await controller.webView.evaluateJavaScript(
+            "window.nativeAuthDocument") as? String)
+        let holdsRetiredPage = ["close", "replacement", "immediate-reopen"].contains(transition)
+        let retirement = DashboardRetirementNavigation()
+        retirement.blockAllNavigation = transition == "immediate-reopen"
+        var replacementWindow: NSWindow?
+        var currentRecipient: DashboardWindowController?
+        defer {
+            currentRecipient?.closeDashboard()
+            if currentRecipient == nil { replacementWindow?.close() }
+        }
+        if holdsRetiredPage {
+            controller.webView.navigationDelegate = retirement
+        }
+        defer {
+            if holdsRetiredPage {
+                controller.webView.navigationDelegate = nil
+                controller.webView.loadHTMLString("", baseURL: nil)
+            }
+            withExtendedLifetime(retirement) {}
+        }
         let pending = Task {
             try await controller.webView.callAsyncJavaScript("""
             try {
@@ -181,6 +206,11 @@ struct DashboardNativeGatewayAuthBridgeTests {
             case "provider": controller.documentHost.nativeGatewayAuthProvider = nil
             case "socket": current.setValue(false)
             case "close": controller.closeDashboard()
+            case "replacement": replacementWindow = try #require(controller.detachWindowForReplacement())
+            case "immediate-reopen":
+                controller.closeDashboard()
+                controller.show()
+                #expect(controller.isWindowOpen)
             case "browser-identity": controller
                 .auth = .browserIdentity(gatewayUrl: server.websocketURL().absoluteString)
             default: break
@@ -201,5 +231,168 @@ struct DashboardNativeGatewayAuthBridgeTests {
             #expect(received["error"] as? String != nil)
             #expect(received["result"] == nil)
         }
+        print("""
+        [native-auth-proof] transition=\(transition) result=\(received["result"] != nil) \
+        error=\(received["error"] != nil)
+        """)
+        if holdsRetiredPage {
+            let currentController: DashboardWindowController
+            if transition == "immediate-reopen" {
+                // Observe denial in the resident retired page before committing a real new document.
+                retirement.blockAllNavigation = false
+                controller.webView.navigationDelegate = controller
+                controller.reloadDashboard()
+                currentController = controller
+            } else {
+                let current = DashboardWindowController(
+                    url: server.url("/control/"), auth: controller.auth,
+                    websiteDataStore: .nonPersistent(), windowAutosaveName: "",
+                    reusingWindow: replacementWindow, requestBrowserProfileImportOffer: { _ in false })
+                currentRecipient = current
+                current.documentHost.nativeGatewayAuthProvider = controller.documentHost.nativeGatewayAuthProvider
+                current.show(url: current.currentURL, auth: current.auth)
+                currentController = current
+            }
+            try await DashboardTestWait.document(currentController, "current native credential recipient") {
+                guard let document = try await currentController.webView.evaluateJavaScript(
+                    "window.nativeAuthDocument") as? String
+                else { return false }
+                return document != sourceDocument
+            }
+            let fresh = try #require(try await currentController.webView.callAsyncJavaScript("""
+            return await window.webkit.messageHandlers.OpenClawNativeGatewayAuth.postMessage({
+              id:'request-current', nonce:'challenge', signedAt:123
+            });
+            """, in: nil, contentWorld: .page) as? [String: Any])
+            #expect(fresh["id"] as? String == "request-current")
+            let result = try #require(fresh["result"] as? [String: Any])
+            #expect((result["auth"] as? [String: String])?["deviceToken"] == "native-grant")
+            print("[native-auth-proof] transition=\(transition) current-recipient=new-document completed")
+        }
+    }
+}
+
+@MainActor
+extension DashboardNativeGatewayAuthBridgeTests {
+    @Test(arguments: [false, true])
+    func retainedClosedDashboardUnloadsAndReopensItsTrustedRoute(reopenImmediately: Bool) async throws {
+        _ = AppKitTestSupport.application
+        let server = try await DashboardHTTPFixture.start(
+            html: """
+            <!doctype html><html><body><script>
+            window.fixtureDocument = crypto.randomUUID();
+            </script></body></html>
+            """, contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
+        defer { server.stop() }
+        let auth = DashboardWindowAuth.nativeDevice(
+            gatewayUrl: server.websocketURL("/control/").absoluteString,
+            token: nil, password: nil)
+        let controller = DashboardWindowController(
+            url: server.url("/control/"), auth: auth,
+            websiteDataStore: .nonPersistent(), windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        let other = DashboardWindowController(
+            url: server.url("/control/"), auth: auth,
+            websiteDataStore: .nonPersistent(), windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer {
+            controller.closeDashboard()
+            other.closeDashboard()
+        }
+        let calls = LockIsolated(0)
+        for document in [controller.documentHost, other.documentHost] {
+            document.nativeGatewayAuthProvider = { _, _ in
+                calls.withValue { $0 += 1 }
+                return DashboardNativeGatewayAuth(
+                    json: Data(#"{"auth":{"deviceToken":"synthetic-grant"}}"#.utf8), isCurrent: { true })
+            }
+        }
+        controller.show(url: controller.currentURL, auth: auth)
+        other.show(url: other.currentURL, auth: auth)
+        try await waitForNativeDashboardDocument(controller)
+        try await waitForNativeDashboardDocument(other)
+        let window = try #require(controller.window)
+        let webView = controller.webView
+        let original = try #require(try await webView.evaluateJavaScript("window.fixtureDocument") as? String)
+        let otherDocument = try #require(try await other.webView.evaluateJavaScript("window.fixtureDocument") as? String)
+        _ = try await webView.evaluateJavaScript("""
+        history.replaceState({}, '', '/control/chat/main/main?panel=privacy');
+        sessionStorage.setItem('closed-dashboard-draft', 'keep this draft');
+        """)
+        let route = try #require(webView.url)
+        let grantScript = """
+        return await window.webkit.messageHandlers.OpenClawNativeGatewayAuth.postMessage({
+          id:'lifecycle-request', nonce:'lifecycle-challenge', signedAt:123
+        });
+        """
+        _ = try await webView.callAsyncJavaScript(grantScript, in: nil, contentWorld: .page)
+
+        // Experience hiding is not retirement: its document and native owner remain available.
+        controller.hideForExperience()
+        #expect(try await webView.evaluateJavaScript("window.fixtureDocument") as? String == original)
+        _ = try await webView.callAsyncJavaScript(grantScript, in: nil, contentWorld: .page)
+        controller.show()
+        window.performClose(nil)
+        #expect(!controller.isWindowOpen)
+        #expect(!controller.canDeliverNativeCommands)
+        if reopenImmediately {
+            controller.show()
+        } else {
+            try await TestWait.state("closed dashboard document retired") {
+                !webView.isLoading && webView.url?.absoluteString == "about:blank"
+            }
+            // No old document remains to run native-auth reconnect timers, even though its controller is retained.
+            #expect(try await webView.evaluateJavaScript("typeof window.fixtureDocument") as? String == "undefined")
+            #expect(!controller.canDeliverNativeCommands)
+        }
+        _ = try await other.webView.callAsyncJavaScript(grantScript, in: nil, contentWorld: .page)
+        #expect(try await other.webView.evaluateJavaScript("window.fixtureDocument") as? String == otherDocument)
+
+        // The same native shell and storage reopen without depending on the blank load completing first.
+        if !reopenImmediately { controller.show(url: controller.currentURL, auth: auth) }
+        try await waitForNativeDashboardDocument(controller)
+        #expect(controller.window === window)
+        #expect(controller.webView === webView)
+        #expect(webView.url == route)
+        #expect(try await webView.evaluateJavaScript("window.fixtureDocument") as? String != original)
+        #expect(try await webView.evaluateJavaScript(
+            "sessionStorage.getItem('closed-dashboard-draft')") as? String == "keep this draft")
+        let reply = try #require(try await webView.callAsyncJavaScript(
+            grantScript, in: nil, contentWorld: .page) as? [String: Any])
+        #expect(reply["result"] != nil)
+        #expect(calls.value == 4)
+        print("[native-auth-proof] close-reopen immediate=\(reopenImmediately) completed")
+    }
+
+    @Test func replacingNativeDashboardRetiresItsOutgoingDocument() async throws {
+        _ = AppKitTestSupport.application
+        let server = try await DashboardHTTPFixture.start(
+            html: "<html><script>window.retiredFixture = true;</script></html>",
+            contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
+        defer { server.stop() }
+        let auth = DashboardWindowAuth.nativeDevice(
+            gatewayUrl: server.websocketURL().absoluteString, token: nil, password: nil)
+        let original = DashboardWindowController(
+            url: server.url(), auth: auth, websiteDataStore: .nonPersistent(), windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { original.closeDashboard() }
+        original.show(url: server.url(), auth: auth)
+        try await waitForNativeDashboardDocument(original)
+        let window = try #require(original.detachWindowForReplacement())
+        let replacement = DashboardWindowController(
+            url: server.url(), auth: auth, websiteDataStore: .nonPersistent(), windowAutosaveName: "",
+            reusingWindow: window, requestBrowserProfileImportOffer: { _ in false })
+        defer { replacement.closeDashboard() }
+        replacement.show(url: server.url(), auth: auth)
+        try await waitForNativeDashboardDocument(replacement)
+        try await TestWait.state("replaced native document retired") {
+            !original.webView.isLoading && original.webView.url?.absoluteString == "about:blank"
+        }
+        #expect(original.window == nil)
+        #expect(!original.canDeliverNativeCommands)
+        #expect(try await original.webView.evaluateJavaScript("typeof window.retiredFixture") as? String == "undefined")
+        #expect(replacement.window === window)
+        #expect(replacement.canDeliverNativeCommands)
+        print("[native-auth-proof] replacement-unload completed")
     }
 }

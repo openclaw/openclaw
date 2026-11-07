@@ -15,18 +15,6 @@ private final class ConversationAuthDocumentReady: NSObject, WKScriptMessageHand
     }
 }
 
-/// Keep the retiring page alive to exercise the interval before WebKit's blank commit.
-@MainActor
-private final class ConversationAuthRetirementNavigation: NSObject, WKNavigationDelegate {
-    func webView(
-        _: WKWebView,
-        decidePolicyFor navigationAction: WKNavigationAction,
-        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
-    {
-        decisionHandler(navigationAction.request.url?.absoluteString == "about:blank" ? .cancel : .allow)
-    }
-}
-
 /// Runs only in the disposable macOS runner; owns its HTTP, native socket, identity and WebKit state.
 @Suite(.serialized)
 @MainActor
@@ -134,7 +122,7 @@ struct ControlUIDocumentNativeAuthTests {
                 pendingReply = pending
                 try await AsyncTimeout.withTimeout(
                     seconds: 5, onTimeout: { URLError(.timedOut) }, operation: { await requested.wait() })
-                let retirement = ConversationAuthRetirementNavigation()
+                let retirement = DashboardRetirementNavigation()
                 defer { withExtendedLifetime(retirement) {} }
                 document.webView.navigationDelegate = retirement
                 bridge.close()
