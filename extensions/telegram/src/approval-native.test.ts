@@ -5,8 +5,15 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { telegramApprovalCapability } from "./approval-native.js";
+
+// The capability is built while the module loads; record SDK warnings from that import.
+const emitWarning = vi.hoisted(() => vi.spyOn(process, "emitWarning"));
+const loadDeprecations = emitWarning.mock.calls
+  .filter(([, options]) => typeof options === "object" && options.code === "DEP_PLUGIN_SDK")
+  .map(([message]) => String(message));
+emitWarning.mockRestore();
 
 const execApprovals = { enabled: true, approvers: ["8460800771"], target: "dm" as const };
 const cfg: OpenClawConfig = { channels: { telegram: { botToken: "tok", execApprovals } } };
@@ -16,6 +23,36 @@ const chatId = "-1003841603622";
 const directTopic = `${chatId}:direct-topic:77`;
 
 describe("telegram native approval adapter", () => {
+  it("builds the approval capability without deprecated Plugin SDK factories", async () => {
+    expect(loadDeprecations).toEqual([]);
+    const authorize = async (senderId: string) =>
+      (
+        await telegramApprovalCapability.authorizeActorActionAsync?.({
+          cfg,
+          accountId: "default",
+          senderId,
+          action: "approve",
+          approvalKind: "exec",
+        })
+      )?.authorized;
+    expect(await authorize("8460800771")).toBe(true);
+    expect(await authorize("1234")).toBe(false);
+    expect(
+      await telegramApprovalCapability.nativeAsync?.describeDeliveryCapabilities({
+        cfg,
+        accountId: "default",
+        approvalKind: "exec",
+        request: { ...requestTimes, id: "req-0", request: { command: "echo hi" } },
+      }),
+    ).toEqual({
+      enabled: true,
+      preferredSurface: "approver-dm",
+      supportsOriginSurface: true,
+      supportsApproverDmSurface: true,
+      notifyOriginWhenDmOnly: true,
+    });
+  });
+
   it.each([undefined, "work"])(
     "reserves terminal UI recovery for plugin approvals on account %s",
     (accountId) => {
@@ -40,7 +77,7 @@ describe("telegram native approval adapter", () => {
   ] as const)(
     "resolves the turn-source target for %s",
     async (session, source, to, threadId, approvalKind) => {
-      const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+      const target = await telegramApprovalCapability.nativeAsync?.resolveOriginTarget?.({
         cfg,
         accountId: "default",
         approvalKind,
@@ -80,7 +117,7 @@ describe("telegram native approval adapter", () => {
       },
     });
 
-    const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+    const target = await telegramApprovalCapability.nativeAsync?.resolveOriginTarget?.({
       cfg: { ...cfg, session: { store: storePath } },
       accountId: "default",
       approvalKind: "plugin",

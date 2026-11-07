@@ -1,4 +1,4 @@
-import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createApproverRestrictedNativeApprovalCapabilityAsync } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import {
   createChannelApproverDmTargetResolverAsync,
@@ -81,7 +81,7 @@ function describeTelegramApprovalSetup(
 }
 
 export const telegramApprovalCapability: ChannelApprovalCapability = {
-  ...createApproverRestrictedNativeApprovalCapability({
+  ...createApproverRestrictedNativeApprovalCapabilityAsync({
     channel: "telegram",
     channelLabel: "Telegram",
     describeExecApprovalSetup: (params) => describeTelegramApprovalSetup(params, "exec"),
@@ -91,7 +91,8 @@ export const telegramApprovalCapability: ChannelApprovalCapability = {
       getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0,
     isExecAuthorizedSender: isTelegramExecApprovalAuthorizedSender,
     isPluginAuthorizedSender: isTelegramExecApprovalApprover,
-    isNativeDeliveryEnabled: isTelegramExecApprovalClientEnabled,
+    isNativeDeliveryEnabled: async ({ cfg, accountId }) =>
+      isTelegramExecApprovalClientEnabled({ cfg, accountId }),
     resolveNativeDeliveryMode: resolveTelegramExecApprovalTarget,
     requireMatchingTurnSourceChannel: true,
     resolveSuppressionAccountId: ({ target, request }) =>

@@ -11,7 +11,12 @@ export function channelPluginHasNativeApprovalPromptUi(
   plugin?: Pick<ChannelPlugin, "approvalCapability"> | null,
 ): boolean {
   const capability = resolveChannelApprovalCapability(plugin);
-  return Boolean(capability?.native || capability?.nativeRuntime);
+  return Boolean(
+    capability?.native ||
+    capability?.nativeAsync ||
+    capability?.nativeRuntime ||
+    capability?.nativeRuntimeAsync,
+  );
 }
 
 export function isKnownNativeApprovalPromptChannel(channel?: string | null): boolean {

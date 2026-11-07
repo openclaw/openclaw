@@ -1,0 +1,2 @@
+# Prompt capability check recognizes nativeAsync and nativeRuntimeAsync approval adapters.
+38
