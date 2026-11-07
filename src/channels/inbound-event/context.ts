@@ -271,7 +271,7 @@ export function finalizeChannelInboundContext<T extends Record<string, unknown>>
     const suppressSelfQuoteMedia = suppressSelfQuoteMediaOption ?? true;
     const finalizeQuote = (quoteMedia?: readonly InboundMediaFacts[] | null) => {
       if (!(selfQuote && suppressSelfQuoteMedia)) {
-        media.push(...(quoteMedia ?? []));
+        media.push(...(quoteMedia ?? []).map((fact) => Object.assign({}, fact, { quoted: true })));
       }
       const { media: _media, isSelf: _isSelf, ...stripped } = quote;
       const visibleQuote =

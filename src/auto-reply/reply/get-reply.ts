@@ -72,7 +72,7 @@ import {
 } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
-  hasInboundAudio,
+  hasAnyInboundAudio,
   hasInboundMedia,
   hasInboundMediaForUnderstanding,
 } from "./inbound-media.js";
@@ -448,7 +448,7 @@ async function resolveReplyFromConfig(
           ...(utilityModelSelectionLocked
             ? {
                 processingMode:
-                  hasInboundAudio(finalized) && hasExplicitAudioUnderstandingConfig(cfg)
+                  hasAnyInboundAudio(finalized) && hasExplicitAudioUnderstandingConfig(cfg)
                     ? ("audio-and-files" as const)
                     : ("files-only" as const),
               }

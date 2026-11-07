@@ -1,5 +1,9 @@
 import { normalizeMimeType } from "@openclaw/media-core/mime";
-import { isMeaningfulMediaFact, normalizeMediaFacts } from "../../media/media-facts.js";
+import {
+  isMeaningfulMediaFact,
+  normalizeMediaFacts,
+  type MediaFact,
+} from "../../media/media-facts.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 
 /** Minimal inbound media fields used by media/audio detection. */
@@ -27,11 +31,17 @@ export function hasInboundMediaForUnderstanding(ctx: InboundMediaContext): boole
   return meaningfulMedia(ctx).length > 1;
 }
 
-/** Returns true when the current turn carries structured audio media facts. */
+function isAudioMediaFact(media: MediaFact): boolean {
+  const type = normalizeMimeType(media.contentType);
+  return media.kind === "audio" || type === "audio" || type?.startsWith("audio/") === true;
+}
+
+/** Returns true when the current message carries structured audio media facts of its own. */
 export function hasInboundAudio(ctx: InboundMediaContext): boolean {
-  const isAudio = (type: string | undefined) =>
-    type === "audio" || type?.startsWith("audio/") === true;
-  return normalizeMediaFacts(ctx.media).some(
-    (media) => media.kind === "audio" || isAudio(normalizeMimeType(media.contentType)),
-  );
+  return normalizeMediaFacts(ctx.media).some((media) => !media.quoted && isAudioMediaFact(media));
+}
+
+/** Returns true when any turn media is audio, including media from the replied-to message. */
+export function hasAnyInboundAudio(ctx: InboundMediaContext): boolean {
+  return normalizeMediaFacts(ctx.media).some(isAudioMediaFact);
 }

@@ -210,9 +210,10 @@ describe("getReplyFromConfig message hooks", () => {
   beforeEach(resetMocks);
 
   it.each([
-    ["claude-cli", "audio/ogg", "audio-and-files"],
-    ["codex", "text/plain", "files-only"],
-  ])("preprocesses model-locked %s %s before dispatch", async (harness, mime, mode) => {
+    ["claude-cli", "audio/ogg", false, "audio-and-files"],
+    ["claude-cli", "audio/ogg", true, "audio-and-files"],
+    ["codex", "text/plain", false, "files-only"],
+  ])("preprocesses model-locked %s %s (quoted %s)", async (harness, mime, quoted, mode) => {
     const sessionKey = `agent:main:harness:${harness}:locked-media`;
     const preprocessingState = createLockedReplyPreprocessingState({
       sessionKey,
@@ -235,6 +236,7 @@ describe("getReplyFromConfig message hooks", () => {
           {
             path: mime === "text/plain" ? "/tmp/pasted-text-123.txt" : "/tmp/voice.ogg",
             contentType: mime,
+            quoted,
           },
         ],
       }),
