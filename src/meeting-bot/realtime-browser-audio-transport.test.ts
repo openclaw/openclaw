@@ -41,6 +41,7 @@ async function setup(received = vi.fn(), fatal = vi.fn()) {
   await setImmediate();
   return {
     resolvePull: (result: Record<string, unknown>) => pulls.shift()!.resolve(result),
+    rejectPull: (error: Error) => pulls.shift()!.reject(error),
     nativeTransport,
     nativeInput: (audio: Buffer) => startInput.mock.calls.at(-1)?.[0](audio),
     transport,
@@ -81,5 +82,51 @@ it("discards a pull after stop and rejects an expired browser capture", async ()
   expect(fatal).toHaveBeenCalledOnce();
   expect(received).not.toHaveBeenCalled();
   expect(next.nativeTransport.stop).toHaveBeenCalledOnce();
+  await next.transport.stop();
+});
+
+it("keeps the call through one stalled pull and ends it on a second in a row", async () => {
+  const { transport, received, fatal, resolvePull, rejectPull, nativeTransport } = await setup();
+  const stalled = new Error("browser request timed out");
+  rejectPull(stalled);
+  await vi.advanceTimersByTimeAsync(50);
+  const remote = Buffer.from([3, 0, 4, 0]);
+  resolvePull({ isolated: true, base64: remote.toString("base64") });
+  await vi.advanceTimersByTimeAsync(50);
+  expect(received.mock.calls).toEqual([[remote]]);
+  expect(fatal).not.toHaveBeenCalled();
+
+  // A success resets the count; two failures in a row mean the browser capture is gone.
+  rejectPull(stalled);
+  await vi.advanceTimersByTimeAsync(50);
+  rejectPull(stalled);
+  await setImmediate();
+  expect(fatal).toHaveBeenCalledOnce();
+  expect(nativeTransport.stop).toHaveBeenCalledOnce();
+  await transport.stop();
+});
+
+it("ends the call when pulled audio keeps failing to reach the model", async () => {
+  const { transport, fatal, resolvePull } = await setup();
+  // A browser request that succeeds is not enough: unusable audio still counts as a failure.
+  const incomplete = { isolated: true, base64: Buffer.from([1]).toString("base64") };
+  resolvePull(incomplete);
+  await vi.advanceTimersByTimeAsync(50);
+  resolvePull(incomplete);
+  await setImmediate();
+  expect(fatal).toHaveBeenCalledOnce();
+  await transport.stop();
+
+  const next = await setup(
+    vi.fn(() => {
+      throw new Error("model input rejected");
+    }),
+  );
+  const audio = { isolated: true, base64: Buffer.from([3, 0]).toString("base64") };
+  next.resolvePull(audio);
+  await vi.advanceTimersByTimeAsync(50);
+  next.resolvePull(audio);
+  await setImmediate();
+  expect(next.fatal).toHaveBeenCalledOnce();
   await next.transport.stop();
 });
