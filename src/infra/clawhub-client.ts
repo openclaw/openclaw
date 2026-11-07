@@ -410,7 +410,7 @@ export async function readClawHubBytes(params: {
   if (declaredSize !== undefined && declaredSize > maxBytes) {
     // Fetch may decode encoded bodies while retaining their wire length, so
     // only identity lengths can safely short-circuit the decoded stream cap.
-    await params.response.body?.cancel().catch(() => undefined);
+    await cancelUnreadResponseBody(params.response);
     throw createClawHubBodyLimitError(params.resourceLabel, declaredSize, maxBytes, "declared");
   }
   return await readResponseWithLimit(params.response, maxBytes, {
