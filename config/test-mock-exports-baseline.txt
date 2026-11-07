@@ -694,7 +694,6 @@
 ["extensions/qa-lab/src/cli.runtime.test.ts","./live-transports/telegram/adapter.runtime.js","b9d43b647fff10fa0a010417f28c9359b5d96744dddbeb6c17594d0002bffe2e",1]
 ["extensions/qa-lab/src/cli.runtime.test.ts","./mantis/cli.runtime.js","913c351eeafddae0ee5d334dca7a58694d7bfbfc3aa5c4a6cbd167a204583d70",1]
 ["extensions/qa-lab/src/cli.runtime.test.ts","./manual-lane.runtime.js","51c4453ddbe987085505da33044671463767fc8bfa3b281aca86867264f456ce",1]
-["extensions/qa-lab/src/cli.runtime.test.ts","./model-selection.runtime.js","8e5f2d4372c332d6f6f56bef0130db0d106e0a5f09e7ee389de3a26257bfe308",1]
 ["extensions/qa-lab/src/cli.runtime.test.ts","./multipass.runtime.js","5bb008d92357082a3bdbe787d8b1b1f6f6dd22532c769f0d1dbc7e06dde45d96",1]
 ["extensions/qa-lab/src/cli.test.ts","./live-transports/telegram/cli.runtime.js","350f2b1a7045ded8b12d8a7214f6685104adea9a926f318bc16906bcf9a2214d",1]
 ["extensions/qa-lab/src/cli.test.ts","./mantis/cli.runtime.js","7a2ff49294858e2c13b9bcee8d43ff65436cf3f67fe23287de348c33319f98b6",1]

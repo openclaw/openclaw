@@ -92,6 +92,7 @@ describe("live transport scenario module routing", () => {
         return call ? [{ call, scenarioId: scenario.id }] : [];
       });
 
+      expect(bindings.map(({ scenarioId }) => scenarioId)).toContain(`${channel}-canary`);
       for (const { call, scenarioId } of bindings) {
         expect(call.call, scenarioId).toBe(runnerName);
         expect(call.args, scenarioId).toHaveLength(2);
