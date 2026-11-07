@@ -130,7 +130,7 @@ Setup checklist:
 
 For local-first with a hosted safety net, swap `primary`/`fallbacks` order and keep the same `providers` block and `models.mode: "merge"`.
 
-OpenClaw fallbacks switch models per turn on provider errors. For per-request routing that keeps small prompts on the local model and sends only oversized ones to a hosted model, see [Hybrid inference](/providers/llmman#hybrid-inference) with llmman.
+OpenClaw fallbacks switch models per turn on provider errors. For per-request routing that keeps small prompts on the local model and sends only oversized ones to a hosted model, see [Hybrid inference](/providers/llmman#hybrid-inference) with llmman. To keep a long session from overflowing a small local fallback, use a pair as the fallback: [Hybrid versus OpenClaw fallbacks](/providers/llmman#hybrid-versus-openclaw-fallbacks).
 
 ### Regional hosting / data routing
 
