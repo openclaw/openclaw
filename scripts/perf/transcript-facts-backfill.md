@@ -37,6 +37,13 @@ Use a unique `--label` for each arm. `--max-batches N` stops after N committed b
 a second invocation starts discovery and its session cursor from scratch, so completed
 facts remain covered without a persisted cursor. The default zero means finish the
 selected session. `--pause-ms` controls proof pacing only; it is not a runtime option.
+`--start-position N` starts at inclusive active position N, useful for preparing
+only the last512 rows through the real batch owner before taking a pristine
+snapshot. For the49k path use `--start-position 48488 --pause-ms 0
+--skip-hydration --allocation-iterations 0`. Preparation is not a measurement.
+`--duty-ratio 20` delays by max(pause-ms,20×measured BEGIN-through-COMMIT wall).
+This is a native pacing model; the foreground probe separately consumes the
+actual host owner’s returned delays, including contention backoff.
 `--allocation-iterations 100` collects a separate sampled allocation/CPU pass before
 and after, and zero omits that pass. Traced CPU is supporting evidence, not the
 untraced timing comparison. Five untraced hydration samples establish medians/spread,
@@ -93,3 +100,47 @@ cleans up its workers and state. Timing uses one A/A pair and two AB/BA pairs wi
 Worker threads, while thread CPU and sampled allocation cover the host. The final
 open/close-only loop isolates host lifecycle work. This does not claim that each
 client open reopens SQLite, or measure payload batch cost or Gateway scheduling.
+
+## Foreground contention
+
+Prepare one synthetic160-session cohort with600 alternating user/assistant messages
+per path, then checkpoint the fixture and make a pristine snapshot on the fixture
+volume. The helper only accepts synthetic10M fixture metadata under this checkout’s
+`.local` directory:
+
+```sh
+python3 scripts/perf/transcript-facts-backfill-foreground.py \
+  --fixture .local/facts-backfill/ten-million.sqlite \
+  --output .local/facts-backfill/cohort-preparation
+```
+
+For each arm, make a fresh native filesystem clone (or sequential copy outside the
+measurement window) at the same isolated active path. Verify its header, size,
+selected index-state rows and historical coverage against the pristine source.
+Run one mode per fresh process; join it before removing the owned active copy.
+Never remove the pristine source until all arms are complete. The native command is:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-facts-backfill-foreground.ts \
+  --fixture .local/facts-backfill/active/ten-million.sqlite \
+  --output .local/facts-backfill/results --label arm-0 --modes idle --arm-start 0
+```
+
+Predeclare four idle/idle A/A pairs, then idle/backfill/backfill/idle. Each arm
+warms160 append/read pairs, waits for host load<=40, and measures1,000 further pairs.
+The600-message cohorts are separate from the49k path sampled approximately seven
+times per arm. Natural actor epoch changes prove nonresident append/read preimages;
+they do not prove OS-cold storage. The background must fill facts during the measured
+interval and remain on the49k path. Raw request samples, reservation diagnostics,
+returned maintenance delays, host load and actual coverage are retained.
+
+The owner probe drives the actual `runBatch()`/`close()` contract and obeys each
+returned delay. It does not prove Gateway readiness/live-run scheduling. For an
+explicit slower rate/queue curve, `--pause-multiplier 2` or4 multiplies returned
+delays on fresh copies, never shortening the production delay. Report these as
+proof-only scheduling settings, not product configuration. If paired signs differ
+or baselines differ more than5×, retain all data and use one predeclared extra pair.
+
+The worker-client comparison accepts `--control-pairs 4 --iterations 10000` for
+longer untraced controls when the initial short comparison is noisy. Allocation
+sampling remains a separate pass.

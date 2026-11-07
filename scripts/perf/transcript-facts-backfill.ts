@@ -2,6 +2,9 @@
  * Synthetic schema-41 backfill proof. Usage and fixture commands are in
  * transcript-facts-backfill.md. Runs the production batch and hydration owners;
  * this is owner proof, not a Gateway admission, shutdown, or transport benchmark.
+ * --start-position selects an inclusive active position for offline tail seeding.
+ * --duty-ratio 20 models owner pacing from measured BEGIN-through-COMMIT wall;
+ * actual host-returned delays and contention require the foreground probe.
  * node --import ./scripts/tsx.mjs scripts/perf/transcript-facts-backfill.ts \
  *   --output .local/facts-backfill --name ten-million --label paced --pause-ms 250
  */
@@ -36,6 +39,8 @@ const { values } = parseArgs({
     label: { type: "string" },
     session: { type: "string", default: "synthetic-0" },
     "pause-ms": { type: "string", default: "250" },
+    "duty-ratio": { type: "string", default: "0" },
+    "start-position": { type: "string", default: "0" },
     "max-batches": { type: "string", default: "0" },
     "allocation-iterations": { type: "string", default: "100" },
     "skip-hydration": { type: "boolean", default: false },
@@ -52,6 +57,8 @@ const positive = (value: string) => {
   return number;
 };
 const pauseMs = positive(values["pause-ms"]);
+const dutyRatio = positive(values["duty-ratio"]);
+const startPosition = positive(values["start-position"]);
 const maxBatches = positive(values["max-batches"]);
 const allocationIterations = positive(values["allocation-iterations"]);
 const output = path.resolve(values.output);
@@ -382,7 +389,7 @@ try {
       }
       await sampleHydration("hydration-before-allocation");
     }
-    let cursor = -1;
+    let cursor = startPosition - 1;
     let completed = false;
     let rowsFilled = 0;
     let rowsVisited = 0;
@@ -413,7 +420,8 @@ try {
         },
         false,
       );
-      batches.push({ ...batch.record, result: batch.value });
+      const nextDelayMs = Math.max(pauseMs, dutyRatio * batch.record.wallMs);
+      batches.push({ ...batch.record, result: batch.value, nextDelayMs });
       emit({ label: "batch-result", index, ...batch.value });
       rowsFilled += batch.value.rowsFilled;
       rowsVisited += batch.value.rowsVisited;
@@ -423,7 +431,7 @@ try {
         completed = true;
         break;
       }
-      await pause(pauseMs);
+      await pause(nextDelayMs);
     }
     const usage = process.cpuUsage(campaignCpu);
     const campaignIo = ioDelta(ioStart, readIo());
@@ -436,6 +444,10 @@ try {
       rowsVisited,
       bytesRead,
       pauseMs,
+      dutyRatio,
+      startPosition,
+      pacingScope:
+        "Native BEGIN-through-COMMIT elapsed model; host returned delays are measured separately",
       io: campaignIo,
       wallMs: performance.now() - campaignStart,
       cpuMs: (usage.user + usage.system) / 1000,
