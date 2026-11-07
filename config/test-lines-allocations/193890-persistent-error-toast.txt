@@ -1,0 +1,3 @@
+# Browser regressions for persistent chat errors on the shared toast: redacted diagnostics,
+# recovery-action alignment, and visible dismissal. Exact net growth for PR #193890.
+117

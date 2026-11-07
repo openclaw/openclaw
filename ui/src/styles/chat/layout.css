@@ -51,15 +51,17 @@ openclaw-pending-session-create {
 }
 
 /* Persistent errors do not time out, so their dismiss control stays visible
- * instead of waiting for hover. */
+ * and sits inside the card: a corner badge would be clipped by scrolling
+ * composer containers on phones. */
 .chat-error > .app-toast__dismiss {
+  position: static;
+  flex: none;
+  margin: -1px -6px 0 -4px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
   opacity: 1;
   scale: 1;
-}
-
-/* Leave the corner badge room beside a trailing recovery action. */
-.chat-error.app-toast--action {
-  padding-right: 22px;
 }
 
 @media (max-width: 560px) {
