@@ -145,7 +145,6 @@ export function NewSessionPlaceControls(props: {
       recents,
       projectQuery: browser.projectQuery,
       freshWorkspace: place.freshWorkspace,
-      projectUnavailable: browser.projectUnavailable,
     });
     return {
       nativeTerminal,

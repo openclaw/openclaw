@@ -33,7 +33,6 @@ export function resolveProjectChip(params: {
   recents: readonly ProjectRecent[];
   projectQuery: string;
   freshWorkspace?: boolean;
-  projectUnavailable?: boolean;
 }): Readonly<{
   label: string;
   recents: readonly Exclude<ProjectRecent, { kind: "project" }>[];
@@ -49,11 +48,9 @@ export function resolveProjectChip(params: {
         ? (selectedProject.repositoryIdentity ?? selectedProject.displayName)
         : params.selectedRemoteProject?.identity
           ? params.selectedRemoteProject.identity
-          : params.projectUnavailable
-            ? t("newSession.projectUnavailable")
-            : folder
-              ? pathDisplayName(folder)
-              : pathDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
+          : folder
+            ? pathDisplayName(folder)
+            : pathDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
     recents: normalizedQuery ? [] : params.recents.filter((recent) => recent.kind !== "project"),
     showWorkspace:
       !normalizedQuery ||

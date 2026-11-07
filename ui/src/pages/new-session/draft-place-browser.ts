@@ -63,8 +63,6 @@ export class DraftPlaceBrowser {
   private lastProjectResult: ProjectCatalog["snapshot"]["result"] = null;
   private projectSelection: DraftProjectSelection = null;
   private selectedProjectRecord: ProjectRecord | undefined;
-  // A saved or selected project the Gateway no longer lists for this caller.
-  private projectUnavailableValue = false;
   private projectQueryValue = "";
   private environmentQueryValue = "";
   private debouncedProjectQuery = "";
@@ -247,15 +245,6 @@ export class DraftPlaceBrowser {
     return hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null);
   }
 
-  get projectUnavailable(): boolean {
-    return this.projectUnavailableValue;
-  }
-
-  /** Hidden and removed projects look the same; the chip says so instead of switching silently. */
-  markProjectUnavailable() {
-    this.projectUnavailableValue = true;
-  }
-
   get remoteProject(): DraftRemoteProject | null {
     return this.projectSelection?.kind === "remote" ? this.projectSelection.project : null;
   }
@@ -328,7 +317,6 @@ export class DraftPlaceBrowser {
         this.lastProjectResult = result;
         if (this.projectId && !result.projects.some((project) => project.id === this.projectId)) {
           this.callbacks.onProjectMissing();
-          this.markProjectUnavailable();
         }
       }
       this.callbacks.changed();
@@ -352,7 +340,6 @@ export class DraftPlaceBrowser {
 
   selectProject(selection: Exclude<DraftProjectSelection, null>) {
     this.projectSelection = selection;
-    this.projectUnavailableValue = false;
     this.selectedProjectRecord = this.projects.find((project) => project.id === this.projectId);
   }
 
@@ -365,7 +352,6 @@ export class DraftPlaceBrowser {
 
   clearProjectSelection() {
     this.projectSelection = null;
-    this.projectUnavailableValue = false;
     this.selectedProjectRecord = undefined;
   }
 

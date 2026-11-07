@@ -124,8 +124,7 @@ checkout paths. This label does not grant access to private repository content.
 Without `operator.write` (for example the `guest` and `contributor` roles), the
 picker lists only agent workspaces and saved projects backed by public GitHub
 repositories, and it hides GitHub search and repository URL entry. A saved
-selection the Gateway no longer lists shows **Not found or no access** instead
-of being restored. See [Operator scopes](/gateway/operator-scopes) for the exact
+selection the Gateway no longer lists falls back to the agent workspace. See [Operator scopes](/gateway/operator-scopes) for the exact
 rules.
 
 ## Create a nested session

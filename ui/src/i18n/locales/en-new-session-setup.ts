@@ -189,7 +189,6 @@ const enNewSessionSetup = {
     checkoutRemoteLocked: "Paired and cloud devices use a worktree",
     local: "This computer",
     folderPlaceholder: "Agent workspace",
-    projectUnavailable: "Not found or no access",
     projects: "Projects",
     projectsAdminHint: "Admins can register projects from Browse folders",
     projectSearchPlaceholder: "Search projects or paste a Git URL",

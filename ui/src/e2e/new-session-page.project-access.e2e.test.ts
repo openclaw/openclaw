@@ -69,8 +69,11 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       const trigger = page.locator("#new-session-project-trigger");
       await pollLocatorText(trigger).toContain(
-        role === "guest" ? "Not found or no access" : PRIVATE_PROJECT.repositoryIdentity,
+        role === "guest" ? WORKSPACE.split("/").pop()! : PRIVATE_PROJECT.repositoryIdentity,
       );
+      if (role === "guest") {
+        expect(await trigger.textContent()).not.toContain(PRIVATE_PROJECT.displayName);
+      }
       await captureProjectUiProof(suite, page, `project-access-${role}-restored.png`);
 
       await trigger.click();

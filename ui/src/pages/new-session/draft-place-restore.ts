@@ -239,7 +239,6 @@ export function restoreDraftPlacePreferences(params: {
     // Remote repositories open through operator.write projectGitUrl; never restore
     // a selection this caller cannot create from.
     state.preferredRemoteProjectRestore = null;
-    browser.markProjectUnavailable();
     changed = true;
   } else if (preferredRemoteProject) {
     const selectingConfiguredRemoteProject =
@@ -275,9 +274,6 @@ export function restoreDraftPlacePreferences(params: {
     if (project) {
       browser.selectProject({ kind: "local", id: project.id });
       state.folderSelectedByUser = false;
-    }
-    if (!project && browser.projectsReady) {
-      browser.markProjectUnavailable();
     }
     if (project || browser.projectsReady) {
       state.preferredProjectRestore = "";
