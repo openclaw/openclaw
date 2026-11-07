@@ -22,6 +22,15 @@ struct RootSidebarTypographyTests {
 }
 
 struct OpenClawTypographyTests {
+    @Test func `local device settings use branded typography`() throws {
+        let source = try String(
+            contentsOf: Self.sourceURL("Settings/DeviceSettings/LocalDeviceSettingsScreen.swift"),
+            encoding: .utf8)
+        #expect(source.contains("OpenClawType.body"))
+        #expect(source.contains("OpenClawType.footnote"))
+        #expect(!source.contains(".font(."))
+    }
+
     @Test func `ESP setup controls and secret prompts use branded typography`() throws {
         let source = try String(contentsOf: Self.sourceURL("Settings/ESPDeviceSetupScreen.swift"), encoding: .utf8)
         #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: "ESPDeviceSetupScreen.swift").isEmpty)
