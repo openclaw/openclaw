@@ -235,6 +235,8 @@ async function deliverAdmittedInboundReply(
     requesterSenderE164: params.ctxPayload.SenderE164,
   });
   assertCurrent?.();
+  // Post-hook text of each confirmed payload; message_sending hooks may rewrite it.
+  const sentContents: string[] = [];
   const send = await sendBatch({
     assertDirectAdapterHandoff: assertCurrent,
     cfg: params.cfg,
@@ -265,6 +267,11 @@ async function deliverAdmittedInboundReply(
       : {}),
     session,
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
+    onMessageSentEvent: (event) => {
+      if (event.success && event.content) {
+        sentContents.push(event.content);
+      }
+    },
   });
   if (send.status === "failed") {
     return {
@@ -282,7 +289,7 @@ async function deliverAdmittedInboundReply(
           .map((result) => result.meta?.visibleText)
           .filter((value): value is string => typeof value === "string")
           .join("")
-      : undefined;
+      : sentContents.join("\n\n") || undefined;
   const receiptDelivery = createChannelDeliveryResultFromReceipt({
     receipt: send.receipt,
     threadId: threadId == null ? undefined : String(threadId),

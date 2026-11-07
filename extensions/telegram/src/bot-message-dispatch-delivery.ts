@@ -282,6 +282,16 @@ export async function sendPayload(
     }
     if (durable.status === "handled_visible") {
       turn.deliveryState.markDelivered();
+      // Same channel-final receipt the preview and fallback paths write, from the
+      // confirmed post-hook text (#194783).
+      const transcriptMirror = hasReplyPayloadFinalDeliveryCapture(payload)
+        ? undefined
+        : createTelegramTranscriptMirror(turn, sourceTurn);
+      if (transcriptMirror && durable.delivery.content) {
+        await transcriptMirror({ text: durable.delivery.content }).catch((err: unknown) => {
+          logVerbose(`telegram durable final transcriptMirror failed: ${formatErrorMessage(err)}`);
+        });
+      }
       return { ...durable.delivery, visibleReplySent: true };
     }
     if (durable.status === "handled_no_send") {
