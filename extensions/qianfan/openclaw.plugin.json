@@ -16,6 +16,15 @@
       }
     ]
   },
+  "providerRequest": {
+    "providers": {
+      "qianfan": {
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
   "modelCatalog": {
     "providers": {
       "qianfan": {
