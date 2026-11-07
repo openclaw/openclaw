@@ -149,6 +149,10 @@ it("translates all questions and preserves lossless V1 estimates from prepared a
   });
   if (outcome.status === "ok") {
     expect(decisionResultV2ToV1(batch, outcome.result)).toEqual(outcome.result);
+    const route = outcome.result.answers.route;
+    if (route?.type === "choice") {
+      expect(Object.keys(route.probabilities ?? {})).toEqual(["sales", "support"]);
+    }
   }
   const [url, init] = mocks.fetch.mock.calls[0]!;
   expect(url).toBe("https://api.openai.com/v1/decisions");
@@ -342,10 +346,32 @@ it.each([
   { usage: { input_tokens: -1, output_tokens: 0 } },
   replaceAnswer(0, { name: "wrong", probability: 0.5 }),
   replaceAnswer(0, { probability: 2 }),
+  replaceAnswer(1, { probabilities: [null] }),
+  replaceAnswer(1, { probabilities: [0] }),
+  replaceAnswer(1, {
+    probabilities: [
+      { value: "unknown", probability: 0.5 },
+      { value: "support", probability: 0.5 },
+    ],
+  }),
+  replaceAnswer(1, { probabilities: [{ value: "support", probability: 1 }] }),
+  replaceAnswer(1, {
+    probabilities: [
+      { value: "sales", probability: 0 },
+      { value: "support", probability: 0 },
+    ],
+  }),
   replaceAnswer(1, {
     probabilities: [
       { value: "support", probability: 0.5 },
       { value: "support", probability: 0.5 },
+    ],
+  }),
+  replaceAnswer(2, {
+    probabilities: [
+      { label: "0", value: 0, probability: 0 },
+      { label: "1", value: 1, probability: 0 },
+      { label: "2", value: 2, probability: 0 },
     ],
   }),
   replaceAnswer(2, {
