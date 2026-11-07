@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesListCommand: vi.fn().mockResolvedValue(undefined),
+  listFallbacksCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLogoutCommand: vi.fn().mockResolvedValue(undefined),
@@ -56,6 +57,10 @@ vi.mock("../commands/models/aliases.js", () => ({
 }));
 // mock-isolation: Observe CLI routing without changing stored model configuration.
 vi.mock("../commands/models/set.js", () => ({ modelsSetCommand: mocks.modelsSetCommand }));
+vi.mock("../commands/models/fallbacks-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/models/fallbacks-shared.js")>()),
+  listFallbacksCommand: mocks.listFallbacksCommand,
+}));
 
 describe("models cli", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -170,6 +175,16 @@ describe("models cli", () => {
       "models --agent other-person accounts list",
       "does not support --agent",
       mocks.modelsAccountsListCommand,
+    ],
+    [
+      "models --agent ops fallbacks list",
+      "models fallbacks list does not support --agent",
+      mocks.listFallbacksCommand,
+    ],
+    [
+      "models --agent ops image-fallbacks list --json",
+      "models image-fallbacks list does not support --agent",
+      mocks.listFallbacksCommand,
     ],
   ] as const)("rejects unsupported agent scope: %s", async (args, message, command) => {
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
