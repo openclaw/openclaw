@@ -289,6 +289,126 @@ struct WatchInboxStoreOperationTests {
         }
     }
 
+    @Test func `only a correlated snapshot closes approvals it omits`() throws {
+        try Self.withStore { store, _ in
+            let gatewayStableID = "watch-test-gateway"
+            let approval = WatchExecApprovalItem(
+                id: "pending-approval",
+                gatewayStableID: gatewayStableID,
+                commandText: "echo pending",
+                allowedDecisions: [.allowOnce])
+            #expect(store.consume(
+                execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
+                    approvals: [approval],
+                    gatewayStableID: gatewayStableID,
+                    sentAtMs: 100,
+                    snapshotId: "initial"),
+                transport: "test"))
+
+            // An iPhone cache can send an unsolicited snapshot before it has read Watch-held approvals.
+            #expect(store.consume(
+                execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
+                    approvals: [],
+                    gatewayStableID: gatewayStableID,
+                    sentAtMs: 200,
+                    snapshotId: "unsolicited"),
+                transport: "test"))
+            #expect(store.sortedExecApprovals.map(\.approvalID) == ["pending-approval"])
+
+            #expect(store.consume(
+                execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
+                    approvals: [],
+                    gatewayStableID: gatewayStableID,
+                    sentAtMs: 300,
+                    snapshotId: "requested",
+                    requestId: "refresh",
+                    requestGatewayStableID: gatewayStableID),
+                transport: "test"))
+            #expect(store.sortedExecApprovals.isEmpty)
+        }
+    }
+
+    @Test func `resolved approvals block only their exact Unicode ID`() throws {
+        try Self.withStore { store, _ in
+            let gatewayStableID = "watch-test-gateway"
+            let composedID = "approval-\u{00E9}"
+            let decomposedID = "approval-e\u{0301}"
+            store.consume(execApprovalResolved: WatchExecApprovalResolvedMessage(
+                approvalId: composedID,
+                gatewayStableID: gatewayStableID,
+                decision: .allowOnce))
+
+            let approvals = [composedID, decomposedID].map { approvalID in
+                WatchExecApprovalItem(
+                    id: approvalID,
+                    gatewayStableID: gatewayStableID,
+                    commandText: "echo \(approvalID)",
+                    allowedDecisions: [.allowOnce])
+            }
+            #expect(store.consume(
+                execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
+                    approvals: approvals,
+                    gatewayStableID: gatewayStableID,
+                    sentAtMs: 100,
+                    snapshotId: "after-resolution"),
+                transport: "test"))
+            #expect(store.sortedExecApprovals.map { Array($0.approvalID.utf8) } == [Array(decomposedID.utf8)])
+        }
+    }
+
+    @Test func `received approval snapshots keep approval and gateway IDs exactly as sent`() async throws {
+        let suiteName = "WatchInboxStoreOperationTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = WatchInboxStore(defaults: defaults, requestNotificationAuthorization: false)
+        let approvalID = " approval "
+        let gatewayStableID = " gateway "
+        let snapshotType = WatchPayloadType.execApprovalSnapshot.rawValue
+        let payload: [String: Any] = [snapshotType: [
+            "type": snapshotType,
+            "approvals": [[
+                "id": approvalID,
+                "gatewayStableID": gatewayStableID,
+                "commandText": "echo exact",
+            ]],
+            "gatewayStableID": gatewayStableID,
+            "sentAtMs": NSNumber(value: 100),
+            "snapshotId": "exact-ids",
+        ]]
+
+        #expect(await Self.receive(payload, store: store))
+        let record = try #require(store.sortedExecApprovals.first)
+        #expect(Array(record.approvalID.utf8) == Array(approvalID.utf8))
+        #expect(record.approval.gatewayStableID.map { Array($0.utf8) } == Array(gatewayStableID.utf8))
+    }
+
+    @Test func `received resolution keeps its semantic outcome over the legacy decision`() async throws {
+        let suiteName = "WatchInboxStoreOperationTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = WatchInboxStore(defaults: defaults, requestNotificationAuthorization: false)
+        let payload: [String: Any] = [
+            "type": WatchPayloadType.execApprovalResolved.rawValue,
+            "approvalId": "resolved-approval",
+            "gatewayStableID": "watch-test-gateway",
+            "decision": "deny",
+            "outcome": "allowedAlways",
+            "source": "another-reviewer",
+        ]
+
+        #expect(await Self.receive(payload, store: store))
+        #expect(store.lastExecApprovalOutcome?.code == .allowedAlways)
+    }
+
+    private static func receive(_ payload: [String: Any], store: WatchInboxStore) async -> Bool {
+        let receiver = WatchConnectivityReceiver(store: store, directNodeSetupHandler: { _, _ in })
+        return await withCheckedContinuation { continuation in
+            receiver.session(WCSession.default, didReceiveMessage: payload) { reply in
+                continuation.resume(returning: reply["ok"] as? Bool == true)
+            }
+        }
+    }
+
     @Test func `switching chat sessions retires voice replies and the previous preview`() throws {
         try Self.withStore { store, defaults in
             var original = Self.snapshot(id: "original-session")

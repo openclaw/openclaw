@@ -237,7 +237,11 @@ export async function describeImageFile(
 }
 
 /** Reads and normalizes image input once before explicit-model fallback attempts. */
-export async function prepareImageDescriptionInput(params: PrepareImageDescriptionInputParams) {
+export async function prepareImageDescriptionInput(
+  params: PrepareImageDescriptionInputParams,
+  execution?: MediaExecutionContext,
+) {
+  assertMediaExecutionCurrent(execution);
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const input = { ...params, timeoutMs };
   const attachments = normalizeMediaAttachments(
@@ -253,6 +257,7 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
       attachmentIndex: 0,
       maxBytes: MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
       timeoutMs,
+      signal: execution?.signal,
     });
     image = {
       buffer: media.buffer,

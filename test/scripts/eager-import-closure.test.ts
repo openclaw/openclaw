@@ -14,7 +14,8 @@ import {
 } from "node:fs";
 import { dirname, join, posix, relative } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import * as nativeTypeScript from "../../scripts/lib/native-typescript.mts";
 import {
   collectRuntimeImportClosure,
   createRuntimeImportGraph,
@@ -501,6 +502,49 @@ it("traverses runtime sources in mixed inventories and still rejects missing run
   expect(() => collectRuntimeImportClosure(root, ["entry.mts", "entry.d.mts"])).toThrow(
     "dependency.mts: unresolved ./missing.mjs",
   );
+});
+
+it("reuses overlapping runtime edges only within the same native snapshot", () => {
+  const root = tempDirs.make("openclaw-runtime-graph-reuse-");
+  writeFixture(root, {
+    "tsconfig.json": { compilerOptions: { module: "NodeNext", moduleResolution: "NodeNext" } },
+    "entry.mts": 'import "./shared.mjs";',
+    "other.mts": 'import "./shared.mjs";',
+    "shared.mts": 'import "./leaf.mjs";',
+    "leaf.mts": "export {};",
+    "extra.mts": 'import "./entry.mjs";',
+  });
+  const openProject = nativeTypeScript.createNativeTypeScriptProject;
+  let session: ReturnType<typeof openProject> | undefined;
+  using projectSpy = vi
+    .spyOn(nativeTypeScript, "createNativeTypeScriptProject")
+    .mockImplementation((options) => {
+      session = openProject({ ...options, observer: () => {} });
+      return session;
+    });
+  using graph = createRuntimeImportGraph(root, ["entry.mts", "other.mts"]);
+  expect(projectSpy).toHaveBeenCalledOnce();
+  const requests = () => session!.api.getTimingInfo().totals.requestCount;
+  const baseline = requests();
+  const measurementOverhead = requests() - baseline;
+  expect(graph.collect(["entry.mts", "other.mts"])).toEqual([
+    "entry.mts",
+    "leaf.mts",
+    "other.mts",
+    "shared.mts",
+  ]);
+  const beforeReuse = requests();
+  expect(graph.collect(["entry.mts"])).toEqual(["entry.mts", "leaf.mts", "shared.mts"]);
+  expect(requests() - beforeReuse).toBe(measurementOverhead);
+
+  // Admitting a root replaces the compiler snapshot; old edge answers must be discarded.
+  graph.dependencies("extra.mts");
+  const beforeRefresh = requests();
+  expect(graph.collect(["entry.mts"])).toEqual(["entry.mts", "leaf.mts", "shared.mts"]);
+  expect(requests() - beforeRefresh).toBeGreaterThan(measurementOverhead);
+  const afterRefresh = requests();
+  graph.collect(["entry.mts"]);
+  expect(requests() - afterRefresh).toBe(measurementOverhead);
 });
 
 it("preserves declaration resolution for source-import graphs", () => {

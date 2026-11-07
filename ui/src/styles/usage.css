@@ -1601,18 +1601,6 @@ select.usage-creator-filter {
   flex: 0 0 auto;
 }
 
-.session-bar-copy {
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
-  padding: 5px;
-}
-
-.session-bar-copy svg {
-  width: 14px;
-  height: 14px;
-}
-
 .session-bar-copy-feedback {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);

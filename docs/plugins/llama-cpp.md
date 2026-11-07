@@ -218,6 +218,8 @@ Add a model under `models.providers.llama-cpp.models`, select its
 URIs, and HTTPS GGUF URLs that publish a SHA-256 response digest. The default
 cache is `~/.openclaw/models/llama.cpp`. A configured `modelCacheDir` remains
 authoritative for managed setup.
+Concurrent chats share pending GGUF verification or download work. Stopping one
+chat cancels only that chat's wait; the shared work continues for other chats.
 
 Setup resolves model aliases and account-qualified references to the selected
 authored model, and keeps that model even when it is not cached. It shows
