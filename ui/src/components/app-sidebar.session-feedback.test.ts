@@ -483,7 +483,9 @@ describe("sidebar session feedback", () => {
         await expectHint(sidebar);
       } else {
         if (mode === "chip") {
-          expect(sidebar.querySelectorAll("[data-session-section]")).toHaveLength(0);
+          // Retained empty section wrappers are not matching sessions or visible headings.
+          expect(sessionKeys(sidebar)).toEqual([]);
+          expect(sidebar.querySelector(".sidebar-recent-sessions__head")).toBeNull();
         }
         for (const status of ["archived", "all"] as const) {
           await selectStatus(sidebar, status);
