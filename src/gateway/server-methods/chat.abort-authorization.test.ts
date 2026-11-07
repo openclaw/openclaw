@@ -5,12 +5,14 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { retireSessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { registerWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import * as abortDescendants from "./chat-abort-descendants.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
+import * as abortedPartial from "./chat-aborted-partial.js";
 import * as persistence from "./chat-transcript-persistence.js";
 import {
   createSingleAbortContext,
@@ -232,6 +234,28 @@ describe("chat.abort authorization", () => {
     expectResult(await abortAsOwner({ context, runId: request.runId }), [request.runId]);
     expect(reserved.input.abortSignal.aborted).toBe(true);
     expect(runStopped.mock.calls).toEqual([stoppedEvent("main", "main", [request.runId])]);
+  });
+
+  it("announces nothing for a reserved run consumed while its Stop prepares", async () => {
+    const runStopped = observeRunStopped();
+    const reserved = createActiveRun("main", {
+      runId: "reserved-run",
+      owner: { connId: "conn-owner", deviceId: "dev-owner" },
+      queued: true,
+    });
+    const prepare = abortedPartial.prepareChatAbortSessionSnapshot;
+    // The input is consumed while the Stop awaits its session snapshot.
+    using consumeWhilePreparing = vi
+      .spyOn(abortedPartial, "prepareChatAbortSessionSnapshot")
+      .mockImplementationOnce(async (...args) => {
+        retireSessionControllerInput(reserved.input);
+        return await prepare(...args);
+      });
+    const context = createChatAbortContext();
+    expectResult(await abortAsOwner({ context, runId: "reserved-run" }), [], false);
+    expect(consumeWhilePreparing).toHaveBeenCalledOnce();
+    expect(reserved.input.phase).toBe("consumed");
+    expect(runStopped).not.toHaveBeenCalled();
   });
 
   it("does not let a local run owner cancel worker inference", async () => {

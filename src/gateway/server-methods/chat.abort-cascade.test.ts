@@ -297,22 +297,29 @@ describe("descendant cascade ownership", () => {
       sessionId: "command-session",
       ownerConnId: "command-owner",
     };
-    const runStopped = vi.fn();
+    let authorized = true;
+    let hooksCompleted = 0;
+    let owner: { signal: AbortSignal } | undefined;
+    // At the notice: every command:stop hook has finished and the command is not yet cancelled.
+    const runStopped = vi.fn(() => ({ hooksCompleted, aborted: owner?.signal.aborted }));
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "run_stopped", handler: runStopped }]),
     );
     onTestFinished(resetGlobalHookRunner);
-    let authorized = true;
     // The first Stop loses its requester's authority while its command:stop hook awaits.
-    const commandStop = vi.fn(async () => {});
+    const commandStop = vi.fn(async () => {
+      await Promise.resolve();
+      hooksCompleted++;
+    });
     commandStop.mockImplementationOnce(async () => {
       await Promise.resolve();
       authorized = false;
+      hooksCompleted++;
     });
     registerInternalHook("command:stop", commandStop);
     onTestFinished(() => unregisterInternalHook("command:stop", commandStop));
     await withExecRequestTurn({ identity }, async () => {
-      const owner = expectDefined(captureExecRequestOwners(identity)?.[0], "command owner");
+      owner = expectDefined(captureExecRequestOwners(identity)?.[0], "command owner");
       const context = createChatAbortContext();
       const request = { sessionKey, runId: "command-run" };
       const client = { connId: "command-owner", connect: { scopes: ["operator.write"] } };
@@ -333,7 +340,9 @@ describe("descendant cascade ownership", () => {
         requireLastRespondCall(await stop({ context, request, client, handler })),
       ).toMatchObject([true, { ok: true, aborted: true, runIds: [] }]);
       expect(owner.signal.aborted).toBe(true);
-      expect(runStopped).toHaveBeenCalledOnce();
+      expect(runStopped.mock.results).toEqual([
+        { type: "return", value: { hooksCompleted: 2, aborted: false } },
+      ]);
     });
   });
 

@@ -40,7 +40,7 @@ export function captureSourceAssertion(input: RpcSourceRef["input"], assertCurre
 
 /**
  * Stops one exact reserved source that has a session target but no RPC registration yet,
- * with that turn's controlled subagents. The accepted Stop is announced before it commits.
+ * with that turn's controlled subagents. The Stop is announced only once its cancellation commits.
  */
 export async function stopReservedClientRun(params: {
   cfg: OpenClawConfig;
@@ -57,13 +57,6 @@ export async function stopReservedClientRun(params: {
 }): Promise<Omit<ExactClientRunStopResult, "failure">> {
   const { runId, reserved, identity, assertCurrent } = params;
   const result: ExactClientRunStopResult = { aborted: false };
-  // Session preparation can await; recheck authority before announcing the Stop.
-  assertCurrent();
-  notifySessionRunStopped({
-    source: "client-run",
-    sessions: [{ agentId: identity.agentId ?? params.agentId, sessionKey: identity.sessionKey }],
-    runIds: [runId],
-  });
   await stopSession({
     source: "client-run",
     capture: captureSessionControllerStop({ inputs: [reserved] }),
@@ -78,6 +71,15 @@ export async function stopReservedClientRun(params: {
     onCancelled: (target) => {
       if (target === reserved) {
         result.aborted = true;
+        // Announced from the kernel's synchronous commit callback: a source it could no longer
+        // abort (consumed while preparation awaited) is never reported stopped.
+        notifySessionRunStopped({
+          source: "client-run",
+          sessions: [
+            { agentId: identity.agentId ?? params.agentId, sessionKey: identity.sessionKey },
+          ],
+          runIds: [runId],
+        });
       }
     },
     stopChildren: async (applyParentStop) => {
