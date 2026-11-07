@@ -4,8 +4,9 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { upsertAuthProfileAsync, type OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { getSpeechProvider, type SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech";
 import { withServer, withTempHome } from "openclaw/plugin-sdk/test-env";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { synthesizeSpeech, textToSpeechTelephony } from "openclaw/plugin-sdk/tts-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const AUDIO = Buffer.from([0x49, 0x44, 0x33, 1, 2, 3]);
 type Request = { url: string; auth?: string; vendorKey?: string; body: Record<string, unknown> };
@@ -28,6 +29,7 @@ type Fixture = {
   cfg: OpenClawConfig;
   home: string;
   requests: Request[];
+  arrivals: string[];
   request: (providerConfig?: Record<string, unknown>) => SpeechSynthesisRequest;
   tts: (
     options?: Partial<Parameters<typeof synthesizeSpeech>[0]>,
@@ -57,6 +59,7 @@ async function withFixture(
   await withTempHome(
     async (home) => {
       const requests: Request[] = [];
+      const arrivals: string[] = [];
       const catalogRequests: string[] = [];
       const catalog: Catalog = {
         providerId: "openai",
@@ -137,6 +140,7 @@ async function withFixture(
               );
               return;
             }
+            arrivals.push(`${req.method} ${req.url}`);
             let text = "";
             for await (const chunk of req) {
               text += chunk;
@@ -174,6 +178,7 @@ async function withFixture(
             cfg,
             home,
             requests,
+            arrivals,
             catalog,
             catalogRequests,
             tts: (options = {}) =>
@@ -438,9 +443,10 @@ describe("ClawRouter native speech", () => {
         });
         const provider = speech(cfg);
         const storedCfg = withoutKey(cfg);
-        await expect(provider.synthesize({ ...request(), cfg: storedCfg })).resolves.toMatchObject({
-          audioBuffer: AUDIO,
-        });
+        // This call includes cold auth-owner setup in the end-to-end budget, as TTS does.
+        await expect(
+          provider.synthesize({ ...request(), cfg: storedCfg, timeoutMs: 30_000 }),
+        ).resolves.toMatchObject({ audioBuffer: AUDIO });
         await expect(
           provider.synthesize(
             request({ profileId: "clawrouter:speech", apiKey: "fixture-inline-must-not-win" }),
@@ -518,20 +524,159 @@ describe("ClawRouter native speech", () => {
     });
   });
 
-  it("aborts an in-flight HTTP body at the request deadline and releases its socket", async () => {
-    const closed = createDeferred();
+  it("expires the registered speech operation under its real 250ms preparation-or-body deadline", async () => {
+    let responseStarted = false;
     await withFixture(
-      async ({ cfg, request, requests }) => {
+      async ({ cfg, request, arrivals }) => {
         await expect(speech(cfg).synthesize({ ...request(), timeoutMs: 250 })).rejects.toThrow(
           /timed out|abort/i,
         );
-        expect(requests).toHaveLength(1);
-        await closed.promise;
+        expect(arrivals.length).toBeLessThanOrEqual(1);
+        // Report only after settlement; no arrival is not proof of zero egress.
+        console.info("[speech-expiry]", {
+          phase: responseStarted
+            ? "response-started"
+            : arrivals.length
+              ? "request-arrived"
+              : "no-arrival-observed",
+          arrivals: arrivals.length,
+        });
       },
       (res) => {
+        responseStarted = true;
         res.setHeader("content-type", "audio/mpeg");
         res.write(AUDIO.subarray(0, 1));
-        res.once("close", () => closed.resolve());
+      },
+    );
+  });
+
+  it("retires the real speech body and socket after transport abort at a pending read", async ({
+    signal,
+  }) => {
+    const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/ssrf-runtime");
+    const { buildClawRouterSpeechProvider } = await import("./speech-provider.js");
+    const pendingRead = createDeferred();
+    const responseClosed = createDeferred();
+    const socketClosed = createDeferred();
+    const controller = new AbortController();
+    const reason = new DOMException("fixture transport aborted", "AbortError");
+    const restore: Array<() => void> = [];
+    const observed: {
+      body?: ReadableStream<Uint8Array>;
+      socket?: NonNullable<ServerResponse["socket"]>;
+    } = {};
+    let firstByte: Uint8Array | undefined;
+    let reads = 0;
+    let secondReadSettled = false;
+    let matchedPosts = 0;
+    await withFixture(
+      async ({ request, requests, arrivals }) => {
+        const provider = buildClawRouterSpeechProvider({
+          resolveApiKeyForProvider: async () => ({
+            apiKey: "fixture-router",
+            mode: "api-key",
+            source: "fixture",
+          }),
+          fetchWithSsrFGuard: async (params) => {
+            expect(params.init?.method).toBe("POST");
+            matchedPosts += 1;
+            const originalSignal = params.signal ?? params.init?.signal;
+            const result = await fetchWithSsrFGuard({
+              ...params,
+              signal: originalSignal
+                ? AbortSignal.any([originalSignal, controller.signal])
+                : controller.signal,
+            });
+            const body = result.response.body;
+            if (!body) {
+              throw new Error("expected real speech response body");
+            }
+            observed.body = body;
+            const getReader = body.getReader.bind(body);
+            const readerSpy = vi.spyOn(body, "getReader").mockImplementation(() => {
+              const reader = getReader();
+              const read = reader.read.bind(reader);
+              const readSpy = vi.spyOn(reader, "read").mockImplementation(() => {
+                const pending = read();
+                const ordinal = ++reads;
+                void pending.then(
+                  (chunk) => {
+                    if (ordinal === 1 && !chunk.done) {
+                      firstByte = chunk.value;
+                    }
+                    if (ordinal === 2) {
+                      secondReadSettled = true;
+                    }
+                  },
+                  () => {
+                    if (ordinal === 2) {
+                      secondReadSettled = true;
+                    }
+                  },
+                );
+                if (ordinal === 2) {
+                  queueMicrotask(() => {
+                    if (!secondReadSettled) {
+                      pendingRead.resolve();
+                    }
+                  });
+                }
+                return pending;
+              });
+              restore.push(() => readSpy.mockRestore());
+              return reader;
+            });
+            restore.push(() => readerSpy.mockRestore());
+            return result;
+          },
+        });
+        const outcome = provider.synthesize(request()).then(
+          (value) => ({ status: "fulfilled" as const, value }),
+          (error: unknown) => ({ status: "rejected" as const, error }),
+        );
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              pendingRead.promise,
+              outcome,
+              "speech settled before pending body read",
+            ),
+            signal,
+          );
+          expect(Buffer.from(firstByte ?? [])).toEqual(AUDIO.subarray(0, 1));
+          expect(reads).toBe(2);
+          expect(secondReadSettled).toBe(false);
+          controller.abort(reason);
+          expect(await withinTest(outcome, signal)).toEqual({ status: "rejected", error: reason });
+          expect(secondReadSettled).toBe(true);
+          expect(observed.body?.locked).toBe(false);
+          expect(matchedPosts).toBe(1);
+          expect(arrivals).toEqual(["POST /v1/audio/speech"]);
+          expect(requests).toHaveLength(1);
+          expect(requests[0]?.auth).toBe("Bearer fixture-router");
+          await withinTest(Promise.all([responseClosed.promise, socketClosed.promise]), signal);
+          expect(observed.socket?.destroyed).toBe(true);
+        } finally {
+          controller.abort(reason);
+          try {
+            await withinTest(outcome, signal);
+          } finally {
+            for (const undo of restore.toReversed()) {
+              undo();
+            }
+          }
+        }
+      },
+      (res) => {
+        const socket = res.socket;
+        if (!socket) {
+          throw new Error("expected real speech response socket");
+        }
+        observed.socket = socket;
+        res.once("close", () => responseClosed.resolve());
+        socket.once("close", () => socketClosed.resolve());
+        res.setHeader("content-type", "audio/mpeg");
+        res.write(AUDIO.subarray(0, 1));
       },
     );
   });

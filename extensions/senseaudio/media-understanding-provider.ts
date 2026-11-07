@@ -17,5 +17,6 @@ export const senseaudioMediaUnderstandingProvider: MediaUnderstandingProvider = 
       provider: "senseaudio",
       defaultBaseUrl: DEFAULT_SENSEAUDIO_AUDIO_BASE_URL,
       defaultModel: DEFAULT_SENSEAUDIO_AUDIO_MODEL,
+      preserveAacFileName: true,
     }),
 };

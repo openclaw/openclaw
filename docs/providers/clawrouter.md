@@ -492,6 +492,54 @@ cover catalog lookup, generation, and result downloads. Prompt, image-count, and
 explicit size bounds come from that model’s current catalog generation limits;
 unknown limits do not authorize generation.
 
+## Catalog-scoped file transcription
+
+The registered audio consumer checks the current ClawRouter key's `/v1/catalog`
+before uploading a recording. It accepts only a fresh proxy-key observation and
+an eligible native `audio.transcription` offer with the selected model, upstream
+model, route, and supported multipart formats. A stale, foreign, revoked, or
+unknown-format offer fails before upload. Each transcription refreshes discovery;
+an earlier successful lookup does not authorize the next recording.
+
+The supported selections are `gpt-4o-transcribe` (also
+`openai/gpt-4o-transcribe`) and `senseaudio/senseaudio-asr-pro-1.5-260319`.
+Both use `openai.audio_transcriptions` requests at
+`/v1/native/<provider>/v1/audio/transcriptions`. OpenAI responses use
+`openai.audio_transcriptions`; SenseAudio responses use `senseaudio.transcription`.
+These are client wire contracts, not a static list of granted or live offers.
+SenseAudio requires a deployment with its native multipart dispatch and catalog
+declaration enabled; client installation alone does not activate the route.
+
+To select an entitled SenseAudio offer:
+
+```json5
+{
+  tools: {
+    media: {
+      audio: { enabled: true },
+      models: [
+        {
+          provider: "clawrouter",
+          model: "senseaudio/senseaudio-asr-pro-1.5-260319",
+          capabilities: ["audio"],
+        },
+      ],
+    },
+  },
+}
+```
+
+SenseAudio accepts up to 10,000,000 file bytes, a lowercase two- or three-letter
+ISO-639 language, and up to 16 KiB of prompt text. Native AAC filenames and bytes
+remain unchanged. The OpenAI route retains its 25,000,000-byte bound and rejects
+AAC relabeling. Both routes use only the resolved ClawRouter key, including a
+locked auth profile; neither borrows an upstream provider key. The caller's
+cancellation, deadline, proxy, and network policy cover discovery and upload.
+An uploaded request is not automatically retried after an HTTP or transport
+failure. Request-dependent affordability still needs the Worker's current grant
+and billing decision; unknown duration or pricing never becomes a free request.
+Raw Deepgram and JSON OpenRouter transcription need separate native consumers.
+
 ## Native Gradium speech
 
 ClawRouter speech can consume a qualified, model-less Gradium offer for

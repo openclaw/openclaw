@@ -13,6 +13,27 @@ if (!transcribeSenseAudioAudio) {
 }
 
 describe("transcribeSenseAudioAudio", () => {
+  it("preserves AAC filenames and MIME in the native multipart transport", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+    const audio = Buffer.from("synthetic transport bytes");
+    await transcribeSenseAudioAudio({
+      buffer: audio,
+      fileName: "voice.aac",
+      mime: "audio/aac",
+      apiKey: "test-key",
+      timeoutMs: 1000,
+      fetchFn,
+    });
+    const form = getRequest().init?.body;
+    if (!(form instanceof FormData)) {
+      throw new Error("expected transcription form");
+    }
+    const file = form.get("file") as File;
+    expect(file.name).toBe("voice.aac");
+    expect(file.type).toBe("audio/aac");
+    expect(Buffer.from(await file.arrayBuffer())).toEqual(audio);
+  });
+
   it("transcribes with the SenseAudio endpoint and default model", async () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
 
