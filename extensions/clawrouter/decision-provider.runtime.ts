@@ -161,7 +161,8 @@ async function prepareClawRouterDecisionCatalog(
     let rows: readonly unknown[];
     try {
       if (!response.ok) {
-        await response.body?.cancel();
+        // Cancellation can outlive the decision deadline; never wait for transport cleanup.
+        void response.body?.cancel().catch(() => {});
         const seconds = parseRetryAfterHeaderSeconds(response.headers.get("retry-after"));
         return {
           status: "unavailable",
