@@ -176,8 +176,8 @@
 }
 
 .device-pair-setup__code > .btn.btn--sm {
-  height: var(--menu-item-height);
-  min-height: var(--menu-item-height);
+  height: var(--overlay-control-height);
+  min-height: var(--overlay-control-height);
 }
 
 .device-pair-setup__fallback {
@@ -190,7 +190,7 @@
   align-items: center;
   gap: var(--space-1);
   width: fit-content;
-  min-height: var(--menu-item-height);
+  min-height: var(--overlay-control-height);
   list-style: none;
   cursor: var(--cursor-action);
 }

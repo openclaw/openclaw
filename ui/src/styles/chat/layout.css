@@ -1580,7 +1580,7 @@ openclaw-chat-video-player {
   border: none;
   background: none;
   color: var(--text);
-  min-height: var(--menu-item-height);
+  min-height: var(--overlay-control-height);
   border-radius: var(--menu-item-radius);
 }
 
