@@ -1,9 +1,12 @@
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
-import { parseRfbVersionBanner } from "./rfb-probe.js";
+import { buildVncAuthResponse } from "./rfb-vnc-auth.js";
 
-const RFB_VERSION_BYTES = 12;
+export const RFB_VERSION_BYTES = 12;
+export const RFB_37_MINOR = 7;
+const RFB_33_VERSION = Buffer.from("RFB 003.003\n", "ascii");
+const RFB_37_VERSION = Buffer.from("RFB 003.007\n", "ascii");
 const RFB_3_8_VERSION = Buffer.from("RFB 003.008\n", "ascii");
 const RFB_SECURITY_NONE = 1;
 const RFB_SECURITY_VNC = 2;
@@ -35,6 +38,9 @@ export class RfbPreauthTimeoutError extends Error {
 }
 
 export class RfbAuthenticationRejectedError extends Error {
+  readonly status: number;
+  readonly reason: string;
+
   constructor(status: number, reason: string) {
     super(
       reason
@@ -42,7 +48,38 @@ export class RfbAuthenticationRejectedError extends Error {
         : `RFB authentication failed with status ${status}`,
     );
     this.name = "RfbAuthenticationRejectedError";
+    this.status = status;
+    this.reason = reason;
   }
+}
+
+/** Parses the fixed-width RFB ProtocolVersion banner without socket state. */
+export function parseRfbVersionBanner(buffer: Buffer):
+  | {
+      kind: "rfb";
+      minor: number;
+      reply: Buffer;
+    }
+  | { kind: "not-rfb"; banner: string } {
+  const banner = buffer.subarray(0, RFB_VERSION_BYTES).toString("ascii");
+  if (buffer.length < RFB_VERSION_BYTES) {
+    return { kind: "not-rfb", banner };
+  }
+  const match = /^RFB 003\.(\d{3})\n$/u.exec(banner);
+  if (!match) {
+    return { kind: "not-rfb", banner };
+  }
+  const minor = Number.parseInt(match[1] ?? "", 10);
+  return {
+    kind: "rfb",
+    minor,
+    reply:
+      minor > RFB_37_MINOR
+        ? RFB_3_8_VERSION
+        : minor === RFB_37_MINOR
+          ? RFB_37_VERSION
+          : RFB_33_VERSION,
+  };
 }
 
 function abortReason(signal: AbortSignal): Error {
@@ -145,6 +182,18 @@ class StreamRfbPreauthPeer extends RfbPreauthBuffer implements RfbPreauthPeer {
     this.stream.off("close", this.onEnd);
     this.stream.off("error", this.onError);
   }
+}
+
+/** Exact-byte peer for one Duplex. Caller disposes before any other reader. */
+export function attachRfbPreauthStream(stream: Duplex): {
+  peer: RfbPreauthPeer;
+  dispose(): void;
+} {
+  const peer = new StreamRfbPreauthPeer(stream);
+  return {
+    peer,
+    dispose: () => peer.dispose(),
+  };
 }
 
 async function readReason(peer: RfbPreauthPeer, signal: AbortSignal): Promise<string> {
@@ -269,28 +318,6 @@ async function negotiateArdAuth(params: {
   );
 }
 
-function reverseByteBits(value: number): number {
-  let input = value;
-  let output = 0;
-  for (let index = 0; index < 8; index += 1) {
-    output = (output << 1) | (input & 1);
-    input >>= 1;
-  }
-  return output;
-}
-
-function buildVncAuthResponse(password: string, challenge: Buffer): Buffer {
-  const key = Buffer.alloc(8);
-  Buffer.from(password, "utf8").copy(key, 0, 0, 8);
-  for (let index = 0; index < key.length; index += 1) {
-    key[index] = reverseByteBits(key[index] ?? 0);
-  }
-  // RFB mandates single DES. EDE with K1=K2 is the same primitive on OpenSSL builds without des-ecb.
-  const cipher = createCipheriv("des-ede", Buffer.concat([key, key]), null);
-  cipher.setAutoPadding(false);
-  return Buffer.concat([cipher.update(challenge), cipher.final()]);
-}
-
 async function negotiateVncAuth(params: {
   peer: RfbPreauthPeer;
   password: string;
@@ -317,7 +344,7 @@ async function readSecurityResult(peer: RfbPreauthPeer, signal: AbortSignal): Pr
   throw new RfbAuthenticationRejectedError(status, reason);
 }
 
-async function negotiateServer(params: {
+export async function negotiateServer(params: {
   peer: RfbPreauthPeer;
   preauth: RfbPreauthDescriptor;
   signal: AbortSignal;

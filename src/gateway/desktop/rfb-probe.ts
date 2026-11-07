@@ -1,45 +1,26 @@
 import net from "node:net";
 import { Duplex } from "node:stream";
-
-const RFB_BANNER_BYTES = 12;
-const RFB_37_MINOR = 7;
-const RFB_37_BANNER = Buffer.from("RFB 003.007\n", "ascii");
-const RFB_38_BANNER = Buffer.from("RFB 003.008\n", "ascii");
+import {
+  attachRfbPreauthStream,
+  negotiateServer,
+  parseRfbVersionBanner,
+  RfbAuthenticationRejectedError,
+  RFB_37_MINOR,
+  RFB_VERSION_BYTES,
+  type RfbPreauthPeer,
+} from "./rfb-preauth.js";
 
 export type RfbProbeResult =
   | { kind: "rfb"; securityTypes: number[] }
+  | { kind: "auth-rejected"; reason: string }
   | { kind: "not-rfb"; banner: string }
   | { kind: "unreachable" }
   | { kind: "timeout" };
 
-/** Parses the fixed-width RFB ProtocolVersion banner without socket state. */
-export function parseRfbVersionBanner(buffer: Buffer):
-  | {
-      kind: "rfb";
-      minor: number;
-      reply: Buffer;
-    }
-  | { kind: "not-rfb"; banner: string } {
-  const banner = buffer.subarray(0, RFB_BANNER_BYTES).toString("ascii");
-  if (buffer.length < RFB_BANNER_BYTES) {
-    return { kind: "not-rfb", banner };
-  }
-  const match = /^RFB 003\.(\d{3})\n$/u.exec(banner);
-  if (!match) {
-    return { kind: "not-rfb", banner };
-  }
-  const minor = Number.parseInt(match[1] ?? "", 10);
-  return {
-    kind: "rfb",
-    minor,
-    reply:
-      minor > RFB_37_MINOR
-        ? RFB_38_BANNER
-        : minor === RFB_37_MINOR
-          ? RFB_37_BANNER
-          : Buffer.from("RFB 003.003\n", "ascii"),
-  };
-}
+const MAX_RFB_DESKTOP_NAME_BYTES = 4096;
+const RFB_SERVER_INIT_BYTES = 24;
+
+export { parseRfbVersionBanner };
 
 class SocketEndedError extends Error {
   constructor(readonly buffered: Buffer) {
@@ -137,11 +118,11 @@ class ConnectedRfbStream extends Duplex {
     callback: (error?: Error | null) => void,
   ): void {
     let remaining = chunk;
-    if (this.version.length < RFB_BANNER_BYTES) {
-      const consumed = Math.min(RFB_BANNER_BYTES - this.version.length, chunk.length);
+    if (this.version.length < RFB_VERSION_BYTES) {
+      const consumed = Math.min(RFB_VERSION_BYTES - this.version.length, chunk.length);
       this.version = Buffer.concat([this.version, chunk.subarray(0, consumed)]);
       remaining = chunk.subarray(consumed);
-      if (this.version.length === RFB_BANNER_BYTES && !this.version.equals(this.versionReply)) {
+      if (this.version.length === RFB_VERSION_BYTES && !this.version.equals(this.versionReply)) {
         callback(new Error("RFB client changed the inspected protocol version"));
         return;
       }
@@ -170,7 +151,14 @@ export async function connectRfbServer(params: {
   timeoutMs: number;
   signal?: AbortSignal;
 }): Promise<
-  | { kind: "rfb"; securityTypes: number[]; stream: Duplex }
+  | {
+      kind: "rfb";
+      securityTypes: number[];
+      stream: Duplex;
+      protocolMinor: number;
+      versionReply: Buffer;
+      inspectedPrefixLength: number;
+    }
   | Exclude<RfbProbeResult, { kind: "rfb" }>
 > {
   params.signal?.throwIfAborted();
@@ -202,7 +190,7 @@ export async function connectRfbServer(params: {
     });
     let bannerBytes: Buffer;
     try {
-      bannerBytes = await reader.readExactly(RFB_BANNER_BYTES);
+      bannerBytes = await reader.readExactly(RFB_VERSION_BYTES);
     } catch (error) {
       params.signal?.throwIfAborted();
       if (error instanceof SocketEndedError) {
@@ -234,9 +222,17 @@ export async function connectRfbServer(params: {
     const stream = new ConnectedRfbStream(socket, version.reply);
     // The Gateway still receives the original RFB wire contract. Only its version
     // reply is consumed locally, since inspection already sent it to this peer.
-    socket.unshift(Buffer.concat([bannerBytes, securityBuffer]));
+    const inspectedPrefix = Buffer.concat([bannerBytes, securityBuffer]);
+    socket.unshift(inspectedPrefix);
     retained = true;
-    return { kind: "rfb", securityTypes, stream };
+    return {
+      kind: "rfb",
+      securityTypes,
+      stream,
+      protocolMinor: version.minor,
+      versionReply: version.reply,
+      inspectedPrefixLength: inspectedPrefix.length,
+    };
   } catch (error) {
     params.signal?.throwIfAborted();
     if (error instanceof SocketTimeoutError) {
@@ -252,18 +248,103 @@ export async function connectRfbServer(params: {
   }
 }
 
-/** Status-only inspection; streaming callers retain the connected result instead. */
+/**
+ * TigerVNC blacklists a loopback client that disconnects after the security
+ * offer. A configured password finishes upstream VncAuth on that same socket,
+ * then ClientInit and ServerInit, before the probe closes it.
+ */
+async function finishConfiguredVncAuth(params: {
+  stream: Duplex;
+  password: string;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+}): Promise<void> {
+  const attached = attachRfbPreauthStream(params.stream);
+  const signal = params.signal ?? new AbortController().signal;
+  // The VNC response is the credential. Revocation fails before that write is sent.
+  const peer: RfbPreauthPeer = {
+    readExactly: (length, requestSignal) => attached.peer.readExactly(length, requestSignal),
+    async write(bytes, requestSignal) {
+      params.assertCurrent?.();
+      await attached.peer.write(bytes, requestSignal);
+    },
+  };
+  try {
+    await negotiateServer({
+      peer,
+      preauth: { auth: "vnc-password", credentials: { password: params.password } },
+      signal,
+    });
+    // Shared ClientInit keeps an existing viewer attached while readiness checks the server.
+    await peer.write(Buffer.from([1]), signal);
+    const header = await peer.readExactly(RFB_SERVER_INIT_BYTES, signal);
+    const nameLength = header.readUInt32BE(20);
+    if (nameLength > MAX_RFB_DESKTOP_NAME_BYTES) {
+      throw new Error(`RFB desktop name is too large (${nameLength})`);
+    }
+    if (nameLength > 0) {
+      await peer.readExactly(nameLength, signal);
+    }
+  } finally {
+    attached.dispose();
+  }
+}
+
+/** Status-only inspection. Streaming callers retain connectRfbServer instead. */
 export async function probeRfbServer(params: {
   host: "127.0.0.1";
   port: number;
   timeoutMs: number;
+  signal?: AbortSignal;
+  vncPassword?: string;
+  assertCurrent?: () => void;
 }): Promise<RfbProbeResult> {
   const result = await connectRfbServer(params);
   if (result.kind !== "rfb") {
     return result;
   }
-  result.stream.destroy();
-  return { kind: "rfb", securityTypes: result.securityTypes };
+  if (!params.vncPassword || classifyRfbSecurity(result.securityTypes) !== "vnc-password") {
+    result.stream.destroy();
+    return { kind: "rfb", securityTypes: result.securityTypes };
+  }
+  const deadline = setTimeout(() => {
+    result.stream.destroy(new SocketTimeoutError("RFB handshake timed out"));
+  }, params.timeoutMs);
+  deadline.unref();
+  let authorityRevoked = false;
+  const assertCurrent = () => {
+    try {
+      params.signal?.throwIfAborted();
+      params.assertCurrent?.();
+    } catch (error) {
+      authorityRevoked = true;
+      throw error;
+    }
+  };
+  try {
+    await finishConfiguredVncAuth({
+      stream: result.stream,
+      password: params.vncPassword,
+      signal: params.signal,
+      assertCurrent,
+    });
+    return { kind: "rfb", securityTypes: result.securityTypes };
+  } catch (error) {
+    if (authorityRevoked) {
+      throw error;
+    }
+    params.signal?.throwIfAborted();
+    if (error instanceof RfbAuthenticationRejectedError) {
+      return { kind: "auth-rejected", reason: error.reason || "VNC authentication failed" };
+    }
+    if (error instanceof SocketTimeoutError) {
+      return { kind: "timeout" };
+    }
+    return { kind: "unreachable" };
+  } finally {
+    clearTimeout(deadline);
+    result.stream.destroy();
+  }
 }
 
 /** Maps standard RFB security numbers into the credential UX supported by OpenClaw. */
