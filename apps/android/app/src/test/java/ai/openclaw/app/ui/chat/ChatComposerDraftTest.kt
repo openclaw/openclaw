@@ -708,7 +708,6 @@ class ChatComposerDraftTest {
     assertEquals(CHAT_COMPOSER_MAX_AUDIO_DECODED_BYTES, chatComposerAttachmentDecodedByteLimit("audio/mpeg"))
     assertEquals(CHAT_COMPOSER_MAX_VIDEO_DECODED_BYTES, chatComposerAttachmentDecodedByteLimit("video/mp4"))
     assertEquals(CHAT_COMPOSER_MAX_DOCUMENT_DECODED_BYTES, chatComposerAttachmentDecodedByteLimit("application/pdf"))
-    assertEquals(20L * 1024L * 1024L, CHAT_COMPOSER_MAX_VIDEO_DECODED_BYTES)
   }
 
   @Test

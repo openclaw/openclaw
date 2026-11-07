@@ -13,6 +13,7 @@ import ai.openclaw.app.gateway.GatewayRequestDefinitiveFailure
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
+import ai.openclaw.app.gateway.GatewayRequestTooLarge
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewaySessionRouting
 import ai.openclaw.app.gateway.QuestionAnswers
@@ -6096,7 +6097,12 @@ class ChatController internal constructor(
 
         err is GatewayRequestDefinitiveFailure -> {
           // A rejection can be a cached result from an admitted run; it never permits replay.
-          val persisted = persist(ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+          // Too-large frames never left the device, so they say why instead of "unconfirmed".
+          val persisted =
+            persist(
+              ChatOutboxStatus.Failed,
+              if (err is GatewayRequestTooLarge) OUTBOX_TOO_LARGE_ERROR else OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
+            )
           if (direct != null) {
             settleDirectSendRun(direct, item.id)
             if (ownsDirectUi()) updateErrorText(err.message)
