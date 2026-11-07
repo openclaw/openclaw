@@ -4,13 +4,13 @@ import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
-import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { formatIsoDate } from "./helpers.ts";
 import { applySuggestionToQuery, buildQuerySuggestions, removeQueryToken } from "./query.ts";
 import type { UsageProps } from "./types.ts";
 import { UsageCreatorFilter } from "./view-creators.tsx";
+import { UsageDisplayMenu } from "./view-display-menu.tsx";
 import { UsageFilterSheet } from "./view-filter-sheet.tsx";
 import { UsageQueryFilter } from "./view-query-filter.tsx";
 
@@ -114,12 +114,7 @@ export function createUsageControls(
   };
   // Everything behind the phone filter button; presets and metric stay on the page.
   const filtersActive = () =>
-    selectedPreset() === "" ||
-    props.filters.timeZone !== "local" ||
-    props.filters.creatorKey !== null ||
-    props.filters.scope !== "family" ||
-    hasDraftQuery() ||
-    hasQuery();
+    selectedPreset() === "" || props.filters.creatorKey !== null || hasDraftQuery() || hasQuery();
   const presetsControl = () => (
     <SettingsSegmented
       mode="buttons"
@@ -151,61 +146,11 @@ export function createUsageControls(
       onChange={(endDate) => props.callbacks.filters.onDatesChange({ endDate })}
     />
   );
-  const timeZoneSelect = () => (
-    <SettingsSelect
-      class="usage-select"
-      title={t("usage.filters.timeZone")}
-      aria-label={t("usage.filters.timeZone")}
-      value={props.filters.timeZone}
-      options={[
-        { value: "local", label: t("usage.filters.timeZoneLocal") },
-        { value: "utc", label: t("usage.filters.timeZoneUtc") },
-      ]}
-      onChange={(event) => {
-        const timeZone = event.currentTarget.value;
-        if (timeZone === "local" || timeZone === "utc") {
-          props.callbacks.filters.onScopeChange({ timeZone });
-        }
-      }}
-    />
-  );
   const creatorFilter = () => (
     <UsageCreatorFilter
       options={props.data.creatorOptions}
       selectedKey={props.filters.creatorKey}
       onSelect={(creatorKey) => props.callbacks.filters.onScopeChange({ creatorKey })}
-    />
-  );
-  const scopeControl = () => (
-    <SettingsSegmented
-      mode="buttons"
-      value={props.filters.scope}
-      onChange={(scope) => props.callbacks.filters.onScopeChange({ scope })}
-      onReselect={(scope) => props.callbacks.filters.onScopeChange({ scope })}
-      options={[
-        {
-          value: "instance",
-          label: t("usage.scope.instance"),
-          title: t("usage.scope.instanceHint"),
-        },
-        {
-          value: "family",
-          label: t("usage.scope.family"),
-          title: t("usage.scope.familyHint"),
-        },
-      ]}
-    />
-  );
-  const metricControl = () => (
-    <SettingsSegmented
-      mode="buttons"
-      value={props.display.chartMode === "tokens" ? "tokens" : "cost"}
-      onChange={(chartMode) => props.callbacks.display.onChange({ chartMode })}
-      onReselect={(chartMode) => props.callbacks.display.onChange({ chartMode })}
-      options={[
-        { value: "tokens", label: t("usage.metrics.tokens") },
-        { value: "cost", label: t("usage.metrics.cost") },
-      ]}
     />
   );
   const partialStatus = () => (
@@ -360,7 +305,7 @@ export function createUsageControls(
           {presetsControl()}
           <div class="usage-toolbar__row">
             {props.agentScope?.()}
-            {metricControl()}
+            <UsageDisplayMenu usage={props} phone />
             <UsageFilterSheet active={filtersActive()}>
               <div class="usage-filter-sheet__fields">
                 <label class="field">
@@ -372,15 +317,10 @@ export function createUsageControls(
                   {endDateInput()}
                 </label>
                 <label class="field">
-                  <span>{t("usage.filters.timeZone")}</span>
-                  {timeZoneSelect()}
-                </label>
-                <label class="field">
                   <span>{t("usage.creators.identity")}</span>
                   {creatorFilter()}
                 </label>
               </div>
-              {scopeControl()}
               <div class="usage-query-section">
                 {queryBar()}
                 {querySuggestionList()}
@@ -398,12 +338,10 @@ export function createUsageControls(
               <span class="usage-separator">{t("usage.filters.to")}</span>
               {endDateInput()}
             </div>
-            {timeZoneSelect()}
           </div>
           <div class="usage-view-options">
             {creatorFilter()}
-            {scopeControl()}
-            {metricControl()}
+            <UsageDisplayMenu usage={props} phone={false} />
             <RefreshButton
               label={t("common.refresh")}
               onClick={() => void props.callbacks.filters.onRefresh()}
