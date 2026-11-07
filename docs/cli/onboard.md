@@ -104,6 +104,18 @@ instead of writing `auth-profiles.json` or modifying SQLite directly.
   `main` is not reserved: if you later recreate it beside a named agent, run
   `openclaw doctor --fix` first when creation reports legacy-session or
   shared-auth ownership still attached to the old `main` installation.
+- `--team`: creates the bundled small team instead of a single agent: a
+  coordinator plus the `researcher`, `writer`, and `reviewer` specialists, each
+  in its own `<workspace>/<agent-id>` folder. `--agent-name` names the
+  coordinator; without it, interactive onboarding asks **What should we call
+  your chief of staff?** and suggests `coordinator`, and non-interactive
+  onboarding uses `coordinator`. Local guided or non-interactive onboarding
+  only: combining `--team` with `--classic`, a remote target, or an import
+  (`--flow import`, `--import-from`, `--import-source`) is rejected. If an agent
+  roster already exists the run stops and points at
+  `openclaw agents team create`. See
+  [CLI onboarding hub](/start/wizard#choose-one-agent-or-a-team) for the team
+  prompts, completion checks, and recovery.
 - `--flow quickstart`: opens the classic wizard with minimal prompts, uses
   a generated Gateway secret by default, without asking you to choose token or
   password. Existing password and trusted-proxy configurations are preserved. Explicit local Gateway flags such as
