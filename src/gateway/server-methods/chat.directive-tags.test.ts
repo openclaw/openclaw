@@ -261,6 +261,9 @@ vi.mock("../../media-understanding/file-context.js", async () => {
     renderInboundDocumentContext: (
       params: Parameters<typeof actual.renderInboundDocumentContext>[0],
     ) => {
+      // #194399/#187438: steer document rendering must stay cancellable with
+      // the active run's abort signal during inbound extraction.
+      expect(params.signal).toBeInstanceOf(AbortSignal);
       if (mockState.steerDocumentRenderError) {
         return Promise.reject(mockState.steerDocumentRenderError);
       }
@@ -1711,7 +1714,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         undefined,
         expect.any(Object),
       );
-      expect(injectedText).toBeDefined();
       expect(injectedText).not.toContain('<file name="notes.txt"');
       expect(injectedText).toContain("hello");
     } else {

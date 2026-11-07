@@ -522,6 +522,7 @@ export async function handleChatSendWithStorage(
               ...(await runtime.renderInboundDocumentContext({
                 ctx,
                 cfg: session.cfg,
+                signal: activeRunAbort.controller.signal,
               })),
             }))
             .catch((err: unknown) => {
