@@ -14,6 +14,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type Step = {
   env?: Record<string, string>;
   name?: string;
+  uses?: string;
   run?: string;
   with?: Record<string, string>;
 };
@@ -149,11 +150,14 @@ it("bounds every git fetch operation", () => {
 it("routes source history through the trusted ancestry owner", () => {
   const sourceAncestry = sourceStep("Establish source ancestry with main");
   const sourceCheck = sourceStep("Check source, test types, and architecture");
+  const ripgrep = sourceStep("Install ripgrep for baseline ratchets");
   const pluginCompatibility = sourceStep("Enforce plugin compatibility release readiness");
   const trustedCheckout = sourceStep("Checkout trusted package source preflight");
   const metadata = step(preflight.jobs?.check_dependencies_npm, "Validate release metadata").run;
 
   expect(trustedCheckout.with?.["sparse-checkout"]).toContain(".github/actions/git-owner");
+  expect(trustedCheckout.with?.["sparse-checkout"]).toContain(".github/actions/setup-ripgrep");
+  expect(ripgrep.uses).toBe("./.release-harness/.github/actions/setup-ripgrep");
   expect(sourceAncestry.env).toMatchObject({
     RELEASE_ANCESTRY_MODE: "merge-base",
     RELEASE_ANCESTRY_SOURCE_REF:
@@ -182,6 +186,8 @@ it("routes source history through the trusted ancestry owner", () => {
   const sourceSteps = preflight.jobs?.check_openclaw_npm?.steps ?? [];
   expect(sourceSteps.indexOf(trustedCheckout)).toBeLessThan(sourceSteps.indexOf(sourceAncestry));
   expect(sourceSteps.indexOf(sourceAncestry)).toBeLessThan(sourceSteps.indexOf(sourceCheck));
+  expect(sourceSteps.indexOf(trustedCheckout)).toBeLessThan(sourceSteps.indexOf(ripgrep));
+  expect(sourceSteps.indexOf(ripgrep)).toBeLessThan(sourceSteps.indexOf(sourceCheck));
   expect(sourceSteps.indexOf(sourceCheck)).toBeLessThan(sourceSteps.indexOf(pluginCompatibility));
 });
 

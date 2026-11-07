@@ -149,6 +149,7 @@ jobs:
           sparse-checkout: |
             .github/actions/git-owner
             .github/actions/setup-node-env
+            .github/actions/setup-ripgrep
             scripts
 
       - name: Setup supported Node runtime
@@ -203,6 +204,9 @@ jobs:
         run: |
           exec python3 -I -S .release-harness/.github/actions/git-owner/owner.py \
             --policy .release-harness/.github/actions/git-owner/release-ancestry.py
+
+      - name: Install ripgrep for baseline ratchets
+        uses: ./.release-harness/.github/actions/setup-ripgrep
 
       - name: Check source, test types, and architecture
         env:
