@@ -1,0 +1,2 @@
+# Channels closure regression and asynchronous readiness assertions retain existing behavior.
+26
