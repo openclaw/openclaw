@@ -341,12 +341,11 @@ it("does not replay covered history on the same thread after local message-tool 
       contentItems: [{ type: "inputText", text: "Sent." }],
     });
     expect(messageTool.execute).toHaveBeenCalledOnce();
-    await harness.waitForMethod("turn/interrupt");
-    await harness.notify({
-      method: "turn/completed",
-      params: { threadId, turn: { id: "turn-2", status: "interrupted", items: [] } },
-    });
+    expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
+    await harness.completeTurn({ threadId, turnId: "turn-2" });
     expect((await terminal).terminal).toEqual({ kind: "ok" });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
     expect(capture).not.toHaveBeenCalled();
     expect(onSettledTurn).toHaveBeenCalledOnce();
     await nativeHookRelayUnregisterQueue.flush();
