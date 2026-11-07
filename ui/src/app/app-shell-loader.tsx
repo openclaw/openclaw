@@ -2,6 +2,7 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { Errored, Loading, lazy, onSettled } from "solid-js";
 import { LazyViewError } from "../components/solid/lazy-view-error.tsx";
 import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
+import { scheduleLayout } from "../lib/layout-frame.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { OpenClawShellProps } from "./app-host.tsx";
 import { bootComposerElement } from "./boot-composer.ts";
@@ -12,7 +13,21 @@ import {
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
 
-const LazyShell = lazy(() => import("./app-host.tsx"), { export: "OpenClawShell" });
+const LazyShell = lazy(
+  async () => {
+    const shell = await import("./app-host.tsx");
+    // Finish evaluating the shell graph before constructing its DOM in a new frame.
+    if (document.visibilityState !== "hidden") {
+      await new Promise<void>((resolve) => {
+        scheduleLayout(resolve, () => () => {
+          scheduleLayout(resolve, () => resolve);
+        });
+      });
+    }
+    return shell;
+  },
+  { export: "OpenClawShell" },
+);
 
 type ShellLoaderProps = OpenClawShellProps & { fallback: SolidJSX.Element };
 
