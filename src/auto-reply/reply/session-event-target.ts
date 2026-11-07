@@ -204,7 +204,7 @@ export async function captureSessionEventTargetForHost(
         resolveSessionEventKey(agentId, caller.sessionKey) === sessionKey;
       if (caller.sessionEventToolsAllow && !sessionScopedSurface) {
         if (
-          caller.sessionEventToolsAllow.length > 512 ||
+          caller.sessionEventToolsAllow.length > SESSION_EVENT_TOOLS_ALLOW_LIMIT ||
           caller.sessionEventToolsAllow.some((name) => name.length > 256)
         ) {
           throw new Error("Session event producer tool surface exceeds the supported bound");
@@ -596,6 +596,9 @@ export function combineSessionEventTargetsForHost(
   bindGatewayContextResolver(combined, getGatewayContextResolver(first));
   return combined;
 }
+
+/** Producer tool surfaces above this bound are rejected at target resolution. */
+export const SESSION_EVENT_TOOLS_ALLOW_LIMIT = 512;
 
 /** Retain each canonical cap independently; overlapping globs cannot be flattened safely. */
 export function intersectSessionEventToolsAllow(

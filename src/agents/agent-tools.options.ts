@@ -162,6 +162,8 @@ export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
    * turn. Omitted or "turn" keeps every background follow-up capped at this turn's tool list.
    */
   toolPolicyScope?: "conversation" | "turn";
+  /** Mutable event-source cap; bundled tools append their final policy-filtered names later. */
+  sessionEventToolsAllowRef?: string[];
 };
 
 export type PluginCodingToolsOptions = Omit<
