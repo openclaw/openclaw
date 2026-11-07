@@ -34,7 +34,11 @@ type Workflow = {
       outputs?: Record<string, string>;
       permissions?: Record<string, string>;
       env?: Record<string, string>;
-      concurrency?: { group: string; "cancel-in-progress": boolean };
+      concurrency?: {
+        group: string;
+        queue?: "single" | "max";
+        "cancel-in-progress": boolean;
+      };
       strategy?: { "fail-fast": boolean; matrix: string };
       steps: WorkflowStep[];
     }
@@ -165,6 +169,7 @@ describe("security review workflow trust boundaries", () => {
     expect(workflow.concurrency).toBeUndefined();
     expect(workflow.jobs.review?.concurrency).toEqual({
       group: "security-review-${{ matrix.head }}",
+      queue: "max",
       "cancel-in-progress": false,
     });
     expect(workflow.jobs.review?.strategy).toEqual({

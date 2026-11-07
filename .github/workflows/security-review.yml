@@ -135,6 +135,8 @@ jobs:
       matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
     concurrency:
       group: security-review-${{ matrix.head }}
+      # Required review checks must finish; replacing a pending job strands its lane.
+      queue: max
       cancel-in-progress: false
     permissions:
       contents: read
