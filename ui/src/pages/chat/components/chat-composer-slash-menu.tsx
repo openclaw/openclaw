@@ -36,7 +36,7 @@ export function SlashMenu(props: { menu: SlashMenuState; host: SlashMenuHost; dr
     > = [];
     for (const [index, command] of state().slashMenuItems.entries()) {
       const category = command.source === "skill" ? "skills" : (command.category ?? "session");
-      const group = props.draft === "/" ? groups.find(([key]) => key === category) : groups.at(-1);
+      const group = groups.at(-1);
       if (group?.[0] === category) {
         group[1].push({ command, index });
       } else {
