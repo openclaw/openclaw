@@ -291,7 +291,9 @@ export function createSidebarSnapshot(host: {
     lastCapture = "retiring";
     void retirement.then(async () => {
       if (!current()) {
-        if (next === captured) lastCapture = "superseded";
+        if (next === captured) {
+          lastCapture = "superseded";
+        }
         return;
       }
       lastCapture = "writing";

@@ -32,7 +32,7 @@ export function readSidebarSnapshotCaptureDiagnostics(
 }
 
 export function readSidebarSnapshotDiagnostics(owner: AppSidebarOwner) {
-  const context = owner.context;
+  const context = owner.sessionDataContext;
   return {
     ...readSidebarSnapshotCaptureDiagnostics(owner.snapshot),
     windowReady: owner.scroll?.windowKeys() !== undefined,
