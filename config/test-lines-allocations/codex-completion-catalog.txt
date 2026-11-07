@@ -1,0 +1,3 @@
+# Completion custody survives the final live-thread pin, with native SQLite-backed
+# receipt/retirement checks and revoked metadata-read coverage.
+115
