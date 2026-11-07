@@ -11,6 +11,7 @@ import ai.openclaw.app.ui.design.ClawLoadingState
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
+import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.sessionColor
 import ai.openclaw.app.ui.design.sessionColorNames
@@ -104,6 +105,10 @@ internal fun SessionsScreen(
   val chatSessionKey by viewModel.chatSessionKey.collectAsState()
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
+  val rosterHasMore by viewModel.sessionRosterHasMore.collectAsState()
+  val rosterLoadingMore by viewModel.sessionRosterLoadingMore.collectAsState()
+  val rosterLoadFailed by viewModel.sessionRosterLoadFailed.collectAsState()
+  val rosterListedArchived by viewModel.sessionRosterListedArchived.collectAsState()
   val coroutineScope = rememberCoroutineScope()
   val searchFocusRequester = remember { FocusRequester() }
   val keyboardController = LocalSoftwareKeyboardController.current
@@ -407,6 +412,36 @@ internal fun SessionsScreen(
               onRename = { renameSessionTarget = session.toActionTarget(activeGatewayStableId) },
               onNewGroup = { groupSessionTarget = session.toActionTarget(activeGatewayStableId) },
               onDelete = { deleteSessionTarget = session.toActionTarget(activeGatewayStableId) },
+            )
+          }
+        }
+        // Only the Recent and Archived tabs page the full roster of their own
+        // scope, and only while the listed scope matches the visible filter;
+        // other tabs and search results project rows the continuation cannot add.
+        val rosterScopeMatches =
+          (filter == SessionFilter.Archived) == rosterListedArchived &&
+            (filter == SessionFilter.Recent || filter == SessionFilter.Archived)
+        if (rosterHasMore && rosterScopeMatches && searchState.query.isEmpty()) {
+          if (rosterLoadFailed) {
+            item(key = "sessions-load-more-error") {
+              Text(
+                text = nativeString("Could not load more sessions. Try again."),
+                style = ClawTheme.type.caption,
+                color = ClawTheme.colors.textMuted,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 10.dp),
+              )
+            }
+          }
+          item(key = "sessions-load-more") {
+            val archivedScope = filter == SessionFilter.Archived
+            ClawSecondaryButton(
+              text = nativeString(if (rosterLoadingMore) "Loading" else "Load more sessions"),
+              onClick = {
+                if (!rosterLoadingMore) coroutineScope.launch { viewModel.loadMoreChatSessions(archived = archivedScope) }
+              },
+              enabled = !rosterLoadingMore,
+              icon = Icons.Default.KeyboardArrowDown,
+              modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
             )
           }
         }
