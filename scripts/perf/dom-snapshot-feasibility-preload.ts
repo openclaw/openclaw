@@ -16,7 +16,9 @@ const pendingVisual = new Set<Promise<void>>();
 function captureDom() {
   const started = performance.now();
   const app = document.querySelector("openclaw-app");
-  if (!app || !document.querySelector(".chat-virtual-row")) return null;
+  if (!app || !document.querySelector(".chat-virtual-row")) {
+    return null;
+  }
   const inertDocument = document.implementation.createHTMLDocument();
   const scrolls: Array<{ index: number; top: number; left: number }> = [];
   let nodes = 0,
@@ -25,9 +27,12 @@ function captureDom() {
     shadows = 0;
   const copy = (source: Node): Node | null => {
     nodes++;
-    if (source.nodeType === Node.TEXT_NODE)
+    if (source.nodeType === Node.TEXT_NODE) {
       return inertDocument.createTextNode(source.textContent ?? "");
-    if (!(source instanceof Element)) return null;
+    }
+    if (!(source instanceof Element)) {
+      return null;
+    }
     if (source.matches("script,iframe,object,embed,base,meta,link")) {
       excluded++;
       return null;
@@ -38,32 +43,41 @@ function captureDom() {
       if (
         /^on/i.test(attribute.name) ||
         /^(?:srcdoc|elementtiming|autofocus)$/i.test(attribute.name) ||
+        // URL parsing strips ASCII controls before recognizing executable schemes.
+        // eslint-disable-next-line no-control-regex
         /^(?:javascript|vbscript):/i.test(attribute.value.replace(/[\s\x00-\x20]/g, ""))
-      )
+      ) {
         continue;
+      }
       target.setAttribute(attribute.name, attribute.value);
     }
-    if (source instanceof HTMLElement && (source.scrollTop || source.scrollLeft))
+    if (source instanceof HTMLElement && (source.scrollTop || source.scrollLeft)) {
       scrolls.push({ index, top: source.scrollTop, left: source.scrollLeft });
+    }
     if (source instanceof HTMLInputElement) {
       target.setAttribute("value", source.value);
       target.toggleAttribute("checked", source.checked);
     }
-    if (source instanceof HTMLImageElement && source.currentSrc)
+    if (source instanceof HTMLImageElement && source.currentSrc) {
       target.setAttribute("src", source.currentSrc);
+    }
     if (source.shadowRoot) {
       shadows++;
       const template = inertDocument.createElement("template");
       template.setAttribute("data-l303-shadow", "");
       for (const child of source.shadowRoot.childNodes) {
         const cloned = copy(child);
-        if (cloned) template.content.append(cloned);
+        if (cloned) {
+          template.content.append(cloned);
+        }
       }
       target.append(template);
     }
     for (const child of source.childNodes) {
       const cloned = copy(child);
-      if (cloned) target.append(cloned);
+      if (cloned) {
+        target.append(cloned);
+      }
     }
     return target;
   };
@@ -79,7 +93,7 @@ function captureDom() {
   const fontRules: string[] = [];
   const readFonts = (rules: CSSRuleList, base: string) => {
     for (const rule of rules) {
-      if (rule instanceof CSSFontFaceRule)
+      if (rule instanceof CSSFontFaceRule) {
         fontRules.push(
           rule.cssText.replace(
             /url\((['"]?)(.*?)\1\)/g,
@@ -87,10 +101,14 @@ function captureDom() {
               `url(${JSON.stringify(new URL(source, base).href)})`,
           ),
         );
-      else if (rule instanceof CSSGroupingRule) readFonts(rule.cssRules, base);
+      } else if (rule instanceof CSSGroupingRule) {
+        readFonts(rule.cssRules, base);
+      }
     }
   };
-  for (const sheet of document.styleSheets) readFonts(sheet.cssRules, sheet.href ?? location.href);
+  for (const sheet of document.styleSheets) {
+    readFonts(sheet.cssRules, sheet.href ?? location.href);
+  }
   const usedFonts = [...document.fonts]
     .filter((face) => face.status === "loaded")
     .map((face) => `${face.style} ${face.weight.split(" ")[0]} 16px ${face.family}`);
@@ -102,7 +120,7 @@ function captureDom() {
       .find((color) => color !== "rgba(0, 0, 0, 0)" && color !== "transparent") ?? "white";
   const requiresDetails =
     (app.querySelector(".chat-details")?.getBoundingClientRect().width ?? 0) > 0;
-  const requiresBoard = !!app.querySelector("openclaw-board-view iframe");
+  const requiresBoard = Boolean(app.querySelector("openclaw-board-view iframe"));
   return {
     markup,
     viewport,
@@ -134,7 +152,9 @@ function replayDom(input: {
   url: string;
   hold: boolean;
 }) {
-  if (window !== window.top || location.href !== input.url) return;
+  if (window !== window.top || location.href !== input.url) {
+    return;
+  }
   const data = {
     sequence: input.sequence,
     replay: input.replay,
@@ -164,15 +184,24 @@ function replayDom(input: {
     for (const entry of list.getEntries()) {
       const id: unknown = Reflect.get(entry, "identifier");
       const time: unknown = Reflect.get(entry, "renderTime");
-      if (typeof time !== "number" || time <= 0) continue;
-      if (id === "l303-snapshot") data.snapshotPaintMs ??= time;
-      if (typeof id === "string" && /^openclaw-transcript(?:-(?:saved|live))?$/.test(id))
+      if (typeof time !== "number" || time <= 0) {
+        continue;
+      }
+      if (id === "l303-snapshot") {
+        data.snapshotPaintMs ??= time;
+      }
+      if (typeof id === "string" && /^openclaw-transcript(?:-(?:saved|live))?$/.test(id)) {
         data.liveRowsPaintMs ??= time;
-      if (id === "openclaw-details") data.liveDetailsPaintMs ??= time;
+      }
+      if (id === "openclaw-details") {
+        data.liveDetailsPaintMs ??= time;
+      }
     }
   }).observe({ type: "element", buffered: true });
   const insert = async () => {
-    if (!document.documentElement || overlay || !input.replay) return;
+    if (!document.documentElement || overlay || !input.replay) {
+      return;
+    }
     const started = performance.now();
     // Shadow styles do not register document fonts; preserve the old font metrics before reveal.
     fontStyle = document.createElement("style");
@@ -195,8 +224,12 @@ function replayDom(input: {
     const html = document.createElement("html", {
       customElementRegistry: registry,
     } as ElementCreationOptions);
-    for (const [name, value] of input.snapshot.htmlAttributes) html.setAttribute(name!, value!);
-    for (const [name, value] of input.snapshot.properties) overlay.style.setProperty(name!, value!);
+    for (const [name, value] of input.snapshot.htmlAttributes) {
+      html.setAttribute(name!, value!);
+    }
+    for (const [name, value] of input.snapshot.properties) {
+      overlay.style.setProperty(name!, value!);
+    }
     html.style.width = `${input.snapshot.viewport.width}px`;
     html.style.height = `${input.snapshot.viewport.height}px`;
     html.style.translate = `${-box.x}px ${-box.y}px`;
@@ -205,7 +238,9 @@ function replayDom(input: {
     // container would upgrade its descendants despite its scoped parent.
     html.innerHTML = `<head>${input.snapshot.styles.join("")}</head><body>${input.snapshot.markup}</body>`;
     const body = html.querySelector("body")!;
-    for (const [name, value] of input.snapshot.bodyAttributes) body.setAttribute(name!, value!);
+    for (const [name, value] of input.snapshot.bodyAttributes) {
+      body.setAttribute(name!, value!);
+    }
     const hydrate = (scope: ParentNode) => {
       for (const template of scope.querySelectorAll<HTMLTemplateElement>(
         "template[data-l303-shadow]",
@@ -225,8 +260,14 @@ function replayDom(input: {
     const elements: Element[] = [];
     const visit = (element: Element) => {
       elements.push(element);
-      if (element.shadowRoot) for (const child of element.shadowRoot.children) visit(child);
-      for (const child of element.children) visit(child);
+      if (element.shadowRoot) {
+        for (const child of element.shadowRoot.children) {
+          visit(child);
+        }
+      }
+      for (const child of element.children) {
+        visit(child);
+      }
     };
     const app = body.firstElementChild!;
     visit(app);
@@ -247,8 +288,9 @@ function replayDom(input: {
     await document.fonts.ready;
     data.fontsReadyMs = performance.now();
     const scrollStarted = performance.now();
-    for (const scroll of input.snapshot.scrolls)
+    for (const scroll of input.snapshot.scrolls) {
       elements[scroll.index]?.scrollTo(scroll.left, scroll.top);
+    }
     data.restoreScrollMs = performance.now() - scrollStarted;
     root
       .querySelector(".chat-text p, .chat-text, .chat-virtual-row")
@@ -274,12 +316,14 @@ function replayDom(input: {
     });
   };
   const observer = new MutationObserver(() => {
-    insert();
-    if (overlay) observer.disconnect();
+    void insert();
+    if (overlay) {
+      observer.disconnect();
+    }
   });
   if (input.replay) {
     observer.observe(document, { childList: true, subtree: true });
-    insert();
+    void insert();
   }
   let complete = false;
   const frame = () => {
@@ -303,7 +347,9 @@ function replayDom(input: {
         if (input.hold && input.replay) {
           Reflect.set(window, "__l303Swap", swap);
           console.debug("L303_READY:" + input.sequence);
-        } else requestAnimationFrame(swap);
+        } else {
+          requestAnimationFrame(swap);
+        }
       }
       return;
     }
@@ -322,7 +368,9 @@ function installSnapshotWitness() {
         element.getAttribute("aria-hidden") === "true" &&
         element.style.zIndex === "2147483647",
     );
-    if (!overlay) return;
+    if (!overlay) {
+      return;
+    }
     observer.disconnect();
     const marker = document.createElement("div");
     marker.inert = true;
@@ -333,7 +381,9 @@ function installSnapshotWitness() {
       if (!overlay.isConnected) {
         marker.remove();
         follow.disconnect();
-      } else marker.style.visibility = overlay.style.visibility;
+      } else {
+        marker.style.visibility = overlay.style.visibility;
+      }
     });
     marker.style.visibility = overlay.style.visibility;
     document.documentElement.append(marker);
@@ -371,23 +421,28 @@ async function instrument(page: Page) {
         event.type === "Image" &&
         event.loaderId === loaderId &&
         event.response.url.startsWith("http")
-      )
+      ) {
         imageResponses.push({
           path: new URL(event.response.url).pathname,
           status: event.response.status,
-          diskCache: !!event.response.fromDiskCache,
-          serviceWorker: !!event.response.fromServiceWorker,
+          diskCache: Boolean(event.response.fromDiskCache),
+          serviceWorker: Boolean(event.response.fromServiceWorker),
           encodedBytes: event.response.encodedDataLength,
         });
+      }
     });
   }
   const originalNewSession = context.newCDPSession.bind(context);
   context.newCDPSession = async (...args) => {
     const cdp = await originalNewSession(...args);
-    if (args[0] !== page) return cdp;
+    if (args[0] !== page) {
+      return cdp;
+    }
     const send = cdp.send.bind(cdp);
     cdp.send = async (method, params) => {
-      if (method === "Page.startScreencast") armed = true;
+      if (method === "Page.startScreencast") {
+        armed = true;
+      }
       return send(method, params);
     };
     return cdp;
@@ -405,7 +460,10 @@ async function instrument(page: Page) {
         );
         await page.evaluate(() => Reflect.get(window, "__l303Swap")());
         await page.evaluate(
-          () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            }),
         );
         const after = await session.send("Page.captureScreenshot", { format: "png" });
         await writeFile(path.join(output, `${index}.live.png`), Buffer.from(after.data, "base64"));
@@ -441,15 +499,20 @@ async function instrument(page: Page) {
     }
   });
   const prepare = async () => {
-    if (!armed) return;
+    if (!armed) {
+      return;
+    }
     armed = false;
     const url = page.url();
-    if (new URL(url).hostname !== "127.0.0.1")
+    if (new URL(url).hostname !== "127.0.0.1") {
       throw new Error("L303 only instruments owned loopback pages");
+    }
     const snapshot = await page.evaluate<ReturnType<typeof captureDom>>(
       `(() => { const __name=(fn)=>fn; return (${captureDom.toString()})(); })()`,
     );
-    if (!snapshot) return;
+    if (!snapshot) {
+      return;
+    }
     const index = sequence++;
     const replay = !aa && (index % 4 === 1 || index % 4 === 2);
     const { markup, metrics, rect } = snapshot;
@@ -475,8 +538,9 @@ async function instrument(page: Page) {
         2,
       ),
     );
-    if (script)
+    if (script) {
       await session.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: script });
+    }
     script = (
       await session.send("Page.addScriptToEvaluateOnNewDocument", {
         source: `const __name=(fn)=>fn;(${replayDom.toString()})(${JSON.stringify({ snapshot, replay, sequence: index, url, hold: process.env.L303_HOLD === "1" })});${collectImages && replay ? `(${installSnapshotWitness.toString()})()` : ""}`,
@@ -500,7 +564,7 @@ chromium.launch = async (...args) => {
   const browser = await launch(...args);
   const close = browser.close.bind(browser);
   browser.close = async (...closeArgs) => {
-    await Promise.all([...pendingVisual]);
+    await Promise.all(pendingVisual);
     return close(...closeArgs);
   };
   const newContext = browser.newContext.bind(browser);
@@ -508,7 +572,7 @@ chromium.launch = async (...args) => {
     const context = await newContext(...contextArgs);
     const closeContext = context.close.bind(context);
     context.close = async (...closeArgs) => {
-      await Promise.all([...pendingVisual]);
+      await Promise.all(pendingVisual);
       return closeContext(...closeArgs);
     };
     const newPage = context.newPage.bind(context);
