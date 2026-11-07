@@ -7,7 +7,10 @@ import type {
   SystemChangeEntry,
   SystemChangesListResult,
 } from "../../packages/gateway-protocol/src/index.ts";
-import type { UserProfile } from "../../packages/gateway-protocol/src/schema/users.ts";
+import type {
+  UserProfile,
+  UsersPersonalFileGetResult,
+} from "../../packages/gateway-protocol/src/schema/users.ts";
 import type { loadVoiceWakeConfig } from "../../src/infra/voicewake.ts";
 import type { ModelAuthStatusResult } from "../../ui/src/api/types.ts";
 import {
@@ -42,6 +45,7 @@ import type {
   InteractionEvidence,
   InteractionScenario,
 } from "./control-ui-interaction-scenarios.ts";
+import { workboardResourceRoute } from "./control-ui-workboard-resource-fixture.ts";
 
 type PageAction = {
   label: string;
@@ -1380,6 +1384,7 @@ function createPageFixture(
           "skills.search",
           "secrets.store.set",
           "users.setDisplayName",
+          ...(id === "profile" ? ["users.personalFile.get"] : []),
           "templates.catalog.search",
           "node.list",
           "device.pair.list",
@@ -1408,6 +1413,17 @@ function createPageFixture(
           ? {
               "cron.list": base.methodResponses?.["cron.list"],
               "cron.status": base.methodResponses?.["cron.status"],
+            }
+          : {}),
+        ...(id === "profile"
+          ? {
+              "users.personalFile.get": {
+                agentId: "main",
+                profileId: savedProfile.id,
+                content: "",
+                hash: null,
+                missing: true,
+              } satisfies UsersPersonalFileGetResult,
             }
           : {}),
         "config.get": {
@@ -1800,9 +1816,23 @@ export async function collectEnginePageStructure(page: Page): Promise<Interactio
     });
 }
 
-async function measureVisit(page: Page, id: RouteId, definition: PageDefinition) {
+async function measureVisit(
+  page: Page,
+  id: RouteId,
+  definition: PageDefinition,
+  timeoutMs = 60_000,
+) {
   return page.evaluate(
-    ({ id: routeId, pathname, search: routeSearch, landed, selector, rows, completion }) =>
+    ({
+      id: routeId,
+      pathname,
+      search: routeSearch,
+      landed,
+      selector,
+      rows,
+      completion,
+      timeoutMs: limitMs,
+    }) =>
       new Promise<{
         startedAtMs: number;
         readyMs: number;
@@ -1903,7 +1933,7 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
               readyAtMs: started + readyMs,
               contentReadyMs: performance.now() - started,
             });
-          } else if (performance.now() - started > 60_000) {
+          } else if (performance.now() - started > limitMs) {
             reject(new Error(`Page readiness timed out: ${routeId} (${selector})`));
           } else {
             requestAnimationFrame(probe);
@@ -1920,6 +1950,7 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
       selector: definition.ready,
       rows: definition.rows,
       completion: definition.completion,
+      timeoutMs,
     },
   );
 }
@@ -2135,28 +2166,26 @@ export function createEnginePageScenarios(
         prepare: enter,
         run: async (page) => {
           const advanced = page.locator(".config-advanced-disclosure");
-          const fields = advanced.locator(":scope > .settings-group > .settings-row");
+          const fields = advanced.locator(":scope > .settings-row--stacked-on-narrow");
           const inputs = advanced.locator("input, select, textarea, button");
           assert.equal(await advanced.getAttribute("open"), null);
           const mountedFieldsBefore = await fields.count();
           await advanced.locator(":scope > summary").click();
-          // The base schema has three numeric fields and the native-search object (ten controls).
           await page.waitForFunction(() => {
             const details = document.querySelector<HTMLDetailsElement>(
               ".config-advanced-disclosure",
             );
-            return (
-              details?.open &&
-              details.querySelectorAll(":scope > .settings-group > .settings-row").length === 4 &&
-              details.querySelectorAll("input, select, textarea, button").length === 10
-            );
+            return details?.open && details.querySelectorAll("input, select, textarea").length > 0;
           });
           await frames(page);
+          const mounted = { fields: await fields.count(), inputs: await inputs.count() };
+          // Native-search object leaves now have their own rows alongside the three numbers.
+          assert.deepEqual(mounted, { fields: 11, inputs: 14 });
           return {
             opened: true,
             mountedFieldsBefore,
-            mountedFields: await fields.count(),
-            mountedInputs: await inputs.count(),
+            mountedFields: mounted.fields,
+            mountedInputs: mounted.inputs,
           };
         },
       };
@@ -2431,5 +2460,240 @@ export function createEnginePageScenarios(
       ].concat(noChanges);
     }
     return [visit, revisit, action, leave].concat(noChanges);
+  });
+}
+
+export type EngineRouteTransition = { from: RouteId; to: RouteId; path: string };
+export type EngineRouteTransitionCallback = (
+  page: Page,
+  transition: EngineRouteTransition,
+  run: () => Promise<number>,
+) => Promise<void>;
+
+const transitionDefinitions: Partial<Record<RouteId, PageDefinition>> = {
+  ...definitions,
+  "new-session": {
+    ready: "openclaw-new-session-page .agent-chat__composer-combobox textarea",
+  },
+  chat: {
+    ready: ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+    pathname: controlUiSessionPath("agent:main:interaction-a"),
+  },
+  dashboard: {
+    ready: "openclaw-chat-page .sidebar-region",
+    pathname: controlUiSessionPath("agent:main:interaction-a").replace(/^\/chat/, "/dashboard"),
+  },
+  logs: { ready: "openclaw-logs-page .logs-toolbar" },
+  usage: { ready: "openclaw-usage-page .usage-page" },
+  workboard: {
+    ready: ".workboard-card",
+    pathname: workboardResourceRoute,
+    // The resource fixture loads 100 cards; windowing mounts only visible rows.
+    rows: { selector: ".workboard-card", minimum: 1 },
+  },
+  plugin: {
+    ready: ".workboard-card",
+    search: `?${new URLSearchParams({
+      plugin: "workboard",
+      id: "workboard",
+      "p.boardId": workboardResourceRoute.split("/").at(-1)!,
+    })}`,
+    rows: { selector: ".workboard-card", minimum: 1 },
+  },
+};
+
+export const engineRouteTransitionCoverage = APP_ROUTE_IDS.map((id) => ({
+  id,
+  path: `${transitionDefinitions[id]?.pathname ?? pathForRoute(id)}${transitionDefinitions[id]?.search ?? ""}`,
+  status: "measured" as const,
+}));
+
+/** One browser context per source preserves warm route and component identities. */
+export function createEngineRouteTransitionScenarios(
+  collect: EngineRouteTransitionCallback,
+  targetPaths?: readonly string[],
+): readonly EngineScenario[] {
+  const routeIds = APP_ROUTE_IDS;
+  const targets = routeIds.map((id) => {
+    const definition = transitionDefinitions[id];
+    assert(definition, `Missing transition definition for ${id}`);
+    return { id, definition };
+  });
+  const aliases: Array<{ id: RouteId; pathname: string }> = [
+    { id: "channels", pathname: "/channels" },
+    { id: "config", pathname: "/config" },
+    { id: "profile", pathname: "/profile" },
+    { id: "communications", pathname: "/communications" },
+    { id: "appearance", pathname: "/appearance" },
+    { id: "lobsterdex", pathname: "/lobsterdex" },
+    { id: "automation", pathname: "/automation" },
+    { id: "mcp", pathname: "/mcp" },
+    { id: "infrastructure", pathname: "/infrastructure" },
+    { id: "ai-agents", pathname: "/ai-agents" },
+    { id: "model-setup", pathname: "/model-setup" },
+    { id: "model-providers", pathname: "/model-providers" },
+    { id: "memory-import", pathname: "/settings/memory-import" },
+    { id: "worktrees", pathname: "/settings/worktrees" },
+    { id: "sessions", pathname: "/settings/sessions" },
+    { id: "cron", pathname: "/cron" },
+    { id: "devices", pathname: "/nodes" },
+  ];
+  targets.push(
+    ...aliases.map(({ id, pathname }) => ({
+      id,
+      definition:
+        id === "model-setup"
+          ? {
+              ...transitionDefinitions["model-providers"]!,
+              pathname,
+              search: "",
+              landed: "model-providers" as const,
+            }
+          : { ...transitionDefinitions[id]!, pathname },
+    })),
+  );
+  const redirects: Array<{
+    id: RouteId;
+    search: string;
+    landed: RouteId;
+    ready?: string;
+  }> = [
+    { id: "communications", search: "?section=__notifications__", landed: "notifications" },
+    { id: "communications", search: "?section=channels", landed: "channels" },
+    { id: "communications", search: "?section=broadcast", landed: "advanced" },
+    { id: "communications", search: "?section=talk", landed: "talk" },
+    { id: "appearance", search: "?section=wizard", landed: "advanced" },
+    { id: "advanced", search: "?section=transcripts", landed: "communications" },
+    { id: "automation", search: "?section=approvals", landed: "security" },
+    {
+      id: "automation",
+      search: "?section=plugins",
+      landed: "plugin-settings",
+      ready: "#plugin-settings-advanced .settings-row",
+    },
+    {
+      id: "ai-agents",
+      search: "?section=memory",
+      landed: "memory",
+      ready: '#memory-settings-panel select[aria-label="Memory engine"]',
+    },
+    { id: "ai-agents", search: "?section=models", landed: "model-providers" },
+    { id: "model-setup", search: "", landed: "model-providers" },
+  ];
+  targets.push(
+    ...redirects.map(({ id, search, landed, ready: redirectedReady }) => ({
+      id,
+      // Inventory counts describe the whole default page, not a relocated section.
+      definition: {
+        ...transitionDefinitions[landed]!,
+        completion: undefined,
+        ...(redirectedReady ? { ready: redirectedReady, rows: undefined } : {}),
+        pathname: pathForRoute(id),
+        search,
+        landed,
+      },
+    })),
+  );
+  const selectedTargets = targetPaths
+    ? targets.filter(({ id, definition }) =>
+        targetPaths.includes(
+          `${definition.pathname ?? pathForRoute(id)}${definition.search ?? ""}`,
+        ),
+      )
+    : targets;
+  if (
+    targetPaths?.some(
+      (path) =>
+        !selectedTargets.some(
+          ({ id, definition }) =>
+            `${definition.pathname ?? pathForRoute(id)}${definition.search ?? ""}` === path,
+        ),
+    )
+  ) {
+    throw new Error("Unknown transition target path");
+  }
+  const broadFixture = createPageFixture(definitions.systems!, "systems");
+  const sources = [...new Set(Object.values(definitions).flatMap((entry) => entry.source ?? []))];
+  const fixtureOverrides: NonNullable<EngineScenario["fixtureOverrides"]> = (sandbox, base) => {
+    const broad = broadFixture(sandbox, base);
+    const domains = sources.map((source) => source.fixtureOverrides?.(sandbox, base));
+    return {
+      ...broad,
+      sessionKey: base.sessionKey,
+      featureMethods: [
+        ...new Set([
+          ...(base.featureMethods ?? []),
+          ...(broad.featureMethods ?? []),
+          ...domains.flatMap((domain) => domain?.featureMethods ?? []),
+        ]),
+      ],
+      methodResponses: Object.assign(
+        {},
+        ...domains.map((domain) => domain?.methodResponses),
+        broad.methodResponses,
+        {
+          "cron.list": base.methodResponses?.["cron.list"],
+          "cron.status": base.methodResponses?.["cron.status"],
+        },
+      ),
+      sessionTranscripts: {
+        ...broad.sessionTranscripts,
+        ...Object.assign({}, ...domains.map((domain) => domain?.sessionTranscripts)),
+        ...base.sessionTranscripts,
+      },
+    };
+  };
+  return routeIds.map((from): EngineScenario => {
+    const source = transitionDefinitions[from]!;
+    const enterSource = async (page: Page) => {
+      if (source.pathname) {
+        await measureVisit(page, from, source);
+      } else {
+        await navigate(page, from, source.search);
+      }
+      await ready(page, from, source);
+    };
+    return {
+      id: `remount-from-${from}`,
+      explicitOnly: true,
+      route: "/new",
+      expected: `Count retained and rebuilt subtrees from ${from} to every supported route, alias and retired URL.`,
+      fixture:
+        from === "plugin" ||
+        from === "workboard" ||
+        selectedTargets.some(({ id }) => id === "plugin" || id === "workboard")
+          ? { workboardResources: true }
+          : undefined,
+      fixtureOverrides,
+      initScript: createColdLoadProbeInitScript({
+        ownerProbes: false,
+        sidebarCounters: false,
+        latencyMs: 0,
+        frameGapMs: 0,
+        events: [],
+      }),
+      prepare: async (page) => {
+        await waitForControlUiRoute(page, { routeId: "new-session" });
+        await enterSource(page);
+      },
+      run: async (page) => {
+        let transitions = 0;
+        for (const { id: to, definition } of selectedTargets) {
+          const path = `${definition.pathname ?? pathForRoute(to)}${definition.search ?? ""}`;
+          const sourcePath = `${source.pathname ?? pathForRoute(from)}${source.search ?? ""}`;
+          if (path === sourcePath) {
+            continue;
+          }
+          await enterSource(page);
+          await collect(page, { from, to, path }, async () => {
+            const timing = await measureVisit(page, to, definition, 10_000);
+            await ready(page, to, definition);
+            return timing.contentReadyMs;
+          });
+          transitions += 1;
+        }
+        return { transitions };
+      },
+    };
   });
 }

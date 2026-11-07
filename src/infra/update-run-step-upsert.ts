@@ -1,4 +1,4 @@
-import { isRetainedStep } from "./update-run-codec.js";
+import { findDisposableStep } from "./update-run-codec.js";
 import type { UpdateRunRecord, UpdateRunStep } from "./update-run-record.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
 
@@ -12,7 +12,7 @@ export function upsertStep(record: UpdateRunRecord, input: UpdateRunStep): void 
     record.steps.push(step);
   }
   while (record.steps.length > 128) {
-    const disposable = record.steps.findIndex((entry) => !isRetainedStep(entry));
+    const disposable = findDisposableStep(record.steps);
     if (disposable < 0) {
       throw new Error("Update run retained steps exceed the step limit");
     }

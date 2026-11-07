@@ -191,8 +191,8 @@ export async function waitForEngineTranscript(
       messages: snapshot?.[1].snapshot.messages.length ?? 0,
       mountedRows: pane?.querySelectorAll(".chat-virtual-row").length ?? 0,
       cachedAdmission:
-        pane?.querySelector("[data-cached-session]")?.getAttribute("data-cached-session") ??
-        "unavailable",
+        pane?.querySelector("[data-cached-session]")?.getAttribute("data-cached-session") ===
+        "true",
       composerReady: input !== null && input !== undefined && !input.disabled,
       transcriptReady: pane ? Reflect.get(pane, "transcriptReady") === true : false,
       longTasksSupported: PerformanceObserver.supportedEntryTypes.includes("longtask"),

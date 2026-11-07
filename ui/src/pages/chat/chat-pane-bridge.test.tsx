@@ -94,7 +94,9 @@ it.each([false, true])(
 it("mounts immediately without the Chromium optimization marker", async () => {
   const yieldTask = vi.fn(() => Promise.resolve());
   vi.stubGlobal("scheduler", { yield: yieldTask });
-  onTestFinished(() => vi.unstubAllGlobals());
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
   const { pane } = mountedFixture("immediate-pane").render({ active: true, presented: true });
   await waitForSolid(() => expect(pane.querySelector(".chat-pane__header")).not.toBeNull());
   await pane.updateComplete;

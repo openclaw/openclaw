@@ -26,6 +26,13 @@ def _extract_frontmatter(content: str) -> Optional[str]:
     return None
 
 
+def _strip_scalar_comment(value: str) -> str:
+    if value.startswith("#"):
+        return ""
+    # Only a leading quote delimits a quoted scalar; apostrophes in plain text do not.
+    return re.sub(r"""^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^'"].*?)[ \t]+#.*$""", r"\1", value)
+
+
 def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]:
     """
     Minimal fallback parser used when PyYAML is unavailable.
@@ -51,11 +58,11 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
             return None
         key, value = stripped.split(":", 1)
         key = key.strip()
-        value = value.strip()
+        value = _strip_scalar_comment(value.strip())
         if not key:
             return None
         # Block headers describe the scalar; only its indented body is content.
-        block_scalar = bool(re.fullmatch(r"[>|](?:[1-9][+-]?|[+-][1-9]?)?(?:\s+#.*)?", value))
+        block_scalar = bool(re.fullmatch(r"[>|](?:[1-9][+-]?|[+-][1-9]?)?", value))
         if block_scalar:
             value = ""
         elif (value.startswith('"') and value.endswith('"')) or (

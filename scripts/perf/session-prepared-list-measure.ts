@@ -5,6 +5,8 @@
 // Shape mode seeds --sessions rows across --agents (default 8); mixed keeps the filter/page mix.
 // --reuse-fixture reopens a completed shape run; keep sessions/agents/list-shape unchanged.
 // Reused directories are serial-only. Compare revisions with separate timing/allocation passes.
+// --list-shape default --identified-viewer uses default params with mixed sharing;
+// --plain-result exercises object consumers instead of retained serialized selection.
 // --list-shape runtime-search exercises cold runtime-label rejection; --acp-rows gives one
 // third of rows persisted ACP ownership. --source-ref pins runtime owners to a Git revision.
 import assert from "node:assert/strict";
@@ -16,6 +18,7 @@ import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
+import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
@@ -54,6 +57,8 @@ const { values } = parseArgs({
     "reuse-fixture": { type: "boolean", default: false },
     "acp-rows": { type: "boolean", default: false },
     "source-ref": { type: "string" },
+    "identified-viewer": { type: "boolean", default: false },
+    "plain-result": { type: "boolean", default: false },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -72,6 +77,8 @@ if (values["source-ref"]) {
       "src/gateway/session-row-model-facts.ts",
       "src/gateway/session-row-projection-materialize.ts",
       "src/gateway/session-utils-list.ts",
+      "src/gateway/session-sharing-read.ts",
+      "src/gateway/session-row-presentation.ts",
     ].map((file) => [
       new URL(`../../${file}`, import.meta.url).href,
       execFileSync("git", ["show", `${values["source-ref"]}:${file}`], { encoding: "utf8" }),
@@ -97,7 +104,14 @@ const warmup = integer("warmup");
 const updatesPerList = integer("updates-per-list", 0);
 const root = path.resolve(values["state-dir"]);
 const presentationSourceHash = createHash("sha256")
-  .update(readFileSync(new URL("../../src/gateway/session-row-presentation.ts", import.meta.url)))
+  .update(
+    values["source-ref"]
+      ? execFileSync("git", [
+          "show",
+          `${values["source-ref"]}:src/gateway/session-row-presentation.ts`,
+        ])
+      : readFileSync(new URL("../../src/gateway/session-row-presentation.ts", import.meta.url)),
+  )
   .digest("hex");
 const filterSourceHash = createHash("sha256")
   .update(readFileSync(new URL("../../src/gateway/session-list-filters.ts", import.meta.url)))
@@ -232,7 +246,7 @@ Date.now = () => clock;
 const cases: SessionsListParams[] = [];
 const profileId = "team-shape-profile-0";
 const viewer: GatewayClient | undefined =
-  values["sort-workload"] || values["collector-presentation"]
+  values["sort-workload"] || values["collector-presentation"] || values["identified-viewer"]
     ? {
         connect: {
           minProtocol: PROTOCOL_VERSION,
@@ -361,6 +375,7 @@ if (values.mode === "verify") {
 
 if (values["list-shape"] && values["list-shape"] !== "mixed") {
   const shapes: Record<string, SessionsListParams> = {
+    default: {},
     sidebar: { source: "sidebar", rowMode: "sidebar", limit: 100, archived: false },
     full: { source: "sessions-page", limit: 100, archived: "all" },
     search: { source: "sessions-page", search: "dashboard", limit: 100, archived: "all" },
@@ -603,7 +618,7 @@ try {
       projection: projection!,
       opts: cases[index % cases.length]!,
       client: viewer,
-      acceptsSerializedJson: true,
+      acceptsSerializedJson: !values["plain-result"],
     });
   const capture = async () => {
     const digest = createHash("sha256");
@@ -780,11 +795,20 @@ try {
     await inspector.post("Profiler.start");
   }
   const started = performance.now();
+  const collections: Array<{ startTime: number; duration: number }> = [];
+  const observer = new PerformanceObserver((list) => collections.push(...list.getEntries()));
+  observer.observe({ entryTypes: ["gc"] });
   const beforeSelections = workMetrics.getSessionRowSelectionMetrics();
   const before = process.threadCpuUsage();
   await run(iterations, true);
   const used = process.threadCpuUsage(before);
   const elapsedMs = performance.now() - started;
+  await nextTurn();
+  await nextTurn();
+  observer.disconnect();
+  const measuredGc = collections.filter(
+    (entry) => entry.startTime >= started && entry.startTime < started + elapsedMs,
+  );
   const afterSelections = workMetrics.getSessionRowSelectionMetrics();
   const allocation =
     values.mode === "allocation"
@@ -860,6 +884,10 @@ try {
     presentationSourceHash,
     filterSourceHash,
     listShape: values["list-shape"],
+    identifiedViewer: values["identified-viewer"],
+    plainResult: values["plain-result"],
+    gcCount: measuredGc.length,
+    gcMs: measuredGc.reduce((sum, entry) => sum + entry.duration, 0),
     allocationLeaves: Array.from(leafBytes)
       .toSorted((a, b) => b[1] - a[1])
       .slice(0, 30),
