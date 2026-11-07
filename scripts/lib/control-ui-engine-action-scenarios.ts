@@ -313,7 +313,7 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
             mountedOptions: menu.querySelectorAll("[data-chat-model-option]").length,
           }));
         },
-      }),
+      } satisfies Partial<EngineScenario>),
     ),
     {
       ...chatSearch,

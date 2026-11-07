@@ -670,8 +670,7 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
     }
 
     .sidebar-shell {
-      /* Keep the fixed-width panel laid out behind the rail's clip. */
-      opacity: 0;
+      display: none;
     }
   }
 
