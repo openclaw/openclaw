@@ -5,6 +5,8 @@
  * --start-position selects an inclusive active position for offline tail seeding.
  * --duty-ratio 20 models owner pacing from measured BEGIN-through-COMMIT wall;
  * actual host-returned delays and contention require the foreground probe.
+ * Uses agent-worker NORMAL durability and explicit checkpoints (no auto-checkpoint).
+ * The isolated probe uses busy_timeout=0, mmap=0 and a 2MiB SQLite cache.
  * --compare-hydration --baseline-tail-rows 512 retains the recent active-path facts
  * in baseline arms; the default zero compares empty versus complete coverage.
  * node --import ./scripts/tsx.mjs scripts/perf/transcript-facts-backfill.ts \
@@ -27,7 +29,7 @@ import {
 import { enableNodeSqliteKyselyStatementCache } from "../../src/infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../src/infra/sqlite-schema-facts.js";
-import { configureSqliteWalMaintenance } from "../../src/infra/sqlite-wal.js";
+import { configureSqliteConnectionPragmas } from "../../src/infra/sqlite-wal.js";
 import {
   readOpenClawAgentDatabaseIdentity,
   registerOpenClawAgentDatabaseIdentity,
@@ -118,8 +120,26 @@ db.loadExtension(extension, "sqlite3_bufprobe_init");
 admitSqliteSchema(db);
 enableNodeSqliteKyselyStatementCache(db);
 registerOpenClawAgentDatabaseIdentity(db);
-const maintenance = configureSqliteWalMaintenance(db, { databasePath: fixture });
-db.exec("PRAGMA mmap_size=0; PRAGMA cache_size=-2048; PRAGMA busy_timeout=0");
+const maintenance = configureSqliteConnectionPragmas(db, {
+  databasePath: fixture,
+  autoCheckpointPages: 0,
+  foreignKeys: true,
+  synchronous: "NORMAL",
+  busyTimeoutMs: 0,
+});
+db.exec("PRAGMA mmap_size=0; PRAGMA cache_size=-2048");
+const sqlitePragmas = Object.fromEntries(
+  [
+    "journal_mode",
+    "synchronous",
+    "wal_autocheckpoint",
+    "foreign_keys",
+    "busy_timeout",
+    "cache_size",
+    "mmap_size",
+    "checkpoint_fullfsync",
+  ].map((name) => [name, db.prepare(`PRAGMA ${name}`).get()]),
+);
 const database = { agentId: "main", path: fixture, db, walMaintenance: maintenance };
 const identity = readOpenClawAgentDatabaseIdentity(database);
 const target = {
@@ -340,6 +360,7 @@ async function compareColdHydration() {
         fixture,
         fixtureRows: fixtureReport.rows,
         session: values.session,
+        sqlitePragmas,
         sqliteCache: "Fresh2MiB native cache per sample; OS cache uncontrolled",
         coverageRestored: true,
         equivalent: true,
@@ -500,6 +521,7 @@ try {
       fixture,
       fixtureRows: fixtureReport.rows,
       session: values.session,
+      sqlitePragmas,
       sqliteCache: "2MiB; released before every measured operation; OS cache uncontrolled",
       campaign,
       closeMs,
