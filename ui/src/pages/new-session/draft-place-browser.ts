@@ -9,6 +9,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -62,6 +63,8 @@ export class DraftPlaceBrowser {
   private lastProjectResult: ProjectCatalog["snapshot"]["result"] = null;
   private projectSelection: DraftProjectSelection = null;
   private selectedProjectRecord: ProjectRecord | undefined;
+  // A saved or selected project the Gateway no longer lists for this caller.
+  private projectUnavailableValue = false;
   private projectQueryValue = "";
   private environmentQueryValue = "";
   private debouncedProjectQuery = "";
@@ -239,6 +242,20 @@ export class DraftPlaceBrowser {
     return this.projectSelection?.kind === "local" ? this.projectSelection.id : "";
   }
 
+  /** Remote and pasted repositories open through operator.write projectGitUrl. */
+  get canOpenRemoteProjects(): boolean {
+    return hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null);
+  }
+
+  get projectUnavailable(): boolean {
+    return this.projectUnavailableValue;
+  }
+
+  /** Hidden and removed projects look the same; the chip says so instead of switching silently. */
+  markProjectUnavailable() {
+    this.projectUnavailableValue = true;
+  }
+
   get remoteProject(): DraftRemoteProject | null {
     return this.projectSelection?.kind === "remote" ? this.projectSelection.project : null;
   }
@@ -311,6 +328,7 @@ export class DraftPlaceBrowser {
         this.lastProjectResult = result;
         if (this.projectId && !result.projects.some((project) => project.id === this.projectId)) {
           this.callbacks.onProjectMissing();
+          this.markProjectUnavailable();
         }
       }
       this.callbacks.changed();
@@ -334,6 +352,7 @@ export class DraftPlaceBrowser {
 
   selectProject(selection: Exclude<DraftProjectSelection, null>) {
     this.projectSelection = selection;
+    this.projectUnavailableValue = false;
     this.selectedProjectRecord = this.projects.find((project) => project.id === this.projectId);
   }
 
@@ -346,6 +365,7 @@ export class DraftPlaceBrowser {
 
   clearProjectSelection() {
     this.projectSelection = null;
+    this.projectUnavailableValue = false;
     this.selectedProjectRecord = undefined;
   }
 

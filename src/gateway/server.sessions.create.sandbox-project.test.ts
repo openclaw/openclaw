@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -9,6 +11,7 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { runGitReadOperation } from "../infra/git-read-cache.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { resetProjectVisibilityCacheForTest } from "./project-access.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import {
@@ -19,8 +22,54 @@ import { initializeRepository } from "./server.sessions.create.projects.test-sup
 import { testState } from "./test-helpers.js";
 import { setupGatewaySessionsHandlerTestHarness } from "./test/server-sessions.test-helpers.js";
 
+// This suite does not resolve bundled plugin surfaces; keep the GitHub transport
+// contract (JSON body, statusCode on failure) over the stubbed global fetch.
+vi.mock("./github-public-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./github-public-api.js")>()),
+  gitHubPublicApi: {
+    fetchGitHubJson: async (url: string, fetchImpl: typeof fetch) => {
+      const response = await fetchImpl(url);
+      if (!response.ok) {
+        throw Object.assign(new Error(`GitHub ${response.status}`), {
+          statusCode: response.status,
+        });
+      }
+      return await response.json();
+    },
+  },
+}));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const execFileAsync = promisify(execFile);
+
+async function publishOrigin(repo: string, name: string) {
+  await execFileAsync("git", [
+    "-C",
+    repo,
+    "config",
+    "remote.origin.url",
+    `https://github.com/${name}.git`,
+  ]);
+}
+
+/** Restricted roles see only repositories GitHub reports as public. */
+function stubRepositoryVisibility(visibility: Record<string, string>) {
+  resetProjectVisibilityCacheForTest();
+  const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const value = visibility[new URL(url).pathname.replace(/^\/repos\//u, "")];
+    return new Response(JSON.stringify(value ? { visibility: value } : { message: "Not Found" }), {
+      status: value ? 200 : 404,
+      headers: { "content-type": "application/json" },
+    });
+  });
+  vi.stubGlobal("fetch", fetchImpl);
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  return fetchImpl;
+}
 
 test.each(["all", "off"] as const)(
   "guest project checkout eligibility preserves creation admission (agent sandbox=%s)",
@@ -28,6 +77,8 @@ test.each(["all", "off"] as const)(
     const root = tempDirs.make("openclaw-session-sandbox-project-");
     const workspace = await initializeRepository(root, "workspace");
     const outside = await initializeRepository(root, "outside");
+    await publishOrigin(outside, "openclaw/site");
+    stubRepositoryVisibility({ "openclaw/site": "public" });
     testState.agentConfig = { workspace, sandbox: { mode } };
     const { storePath } = await createSessionStoreDir();
     const project = await registerProjectRegistry({ path: outside });
@@ -149,3 +200,121 @@ test.each(["all", "off"] as const)(
     }
   },
 );
+
+test("restricted roles cannot discover, open, clone, search or list worktrees of a private repository", async () => {
+  const root = tempDirs.make("openclaw-session-private-project-");
+  const workspace = await initializeRepository(root, "workspace");
+  const repos = {
+    public: await initializeRepository(root, "public"),
+    private: await initializeRepository(root, "private"),
+  };
+  await publishOrigin(repos.public, "openclaw/site");
+  await publishOrigin(repos.private, "openclaw/openclaworg");
+  const fetchImpl = stubRepositoryVisibility({
+    "openclaw/site": "public",
+    "openclaw/openclaworg": "private",
+  });
+  testState.agentConfig = { workspace, sandbox: { mode: "all" } };
+  await createSessionStoreDir();
+  const publicProject = await registerProjectRegistry({ path: repos.public });
+  const privateProject = await registerProjectRegistry({ path: repos.private });
+  const contributorScopes = [
+    "operator.read",
+    "operator.sessions.write",
+    "operator.approvals",
+    "operator.questions",
+  ] as const;
+  const baseCfg = getRuntimeConfig();
+  const cfg = {
+    ...baseCfg,
+    agents: {
+      ...baseCfg.agents,
+      entries: {
+        ...baseCfg.agents?.entries,
+        main: { ...baseCfg.agents?.entries?.main, workspace, sandbox: { mode: "all" as const } },
+      },
+    },
+    gateway: {
+      ...baseCfg.gateway,
+      roles: {
+        default: "contributor",
+        definitions: {
+          contributor: {
+            scopes: [...contributorScopes],
+            agents: ["main"],
+            sessions: { others: "view" as const },
+            sandbox: "required" as const,
+          },
+        },
+      },
+    },
+  };
+  const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+  context.readPreparedGatewayModelCatalog = async () => {
+    const catalog = await context.loadGatewayModelCatalogSnapshot();
+    return { entries: catalog.entries, routeVariants: catalog.routeVariants };
+  };
+  await initializeSessionReadContext(context);
+  const operator = (email: string, scopes: readonly string[]) => {
+    const client = identifiedClient(ensureProfileForEmail(email).id);
+    client.connect.scopes = [...scopes];
+    return client;
+  };
+  // The live team Gateway's guest role holds only operator.sessions.write.
+  const guest = operator("private-guest@example.test", ["operator.sessions.write"]);
+  const contributor = operator("private-contributor@example.test", contributorScopes);
+  const request = async (
+    client: ReturnType<typeof operator>,
+    method: string,
+    params: Record<string, unknown>,
+  ) => {
+    const respond = vi.fn();
+    await handleGatewayRequest({
+      req: { type: "req" as const, id: method, method, params },
+      client,
+      context,
+      respond,
+      isWebchatConnect: () => false,
+    });
+    return respond.mock.calls[0];
+  };
+
+  const [, listed] = (await request(guest, "projects.list", {})) ?? [];
+  const listedIds = (listed as { projects: { id: string }[] }).projects.map(
+    (project) => project.id,
+  );
+  expect(listedIds).toContain(publicProject.id);
+  expect(listedIds).not.toContain(privateProject.id);
+  expect(
+    await request(guest, "projects.checkoutOptions", {
+      agentId: "main",
+      projectId: privateProject.id,
+    }),
+  ).toEqual([true, { current: false, worktree: false }, undefined]);
+  expect(
+    await request(guest, "sessions.create", {
+      agentId: "main",
+      projectId: privateProject.id,
+      worktree: true,
+    }),
+  ).toMatchObject([
+    false,
+    undefined,
+    { code: "INVALID_REQUEST", message: `unknown project id: ${privateProject.id}` },
+  ]);
+  // Pasting the URL would reuse the registered row with the Gateway's GitHub token.
+  for (const [client, method, params] of [
+    [
+      guest,
+      "sessions.create",
+      { agentId: "main", projectGitUrl: "https://github.com/openclaw/openclaworg.git" },
+    ],
+    [contributor, "projects.searchRemote", { query: "openclaw/openclaworg" }],
+    [contributor, "worktrees.list", {}],
+  ] as const) {
+    const denied = await request(client, method, params);
+    expect(denied?.[0], method).toBe(false);
+    expect(JSON.stringify(denied?.[2]), method).toContain("operator.write");
+  }
+  expect(fetchImpl).toHaveBeenCalled();
+});

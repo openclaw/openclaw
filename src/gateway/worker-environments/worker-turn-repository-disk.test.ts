@@ -8,6 +8,7 @@ import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/s
 import * as processExec from "../../process/exec.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { prepareUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
+import { INTERNAL_PROJECT_REQUESTER } from "../project-access.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { captureGatewayRequestOperatorGuard } from "../server-methods/session-mutation-guards.js";
 import { createGatewaySession } from "../session-create-service.js";
@@ -102,6 +103,7 @@ it("inherits fresh disk history and dirty files without sharing or releasing the
     cfg: getRuntimeConfig(),
     target,
     inheritParentKey: sessionTarget.sessionKey,
+    projectRequester: INTERNAL_PROJECT_REQUESTER,
     repositoryMutations: f.mutations,
     deferWorktree: false,
     titleSource: "disk child",
@@ -318,6 +320,7 @@ it.each([
           cfg,
           target: lifecycleTarget,
           inheritParentKey: sessionTarget.sessionKey,
+          projectRequester: INTERNAL_PROJECT_REQUESTER,
           repositoryMutations: f.mutations,
           deferWorktree: false,
           titleSource: "disk child",

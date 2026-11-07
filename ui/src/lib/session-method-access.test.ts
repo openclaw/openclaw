@@ -55,6 +55,23 @@ describe("readSessionMethodAccess", () => {
     }
   });
 
+  it("keeps repository URL creation write-scoped for session creators", () => {
+    const request = {
+      method: "sessions.create",
+      params: { projectGitUrl: "https://github.com/openclaw/openclaworg.git" },
+      sessionScope: true,
+    };
+    expect(access(["operator.read", "operator.sessions.write"], request)).toMatchObject({
+      allowed: false,
+      requiredScope: "operator.write",
+      cause: "missing-scope",
+    });
+    expect(access(["operator.write"], request)).toEqual({
+      allowed: true,
+      requiredScope: "operator.write",
+    });
+  });
+
   it("keeps profile placement admin-only through the caller's scope", () => {
     const request: SessionMethodAccessRequest = {
       method: "sessions.dispatch",

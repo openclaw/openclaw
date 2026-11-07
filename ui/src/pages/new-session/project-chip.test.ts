@@ -18,6 +18,24 @@ const projects = [
   },
 ];
 
+describe("hidden project selection", () => {
+  it("says the saved project is not found or inaccessible instead of naming the fallback", () => {
+    const params = {
+      folder: "",
+      workspace: "/workspace",
+      projectId: "",
+      selectedRemoteProject: null,
+      projects,
+      recents: [],
+      projectQuery: "",
+    };
+    expect(resolveProjectChip({ ...params, projectUnavailable: true }).label).toBe(
+      "Not found or no access",
+    );
+    expect(resolveProjectChip(params).label).toBe(pathDisplayName("/workspace"));
+  });
+});
+
 describe("What chip state", () => {
   it.each([
     {
