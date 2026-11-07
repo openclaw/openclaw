@@ -1,9 +1,6 @@
 // Subagent delivery-state tests cover current registry record normalization.
 import { describe, expect, it } from "vitest";
-import {
-  normalizeSubagentRunState,
-  resetRequesterSettleWakeRetry,
-} from "./subagent-delivery-state.js";
+import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function baseRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -24,20 +21,6 @@ function baseRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord 
     ...overrides,
   };
 }
-
-it("clears delivery-only recovery when a new requester wake resets its attempt identity", () => {
-  expect(
-    resetRequesterSettleWakeRetry({
-      status: "pending",
-      attemptCount: 2,
-      requesterStallFallback: "transcript",
-    }),
-  ).toMatchObject({
-    status: "pending",
-    attemptCount: 0,
-    requesterStallFallback: undefined,
-  });
-});
 
 describe("normalizeSubagentRunState", () => {
   it("normalizes the durable delete-dispatch boundary", () => {

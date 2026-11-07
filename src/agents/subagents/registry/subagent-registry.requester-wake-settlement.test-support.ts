@@ -313,6 +313,10 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>(
 
     await fixture.spawnVisibleChild({ ...child, requesterTurnRunId });
     await settleYield(requesterTurnRunId, [child]);
+    // Until a stall is admitted, the stored batch keeps the shape earlier builds persisted.
+    const persisted = loadSubagentRegistryFromSqlite().get(child.runId)?.requesterSettleWake;
+    expect(persisted?.requesterYieldBatch).toBe(true);
+    expect(persisted).not.toHaveProperty("requesterStallFallback");
     fixture.emitCompleted(child.runId, child.childSessionKey, resultText);
     const completion = fixture.flushOwnedWork();
     try {

@@ -96,7 +96,9 @@ If a requester turn stalls after accepting a completed child, OpenClaw retains t
 child result and attempts a bounded, delivery-only fallback with a visible stall
 notice and the retained result. It does not rerun the child or replay the requester
 turn. Intentional Stop, changed ownership, and uncertain sends are not reopened
-by this recovery path.
+by this recovery path. When the batch includes a private result, including after
+`sessions_yield`, the notice omits the retained findings. An external send retries
+only when the failure proves nothing was sent.
 
 A confirmed handoff remains delivered even if its receipt callback fails; cleanup
 must not replay an already consumed result. Failures before a delivery result is

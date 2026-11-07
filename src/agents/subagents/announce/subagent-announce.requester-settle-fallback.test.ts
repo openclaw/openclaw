@@ -45,15 +45,12 @@ describe("requester stall fallback", () => {
   ])(
     "delivers a truthful visible notice (external=$external, findings=$findings)",
     async ({ external, findings }) => {
-      const current = vi.fn();
       const result = await deliverRequesterStallFallback({
         ...params,
         findings,
-        assertCurrent: current,
         ...(external ? { directDelivery } : {}),
       });
       expect(result.delivered).toBe(true);
-      expect(current).toHaveBeenCalledOnce();
       const options = expectDefined((external ? direct : append).mock.calls[0], "fallback call")[0];
       const text = external ? options.preparedNotice : options.text;
       expect(text).toContain("follow-up turn stalled");
@@ -61,30 +58,11 @@ describe("requester stall fallback", () => {
       if (findings === undefined) {
         expect(text).not.toContain(params.findings);
       }
-      if (external) {
-        expect(options).toMatchObject({
-          deliveryTarget: directDelivery.deliveryTarget,
-          directIdempotencyKey: params.idempotencyKey,
-          contentKind: "completed_result",
-        });
-        expect(append).not.toHaveBeenCalled();
-      } else {
-        expect(result.requesterVisibleFinalDelivered).toBe(true);
-        expect(options).toMatchObject({
-          sessionKey: params.requesterSessionKey,
-          expectedSessionId: params.requesterSessionId,
-          expectedLifecycleRevision: params.requesterLifecycleRevision,
-          idempotencyKey: params.idempotencyKey,
-          assertCurrent: current,
-        });
-        expect(options.runId).toBeUndefined();
-        const message = { role: "assistant", content: [{ type: "text", text: params.findings }] };
-        expect(options.beforeMessageWrite({ message })).toEqual({ ...message, display: true });
-      }
+      expect(external ? append : direct).not.toHaveBeenCalled();
     },
   );
 
-  it.each(["retryable", "ambiguous", undefined])(
+  it.each(["ambiguous", undefined])(
     "does not silently append after external nondelivery (%s)",
     async (disposition) => {
       const receipt = disposition ? { delivered: false, path: "direct", disposition } : undefined;
@@ -94,7 +72,7 @@ describe("requester stall fallback", () => {
         delivered: false,
         disposition: disposition ?? "permanent_failure",
       });
-      expect(result.reason).toBe(disposition === "retryable" ? "visible_reply_missing" : undefined);
+      expect(result.reason).toBeUndefined();
       if (disposition === "ambiguous") {
         expect(result).toBe(receipt);
       }

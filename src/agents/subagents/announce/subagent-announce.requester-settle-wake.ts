@@ -559,7 +559,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
         requesterAgentId,
         requesterStorePath: currentSettledEntry.requesterStorePath,
         idempotencyKey: `${batchKey}:watchdog-fallback`,
-        findings: parentOnly ? undefined : preparedFindings.text,
+        // A yield may publish the parent's own answer, never its private child input.
+        findings: privateRows.length > 0 ? undefined : preparedFindings.text,
         cfg,
         requesterDepth,
         origin: directOrigin,

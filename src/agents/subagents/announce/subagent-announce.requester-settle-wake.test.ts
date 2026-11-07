@@ -189,9 +189,14 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "uses only a generic notice for private or mixed findings (mixed=%s)",
-    async (mixed) => {
+  it.each([
+    { mixed: false, yielded: false },
+    { mixed: true, yielded: false },
+    { mixed: false, yielded: true },
+    { mixed: true, yielded: true },
+  ])(
+    "uses only a generic notice for private findings (mixed=$mixed, yielded=$yielded)",
+    async ({ mixed, yielded }) => {
       const fallback = vi.mocked(deliverRequesterStallFallback).mockReset();
       fallback.mockResolvedValue({ delivered: true, path: "direct" });
       setChildren([
@@ -203,7 +208,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
           completionTarget: "parent",
           completionRequesterSessionId: "sess-main",
           completion: completion("private child findings"),
-          requesterSettleWake: wakeState(),
+          requesterSettleWake: {
+            ...expectDefined(wakeState(), "wake state"),
+            // A yielded deliverable admits the parent's own final, not its private input.
+            ...(yielded && { afterRequesterYield: true, yieldedFinalDeliverable: true as const }),
+          },
         }),
       ]);
       deliverSpy.mockImplementationOnce(async (params) => {
