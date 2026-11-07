@@ -612,3 +612,23 @@ Example truncate response (`--max-lines 200`):
 - [CLI reference](/cli)
 - [`openclaw resume`](/cli/resume) — attach the TUI to a recent Gateway session
 - [Cloud Workers](/gateway/cloud-workers) — sessions hosted on remote workers
+
+## Session artifacts
+
+List or fetch the files and payloads a session produced, the same inventory the artifact viewers use.
+
+```bash
+openclaw sessions artifacts "agent:main:main"
+openclaw sessions artifacts "agent:main:main" --run run-1
+openclaw sessions artifacts "agent:main:main" art-1 --output art-1.png
+openclaw sessions artifacts "agent:main:main" --json
+```
+
+| Flag              | Description                                      |
+| ----------------- | ------------------------------------------------ |
+| `--run <id>`      | Scope artifacts to one run.                      |
+| `--agent <id>`    | Agent id that owns the session.                  |
+| `--output <path>` | Save the fetched artifact bytes to a file.       |
+| `--json`          | Raw `artifacts.list` / `artifacts.get` response. |
+
+Backed by the `artifacts` Gateway RPCs. Inline bytes arrive base64 and are written by `--output`; url-mode artifacts print their signed URL; unsupported inline downloads exit non-zero. The Gateway resolves the scope from the session key, so the parent `sessions` list selectors do not apply.
