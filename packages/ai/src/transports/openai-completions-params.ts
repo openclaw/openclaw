@@ -353,7 +353,7 @@ export function buildOpenAICompletionsRequest(
     params.presence_penalty = options.presencePenalty;
   }
   if (policy.mode === "managed" && options?.seed !== undefined) {
-    params.seed = options.seed;
+    params[compat.seedField] = options.seed;
   }
   if (options?.stop !== undefined && options.stop.length > 0) {
     params.stop = options.stop;
