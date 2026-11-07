@@ -521,3 +521,81 @@ it.each([
     }
   },
 );
+
+it.each([undefined, "caller"] as const)(
+  "applies deployment scope %s to native-app admin chat management",
+  async (scope) => {
+    config.tools = {
+      ...config.tools,
+      gatewayPolicy: {
+        allow: [AUTOMATIONS_TOOL_NAME],
+        actions: { [AUTOMATIONS_TOOL_NAME]: ["list", "get", "update"] },
+        automations: { scope },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+    const client = createOperatorClient({ scopes: ["operator.admin"] });
+    client.connect.client = {
+      id: "openclaw-macos",
+      mode: "ui",
+      version: "test",
+      platform: "macOS",
+    };
+    client.internal = { authenticatedOperator: true };
+    const runId = "native-admin-management";
+    const creatorAdmission = resolveGatewayChatCronCreatorAuthorityAdmission({
+      runId,
+      resolvedSessionKey: SESSION,
+      client,
+      hasExplicitOrigin: false,
+      hasRestoredCronContinuation: false,
+      isIncognito: false,
+      isReconnectResume: false,
+      isSystemGenerated: false,
+      turnKind: "main",
+      isDirectExternalUser: true,
+    });
+    const foreign = await cronService.add({
+      name: "Foreign automation",
+      enabled: false,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "Original prompt", toolsAllow: [] },
+      owner: { agentId: "main", sessionKey: "agent:main:foreign", accountId: "other" },
+      delivery: { mode: "none" },
+    });
+    await inRun(
+      runId,
+      creatorAdmission,
+      boundTo(fixture, async (_identity, admitted, creator) => {
+        const tools = await createCreatorTransportTools({
+          transport: "embedded",
+          config,
+          admitted,
+          creator,
+          senderIsOwner: false,
+        });
+        const inventory = await tools.invoke(AUTOMATIONS_TOOL_NAME, {
+          action: "list",
+          includeDisabled: true,
+        });
+        expect(inventory).toHaveProperty("details.scope", scope ?? "gateway");
+        if (scope === "caller") {
+          await expect(
+            tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId: foreign.id }),
+          ).rejects.toThrow("not found");
+          return;
+        }
+        await tools.invoke(AUTOMATIONS_TOOL_NAME, {
+          action: "update",
+          jobId: foreign.id,
+          job: { payload: { kind: "agentTurn", message: "Repaired prompt" } },
+        });
+        expect(await fixture.read()).toMatchObject([
+          { id: foreign.id, payload: { message: "Repaired prompt" } },
+        ]);
+      }),
+    );
+  },
+);

@@ -57,6 +57,11 @@ is committed. Other people's automations remain read-only; global creation and
 administration still require `operator.admin`. Global scheduler status requires
 `operator.read`.
 
+Fresh authenticated admin chat turns from the Control UI or a native app UI can
+manage automations across conversations. Native UI identity alone is insufficient:
+the connection must hold `operator.admin`. The deployment-level
+`tools.gatewayPolicy.automations.scope: "caller"` restriction still takes precedence.
+
 The **Owner** field under **Agent** shows the human responsible for an automation.
 Its current human owner or an administrator can select another existing profile.
 Transferring ownership pauses the automation, cancels any active occurrence, and

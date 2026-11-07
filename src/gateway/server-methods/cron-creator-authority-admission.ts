@@ -1,3 +1,4 @@
+import { isNativeAppUiClient } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   createCronCreatorAuthorityCapability,
   type CronCreatorAuthorityCapability,
@@ -77,10 +78,14 @@ function resolveDirectOperatorAuthority(
     // A new user admission replaces pending task authority, including for a non-admin caller.
     revokeRequesterCronAuthority(params.resolvedSessionKey);
   }
+  const nativeAppAdmin =
+    internal?.authenticatedOperator === true &&
+    hasGatewayAdminScope(params.client) &&
+    isNativeAppUiClient(params.client?.connect.client);
   const isDirectOperator =
     isDirectTurn &&
     hasGatewayAdminScope(params.client) &&
-    (internal?.isLocalClient === true || internal?.controlUiAdmin === true);
+    (internal?.isLocalClient === true || internal?.controlUiAdmin === true || nativeAppAdmin);
   const isScopedOperator =
     isDirectTurn && operatorScopeSatisfied(CRON_SCOPE, params.client?.connect.scopes ?? []);
   return isDirectOperator || isScopedOperator
@@ -91,8 +96,14 @@ function resolveDirectOperatorAuthority(
           isDirectOperator && internal?.isLocalClient === true
             ? { kind: "local" as const }
             : { kind: "unknown" as const },
-        ...(isDirectOperator && internal?.controlUiAdmin === true
-          ? { managementEntitlement: { source: "control-ui-admin" as const } }
+        ...(isDirectOperator && (internal?.controlUiAdmin === true || nativeAppAdmin)
+          ? {
+              managementEntitlement: {
+                source: internal?.controlUiAdmin
+                  ? ("control-ui-admin" as const)
+                  : ("native-app-admin" as const),
+              },
+            }
           : {}),
         ...(!isDirectOperator || internal?.isLocalClient !== true
           ? { callerScopedCreation: true as const }
