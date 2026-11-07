@@ -69,6 +69,7 @@ const CORE_TOOL_DESCRIPTIONS = {
   memory_get: "Read memory files",
   personal_instructions: "Edit the requesting user’s personal instructions",
   presence: "Online people, connected devices, recent activity, and connection location",
+  skills_status: "Why installed skills are eligible or unavailable, including missing requirements",
   sessions: "Session settings: label, pin, archive, groups",
   sessions_create: "Create an independent session, optionally starting work",
   sessions_list: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,

@@ -98,6 +98,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       },
     },
     presence: displayTool("radio", "Presence"),
+    skills_status: displayTool("listChecks", "Skill Status", ["agentId", "sessionKey", "refresh"]),
     attach: displayTool("paperclip", "Attach", ["path", "url", "fileName"]),
     api: displayTool("globe", "API", ["url", "endpoint", "path", "method", "name"]),
     browser: {
