@@ -96,13 +96,9 @@ if [[ "$diarize" == "1" && "$prompt" != "" ]]; then
   exit 2
 fi
 
-target="$out"
-tmp=""
-if [[ "$json_output" == "0" && ( "$request_format" == "json" || "$request_format" == "diarized_json" ) ]]; then
-  tmp="$(mktemp)"
-  trap '[[ "$tmp" == "" ]] || rm -f "$tmp"' EXIT
-  target="$tmp"
-fi
+# Preserve existing output until the response has downloaded successfully.
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
 
 curl_args=(
   -fsS "${api_base}/audio/transcriptions"
@@ -122,9 +118,9 @@ if [[ "$diarize" == "1" ]]; then
   curl_args+=(-F "chunking_strategy=auto")
 fi
 
-curl "${curl_args[@]}" >"$target"
+curl "${curl_args[@]}" >"$tmp"
 
-if [[ "$target" != "$out" ]]; then
+if [[ "$json_output" == "0" && ( "$request_format" == "json" || "$request_format" == "diarized_json" ) ]]; then
   node -e '
 const fs = require("fs");
 const input = process.argv[1];
@@ -148,7 +144,9 @@ if (typeof payload.text !== "string") {
   throw new Error("Transcription response missing text");
 }
 fs.writeFileSync(output, payload.text);
-' "$target" "$out"
+' "$tmp" "$out"
+else
+  cat "$tmp" >"$out"
 fi
 
 echo "$out"
