@@ -1184,6 +1184,8 @@
   flex: none;
   width: 28px;
   height: 28px;
+  /* The 28px hit area overhangs the 24px avatar line so the row stays 36. */
+  margin-block: -2px;
   padding: 6px;
   border: 0;
   border-radius: var(--radius-sm);
