@@ -1,8 +1,7 @@
 import {
   type CachePointBlock,
   CacheTTL,
-  BedrockRuntimeClient,
-  type BedrockRuntimeClientConfig,
+  type BedrockRuntimeClient,
   BedrockRuntimeServiceException,
   type ContentBlock,
   type ContentBlockDeltaEvent,
@@ -20,8 +19,8 @@ import {
   type ToolConfiguration,
   ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
-import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { DocumentType } from "@smithy/types";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   adjustMaxTokensForThinking,
@@ -29,7 +28,6 @@ import {
   buildBaseOptions,
   calculateCost,
   clampReasoning,
-  createHttpProxyAgentsForTarget,
   createToolArgumentPreviewSchedule,
   hasRuntimeContextMarker,
   parseStreamingJson,
@@ -59,6 +57,7 @@ import {
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import type { ConverseProxyTransportFactory } from "openclaw/plugin-sdk/provider-stream-family";
 import {
   applyAnthropicRefusal,
   createDeferredEventBuffer,
@@ -77,11 +76,8 @@ import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
-import {
-  asOptionalRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveBedrockRuntimeAuth } from "./aws-credential-refresh.js";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createBedrockStreamClient, getConfiguredBedrockRegion } from "./bedrock-client.js";
 import {
   resolveBedrockCachePoint,
   resolveBedrockCacheRetention,
@@ -132,11 +128,12 @@ function resolveAdaptiveBedrockMaxTokens(
   return OPENCLAW_FALLBACK_MODEL_MAX_TOKENS.has(model.maxTokens) ? undefined : model.maxTokens;
 }
 
-const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
-  model,
-  context,
-  options = {},
-) => {
+function streamBedrock(
+  model: Model<"bedrock-converse-stream">,
+  context: Context,
+  options: BedrockOptions = {},
+  transport?: ConverseProxyTransportFactory,
+) {
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
@@ -361,48 +358,10 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       }
     }
 
-    const config: BedrockRuntimeClientConfig = {
-      profile: options.profile,
-      ...resolveBedrockRuntimeAuth(options.bearerToken),
-    };
-    const configuredRegion = getConfiguredBedrockRegion(options);
-    const requestRegion = options.region || getBedrockModelArnRegion(model.id) || configuredRegion;
-    const hasConfiguredProfile = hasConfiguredBedrockProfile(options);
-    const endpointRegion = getStandardBedrockEndpointRegion(model.baseUrl);
-    const useExplicitEndpoint = !endpointRegion || (!requestRegion && !hasConfiguredProfile);
-
-    // Only pin standard AWS Bedrock runtime endpoints when no region/profile is configured.
-    // This preserves custom endpoints (VPC/proxy) from #3402 without forcing built-in
-    // catalog defaults such as us-east-1 to override AWS_REGION/AWS_PROFILE.
-    if (useExplicitEndpoint) {
-      config.endpoint = model.baseUrl;
-    }
-
-    // Region resolution: explicit option > model ARN > env vars > SDK default chain.
-    // When AWS_PROFILE is set, leave region undefined so the SDK can resolve it.
-    if (requestRegion) {
-      config.region = requestRegion;
-    } else if (endpointRegion && useExplicitEndpoint) {
-      config.region = endpointRegion;
-    } else if (!hasConfiguredProfile) {
-      config.region = "us-east-1";
-    }
-
-    const proxyAgents = createHttpProxyAgentsForTarget(model.baseUrl);
-    if (proxyAgents) {
-      // Bedrock runtime uses NodeHttp2Handler by default since v3.798.0, which is based
-      // on `http2` module and has no support for http agent.
-      // Use NodeHttpHandler to support HTTP(S) proxy agents.
-      config.requestHandler = new NodeHttpHandler(proxyAgents);
-    } else if (process.env.AWS_BEDROCK_FORCE_HTTP1 === "1") {
-      // Some custom endpoints require HTTP/1.1 instead of HTTP/2
-      config.requestHandler = new NodeHttpHandler();
-    }
-
     let client: BedrockRuntimeClient | undefined;
     try {
       options.signal?.throwIfAborted();
-      client = new BedrockRuntimeClient(config);
+      client = await createBedrockStreamClient(model, options, transport);
       const cachePolicy = resolveBedrockPromptCachePolicy(model);
       const cacheRetention = resolveBedrockCacheRetention(cachePolicy, options.cacheRetention);
       const cachePoint = resolveBedrockCachePoint(cachePolicy, cacheRetention);
@@ -566,7 +525,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
   })();
 
   return stream;
-};
+}
 
 /**
  * Human-readable prefixes for Bedrock SDK exception names.
@@ -595,7 +554,30 @@ export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", Simp
   model,
   context,
   options,
-) => {
+) => streamSimpleBedrockWithTransport(model, context, options);
+
+/** Same native machinery, with one explicit caller-owned serialized HTTP transport. */
+export function createConverseStreamFn(transport: ConverseProxyTransportFactory): StreamFn {
+  return (model, context, options) => {
+    if (model.api !== "bedrock-converse-stream") {
+      throw new Error("Converse transport requires the bedrock-converse-stream API");
+    }
+    return streamSimpleBedrockWithTransport(
+      // SAFETY: The API check above narrows the generic model to the native Converse model contract.
+      model as Model<"bedrock-converse-stream">,
+      context,
+      options,
+      transport,
+    );
+  };
+}
+
+function streamSimpleBedrockWithTransport(
+  model: Model<"bedrock-converse-stream">,
+  context: Context,
+  options?: SimpleStreamOptions,
+  transport?: ConverseProxyTransportFactory,
+) {
   const base: BedrockOptions = {
     ...options,
     ...buildBaseOptions(model, options, undefined),
@@ -604,7 +586,7 @@ export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", Simp
     base.maxTokens = resolveAdaptiveBedrockMaxTokens(model, base.maxTokens);
     base.reasoning = options?.reasoning;
     base.thinkingBudgets = options?.thinkingBudgets;
-    return streamBedrock(model, context, base);
+    return streamBedrock(model, context, base, transport);
   }
   if (!options?.reasoning || options.reasoning === "off") {
     base.reasoning =
@@ -616,7 +598,7 @@ export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", Simp
     if (base.reasoning === "high" || supportsAdaptiveThinking(model)) {
       base.maxTokens = resolveAdaptiveBedrockMaxTokens(model, base.maxTokens);
     }
-    return streamBedrock(model, context, base);
+    return streamBedrock(model, context, base, transport);
   }
 
   base.reasoning = options.reasoning;
@@ -643,8 +625,8 @@ export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", Simp
       }
     }
   }
-  return streamBedrock(model, context, base);
-};
+  return streamBedrock(model, context, base, transport);
+}
 
 function resolveClaudeProfileNameModelId(modelName?: string): string | undefined {
   const normalized =
@@ -1100,40 +1082,6 @@ function convertToolConfig(
   }
 
   return { tools: bedrockTools, toolChoice: bedrockToolChoice };
-}
-
-function getBedrockModelArnRegion(modelId: string): string | undefined {
-  return /^arn:aws(?:-[a-z0-9-]+)?:bedrock:([a-z0-9-]+):/.exec(modelId)?.[1];
-}
-
-function getConfiguredBedrockRegion(options: BedrockOptions): string | undefined {
-  if (typeof process === "undefined") {
-    return options.region;
-  }
-
-  return (
-    options.region ||
-    normalizeOptionalString(process.env.AWS_REGION) ||
-    normalizeOptionalString(process.env.AWS_DEFAULT_REGION)
-  );
-}
-
-function hasConfiguredBedrockProfile(options: BedrockOptions): boolean {
-  if (options.profile) {
-    return true;
-  }
-  if (typeof process === "undefined") {
-    return false;
-  }
-
-  return Boolean(process.env.AWS_PROFILE);
-}
-
-function getStandardBedrockEndpointRegion(baseUrl: string | undefined): string | undefined {
-  const hostname = baseUrl ? URL.parse(baseUrl)?.hostname : undefined;
-  return hostname
-    ?.toLowerCase()
-    .match(/^bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$/)?.[1];
 }
 
 function isGovCloudBedrockTarget(
