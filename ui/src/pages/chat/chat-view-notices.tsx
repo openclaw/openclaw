@@ -55,6 +55,7 @@ export type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
   defaultModelRecovery?: ChatDefaultModelRecoveryReader;
   onRefresh?: () => void;
   onDismissWorkspaceConflict?: () => void;
+  onDismissRunError?: () => void;
   workspaceConflict?: WorkspaceResultConflict | null;
 };
 

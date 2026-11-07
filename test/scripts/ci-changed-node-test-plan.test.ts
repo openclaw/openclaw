@@ -144,6 +144,62 @@ describe("selected boundary setup sharing", () => {
     expect(selected.groups).toHaveLength(1);
   });
 
+  it.each([
+    { measurement: "complete", prices: [1, 1], allocations: 1 },
+    { measurement: "missing", prices: [1, undefined], allocations: 2 },
+    { measurement: "expensive", prices: [75, 1], allocations: 2 },
+  ])(
+    "shares boundary setup only for a short $measurement tooling selection",
+    ({ prices, allocations }) => {
+      // Recorded CI run 42235536470 executed these separate one-file processes in 9s.
+      const files = [
+        "test/scripts/lint-suppressions.test.ts",
+        "test/scripts/update-restart-module-outcome.test.ts",
+      ];
+      const timings = Object.fromEntries(
+        files.flatMap((file, index) =>
+          prices[index] === undefined ? [] : [[file, prices[index]!]],
+        ),
+      );
+      const readTimings = vi.spyOn(testTimings, "readToolingFileTimings").mockReturnValue(timings);
+      try {
+        const selected = expectDefined(
+          createSelectedNodeTestShardBundles(files, {
+            runnerBackend: "hybrid",
+          }),
+          "selected tooling plan",
+        );
+        const packed = packChangedNodeBoundary([
+          ...selected.map((job) => ({ ...job, configs: [] })),
+          boundary,
+        ]);
+        expect(packed).toHaveLength(allocations);
+        expect(selectedFiles(packed).toSorted()).toEqual(files.toSorted());
+        const groups = packed.flatMap((job) => job.groups ?? []);
+        expect(groups.filter((group) => group.configs.includes(boundary.configs[0]!))).toEqual(
+          allocations === 1
+            ? [
+                {
+                  shard_name: "changed-boundary",
+                  configs: boundary.configs,
+                  requiresDist: false,
+                  runner,
+                },
+              ]
+            : [],
+        );
+        expect(
+          groups.filter((group) => group.includePatterns).map((group) => group.includePatterns),
+        ).toEqual(selected.flatMap((job) => job.groups.map((group) => group.includePatterns)));
+        expect(packed.every((job) => job.runner === runner && job.planConcurrency !== 2)).toBe(
+          true,
+        );
+      } finally {
+        readTimings.mockRestore();
+      }
+    },
+  );
+
   it("retains the standalone gate when setup, concurrency, or timing cannot be shared", () => {
     const base = tooling();
     const variants = [
@@ -1158,7 +1214,9 @@ describe("CI changed Node test plan", () => {
       for (const job of selected.filter((candidate) => candidate.groups)) {
         const embeddedGroups =
           job.groups?.filter(
-            (group) => !group.includePatterns?.includes(lintSuppressionInventoryTest),
+            (group) =>
+              !group.configs.includes("test/vitest/vitest.boundary.config.ts") &&
+              !group.includePatterns?.includes(lintSuppressionInventoryTest),
           ) ?? [];
         for (const group of embeddedGroups) {
           const { job: ownerJob, group: owner } = canonicalOwner(full, group.shard_name);
@@ -1196,7 +1254,11 @@ describe("CI changed Node test plan", () => {
           expect(timings.compactGroupSeconds.blacksmith[group.shard_name]).toBeUndefined();
         }
       }
-      expect(selected.filter((shard) => !shard.groups)).toEqual([
+      expect(
+        selected
+          .flatMap((shard) => [...(shard.groups ?? [shard])])
+          .filter((group) => group.configs.includes("test/vitest/vitest.boundary.config.ts")),
+      ).toEqual([
         expect.objectContaining({
           configs: ["test/vitest/vitest.boundary.config.ts"],
           requiresDist: false,

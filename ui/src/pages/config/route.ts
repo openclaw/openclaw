@@ -5,7 +5,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { hasConfigPageDisplay, isAppearanceDataTarget } from "./config-page-reads.ts";
 import { CONFIG_PAGE_IDS, normalizeConfigSelection, type ConfigPageId } from "./config-sections.ts";
-import { configRouteData, configTargetIdFromHash, SETTINGS_ROUTE_TARGETS } from "./route-data.ts";
+import { canonicalGeneralSettingsLocation, configRouteData } from "./route-data.ts";
 
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
@@ -100,17 +100,8 @@ const removedGeneralRedirectPage = definePage({
   ...routePageSpec("config"),
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
     `${location.pathname}\u0000${location.search}\u0000${location.hash}`,
-  loader: (context: ApplicationContext, { location }) => {
-    const target =
-      configTargetIdFromHash(location.hash) === "settings-general-model"
-        ? SETTINGS_ROUTE_TARGETS.modelBehavior
-        : SETTINGS_ROUTE_TARGETS.appearanceLanguage;
-    return redirect({
-      pathname: pathForRoute(target.routeId, context.basePath),
-      search: "search" in target ? target.search : "",
-      hash: target.hash,
-    });
-  },
+  loader: (context: ApplicationContext, { location }) =>
+    redirect(canonicalGeneralSettingsLocation(location, context.basePath)),
   // Redirect routes still require a module by contract, but never render page content.
   component: async () => ({ renderSolid: () => null }),
 });

@@ -1,26 +1,43 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { compareSemverStrings } from "./npm-registry-spec.js";
-import { checkTelemetryUpdate } from "./telemetry.js";
-import { UpdateCampaignController } from "./update-campaign.js";
+import type { UpdateCheckLifecycle } from "./update-check-lifecycle.js";
+import type { UpdateCheckResult } from "./update-check.js";
 import {
-  createGatewayUpdateLifecycle,
-  type UpdateCheckLifecycle,
-} from "./update-check-lifecycle.js";
-import { checkUpdateStatus, resolveNpmChannelTag, type UpdateCheckResult } from "./update-check.js";
-import { resolveDevGitCommits } from "./update-git-metadata.js";
-import { runCampaignUpdate } from "./update-startup-auto-run.js";
-import { createDevGitStatus } from "./update-startup-git.test-support.js";
+  closeUpdateFixtureDatabases,
+  resetUpdateFixtureModules,
+} from "./update-fixture.test-support.js";
 import { pauseAt, expectNoCalls } from "./update-startup-suite.test-support.js";
-import { runGatewayUpdateCheck as runGatewayUpdateCheckOwner } from "./update-startup.js";
-import { getGatewayUpdateSchedule, refreshGatewayUpdateStatus } from "./update-status-schedule.js";
-import {
-  getUpdateAvailable,
-  getUpdateSchedule,
-  resetUpdateStatusState,
-} from "./update-status-state.js";
+
+let { createTestGatewayScheduler } = await import("../test-utils/gateway-scheduler-clock.js");
+let { compareSemverStrings } = await import("./npm-registry-spec.js");
+let { checkTelemetryUpdate } = await import("./telemetry.js");
+let { UpdateCampaignController } = await import("./update-campaign.js");
+let { createGatewayUpdateLifecycle } = await import("./update-check-lifecycle.js");
+let { checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js");
+let { resolveDevGitCommits } = await import("./update-git-metadata.js");
+let { runCampaignUpdate } = await import("./update-startup-auto-run.js");
+let { createDevGitStatus } = await import("./update-startup-git.test-support.js");
+let { runGatewayUpdateCheck: runGatewayUpdateCheckOwner } = await import("./update-startup.js");
+let { getGatewayUpdateSchedule, refreshGatewayUpdateStatus } =
+  await import("./update-status-schedule.js");
+let { getUpdateAvailable, getUpdateSchedule } = await import("./update-status-state.js");
+
+async function importUpdateFixtureModules() {
+  ({ createTestGatewayScheduler } = await import("../test-utils/gateway-scheduler-clock.js"));
+  ({ compareSemverStrings } = await import("./npm-registry-spec.js"));
+  ({ checkTelemetryUpdate } = await import("./telemetry.js"));
+  ({ UpdateCampaignController } = await import("./update-campaign.js"));
+  ({ createGatewayUpdateLifecycle } = await import("./update-check-lifecycle.js"));
+  ({ checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js"));
+  ({ resolveDevGitCommits } = await import("./update-git-metadata.js"));
+  ({ runCampaignUpdate } = await import("./update-startup-auto-run.js"));
+  ({ createDevGitStatus } = await import("./update-startup-git.test-support.js"));
+  ({ runGatewayUpdateCheck: runGatewayUpdateCheckOwner } = await import("./update-startup.js"));
+  ({ getGatewayUpdateSchedule, refreshGatewayUpdateStatus } =
+    await import("./update-status-schedule.js"));
+  ({ getUpdateAvailable, getUpdateSchedule } = await import("./update-status-state.js"));
+}
 
 vi.mock("../version.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../version.js")>()),
@@ -143,9 +160,11 @@ function paused<T>(fallback: T) {
 describe("interactive Dev update discovery", () => {
   let lifecycle: UpdateCheckLifecycle;
   let scheduler: ReturnType<typeof createTestGatewayScheduler>;
-  let campaign: UpdateCampaignController;
+  let campaign: InstanceType<typeof UpdateCampaignController>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await resetUpdateFixtureModules();
+    await importUpdateFixtureModules();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
     vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", undefined);
@@ -155,7 +174,6 @@ describe("interactive Dev update discovery", () => {
     vi.mocked(compareSemverStrings).mockReset();
     vi.mocked(resolveDevGitCommits).mockReset().mockResolvedValue([]);
     vi.mocked(runCampaignUpdate).mockClear();
-    resetUpdateStatusState();
     scheduler = createTestGatewayScheduler("fake-timers");
     lifecycle = createGatewayUpdateLifecycle(scheduler);
     campaign = new UpdateCampaignController(scheduler);
@@ -165,7 +183,7 @@ describe("interactive Dev update discovery", () => {
   afterEach(async () => {
     await lifecycle.stop();
     await scheduler.stop();
-    resetUpdateStatusState();
+    await closeUpdateFixtureDatabases();
     vi.unstubAllEnvs();
     vi.useRealTimers();
   });

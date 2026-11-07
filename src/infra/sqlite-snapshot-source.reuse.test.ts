@@ -3,12 +3,26 @@ import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import { useSqliteTempDirs } from "./sqlite-shard-lifecycle.test-support.js";
 import { withSqliteSnapshotReuse } from "./sqlite-snapshot-reuse.js";
-import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
+import {
+  prepareSqliteReadOnlyLocationAwaited,
+  prepareSqliteReadOnlyLocationSync,
+} from "./sqlite-snapshot-source.js";
+import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
-const worker = vi.hoisted(() => ({ copies: 0 }));
+const worker = vi.hoisted(() => ({ copies: 0, retainedChildren: 0 }));
 
 vi.mock("./sqlite-readonly-worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./sqlite-readonly-worker.js")>()),
+  createScopedSqliteReadOnlyWorker: () => {
+    worker.retainedChildren += 1;
+    throw new Error("a scoped reader must not retain a child");
+  },
+  runSqliteReadOnlyWorker: async (source: string, options: { stagingRoot: string }) => {
+    worker.copies += 1;
+    const location = path.join(options.stagingRoot, "database.sqlite");
+    fs.copyFileSync(source, location);
+    return location;
+  },
   runSqliteReadOnlyWorkerSync: (source: string, stagingRoot: string) => {
     worker.copies += 1;
     const location = path.join(stagingRoot, "database.sqlite");
@@ -29,6 +43,7 @@ function settledSource() {
 
 beforeEach(() => {
   worker.copies = 0;
+  worker.retainedChildren = 0;
 });
 
 it("copies an unchanged source once across a scope's read-only requests", () =>
@@ -69,4 +84,32 @@ it("copies per request outside a reuse scope", () => {
   expect(worker.copies).toBe(2);
   first.cleanup();
   second.cleanup();
+});
+
+it("seeds a scope's image for awaited readers without retaining a child", () =>
+  withSqliteSnapshotReuse(async () => {
+    const source = settledSource();
+    const request = {
+      signal: new AbortController().signal,
+      expectedSourceIdentity: readDatabasePathIdentitySync(source),
+      reuse: true,
+    } as const;
+    const first = await prepareSqliteReadOnlyLocationAwaited(source, request);
+    await first.cleanupAsync();
+    const second = await prepareSqliteReadOnlyLocationAwaited(source, request);
+    expect(second.location).toBe(first.location);
+    await second.cleanupAsync();
+    expect(worker).toEqual({ copies: 1, retainedChildren: 0 });
+  }));
+
+it("keeps the retained child for awaited readers outside a scope", async () => {
+  const source = settledSource();
+  await expect(
+    prepareSqliteReadOnlyLocationAwaited(source, {
+      signal: new AbortController().signal,
+      expectedSourceIdentity: readDatabasePathIdentitySync(source),
+      reuse: true,
+    }),
+  ).rejects.toThrow("must not retain a child");
+  expect(worker.retainedChildren).toBe(1);
 });

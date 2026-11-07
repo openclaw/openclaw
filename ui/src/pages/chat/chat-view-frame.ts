@@ -124,6 +124,7 @@ export type ChatProps = Omit<
     ) => void | Promise<void>;
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
+    onDismissRunError?: () => void;
     chatMessageMaxWidth?: string | null;
     showNewMessages?: boolean;
     onScrollToBottom?: (options?: { smooth?: boolean }) => void;

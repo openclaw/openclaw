@@ -487,7 +487,8 @@ export async function prepareGatewayKernelState(params: {
     getAgentDatabaseAdmissionRefusals: () => {
       const cfg = getRuntimeConfig();
       return listAgentDatabaseAdmissionRefusals().filter(
-        (refusal) => !canIsolateAgentDatabase(cfg, refusal.agentId),
+        (refusal) =>
+          refusal.code === "agent-deletion" || !canIsolateAgentDatabase(cfg, refusal.agentId),
       );
     },
     getPluginReloadStatus: params.getPluginReloadStatus,
@@ -551,6 +552,7 @@ export async function prepareGatewayKernelState(params: {
       runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
     pluginRegistry: pluginRuntime.registry,
     getPluginRouteRegistry: () => pluginRuntime.registry,
+    isRequestRuntimeReady: () => startupState.dispatchReady,
     isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
     getGatewayRequestContext: resolvePluginGatewayContext,
     deps,

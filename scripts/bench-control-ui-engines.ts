@@ -23,9 +23,9 @@ import { waitForControlUiInitialRoster } from "../ui/src/test-helpers/control-ui
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
-  installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import {
   mapControlUiAllocationProfile,
@@ -80,6 +80,9 @@ import {
   createEnginePageScenarios,
   enginePageCoverage,
   enginePageFixtureCounts,
+  createEngineRouteTransitionScenarios,
+  engineRouteTransitionCoverage,
+  type EngineRouteTransition,
 } from "./lib/control-ui-engine-page-scenarios.ts";
 import { createEnginePluginMemoryScenarios } from "./lib/control-ui-engine-plugin-memory-scenarios.ts";
 import { createEngineStreamingScenarios } from "./lib/control-ui-engine-streaming-scenarios.ts";
@@ -103,6 +106,7 @@ import {
   type ControlUiMutationAudit,
 } from "./lib/control-ui-mutation-audit.ts";
 import { summarizeControlUiNativeTrace } from "./lib/control-ui-native-trace.ts";
+import { createControlUiObservationWriter } from "./lib/control-ui-observation-output.ts";
 import {
   finishControlUiPageObserver,
   installControlUiPageObserver,
@@ -110,6 +114,11 @@ import {
   resetControlUiPageObserver,
   type ControlUiPageObservation,
 } from "./lib/control-ui-page-observer.ts";
+import {
+  createControlUiRemountAudit,
+  type ControlUiRemountAudit,
+} from "./lib/control-ui-remount-audit.ts";
+import { createEngineRemountScenarios } from "./lib/control-ui-remount-scenarios.ts";
 import { installControlUiResourceCounts } from "./lib/control-ui-resource-counts.ts";
 import { launchTalkObservationBrowser } from "./lib/control-ui-talk-fixture.ts";
 import {
@@ -142,6 +151,9 @@ const { values } = parseArgs({
     "native-audit": { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     "mutation-audit": { type: "boolean", default: false },
+    "remount-audit": { type: "boolean", default: false },
+    "route-transitions": { type: "boolean", default: false },
+    "transition-targets": { type: "string" },
     "cpu-throttle": { type: "string", default: "1" },
     "idle-warmup-ms": { type: "string" },
     "idle-duration-ms": { type: "string", default: "30000" },
@@ -235,10 +247,12 @@ if (values.trace && values["cpu-only"]) {
   throw new Error("Choose --trace or --cpu-only; use separate untraced timing runs");
 }
 if (
-  values["mutation-audit"] &&
+  (values["mutation-audit"] || values["remount-audit"]) &&
   (values.trace || values["cpu-only"] || values["cpu-profile"] || values["native-audit"])
 ) {
-  throw new Error("--mutation-audit is diagnostic; collect profiles and timings in separate runs");
+  throw new Error(
+    "Mutation/remount audits are diagnostic; collect profiles and timings separately",
+  );
 }
 if (values["cpu-profile"] && (values.trace || values["cpu-only"] || engines.includes("webkit"))) {
   throw new Error("--cpu-profile requires Chromium and a separate run from --trace/--cpu-only");
@@ -276,12 +290,20 @@ const sourceRoots = [
   ...(values["control-source-root"] ?? []),
 ];
 const needsWorkboard =
+  values["route-transitions"] ||
   values.pages ||
   values.steps
     ?.split(",")
     .some(
       (id) =>
         id.startsWith("workboard-") ||
+        (id.startsWith("remount-from-") &&
+          (id === "remount-from-plugin" ||
+            id === "remount-from-workboard" ||
+            !values["transition-targets"] ||
+            values["transition-targets"]
+              .split(",")
+              .some((target) => /^\/(?:plugin|workboard)(?:[/?]|$)/u.test(target)))) ||
         id.startsWith("noop-workboard-") ||
         /^page-(?:workboard|plugin)-(?:visit|revisit|action|leave)$/u.test(id),
     );
@@ -370,6 +392,16 @@ type Observation = {
     unmappedFrames: number;
   };
   mutations?: ControlUiMutationAudit;
+  remounts?: ControlUiRemountAudit;
+  transitions?: Array<
+    EngineRouteTransition & {
+      metrics?: EngineMetrics;
+      remounts?: ControlUiRemountAudit;
+      wallMs: number;
+      applicationMs?: number;
+      error?: string;
+    }
+  >;
   pixels?: Awaited<ReturnType<typeof compareControlUiScreenshots>>;
   computedTheme?: Record<string, string>;
   layers?: ControlUiLayerAudit;
@@ -405,6 +437,7 @@ type Observation = {
   artifactPrefix: string;
 };
 const observations: Observation[] = [];
+const observationWriter = createControlUiObservationWriter(artifactDir);
 const cpuCensus = createControlUiCpuCensus();
 const writeJson = (name: string, value: unknown) =>
   writeFile(path.join(artifactDir, name), JSON.stringify(value, null, 2));
@@ -452,7 +485,11 @@ try {
     ...createEngineMemoryScenarios(memorySoakRounds),
     ...createEnginePluginMemoryScenarios(),
     ...createEngineStreamingScenarios(),
-    ...createEnginePageScenarios(0, pageOrigin),
+    ...createEnginePageScenarios(0, pageOrigin, servers[0]!.server.baseUrl),
+    ...createEngineRemountScenarios(),
+    ...createEngineRouteTransitionScenarios(async (_page, _transition, run) => {
+      await run();
+    }, values["transition-targets"]?.split(",")),
     ...interactionScenarios.filter(
       (scenario) =>
         requestedIds?.includes(scenario.id) ||
@@ -463,18 +500,27 @@ try {
     ),
   ];
   const ids = requestedIds?.flatMap((id) =>
-    id === "chat-actions"
+    id === "remount-interactions"
       ? catalog
-          .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+          .filter(
+            (scenario) =>
+              scenario.id.startsWith("remount-") && !scenario.id.startsWith("remount-from-"),
+          )
           .map((scenario) => scenario.id)
-      : [id],
+      : id === "chat-actions"
+        ? catalog
+            .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+            .map((scenario) => scenario.id)
+        : [id],
   );
   const scenarios = catalog.filter(({ id, explicitOnly, memory }) =>
     ids
       ? ids.some((selected) => selected === id || (selected === "memory" && memory))
-      : values.pages
-        ? id.startsWith("page-") && pagePhases.some((phase) => id.endsWith(`-${phase}`))
-        : !explicitOnly,
+      : values["route-transitions"]
+        ? id.startsWith("remount-from-")
+        : values.pages
+          ? id.startsWith("page-") && pagePhases.some((phase) => id.endsWith(`-${phase}`))
+          : !explicitOnly,
   );
   if (
     !scenarios.length ||
@@ -594,21 +640,29 @@ try {
     idleDurationMs,
     allocations: values.allocations,
     mutationAudit: values["mutation-audit"],
+    remountAudit: values["remount-audit"],
+    routeTransitions: values["route-transitions"],
+    transitionTargets: values["transition-targets"]?.split(","),
+    routeTransitionCoverage: values["route-transitions"]
+      ? engineRouteTransitionCoverage
+      : undefined,
     cpuThrottle,
     memorySoakRounds,
     collection: values.allocations
       ? "V8 sampled allocations including major/minor-GC collected objects; diagnostic overhead, not timing proof"
-      : values["mutation-audit"]
-        ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
-        : values["native-audit"]
-          ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
-          : values["cpu-profile"]
-            ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
-            : values.trace
-              ? "Playwright tracing and engine Inspector/Profiler; overhead included"
-              : values["cpu-only"]
-                ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
-                : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
+      : values["remount-audit"]
+        ? "DOM attachment census with synchronous removal snapshots; diagnostic overhead, not timing proof. DOM detach is not Solid disposal."
+        : values["mutation-audit"]
+          ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
+          : values["native-audit"]
+            ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
+            : values["cpu-profile"]
+              ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
+              : values.trace
+                ? "Playwright tracing and engine Inspector/Profiler; overhead included"
+                : values["cpu-only"]
+                  ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
+                  : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
     order:
       "Serial network profiles alternate each pair; engine/configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
@@ -654,7 +708,7 @@ try {
           );
           for (const [position, { configuration, bundle, slot }] of configuredSlots.entries()) {
             slot.server.setAssetLatencyMs(networkProfile.httpLatencyMs);
-            const scenario =
+            let scenario =
               createEngineBootScenarios(slot.server.baseUrl, networkProfile.gatewayLatencyMs).find(
                 ({ id }) => id === item.id,
               ) ??
@@ -662,9 +716,11 @@ try {
                 ({ id }) => id === item.id,
               ) ??
               (item.id.startsWith("page-")
-                ? createEnginePageScenarios(networkProfile.gatewayLatencyMs, pageOrigin).find(
-                    ({ id }) => id === item.id,
-                  )
+                ? createEnginePageScenarios(
+                    networkProfile.gatewayLatencyMs,
+                    pageOrigin,
+                    slot.server.baseUrl,
+                  ).find(({ id }) => id === item.id)
                 : undefined) ??
               item;
             const idleControl = isEngineIdleControl(scenario);
@@ -684,20 +740,54 @@ try {
               hostLoadAverage: os.loadavg(),
               artifactPrefix,
             };
+            if (scenario.id.startsWith("remount-from-")) {
+              observation.transitions = [];
+              scenario = createEngineRouteTransitionScenarios(async (page, transition, run) => {
+                const row: NonNullable<Observation["transitions"]>[number] = {
+                  ...transition,
+                  wallMs: 0,
+                };
+                const started = performance.now();
+                if (values["remount-audit"]) {
+                  await page.evaluate(() => {
+                    window.openclawRemountAudit = window.openclawCreateRemountAudit!();
+                    window.openclawRemountAudit.start();
+                  });
+                }
+                const measurement = await startEngineMeasurement(page, engine, { trace: false });
+                try {
+                  row.applicationMs = await run();
+                } catch (error) {
+                  row.error = String(error);
+                  await page.screenshot({
+                    path: path.join(
+                      artifactDir,
+                      `${artifactPrefix}.transition-${observation.transitions!.length}-failed.png`,
+                    ),
+                  });
+                } finally {
+                  row.wallMs = performance.now() - started;
+                  row.metrics = (await measurement.stop()).metrics;
+                  if (values["remount-audit"]) {
+                    row.remounts = await page.evaluate(() => window.openclawRemountAudit!.finish());
+                  }
+                  observation.transitions!.push(row);
+                  await writeJson(`${artifactPrefix}.transitions.json`, observation.transitions);
+                }
+              }, values["transition-targets"]?.split(",")).find(({ id }) => id === scenario.id)!;
+            }
             if (scenario.viewports && !scenario.viewports.some((name) => name === viewport.name)) {
               observation.status = "skipped";
               observation.skipReason = "This control is unavailable at this viewport.";
               observations.push(observation);
-              await writeJson(`${artifactPrefix}.json`, observation);
-              await writeJson("observations.json", observations);
+              await observationWriter.record(observation);
               continue;
             }
             if (scenario.visibility === "hidden" && engine !== "chromium") {
               observation.status = "skipped";
               observation.skipReason = `${engine} has no supported native headless hiding API; no simulated visibility proof.`;
               observations.push(observation);
-              await writeJson(`${artifactPrefix}.json`, observation);
-              await writeJson("observations.json", observations);
+              await observationWriter.record(observation);
               continue;
             }
             if (scenario.memory || !browsers.get(engine)!.isConnected()) {
@@ -760,6 +850,9 @@ try {
                   deviceScaleFactor: configuration.deviceScaleFactor,
                   mobile: viewport.name === "mobile",
                 });
+                if (viewport.name === "mobile") {
+                  await throttle.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+                }
                 await throttle.send("Emulation.setLocaleOverride", {
                   locale: configuration.locale,
                 });
@@ -773,6 +866,11 @@ try {
                 await throttle.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
               }
               await page.addInitScript("globalThis.__name = (fn) => fn");
+              if (values["remount-audit"]) {
+                await page.addInitScript(
+                  `window.openclawCreateRemountAudit = ${createControlUiRemountAudit.toString()};${scenario.navigation ? "window.openclawRemountAudit = window.openclawCreateRemountAudit(); window.openclawRemountAudit.start();" : ""}`,
+                );
+              }
               if (values["mutation-audit"]) {
                 await page.addInitScript(
                   `window.openclawMutationAudit = (${createControlUiMutationAudit.toString()})();${scenario.navigation ? "window.openclawMutationAudit.start();" : ""}`,
@@ -843,7 +941,7 @@ try {
                   },
                 );
               }
-              const fixture: ReturnType<typeof createScenarioFixture> = scenario.fixture
+              let fixture: ReturnType<typeof createScenarioFixture> = scenario.fixture
                 ?.workboardResources
                 ? createWorkboardResourceFixture(
                     slot.build.buildId,
@@ -851,6 +949,38 @@ try {
                     slot.workboardSource!.root,
                   )
                 : createScenarioFixture(slot.build.buildId, slot.build.version, scenario);
+              if (scenario.fixture?.workboardResources && scenario.id.startsWith("remount-from-")) {
+                const broad = createScenarioFixture(
+                  slot.build.buildId,
+                  slot.build.version,
+                  scenario,
+                );
+                fixture = {
+                  ...broad,
+                  nativePlugins: fixture.nativePlugins,
+                  controlUiTabs: fixture.controlUiTabs,
+                  sessions: [
+                    ...new Map(
+                      [...broad.sessions, ...fixture.sessions].map((row) => [row.key, row]),
+                    ).values(),
+                  ],
+                  featureMethods: [
+                    ...new Set([
+                      ...(broad.featureMethods ?? []),
+                      ...(fixture.featureMethods ?? []),
+                    ]),
+                  ],
+                  methodResponses: {
+                    ...broad.methodResponses,
+                    ...fixture.methodResponses,
+                    "plugins.uiDescriptors": Object.assign(
+                      {},
+                      broad.methodResponses?.["plugins.uiDescriptors"],
+                      { controlUiTabs: fixture.controlUiTabs },
+                    ),
+                  },
+                };
+              }
               const configResponse = fixture.methodResponses?.["config.get"];
               if (isRecord(configResponse) && isRecord(configResponse.config)) {
                 const config = configResponse.config;
@@ -888,10 +1018,11 @@ try {
               };
               const gateway = idleControl
                 ? undefined
-                : await installMockGateway(
+                : await installNativePluginMockGateway(
                     page,
                     { ...fixture, awaitInitialRoster: false },
                     {
+                      nativeAssetLatencyMs: networkProfile.httpLatencyMs,
                       requestHandlers: {
                         ...defaults,
                         ...scenario.createRequestHandlers?.(defaults),
@@ -949,7 +1080,8 @@ try {
                 await installChatActionObservation(
                   page,
                   values.trace,
-                  scenario.id === "chat-actions-fork",
+                  scenario.id === "chat-actions-fork" ||
+                    scenario.id.startsWith("chat-actions-split-"),
                 );
               }
               const actionTiming =
@@ -966,6 +1098,16 @@ try {
                 : undefined;
               if (values["mutation-audit"] && !scenario.navigation) {
                 await page.evaluate(() => window.openclawMutationAudit!.start());
+              }
+              if (
+                values["remount-audit"] &&
+                !scenario.navigation &&
+                !scenario.id.startsWith("remount-from-")
+              ) {
+                await page.evaluate(() => {
+                  window.openclawRemountAudit = window.openclawCreateRemountAudit!();
+                  window.openclawRemountAudit.start();
+                });
               }
               if (values["native-audit"]) {
                 layerAudit = await createControlUiLayerAudit(page);
@@ -1158,6 +1300,11 @@ try {
                   after: afterPixels.toString("base64"),
                 });
               }
+              if (values["remount-audit"] && !scenario.id.startsWith("remount-from-")) {
+                observation.remounts = await page.evaluate(() =>
+                  window.openclawRemountAudit!.finish(),
+                );
+              }
               if (scenario.navigation) {
                 await page.waitForLoadState("networkidle");
                 await page.evaluate(() => document.fonts.ready.then(() => undefined));
@@ -1271,6 +1418,12 @@ try {
               if (errors.length) {
                 throw new Error(errors.map(({ message }) => message).join("\n"));
               }
+              const failedTransitions = observation.transitions?.filter((row) => row.error);
+              if (failedTransitions?.length) {
+                throw new Error(
+                  `${failedTransitions.length} transition(s) failed; see transitions.json`,
+                );
+              }
               if (
                 configuration.forcedColors === "active" &&
                 !observation.configurationEvidence.forcedColors
@@ -1351,8 +1504,7 @@ try {
                 await writeJson("cpu-census.json", cpuCensus.report());
               }
               observations.push(observation);
-              await writeJson(`${artifactPrefix}.json`, observation);
-              await writeJson("observations.json", observations);
+              await observationWriter.record(observation);
               console.log(
                 JSON.stringify(
                   observation.memory
@@ -1367,11 +1519,15 @@ try {
     }
   }
 } finally {
-  for (const browser of browsers.values()) {
-    await browser.close();
-  }
-  for (const { server } of servers) {
-    await server.close();
+  try {
+    for (const browser of browsers.values()) {
+      await browser.close();
+    }
+    for (const { server } of servers) {
+      await server.close();
+    }
+  } finally {
+    await observationWriter.finish(observations);
   }
 }
 function distribution(samples: number[]) {

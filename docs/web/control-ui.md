@@ -280,6 +280,8 @@ Opening a nested session from a **Waiting on** link, a direct URL, or browser hi
 
 Use **Snooze → Choose another time** in a session menu to pick a future date and time in your browser’s local time zone. After a successful snooze, **Custom** shows that exact date and time in other session menus for one hour. Choosing another custom time replaces it; presets and Undo leave the remembered choice unchanged. The browser stores this choice separately for each Gateway and signed-in account, and removes it when it expires or the wake time passes. If browser storage is unavailable, the choice remains reusable only in the current page.
 
+Snoozing also hides pinned sessions from the Active sidebar until they wake. Their pins and relative order are preserved, and snoozed sessions remain discoverable with the **Snoozed** or **All** filter.
+
 The chat header’s **Details** panel groups session information into collapsible sections separated by subtle dividers. **Environment** shows the workspace name, branch, worktree, execution device, and model. Absolute workspace paths stay out of the panel text and tooltips; use **Copy path** when you need the full path, copy the branch, or open **Show session files** to browse the workspace. The composer's context ring shows a compact usage breakdown, latest-run tokens, and provider plan limits. **View context** opens the complete report, Refresh, and compaction action in one side panel. Approximate usage keeps its `~` marker. **Changes** keeps pull requests, change totals, checks, and available publication actions together. Background tasks, automations, participants, and task progress retain their existing session-scoped actions. On wide conversations, Details docks beside the transcript; narrower conversations use a dismissible popover below the header. On desktop, use the **Details** toggle to open or close the panel; mobile keeps a close button inside the panel.
 
 Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to a session reuses its details on the same connection, including updates received through complete session snapshots. Incomplete updates, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
@@ -683,6 +685,10 @@ Local onboarding generates a Gateway secret in token mode by default, without a 
 
 Use the agent selector to open an agent's chat or its settings gear to configure
 that agent. Per-agent settings remain at `/settings/agents/<id>`.
+
+The agent's **Automations** panel shows an empty state only after its jobs read
+succeeds. Failed reads show an error with **Refresh** available; previously loaded
+jobs remain visible while a refresh is pending or fails.
 
 Open **Templates** in **Pages**, or visit `/templates`, to discover official Templates.
 This page contains Templates discovery only. Enable **Templates** in **Settings → Labs**

@@ -174,8 +174,12 @@ describe("production lint suppressions", () => {
         // Pinned Playwright exposes WebKit Inspector only through its private connection/session fields.
         "scripts/lib/control-ui-engine-memory.ts|no-underscore-dangle|3",
         "scripts/lib/control-ui-engine-metrics.ts|no-underscore-dangle|3",
+        // The Terminal output probe forwards native fillText with its original canvas receiver.
+        "scripts/lib/control-ui-engine-page-scenarios.ts|typescript/unbound-method|1",
         // The streaming probe forwards native methods with their original receivers.
         "scripts/lib/control-ui-engine-streaming-scenarios.ts|typescript/unbound-method|2",
+        // The heavy-row probe forwards native image decoding with its original image receiver.
+        "scripts/lib/control-ui-heavy-window-scenarios.ts|typescript/unbound-method|1",
         // The diagnostic observer restores native methods and forwards their original receiver.
         "scripts/lib/control-ui-mutation-audit.ts|typescript/unbound-method|2",
         // The scheduling probe forwards native methods with the original call receiver through Reflect.apply.
