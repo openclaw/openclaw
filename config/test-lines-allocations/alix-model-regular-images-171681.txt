@@ -1,0 +1,2 @@
+# FIFO rejection, missing-path no-dispatch, and real image/symlink controls at the CLI owner.
+56
