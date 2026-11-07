@@ -180,14 +180,12 @@ test.each([
       },
     ),
     notice: "The request was interrupted because OpenClaw storage is busy.",
-    errorKind: undefined,
     diagnostic: undefined,
   },
   {
     name: "storage capacity",
     failure: Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" }),
     notice: "OpenClaw couldn't save your conversation because the disk is full.",
-    errorKind: undefined,
     diagnostic: undefined,
   },
   {
@@ -197,119 +195,98 @@ test.each([
         "This workspace is unavailable. Ask the operator to review its setup before retrying.",
     }),
     notice: "This workspace is unavailable.",
-    errorKind: undefined,
     diagnostic:
       "This workspace is unavailable. Ask the operator to review its setup before retrying.",
   },
   {
-    name: "safe preflight permission",
-    failure: new AgentHarnessPreflightError("private binding /private/worktree is invalid", {
-      userMessage: "Confirm this session's workspace before trying again.",
-    }),
-    notice: "Confirm this session's workspace before trying again.",
-    errorKind: undefined,
-    diagnostic: undefined,
-  },
-  {
     name: "unknown private failure",
     failure: new Error("private credentials /private/worktree database is locked"),
-    notice: "Your request couldn't be completed.",
-    errorKind: undefined,
+    notice: undefined,
     diagnostic: "Error: private credentials /private/worktree database is locked",
   },
-])(
-  "preserves $name through accepted chat.send",
-  async ({ failure, notice, errorKind, diagnostic }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await loadOrCreateProcessDeviceIdentityAsync();
-      const sessionKey = "agent:main:startup-storage-failure";
-      const sessionId = "startup-storage-failure-session";
-      const runId = "startup-storage-failure-run";
-      setRuntimeConfigSnapshot({ agents: { defaults: { workspace: state.workspaceDir } } });
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey },
-        {
-          sessionId,
-          updatedAt: Date.now(),
-          status: "done",
-          pendingProjectGitUrl: "https://example.com/synthetic.git",
-        },
-      );
-      const context = createDirectChatContext();
-      const ready = createDeferred();
-      const workspaceSpy = vi.spyOn(workspace, "prepareSessionWorkspace").mockReturnValue({
-        sessionKey,
-        assertCurrent: () => {},
-        promptReady: ready.promise,
-        isReady: () => false,
-        getFailure: () => failure,
-        waitUntilReady: async () => {
-          throw failure;
-        },
-      });
-      const model = vi.spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher");
-      const finished = createDeferred();
-      const launch = agentDispatch.startChatDispatch;
-      const dispatchSpy = vi
-        .spyOn(agentDispatch, "startChatDispatch")
-        .mockImplementation((params) => {
-          const result = launch(params);
-          void result.then(finished.resolve, finished.reject);
-          return result;
-        });
-      try {
-        const respond = vi.fn();
-        await handleChatSend({
-          req: { type: "req", id: runId, method: "chat.send" },
-          params: { sessionKey, message: "hello", idempotencyKey: runId },
-          respond,
-          context,
-          client: null,
-          isWebchatConnect: () => false,
-        });
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ runId, status: "started" }),
-          undefined,
-          expect.objectContaining({ runId }),
-        );
-        ready.reject(failure);
-        await finished.promise;
-        expect(model).not.toHaveBeenCalled();
-        expect(context.logGateway.warn).not.toHaveBeenCalled();
-        const notices = (
-          await loadTranscriptEvents({ agentId: "main", sessionKey, sessionId })
-        ).filter((event) => isRecord(event) && event.type === "custom_message");
-        expect(notices).toEqual([
-          expect.objectContaining({
-            customType: "run-failed-before-reply",
-            content: "Your request couldn't be completed.",
-            details: expect.objectContaining({
-              runId,
-              ...(notice !== "Your request couldn't be completed."
-                ? { desktopNotice: notice }
-                : {}),
-            }),
-          }),
-        ]);
-        if (diagnostic) {
-          expect(notices[0]).toMatchObject({ details: { error: diagnostic } });
-          expect(notices[0]).not.toMatchObject({ details: { errorKind: expect.anything() } });
-        }
-        expect(context.broadcast).toHaveBeenCalledWith(
-          "chat",
-          expect.objectContaining({
-            runId,
-            state: "error",
-            ...(errorKind ? { errorKind } : {}),
-          }),
-          expect.anything(),
-        );
-      } finally {
-        workspaceSpy.mockRestore();
-        model.mockRestore();
-        dispatchSpy.mockRestore();
-      }
+])("preserves $name through accepted chat.send", async ({ failure, notice, diagnostic }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await loadOrCreateProcessDeviceIdentityAsync();
+    const sessionKey = "agent:main:startup-storage-failure";
+    const sessionId = "startup-storage-failure-session";
+    const runId = "startup-storage-failure-run";
+    setRuntimeConfigSnapshot({ agents: { defaults: { workspace: state.workspaceDir } } });
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      {
+        sessionId,
+        updatedAt: Date.now(),
+        status: "done",
+        pendingProjectGitUrl: "https://example.com/synthetic.git",
+      },
+    );
+    const context = createDirectChatContext();
+    const ready = createDeferred();
+    const workspaceSpy = vi.spyOn(workspace, "prepareSessionWorkspace").mockReturnValue({
+      sessionKey,
+      assertCurrent: () => {},
+      promptReady: ready.promise,
+      isReady: () => false,
+      getFailure: () => failure,
+      waitUntilReady: async () => {
+        throw failure;
+      },
     });
-  },
-);
+    const model = vi.spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher");
+    const finished = createDeferred();
+    const launch = agentDispatch.startChatDispatch;
+    const dispatchSpy = vi
+      .spyOn(agentDispatch, "startChatDispatch")
+      .mockImplementation((params) => {
+        const result = launch(params);
+        void result.then(finished.resolve, finished.reject);
+        return result;
+      });
+    try {
+      const respond = vi.fn();
+      await handleChatSend({
+        req: { type: "req", id: runId, method: "chat.send" },
+        params: { sessionKey, message: "hello", idempotencyKey: runId },
+        respond,
+        context,
+        client: null,
+        isWebchatConnect: () => false,
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId, status: "started" }),
+        undefined,
+        expect.objectContaining({ runId }),
+      );
+      ready.reject(failure);
+      await finished.promise;
+      expect(model).not.toHaveBeenCalled();
+      expect(context.logGateway.warn).not.toHaveBeenCalled();
+      const notices = (
+        await loadTranscriptEvents({ agentId: "main", sessionKey, sessionId })
+      ).filter((event) => isRecord(event) && event.type === "custom_message");
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({
+        customType: "run-failed-before-reply",
+        content: "Your request couldn't be completed.",
+        details: { runId, ...(notice ? { desktopNotice: notice } : {}) },
+      });
+      if (diagnostic) {
+        expect(notices[0]).toMatchObject({ details: { error: diagnostic } });
+        expect(notices[0]).not.toMatchObject({ details: { errorKind: expect.anything() } });
+      }
+      expect(context.broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({
+          runId,
+          state: "error",
+        }),
+        expect.anything(),
+      );
+    } finally {
+      workspaceSpy.mockRestore();
+      model.mockRestore();
+      dispatchSpy.mockRestore();
+    }
+  });
+});

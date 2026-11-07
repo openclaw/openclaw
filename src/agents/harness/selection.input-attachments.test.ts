@@ -101,7 +101,12 @@ async function prepareRememberedOwnerConsent() {
     { ownerPluginId: "codex" },
   );
   const revoked = { ...config, agents: { entries: { main: { nativeRuntimeConsent: [] } } } };
-  return { revoked, attempt, nativeStart };
+  return {
+    revoked,
+    attempt,
+    nativeStart,
+    staleHarness: { ...harness, supports, runAttempt: nativeStart },
+  };
 }
 
 it("runs a native harness in full mode under remembered owner consent", async () => {
@@ -126,52 +131,37 @@ it("refuses remembered consent revoked after admission before native dispatch", 
   expect(nativeStart).not.toHaveBeenCalled();
 });
 
-it("keeps public guidance when native consent is revoked before dispatch", async () => {
-  const { revoked, attempt, nativeStart } = await prepareRememberedOwnerConsent();
+it.each(["consent", "binding"])("keeps public guidance after native %s changes", async (kind) => {
+  const { revoked, attempt, nativeStart, staleHarness } = await prepareRememberedOwnerConsent();
   const original = harnessLifecycle.runAgentHarnessLifecycleAttempt;
   using dispatch = vi
     .spyOn(harnessLifecycle, "runAgentHarnessLifecycleAttempt")
     .mockImplementation(async (harness, prepared, execute) => {
-      setRuntimeConfigSnapshot({ ...revoked, tools: { fs: { workspaceOnly: false } } });
+      if (kind === "consent") {
+        setRuntimeConfigSnapshot({ ...revoked, tools: { fs: { workspaceOnly: false } } });
+      }
       return original(harness, prepared, execute);
     });
   const message =
-    "Native runtime consent was revoked before dispatch. Review this chat's permissions before retrying.";
-
-  await expect(runAgentHarnessAttempt(attempt)).rejects.toMatchObject({
+    kind === "consent"
+      ? "Native runtime consent was revoked before dispatch. Review this chat's permissions before retrying."
+      : "Native session runtime changed before dispatch. Reattach the original native session before retrying.";
+  const runtime =
+    kind === "binding"
+      ? {
+          harness: staleHarness,
+          auth: "host" as const,
+          modelRef: { provider: attempt.provider, model: attempt.modelId },
+          assertCurrent: async () => {},
+        }
+      : undefined;
+  await expect(runAgentHarnessAttempt(attempt, runtime)).rejects.toMatchObject({
     name: "AgentHarnessPreflightError",
     message,
     desktopMessage: message,
     userMessage: undefined,
   });
-  expect(dispatch).toHaveBeenCalledOnce();
-  expect(nativeStart).not.toHaveBeenCalled();
-});
-
-it("keeps public guidance when a bound native runtime changes before dispatch", async () => {
-  const { attempt, nativeStart } = await prepareRememberedOwnerConsent();
-  const staleHarness: AgentHarness = {
-    id: "codex",
-    label: "Codex",
-    supports: () => ({ supported: true }),
-    runAttempt: nativeStart,
-  };
-  const message =
-    "Native session runtime changed before dispatch. Reattach the original native session before retrying.";
-
-  await expect(
-    runAgentHarnessAttempt(attempt, {
-      harness: staleHarness,
-      auth: "host",
-      modelRef: { provider: attempt.provider, model: attempt.modelId },
-      assertCurrent: async () => {},
-    }),
-  ).rejects.toMatchObject({
-    name: "AgentHarnessPreflightError",
-    message,
-    desktopMessage: message,
-    userMessage: undefined,
-  });
+  expect(dispatch).toHaveBeenCalledTimes(kind === "consent" ? 1 : 0);
   expect(nativeStart).not.toHaveBeenCalled();
 });
 
