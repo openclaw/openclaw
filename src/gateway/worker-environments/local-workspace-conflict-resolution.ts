@@ -342,7 +342,11 @@ export async function commitLocalWorkspaceReconciliation(params: {
       divergedPaths,
     });
   }
-  const baselineDoc = params.baselineDocument ? await params.baselineDocument() : undefined;
+  const needsResolvedBaseline = Boolean(
+    params.resolvedCanonicalPaths?.length && params.resolvedManifest,
+  );
+  const baselineDoc =
+    needsResolvedBaseline && params.baselineDocument ? await params.baselineDocument() : undefined;
   const baseManifestRaw =
     baselineDoc?.rawManifest ??
     params.checkpoint?.baseManifestRaw ??
