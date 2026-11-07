@@ -8,6 +8,7 @@ import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { ErrorDetails } from "../../components/config-error.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
@@ -20,11 +21,11 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
-import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import "../../styles/chat/text.css";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import "../../styles/skill-workshop.css";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
 import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
 import { undoMutationFor } from "./api.ts";
@@ -237,21 +238,19 @@ function PluginUnavailable(props: { view: WorkshopView }) {
 
 function ErrorBanner(props: { message: string; error?: unknown; onRetry?: () => void }) {
   return (
-    <div class="callout danger oc-banner oc-banner-error" role="alert">
-      <span>
-        {props.message}
-        {props.error != null && <ErrorDetails error={props.error} />}
-      </span>
-      {props.onRetry && (
-        <button
-          type="button"
-          class="btn btn--sm oc-action oc-action-secondary oc-banner-action"
-          onClick={() => props.onRetry?.()}
-        >
-          {t("skillWorkshop.retry")}
-        </button>
-      )}
-    </div>
+    <InlineAlert
+      tone="danger"
+      action={
+        props.onRetry && (
+          <button type="button" class="btn btn--sm" onClick={() => props.onRetry?.()}>
+            {t("skillWorkshop.retry")}
+          </button>
+        )
+      }
+    >
+      {props.message}
+      {props.error != null && <ErrorDetails error={props.error} />}
+    </InlineAlert>
   );
 }
 

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { createBoardWidget } from "../lib/board/widget.test-support.ts";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { board as emptyBoard, seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -49,7 +50,7 @@ suite.define(() => {
         position: (index + 4) * 1000,
       }));
       const lastPage = { cards: [...cards.slice(2), ...readyCards], statuses };
-      await installMockGateway(page, {
+      await installNativePluginMockGateway(page, {
         ...workboardUi,
         sessionKey,
         controlUiWidgetKinds: [

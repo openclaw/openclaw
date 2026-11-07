@@ -16,7 +16,10 @@ import type {
   ModelCatalogEntry,
   ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
-import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
+import {
+  providerDisplayLabel,
+  type ProviderPresentation,
+} from "../../components/provider-icon-data.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import {
   canonicalModelAuthProviderId,
@@ -53,7 +56,7 @@ export type ModelProviderPendingLogout = { cardId: string; label: string } & (
     }
 );
 
-export type ModelProviderCard = {
+export type ModelProviderCard = ProviderPresentation & {
   /** Canonical provider id used for icon + label lookup. */
   id: string;
   /** Exact config map key; provider ids are otherwise normalized for display/runtime use. */
@@ -90,7 +93,7 @@ export type ModelProviderCard = {
   usage?: ProviderUsageSnapshot;
 };
 
-type ConfiguredModelProvider = {
+type ConfiguredModelProvider = ProviderPresentation & {
   key: string;
   hasApiKey: boolean;
   apiKeyReference?: boolean;
@@ -103,6 +106,7 @@ type ModelProviderCardsInput = {
   providerOutcomes?: ModelCatalogProviderOutcome[];
   pendingProviders?: readonly string[];
   configProviders?: ConfiguredModelProvider[];
+  providerPresentations?: Record<string, ProviderPresentation>;
   providerUsage: UsageSummary | null;
 };
 
@@ -385,9 +389,21 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     )
     .map((draft) => {
       const apiKeySupported = apiKeyCapabilities.get(draft.card.id);
+      const presentation =
+        input.providerPresentations?.[draft.card.configKey ?? draft.card.id] ??
+        input.models?.find(
+          (model) => canonicalModelAuthProviderId(model.provider) === draft.card.id,
+        ) ??
+        input.configProviders?.find(
+          (provider) => canonicalModelAuthProviderId(provider.key) === draft.card.id,
+        );
+      const name = presentation?.providerName;
+      const icon = presentation?.providerIcon;
       return Object.assign(
         {},
         draft.card,
+        name ? { displayName: name, providerName: name } : {},
+        icon ? { providerIcon: icon } : {},
         draft.catalogOutcome ? { catalogStatus: draft.catalogOutcome.status } : {},
         apiKeySupported === undefined ? {} : { apiKeySupported },
       );
@@ -592,6 +608,7 @@ export function buildModelProviderPresentation(params: {
   const cards = buildModelProviderCards({
     ...data,
     models: catalog.models,
+    providerPresentations: catalog.providerPresentations,
     providerOutcomes: catalog.hasSnapshot
       ? (catalog.providerOutcomes ?? [])
       : data.providerOutcomes,

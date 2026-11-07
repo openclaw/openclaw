@@ -56,12 +56,8 @@ export async function prepareCodexAttemptTurnRequest(
   waitForActiveNativeTurnCompletion: () => Promise<boolean>,
 ) {
   const { prompt, state: resourceState, releaseCurrentRoute } = resources;
-  const {
-    context,
-    turnState,
-    buildRenderedCodexDeveloperInstructions,
-    nativeHistoryProvenancePrefix,
-  } = prompt;
+  const { context, turnState, buildRenderedCodexInstructions, nativeHistoryProvenancePrefix } =
+    prompt;
   const { runtime, attemptTools, hookContextWindowFields, workspaceBootstrapContext } = context;
   const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
     runtime;
@@ -111,7 +107,7 @@ export async function prepareCodexAttemptTurnRequest(
     capture: codexModelContentCapture,
     tools,
     buildInputMessages: buildCodexModelInputMessages,
-    buildSystemPrompt: buildRenderedCodexDeveloperInstructions,
+    buildSystemPrompt: buildRenderedCodexInstructions,
     onErrorDiagnostic: (error) => {
       embeddedAgentLog.debug("codex app-server model call diagnostic ended with error", {
         error: formatErrorMessage(error),
@@ -342,7 +338,7 @@ export async function prepareCodexAttemptTurnRequest(
     recordCodexTrajectoryContext(resources.trajectoryRecorder, {
       attempt: params,
       developerInstructions: joinPresentSections(
-        buildRenderedCodexDeveloperInstructions(),
+        buildRenderedCodexInstructions(),
         attemptTools.configuredMcp?.diagnosticNotice,
       ),
       prompt: turnState.codexTurnPromptText,
@@ -462,7 +458,7 @@ export async function prepareCodexAttemptTurnRequest(
   prepareWorkspaceReferences();
   const buildLlmInputEvent = () => ({
     ...buildModelCallIdentity(),
-    systemPrompt: buildRenderedCodexDeveloperInstructions(),
+    systemPrompt: buildRenderedCodexInstructions(),
     prompt: turnState.codexTurnPromptText,
     historyMessages: [],
     imagesCount:

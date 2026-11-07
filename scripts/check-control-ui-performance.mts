@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 import {
   CONTROL_UI_ROUTE_PRELOAD_ATTRIBUTE,
   selectControlUiRoutePreloads,
@@ -45,6 +46,8 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
+  // Coordinator-approved full locale hints: measured document plus 64 B headroom.
+  documentGzipBytes: 13_893,
   // Consolidated eager/route partitions measure 5/20/17 requests over HTTP/1.1.
   // Preserve the initial two-request headroom; route limits match their measured graphs.
   startupJsRequests: 7,
@@ -55,8 +58,12 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Generated-name-normalized main measurement plus 64 B toolchain headroom.
-  chatBootJsGzipBytes: 1_288_198,
-  newBootJsGzipBytes: 797_620,
+  // Coordinator accepted transcript mounting's minifier variance; complete build plus 64 B.
+  // Josh Lehman approved the OpenClaw ID sidebar mounts and sign-in callback check
+  // (#192352, 2026-11-06): on main 0a6590652dc this branch measures Chat 1,288,774 B
+  // and New Session 797,124 B; main's concurrent growth gets 256 B of headroom.
+  chatBootJsGzipBytes: 1_289_030,
+  newBootJsGzipBytes: 797_380,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -66,13 +73,17 @@ const controlUiPerformanceBudgets = {
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
   // Normalized shared application chunk plus 64 B toolchain headroom.
-  largestJsGzipBytes: 560_350,
+  // Josh Lehman approved the OpenClaw ID shared-chunk growth (#192352, 2026-11-06):
+  // measured 560,277 B; main's concurrent growth gets 256 B of headroom.
+  largestJsGzipBytes: 560_533,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Header-local notice matching adds 13 B and lowers 400-message 4x scroll CPU 5–7%.
-  totalCssGzipBytes: 324_685,
-  totalCssRawBytes: 1_676_828,
+  // Retired selectors and supported-browser fallback removal: measured head plus 64 B.
+  // Josh Lehman approved the OpenClaw ID account menu styles (#192352, 2026-11-06):
+  // measured 325,045 B gzip / 1,675,690 B raw; retain 64 B headroom.
+  totalCssGzipBytes: 325_109,
+  totalCssRawBytes: 1_675_754,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
@@ -213,6 +224,7 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
   }
   return {
     schemaVersion: 2 as const,
+    document: { rawBytes: Buffer.byteLength(html), gzipBytes: gzipSync(html).byteLength },
     startup,
     routeBoot,
     total: {
@@ -241,6 +253,7 @@ function collectControlUiPerformanceBudgetChecks(
     ].map((asset) => asset.file),
   );
   const checks: Array<[string, number, number, "count" | "bytes"]> = [
+    ["document gzip", metrics.document.gzipBytes, budgets.documentGzipBytes, "bytes"],
     ["startup JS requests", metrics.startup.js.requests, budgets.startupJsRequests, "count"],
     ["startup CSS requests", metrics.startup.css.requests, budgets.startupCssRequests, "count"],
     ["startup JS gzip", metrics.startup.js.gzipBytes, startupJsLimit, "bytes"],
@@ -481,6 +494,7 @@ export function formatControlUiPerformanceReport(
   const lines = [
     "Control UI performance:",
     `  measurement: generated asset hashes normalized for budgets; served sizes retain sidecars with identity fallback; Node ${process.version}`,
+    `  document: ${metrics.document.rawBytes} B raw, ${metrics.document.gzipBytes} B gzip (limit: ${budgets.documentGzipBytes} B)`,
     `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(startupJsLimits.enforcementLimit)} gzip / ${startupJsLimits.enforcementLimit} B)`,
   ];
   if (startupBudgetBaseline) {

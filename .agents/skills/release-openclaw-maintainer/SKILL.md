@@ -1,6 +1,6 @@
 ---
 name: release-openclaw-maintainer
-description: "Manage one OpenClaw release or orchestrate release owners across beta, stable, and extended-stable: preparation, hotfix routing, publication, handoff, and closeout."
+description: "Manage one OpenClaw release or orchestrate release owners across beta, stable, and extended-stable: preparation, fix-inclusion tracing, hotfix routing, publication, handoff, and closeout."
 ---
 
 # OpenClaw Release Maintainer
@@ -29,6 +29,7 @@ with current evidence rather than starting another release.
 Read only the references needed for the selected phase:
 
 - Regular beta/stable preparation or publication: [regular release](references/regular-release.md), which routes preparation and phase-specific proof. If the request does not specify stable/full, default to beta; beta authorization does not authorize later stable promotion.
+- Fix status, candidate inclusion, first published version, or cumulative upstream-fix counts: [fix-inclusion tracing](references/fix-inclusion.md).
 - Backport discovery and porting: [candidate inventory and worker brief](references/backport-discovery.md). For extended-stable also read [backport preparation](references/extended-stable-backports.md); SDK/config changes need a visible maintenance-risk warning and maintainer decision.
 - Extended-stable `.33+` Gateway publication: [extended-stable publication](references/extended-stable-publish.md). Use the shared publisher with extended-stable inputs; its non-Latest GitHub Release carries evidence without native-app or ClawHub publication.
 - Validation selection or failed proof: [validation and confidence](references/validation.md), with `$release-openclaw-ci` for workflow execution and immutable manifests.

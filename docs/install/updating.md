@@ -53,6 +53,38 @@ backup.
 
 ## Update implementation contract
 
+Engine identification reads the committed SQLite engine anchor in an isolated
+read-only transaction without copying a healthy live database. Hot rollback
+journals and incomplete WAL families retain private recovery, and unreadable or
+invalid anchors still refuse admission. Artifact-preserving inspection scopes and
+offline maintenance or exclusive source locks also retain private reads so engine identification cannot
+change retained SHM bytes or borrow another process's native custody.
+This applies to conditional update
+capture, engine admission, and version-zero candidate validation probes. The
+binary performing the probe must contain this fix; a candidate cannot repair an
+older installed updater's preflight. Strict recovery captures keep their separate
+artifact-preservation requirements. No schema or worker-version bump is required.
+
+Git-source and immutable updates probe support before passing `--no-lazy-fetch`.
+Older Git runs the same inspection commands without that option; partial clones
+may fetch promised objects. This fix must be present in the installed updater;
+a downloaded candidate cannot repair an older updater's preflight.
+
+Interactive failed-update triage preserves the invoking operator's `PATH`, home,
+and authentication environment before candidate admission enters the managed
+Gateway environment. Repair agents still receive the latest target installation's
+state, config, and workspace selectors and require launch confirmation. The
+installed updater must contain this fix; a downloaded candidate cannot repair
+the older updater's already-captured environment. No schema or config migration
+is required.
+
+SQLite header-probe timeouts report the discovery path count and link to the
+manual package-manager hop. A probe batch that misses its 10-second deadline now
+splits and retries, so slow or cold storage gets an answer; a path that cannot
+answer alone still refuses the backup. Backup refusal and rollback safety are
+unchanged. These changes require the updater performing discovery to contain the
+fix; a candidate cannot change an older installed updater's probe.
+
 Candidate Doctor prepares plugin setup sources asynchronously before resolving
 legacy session migrations. Configured external channels can then finish
 post-plugin Doctor without an unprepared-source refusal blocking later state
@@ -400,16 +432,20 @@ pass. An explicit `openclaw doctor` continues to run the full pass. This correct
 must be in the candidate Doctor; the installed updater must already support
 retirement-only requests. Older updaters keep their existing full-pass selection.
 
-Standing advice about a custom Codex executable or enabled Computer Use remains
+Standing advice about a custom Codex executable, enabled Computer Use, or authored
+native Codex request parameters that Doctor cannot migrate remains
 visible in Doctor output and update warnings without preventing that narrow pass.
 Invalid inline command arguments, unfinished repairs, and access-policy warnings
-still require the full pass. This distinction must be in the candidate Doctor;
+still require the full pass, as do redundant service-tier parameters that Doctor
+can remove. This distinction must be in the candidate Doctor;
 it does not require another updater change.
 
 When a retirement-only request needs the full pass, the candidate Doctor writes a
-fixed `Retirement-only Doctor widened:` reason to stderr. Updated updaters retain
-that reason in the step diagnostics and compacted update history. The candidate
-and installed updater must both contain this diagnostic fix to retain it there;
+fixed `Retirement-only Doctor widened:` reason to stderr for every config blocker,
+including the specific model-retirement condition and Codex warning source.
+Updated updaters retain these reasons in step diagnostics and compacted update
+history. The candidate and installed updater must both contain this diagnostic
+fix to retain every reason there;
 older updaters still run the same repairs.
 
 Direct updates from extended-stable 2026.9.33 and 2026.9.34 are supported when
@@ -1880,6 +1916,11 @@ upstream source, respecting the repository's ref mappings and exclusions. It doe
 not download unrelated branches or change the repository's shallow boundary.
 Stable and beta target inspection fetches release tags only, without refreshing
 remote branches.
+An implicit dev-channel switch from a detached release-tag checkout can use the
+fetched `main` commit even when the configured fetch refspecs only map tags. The
+updater leaves those mappings unchanged and still honors explicit branch exclusions.
+When it creates `main`, it records the selected remote and merge source so later
+dev updates remain managed. It does not take over an existing unmanaged `main`.
 
 On source installs, Doctor and plugin updates keep plugins built with the host.
 A registry plugin with the same version string can target a different SDK, so

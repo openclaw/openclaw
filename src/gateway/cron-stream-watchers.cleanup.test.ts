@@ -7,6 +7,7 @@ import {
   job,
   settle,
 } from "./cron-stream-watchers.test-helpers.js";
+import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 
 function cleanup(
   watchers: ReturnType<typeof createCronStreamWatcherFixture>["watchers"],
@@ -159,4 +160,61 @@ it("does not revive a running source after a superseded replacement", async () =
   expect(fake.inputs[1]?.assertCurrent).not.toThrow();
   expectHealthy(watchers);
   expect(recordFailure).not.toHaveBeenCalled();
+});
+
+it("refuses OCID recovery without the original private process source", async () => {
+  const fake = fakeSupervisor();
+  const fixture = createCronStreamWatcherFixture({ getProcessSupervisor: () => fake.supervisor });
+  cleanup(fixture.watchers);
+  const principal = {
+    kind: "owner",
+    peerKey: `iroh:${"dc".repeat(32)}`,
+    authority: {
+      clawId: "host-stream-claw",
+      rootPub: "host-stream-root",
+      listedSeq: 2,
+      ownerDevice: "host-owner",
+    },
+  } satisfies OpenClawIdTunnelPrincipal;
+  const stored = job({
+    operatorSource: {
+      executionRevision: "source-revision",
+      source: {
+        version: 1,
+        agentId: "main",
+        sessionKey: "agent:main:creator",
+        sessionId: "creator",
+        sourceRunId: "creator-run",
+        snapshot: {
+          profileId: "gateway-owner",
+          scopes: ["operator.admin"],
+          assignedRole: null,
+          githubLogin: null,
+          grant: null,
+          aliasBindingIds: [],
+          authPolicy: {
+            generation: "",
+            grantGeneration: "fixture",
+            role: "operator",
+            authMethod: "trusted-proxy",
+          },
+          controlUiAdmin: true,
+          localOperator: false,
+          sourceIngress: "control-ui",
+          openclawIdPrincipal: principal,
+        },
+      },
+    },
+  });
+  const savedJob = JSON.stringify(stored);
+  await fixture.watchers.start(JSON.parse(savedJob));
+  await fixture.watchers.stopAll("shutdown");
+  expect(fake.spawn).not.toHaveBeenCalled();
+  expect(fixture.recordFailure).toHaveBeenCalledWith(
+    "stream-job",
+    expect.stringContaining("operator authority"),
+    expect.objectContaining({ streamRestartExhausted: true }),
+    expect.any(String),
+    expect.any(String),
+  );
 });

@@ -1,7 +1,10 @@
 import {
+  buildAgentHarnessBasePrompt,
+  buildAgentRuntimePlan,
   buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
   buildUiPresentationPrompt,
+  isHostScopedAgentToolActive,
   listToolPromptGuidance,
   resolveMainSessionDelegationMode,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -9,6 +12,8 @@ import {
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { deniesCodexNativeDelegation } from "../../native-tool-policy.js";
+import { readCodexConfigValue } from "./config-layer-policy.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
@@ -19,6 +24,7 @@ import {
   type CodexDynamicToolSpec,
 } from "./protocol.js";
 import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
+import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
 
 export type CodexThreadPromptContext = Pick<
   EmbeddedRunAttemptParams,
@@ -39,7 +45,158 @@ export type CodexThreadPromptContext = Pick<
   | "extraSystemPromptTurnContext"
   | "gitCoauthorPrompt"
   | "runtimePlan"
->;
+> &
+  Partial<Pick<EmbeddedRunAttemptParams, "workspaceDir">>;
+
+// Obligations of Codex's model prompt that outlive it: its channels, steering, compaction,
+// and native tools still exist when OpenClaw's base prompt replaces that text.
+const CODEX_RUNTIME_GUIDANCE = [
+  "## Codex Runtime",
+  "Commentary is the progress channel. The final message ends your turn and must stand alone, including every answer the user is still waiting for.",
+  "A user message that arrives during work steers the active task: apply corrections, answer briefly, and continue unless they cancel or replace it.",
+  "Automatic compaction does not end a task: continue from the summary without restarting finished work or repeating delivered updates.",
+];
+
+const CODEX_NATIVE_TOOL_GUIDANCE = [
+  "Search with `rg` or `rg --files` when available. Batch independent reads in one `functions.exec` with `Promise.allSettled`; keep dependent, mutating, or approval-gated steps sequential.",
+  "Shell command text is code: `JSON.stringify()` is not shell escaping, and backticks or `$()` in `cmd` still execute. Never repurpose `$HOME` or `$CODEX_HOME`.",
+  "If automatic approval review rejects an action you cannot complete more safely, name the action and the stated reason.",
+  "Connected app tools are exposed directly or load through `tool_search`; app mentions look like `[$app-name](app://connector_id)`. Plugins are not invoked directly: use their skills, apps, and `mcp__server__tool` tools.",
+];
+
+/** Ring-zero threads pin empty base instructions, so their policy stays in the developer carrier. */
+function isCodexRingZeroThread(
+  params: Pick<CodexThreadPromptContext, "toolsAllow">,
+  hostSystemAgentActive?: boolean,
+): boolean {
+  return (
+    (hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw")) &&
+    isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)
+  );
+}
+
+function listDynamicToolNames(dynamicTools: readonly CodexDynamicToolSpec[] | undefined) {
+  return (dynamicTools ?? [])
+    .flatMap((spec) => (spec.type === "namespace" ? spec.tools : [spec]))
+    .map((tool) => tool.name.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Replaces Codex's model prompt with the regular OpenClaw policy. Codex pins this text in
+ * the rollout, so it renders from thread-stable facts only: the thread fingerprint
+ * covers it, and a changed render reaches an existing thread on its next cold resume.
+ */
+function buildCodexBaseInstructions(
+  params: CodexThreadPromptContext,
+  options: {
+    dynamicTools?: readonly CodexDynamicToolSpec[];
+    nativeCodeModeEnabled?: boolean;
+    nativeModelProvider?: string;
+  } = {},
+): string {
+  const nativeToolsEnabled = options.nativeCodeModeEnabled !== false;
+  const promptMode = params.promptMode ?? "full";
+  const toolNames = [
+    ...listDynamicToolNames(options.dynamicTools),
+    ...(nativeToolsEnabled ? ["exec"] : []),
+  ];
+  // Supervision strips the outer plan because auth and routing stay native. Only this prompt
+  // resolver is used here, so the thread's provider owns its guidance as a regular run's does.
+  const promptPlan =
+    params.runtimePlan ??
+    (options.nativeModelProvider
+      ? buildAgentRuntimePlan({
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          provider: options.nativeModelProvider,
+          modelId: params.modelId,
+        })
+      : undefined);
+  return joinPresentSections(
+    buildAgentHarnessBasePrompt({
+      config: params.config,
+      toolNames,
+      promptMode,
+      promptContribution: promptPlan?.prompt.resolveSystemPromptContribution({
+        config: params.config,
+        provider: promptPlan.prompt.provider,
+        modelId: params.modelId,
+        promptMode,
+        agentId: params.agentId,
+      }),
+      nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
+        surface: "codex_app_server",
+        includeLegacyGlobalGuidance: false,
+      }),
+    }),
+    promptMode === "none"
+      ? undefined
+      : [...CODEX_RUNTIME_GUIDANCE, ...(nativeToolsEnabled ? CODEX_NATIVE_TOOL_GUIDANCE : [])].join(
+          "\n",
+        ),
+  );
+}
+
+// Neither key has a Codex default, so a string in the effective config is authored.
+function hasAuthoredCodexBaseInstructions(
+  options: Pick<CodexThreadConfigurationOptions, "config" | "nativeConfig">,
+): boolean {
+  return ["model_instructions_file", "instructions"].some((key) =>
+    [options.config, options.nativeConfig?.config].some(
+      (config) => config !== undefined && typeof readCodexConfigValue(config, key) === "string",
+    ),
+  );
+}
+
+/**
+ * OpenClaw's rendered base, whichever carrier holds it. Ring-zero threads have none, and
+ * neither do threads whose before_prompt_build `systemPrompt` replaced OpenClaw's policy.
+ */
+export function resolveCodexOpenClawBaseInstructions(
+  params: CodexThreadPromptContext,
+  options: Pick<
+    CodexThreadConfigurationOptions,
+    | "dynamicTools"
+    | "nativeCodeModeEnabled"
+    | "nativeModelProvider"
+    | "hostSystemAgentActive"
+    | "systemPromptReplaced"
+  >,
+): string | undefined {
+  return options.systemPromptReplaced ||
+    isCodexRingZeroThread(params, options.hostSystemAgentActive)
+    ? undefined
+    : buildCodexBaseInstructions(params, options);
+}
+
+/**
+ * A request base outranks `model_instructions_file` and `instructions`
+ * (codex-rs/core/src/config/mod.rs), so with either authored OpenClaw omits the base and
+ * carries its policy ahead of the developer instructions. Start and resume place it alike,
+ * keeping warm reuse and fork snapshots consistent with the creation request.
+ *
+ * A replaced system prompt replaces the base too: an explicit empty base outranks the
+ * rollout's saved one on a cold resume (codex-rs/core/src/session/mod.rs, base priority
+ * order), so an existing thread drops OpenClaw's base in place. A loaded thread ignores
+ * the override; the base is part of the configuration fingerprint, so the change takes the
+ * cold-resume path. An authored base stays the operator's.
+ */
+export function placeCodexBaseInstructions(
+  params: CodexThreadPromptContext,
+  options: CodexThreadConfigurationOptions,
+  developerInstructions: string,
+  ringZero: { baseInstructions?: string },
+): { baseInstructions?: string; developerInstructions: string } {
+  if (isCodexRingZeroThread(params, options.hostSystemAgentActive)) {
+    return { ...ringZero, developerInstructions };
+  }
+  const baseInstructions = resolveCodexOpenClawBaseInstructions(params, options);
+  if (hasAuthoredCodexBaseInstructions(options)) {
+    return { developerInstructions: joinPresentSections(baseInstructions, developerInstructions) };
+  }
+  return { baseInstructions: baseInstructions ?? "", developerInstructions };
+}
 
 /** Move only the exact section annotated by its producer; later policy additions survive. */
 export function splitCodexExtraSystemPrompt(
@@ -89,6 +246,7 @@ export function buildDeveloperInstructions(
     dynamicTools?: readonly CodexDynamicToolSpec[];
     nativeCodeModeEnabled?: boolean;
     nativeCodeModeOnlyEnabled?: boolean;
+    hostSystemAgentActive?: boolean;
     /** The lifecycle must select a compaction-safe carrier before omitting this context. */
     omitConversationTurnContext?: boolean;
   } = {},
@@ -139,10 +297,9 @@ export function buildDeveloperInstructions(
         ? `\`${sessionsSpawnTool.name}\` with \`runtime="subagent"\``
         : undefined
     : undefined;
-  const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
-    surface: "codex_app_server",
-    includeLegacyGlobalGuidance: false,
-  }).join("\n");
+  // The base prompt owns this policy unless it is empty (ring zero) or identity-only (none).
+  const policyInDeveloperCarrier =
+    params.promptMode === "none" || isCodexRingZeroThread(params, options.hostSystemAgentActive);
   const delegationGuidanceAvailable =
     params.disableTools !== true &&
     params.toolsAllow?.length !== 0 &&
@@ -168,14 +325,16 @@ export function buildDeveloperInstructions(
         : "Call the supplied OpenClaw tools by their exact qualified names. Shell command tools execute operating-system commands, not JavaScript tool discovery."
       : undefined;
   const sections = [
-    "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
+    policyInDeveloperCarrier
+      ? "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes."
+      : "OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
     deferredToolNames.size > 0
       ? `Deferred searchable OpenClaw dynamic tools available: ${[...deferredToolNames]
           .toSorted((left, right) => left.localeCompare(right))
           .join(", ")}.`
       : undefined,
     deferredToolDiscoveryGuidance,
-    listToolPromptGuidance(toolNames.keys()).join("\n\n"),
+    policyInDeveloperCarrier ? listToolPromptGuidance(toolNames.keys()).join("\n\n") : undefined,
     // Deferred native tools still need discovery. Inherited dynamic schemas do
     // not give native children OpenClaw executors, so choose that owner up front.
     nativeDelegationAvailable
@@ -215,11 +374,18 @@ export function buildDeveloperInstructions(
           messageTool,
         })
       : undefined,
-    buildCredentialSafetyPrompt({
-      controlToolsAvailable:
-        params.disableTools !== true && (toolNames.has("openclaw") || toolNames.has("gateway")),
-    }),
-    nativeCommandGuidance,
+    policyInDeveloperCarrier
+      ? buildCredentialSafetyPrompt({
+          controlToolsAvailable:
+            params.disableTools !== true && (toolNames.has("openclaw") || toolNames.has("gateway")),
+        })
+      : undefined,
+    policyInDeveloperCarrier
+      ? listRegisteredPluginAgentPromptGuidance({
+          surface: "codex_app_server",
+          includeLegacyGlobalGuidance: false,
+        }).join("\n")
+      : undefined,
     params.gitCoauthorPrompt,
     options.omitConversationTurnContext
       ? splitCodexExtraSystemPrompt(params).persistent

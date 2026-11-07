@@ -19,7 +19,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { hasUnjoinedWork, runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
+import { resolveNodeCompilerArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import {
   resolveRuntimeWorkerArgv,
@@ -106,7 +106,7 @@ async function withFixture(scenario: (context: ReturnType<typeof createFixture>)
 
 function createFixture(diagnostics?: FixtureDiagnostics) {
   const nodeExecutable = resolveTestNodeExecPath();
-  const nodeArgs = resolveVitestNodeArgs();
+  const nodeArgs = resolveNodeCompilerArgs();
   // openclaw-temp-dir: allow retain input ownership when a child cannot be joined
   const root = mkdtempSync(join(tmpdir(), "openclaw-crabbox-recovery-"));
   const source = join(root, "source"),
@@ -1172,7 +1172,7 @@ describe.skipIf(process.platform === "win32")(
             new Set(["source-selection", "claims-cli"]),
           );
           for (const policy of policies) {
-            expect(policy.nodeArgs, policy.entry).toEqual(resolveVitestNodeArgs());
+            expect(policy.nodeArgs, policy.entry).toEqual(resolveNodeCompilerArgs());
           }
           expect(readdirSync(f.staging)).toEqual([]);
           expect(readFileSync(join(f.source, "source.txt"), "utf8")).toBe("retained source\n");

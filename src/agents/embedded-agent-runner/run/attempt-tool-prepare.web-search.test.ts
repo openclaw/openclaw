@@ -56,6 +56,7 @@ async function createFixture(
     sessionId: "attribution",
     sessionKey: "agent:main:attribution",
     modelId: "test-model",
+    authProfileId: "selected-search-profile",
     provider,
     model: makeProviderModelFixture({
       id: "test-model",
@@ -306,6 +307,11 @@ it.each([
     toolOverrides: scenario.sessionDisabled ? { webSearch: false } : undefined,
   });
   const { result, attempt } = fixture;
+  if (scenario.toolsDisabled || scenario.raw) {
+    expect(codingTools).not.toHaveBeenCalled();
+  } else {
+    expect(codingTools.mock.calls[0]?.[0]?.modelAuthProfileId).toBe("selected-search-profile");
+  }
   expect(result.webSearchUnconfigured).toBe(scenario.expected);
   const catalog = await prepareEmbeddedAttemptToolCatalog({
     attempt,

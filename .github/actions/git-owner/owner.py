@@ -468,12 +468,13 @@ def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
     node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
     security_scripts = (".github/zizmor.yml", "scripts/detect-private-keys.mts", "scripts/ci-production-audit.mjs", "scripts/ci-collect-checks.sh")
-    evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/ios-test-results.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh", "scripts/ci-collect-checks.sh", "scripts/macos-native-runtime-artifact.mjs")
+    evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/ios-test-results.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh", "scripts/ci-collect-checks.sh", "scripts/macos-native-runtime-artifact.mjs", "scripts/lib/process-memory.mts", "packages/normalization-core/src/mountinfo-path.ts")
     platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs", "scripts/ci-xcodebuild.py", "scripts/swift-build-cache-metadata.py")
     upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs", "scripts/lib/canonical-json.mjs", "scripts/lib/upgrade-survivor-policy.mjs", "scripts/lib/upgrade-survivor-scenarios.json")
     # Preflight imports these siblings by file-relative paths.
     preflight_scripts = (
         "scripts/ci-build-manifest.mjs",
+        "scripts/lib/ci-blacksmith-capacity.mjs",
         "scripts/ci-adaptive-priors.mjs",
         "scripts/lib/actions-artifact-archive.mjs",
         "scripts/lib/changed-path-facts.mjs",

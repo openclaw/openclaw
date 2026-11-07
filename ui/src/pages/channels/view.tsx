@@ -3,13 +3,15 @@ import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import "../../styles/channels.css";
 import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import "../../components/openclaw-mascot.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
   SettingsSection,
 } from "../../components/solid/settings-ui.tsx";
-import "../../components/openclaw-mascot.tsx";
 import { WizardBusyButton, WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import {
@@ -18,8 +20,8 @@ import {
   type ChannelsState,
 } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../components/modal-dialog.tsx";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { channelDocsUrl } from "./hub-meta.ts";
 import { renderChannelDetail as ChannelDetail } from "./view.detail.tsx";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.tsx";
@@ -67,14 +69,14 @@ function ChannelStatusNotices(props: { channels: ChannelsState; error: string | 
         </span>
       ) : undefined}
       {props.channels.channelsSnapshot?.partial ? (
-        <div class="callout warn">
+        <InlineAlert tone="warning">
           {t("channels.hub.partialSnapshot")} {partialWarnings()}
-        </div>
+        </InlineAlert>
       ) : undefined}
       {props.error ? (
-        <div class="callout danger" role="alert">
+        <InlineAlert tone="danger" role="alert">
           {props.error}
-        </div>
+        </InlineAlert>
       ) : undefined}
     </>
   );
@@ -135,7 +137,7 @@ export function ChannelsView(props: ChannelsProps) {
         {props.wizardHost.blockedByDirtyConfig() &&
         !props.selectedChannel &&
         (props.config.configFormDirty || Object.keys(props.configEdits).length > 0) ? (
-          <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
+          <InlineAlert tone="warning">{t("channels.hub.saveBeforeSetup")}</InlineAlert>
         ) : undefined}
         <SettingsSection
           title={t("channels.hub.connectedTitle")}
@@ -163,9 +165,9 @@ export function ChannelsView(props: ChannelsProps) {
           description={t("channels.hub.addSubtitle")}
         >
           {!props.canAdmin && props.channels.connected ? (
-            <div class="callout info" role="note">
+            <InlineAlert tone="info" role="note">
               {t("channels.hub.adminRequired")}
-            </div>
+            </InlineAlert>
           ) : (
             <>
               <For each={available()}>
@@ -562,14 +564,14 @@ function WizardDialog(props: { controls: ChannelsProps }) {
             </Show>
             {t("channels.setup.title", { channel: label() })}
           </h2>
-          <button
-            type="button"
+          <IconButton
+            size={28}
             class="oc-dialog__close"
-            aria-label={t("common.close")}
+            icon="x"
+            label={t("common.close")}
+            tooltip={false}
             onClick={() => props.controls.wizardHost.close()}
-          >
-            <Icon name="x" />
-          </button>
+          />
           <div class="oc-dialog__description">
             <p class="channels-wizard__subtitle">
               <span>{t("channels.setup.subtitle")}</span>{" "}
@@ -608,9 +610,9 @@ function WizardDialog(props: { controls: ChannelsProps }) {
           </Show>
           <Show when={error()}>
             {(failure) => (
-              <div class="callout danger channels-wizard__error" role="alert">
+              <InlineAlert tone="danger" class="channels-wizard__error" role="alert">
                 {failure().message}
-              </div>
+              </InlineAlert>
             )}
           </Show>
           <Show when={done()}>
@@ -620,13 +622,14 @@ function WizardDialog(props: { controls: ChannelsProps }) {
             {(current) => (
               <>
                 {current().validationError ? (
-                  <div
+                  <InlineAlert
+                    tone="danger"
+                    class="channels-wizard__error"
                     id="channel-wizard-validation-error"
-                    class="callout danger channels-wizard__error"
                     role="alert"
                   >
                     {current().validationError}
-                  </div>
+                  </InlineAlert>
                 ) : undefined}
                 <WizardStepBody wizard={current()} controls={props.controls} />
               </>
