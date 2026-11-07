@@ -740,15 +740,30 @@ internal fun OpenClawSidebar(
             if (sessionCreating) stateDescription = nativeString("Loading")
           },
       ) {
-        if (sessionCreating) {
-          CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = palette.text)
-        } else {
-          Icon(
-            imageVector = Icons.Default.Add,
-            contentDescription = null,
-            tint = palette.text,
-            modifier = Modifier.size(22.dp),
-          )
+        Box(
+          modifier =
+            Modifier
+              .size(ClawTheme.spacing.control)
+              .background(
+                color = ClawTheme.colors.primary,
+                shape = RoundedCornerShape(ClawTheme.radii.button),
+              ),
+          contentAlignment = Alignment.Center,
+        ) {
+          if (sessionCreating) {
+            CircularProgressIndicator(
+              modifier = Modifier.size(22.dp),
+              strokeWidth = 2.dp,
+              color = ClawTheme.colors.primaryText,
+            )
+          } else {
+            Icon(
+              imageVector = Icons.Default.Add,
+              contentDescription = null,
+              tint = ClawTheme.colors.primaryText,
+              modifier = Modifier.size(22.dp),
+            )
+          }
         }
       }
       if (showCloseButton) {
