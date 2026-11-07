@@ -9,6 +9,12 @@ import { isSelectableCdpBrowserTarget } from "../cdp-target-filter.js";
 import { resolveCreateTargetParams } from "./create-target-params.js";
 import { resolveExtensionRelayCommandTimeoutMs } from "./relay-command-timeout.js";
 import {
+  awaitDiscoveryAttachment,
+  discoveryTargetInfo,
+  publishDiscoveryAttachment,
+  enumerateDiscoveryTargets,
+} from "./relay-discovery.js";
+import {
   type ExtensionToRelayMessage,
   parseExtensionMessage,
   type RelayCommandBody,
@@ -441,14 +447,22 @@ export class ExtensionRelayBridge {
     tabId: number,
     use?: (targetId: string) => void,
   ): Promise<void> {
-    return this.withAttachedTab(client, tabId, (attached) => {
-      this.announceAttachedTab(
+    return awaitDiscoveryAttachment(
+      this.withAttachedTab(
+        client,
         tabId,
-        attached,
-        this.autoAttachRecipients(tabId, attached.sessionId),
-      );
-      use?.(attached.targetId);
-    });
+        publishDiscoveryAttachment(
+          (attached) =>
+            this.announceAttachedTab(
+              tabId,
+              attached,
+              this.autoAttachRecipients(tabId, attached.sessionId),
+            ),
+          use,
+        ),
+      ),
+      4_000,
+    );
   }
 
   private async withAttachedTab(
@@ -559,6 +573,9 @@ export class ExtensionRelayBridge {
         },
       );
       current.restoreAttachment = false;
+      // Discovery can stop waiting while the shared native acquisition finishes.
+      // Retire a late attachment if no client still owns or claims it.
+      void this.detachUnusedAttachments();
       return attached;
     });
     tab.attaching = attaching;
@@ -573,17 +590,12 @@ export class ExtensionRelayBridge {
   }
 
   private targetInfoForTab(tab: TabState, targetId: string): Record<string, unknown> {
-    return {
+    return discoveryTargetInfo(
+      tab.info,
       targetId,
-      type: "page",
-      title: tab.info.title,
-      url: tab.info.url,
-      // connectOverCDP owns this as a persistent default context, but still
-      // asserts that attached page events carry a non-empty context id.
-      browserContextId: BROWSER_CONTEXT_ID,
-      attached: Boolean(tab.target?.sessionId),
-      canAccessOpener: false,
-    };
+      Boolean(tab.target?.sessionId),
+      BROWSER_CONTEXT_ID,
+    );
   }
 
   private autoAttachRecipients(tabId: number, sessionId?: string): CdpClientState[] {
@@ -598,68 +610,14 @@ export class ExtensionRelayBridge {
   private async enumerateTargetInfos(
     client: CdpClientState,
   ): Promise<{ targetInfos: Record<string, unknown>[] } | { error: string }> {
-    if (!this.extensionConnected) {
-      return { error: "Extension is disconnected" };
-    }
-    // Tabs can arrive while Chrome attaches the previous batch. Visit each tab
-    // generation once; only Chrome's permanent page refusal permits an omission.
-    const identities = new Map<TabState, string | undefined>();
-    const skipped = new Map<TabState, { url: string; reason: string }>();
-    while (this.extensionConnected) {
-      const pending = [...this.tabs].filter(
-        ([, tab]) =>
-          !identities.has(tab) && isSelectableCdpBrowserTarget({ type: "page", url: tab.info.url }),
-      );
-      if (pending.length === 0) {
-        break;
-      }
-      for (const [, tab] of pending) {
-        identities.set(tab, undefined);
-      }
-      await Promise.allSettled(
-        pending.map(async ([tabId, tab]) => {
-          const url = tab.info.url;
-          try {
-            await this.withAutoAttachedTab(client, tabId, (targetId) => {
-              identities.set(tab, targetId);
-            });
-          } catch (error) {
-            // Exact Chromium page restrictions, not attachment conflicts,
-            // permission failures, timeouts, or retired tab generations.
-            if (
-              error instanceof Error &&
-              (error.message === "The extensions gallery cannot be scripted." ||
-                error.message === "Cannot access a chrome:// URL" ||
-                error.message ===
-                  "Cannot access a chrome-extension:// URL of different extension" ||
-                error.message === "Cannot attach to this target.")
-            ) {
-              skipped.set(tab, { url, reason: error.message });
-            }
-          }
-        }),
-      );
-    }
-    if (!this.extensionConnected) {
-      return { error: "Extension is disconnected" };
-    }
-    const targetInfos: Record<string, unknown>[] = [];
-    for (const [tabId, tab] of this.tabs) {
-      if (!isSelectableCdpBrowserTarget({ type: "page", url: tab.info.url })) {
-        continue;
-      }
-      const refusal = skipped.get(tab);
-      if (refusal && refusal.url === tab.info.url) {
-        log.warn(`Skipping tab ${tabId} during target enumeration: ${refusal.reason}`);
-        continue;
-      }
-      const targetId = identities.get(tab);
-      if (!targetId || (!tab.target?.sessionId && this.autoAttachRecipients(tabId).length > 0)) {
-        return { error: "Target identities are unavailable" };
-      }
-      targetInfos.push(this.targetInfoForTab(tab, targetId));
-    }
-    return { targetInfos };
+    return enumerateDiscoveryTargets({
+      connected: () => this.extensionConnected,
+      tabs: this.tabs,
+      attach: (tabId, use) => this.withAutoAttachedTab(client, tabId, use),
+      hasRecipients: (tabId) => this.autoAttachRecipients(tabId).length > 0,
+      targetInfo: (tab, targetId) => this.targetInfoForTab(tab, targetId),
+      warn: (message) => log.warn(message),
+    });
   }
 
   private announceAttachedTab(

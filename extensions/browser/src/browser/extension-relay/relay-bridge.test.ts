@@ -617,6 +617,97 @@ it("publishes a shared recovered attachment to every waiting auto-attach client"
   expect(attached(first)).toHaveLength(firstAttachedEventCount);
 });
 
+it("bounds target enumeration when one debugger attachment never replies", async () => {
+  vi.useFakeTimers();
+  let blocked = true;
+  const { bridge, socket, handlers } = readyBridge(
+    (message) =>
+      message.type === "attach" && message.tabId === 1 && blocked ? null : replyFor(message),
+    [...defaultTabs(), { tabId: 2, url: "https://example.org", title: "Healthy", active: false }],
+  );
+  const { client, cdp } = connectClient(bridge);
+  sendCommand(cdp, 10, "Target.setAutoAttach", { autoAttach: true });
+  await vi.advanceTimersByTimeAsync(4_001);
+  expect(response(client, 10)?.error).toBeUndefined();
+  sendCommand(cdp, 1, "Target.getTargets");
+  await vi.advanceTimersByTimeAsync(4_001);
+  expect(response(client, 1)?.error).toBeUndefined();
+  expect(asOptionalRecord(response(client, 1)?.result)?.targetInfos).toEqual([
+    expect.objectContaining({ targetId: "target-2" }),
+  ]);
+  await vi.advanceTimersByTimeAsync(7_001);
+  const staleAttach = frames(socket, "attach")[0];
+  sendResult(handlers, staleAttach?.seq, { targetId: "stale-target" });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(attached(client).some((event) => JSON.stringify(event).includes("stale-target"))).toBe(
+    false,
+  );
+  blocked = false;
+  sendCommand(cdp, 2, "Target.getTargets");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(asOptionalRecord(response(client, 2)?.result)?.targetInfos).toHaveLength(2);
+});
+
+it("publishes an automatic attachment that succeeds after discovery stops waiting", async () => {
+  vi.useFakeTimers();
+  const { bridge, socket, handlers } = readyBridge((message) =>
+    message.type === "attach" ? null : replyFor(message),
+  );
+  const { client, cdp } = connectClient(bridge);
+  sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
+  await vi.advanceTimersByTimeAsync(4_001);
+  expect(response(client, 1)?.error).toBeUndefined();
+  expect(attached(client)).toHaveLength(0);
+  await vi.advanceTimersByTimeAsync(999);
+  sendResult(handlers, frames(socket, "attach")[0]?.seq, { targetId: "target-1" });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(attached(client)).toHaveLength(1);
+  expect(JSON.stringify(attached(client)[0])).toContain("target-1");
+});
+
+it("keeps explicit attachment alive after a discovery claimant expires", async () => {
+  vi.useFakeTimers();
+  let blocked = false;
+  const { bridge, socket, handlers } = readyBridge((message) =>
+    message.type === "attach" && blocked ? null : replyFor(message),
+  );
+  const { client, cdp } = connectClient(bridge);
+  sendCommand(cdp, 10, "Target.getTargets");
+  await vi.advanceTimersByTimeAsync(0);
+  blocked = true;
+  sendCommand(cdp, 1, "Target.getTargets");
+  await vi.advanceTimersByTimeAsync(0);
+  sendCommand(cdp, 2, "Target.attachToTarget", { targetId: "target-1", flatten: true });
+  await vi.advanceTimersByTimeAsync(4_001);
+  expect(response(client, 1)?.error).toBeUndefined();
+  expect(response(client, 2)).toBeUndefined();
+  const attach = frames(socket, "attach").at(-1);
+  sendResult(handlers, attach?.seq, { targetId: "target-1" });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(response(client, 2)?.error).toBeUndefined();
+  expect(response(client, 2)?.result).toHaveProperty("sessionId");
+});
+
+it("does not lose healthy targets when another tab has an active debugger", async () => {
+  const { bridge } = readyBridge(
+    (message) =>
+      message.type === "attach" && message.tabId === 1
+        ? {
+            type: "error",
+            seq: message.seq,
+            message: "Another debugger is already attached to the tab with id: 1.",
+          }
+        : replyFor(message),
+    [...defaultTabs(), { tabId: 2, url: "https://example.org", title: "Healthy", active: false }],
+  );
+  const { client, cdp } = connectClient(bridge);
+  await dispatch(cdp, 1, "Target.getTargets");
+  expect(response(client, 1)?.error).toBeUndefined();
+  expect(asOptionalRecord(response(client, 1)?.result)?.targetInfos).toEqual([
+    expect.objectContaining({ targetId: "target-2" }),
+  ]);
+});
+
 it.each([
   ["The extensions gallery cannot be scripted.", true],
   ["Cannot access a chrome:// URL", true],
