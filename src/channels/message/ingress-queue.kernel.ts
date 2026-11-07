@@ -591,6 +591,40 @@ export function listChannelIngressAccountsInDatabase(
   ).rows.map((row) => row.account_id);
 }
 
+// Steps through distinct pending lanes on the lane index, one probe per excluded lane, so a
+// read behind one large blocked lane ends without walking that lane's rows.
+function hasPendingLaneOutside(
+  db: EngineConnection,
+  queueName: string,
+  excluded: ReadonlySet<string>,
+): boolean {
+  const pendingLanes = getQueue(db)
+    .selectFrom("channel_ingress_events")
+    .select("lane_key")
+    .where("queue_name", "=", queueName)
+    .where("status", "=", "pending");
+  if (executeSqliteQueryTakeFirstSync(db, pendingLanes.where("lane_key", "is", null).limit(1))) {
+    return true;
+  }
+  let laneKey: string | null | undefined;
+  for (;;) {
+    const next =
+      laneKey === undefined
+        ? pendingLanes.where("lane_key", "is not", null)
+        : pendingLanes.where("lane_key", ">", laneKey);
+    laneKey = executeSqliteQueryTakeFirstSync(
+      db,
+      next.orderBy("lane_key", "asc").limit(1),
+    )?.lane_key;
+    if (laneKey == null) {
+      return false;
+    }
+    if (!excluded.has(laneKey)) {
+      return true;
+    }
+  }
+}
+
 export function listChannelIngressRowsInDatabase(
   db: EngineConnection,
   input: ChannelIngressListInput,
@@ -625,6 +659,9 @@ export function listChannelIngressRowsInDatabase(
   let pending = select.where("status", "=", "pending");
   const excluded = input.excludeLaneKeys;
   if (excluded?.length) {
+    if (!hasPendingLaneOutside(db, input.queueName, new Set(excluded))) {
+      return result;
+    }
     pending = pending.where((eb) =>
       eb.or([eb("lane_key", "is", null), eb("lane_key", "not in", excluded)]),
     );

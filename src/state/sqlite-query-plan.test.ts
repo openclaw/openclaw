@@ -305,6 +305,13 @@ describe("sqlite hot query plans", () => {
       ["ingress", "pending"],
       ["idx_channel_ingress_pending"],
     );
+    check(
+      `SELECT lane_key FROM channel_ingress_events
+       WHERE queue_name = ? AND status = ? AND lane_key > ? ORDER BY lane_key ASC LIMIT 1`,
+      ["ingress", "pending", "lane"],
+      ["USING COVERING INDEX idx_channel_ingress_lane"],
+      ["USE TEMP B-TREE FOR ORDER BY"],
+    );
   });
 
   it("keeps the reply-target delivery lookup on the partial reply index", () => {
