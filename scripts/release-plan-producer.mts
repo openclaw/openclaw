@@ -46,6 +46,7 @@ const TOOLING_MODULE_PATHS = [
   "scripts/lib/record-shared.mjs",
   "scripts/lib/release-plan-source.mts",
   "scripts/lib/release-upgrade-baseline.mjs",
+  "scripts/lib/release-validation-waivers.mjs",
   "scripts/lib/release-version.mjs",
   "scripts/release-plan-contract.mjs",
   "scripts/release-plan-producer-core.mts",

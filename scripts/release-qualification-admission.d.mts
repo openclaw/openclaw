@@ -50,6 +50,7 @@ export type QualificationCoverage = {
     requiredJobs: string[];
   }>;
   requiredParentJobs: string[];
+  exemptions?: import("./lib/release-validation-waivers.mjs").QualificationExemption[];
 };
 export type QualificationAdmission = {
   kind: "openclaw.release-qualification-admission/v1";
