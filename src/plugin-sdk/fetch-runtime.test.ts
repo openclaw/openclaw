@@ -1,6 +1,8 @@
+import { createServer } from "node:http";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { responseWithRelease } from "./fetch-runtime.js";
 
 function readerWithRelease(body: BodyInit, release: () => Promise<void>) {
@@ -99,4 +101,68 @@ it("releases a cancelled response before its capture tee settles", async () => {
     await capture.body?.cancel("test cleanup");
     await cancellation;
   }
+});
+
+it.each([false, true])(
+  "preserves fetched response metadata through release and clones (redirect=%s)",
+  async (redirect) => {
+    const { claim, listener, releaseListener } = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((request, response) => {
+          if (request.url === "/redirect") {
+            response.writeHead(302, { location: "/final" }).end();
+          } else {
+            response.writeHead(200, { "x-response": "original" }).end("complete");
+          }
+        }),
+    });
+    try {
+      const baseUrl = `http://127.0.0.1:${claim.port}`;
+      const original = await fetch(`${baseUrl}/${redirect ? "redirect" : "final"}`);
+      const release = vi.fn(async () => {});
+      const wrapped = responseWithRelease(original, release);
+      const clone = wrapped.clone();
+      const responses = [wrapped, clone, clone.clone()];
+      await expect(Promise.all(responses.map((response) => response.text()))).resolves.toEqual([
+        "complete",
+        "complete",
+        "complete",
+      ]);
+      for (const response of responses) {
+        expect(response).toMatchObject({
+          url: `${baseUrl}/final`,
+          redirected: redirect,
+          type: original.type,
+          status: 200,
+        });
+        expect(response.headers.get("x-response")).toBe("original");
+      }
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      listener.closeAllConnections();
+      try {
+        await releaseListener();
+      } finally {
+        await claim.release();
+      }
+    }
+  },
+);
+
+it("keeps mutable response headers independent across release wrappers and clones", async () => {
+  const original = new Response("complete", { headers: { "x-response": "original" } });
+  const release = vi.fn(async () => {});
+  const wrapped = responseWithRelease(original, release);
+  const clone = wrapped.clone();
+  clone.headers.set("x-response", "clone");
+  expect(wrapped.headers.get("x-response")).toBe("original");
+  wrapped.headers.set("x-response", "wrapped");
+  expect(original.headers.get("x-response")).toBe("original");
+  expect(clone.headers.get("x-response")).toBe("clone");
+  await expect(Promise.all([wrapped.text(), clone.text()])).resolves.toEqual([
+    "complete",
+    "complete",
+  ]);
+  expect(release).toHaveBeenCalledTimes(1);
 });
