@@ -53,6 +53,13 @@ const enUsage = {
       hoursCount: "{count} hours",
       sessionsCount: "{count} sessions",
     },
+    display: {
+      title: "Display",
+      metric: "Metric",
+      breakdown: "Breakdown",
+      sessions: "Sessions",
+      pin: "Pin filters to top",
+    },
     query: {
       placeholder:
         "Filter sessions (e.g. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",

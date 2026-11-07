@@ -381,6 +381,60 @@ select.usage-select {
   max-width: min(320px, calc(100vw - 48px));
 }
 
+/* View settings live in one Display menu next to refresh. */
+.oc-menu.usage-display-menu__panel {
+  width: min(300px, calc(100dvw - 16px));
+  background: var(--bg-elevated);
+}
+
+.usage-display-menu__metric {
+  display: grid;
+  flex: none;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px 4px 6px;
+}
+
+.usage-display-menu__metric button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  cursor: var(--cursor-action);
+}
+
+.usage-display-menu__metric button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.usage-display-menu__metric button[aria-pressed="true"] {
+  border-color: transparent;
+  background: var(--menu-selected);
+  color: var(--text-strong);
+}
+
+.usage-display-menu__metric svg {
+  width: 15px;
+  height: 15px;
+}
+
+.usage-display-menu__value {
+  color: var(--muted);
+}
+
+.usage-display-menu__trigger[aria-expanded="true"] {
+  background: var(--bg-hover);
+}
+
 .usage-filter-option {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
