@@ -6,8 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
+import { JSDOM } from "jsdom";
 import { build, createLogger, type InlineConfig, type Plugin } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { selectControlUiRoutePreloads } from "../../../src/gateway/control-ui-route-preloads.ts";
 import {
   listDirectoryTreeStrict,
   listDirectoryTreeStrictSync,
@@ -138,6 +140,30 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
+it("keeps inline recovery executable and its DOM intact after document compaction", async () => {
+  const source = `<style>/* fallback */ h1 { color: rgb(255, 0, 0); }</style>
+    <h1>Still loading</h1><button>Retry</button>
+    <script data-cfasync="false">/* recovery */
+      document.querySelector("button").addEventListener("click", function () {
+        document.querySelector("h1").textContent = "Retrying";
+      });
+    </script>
+    <script nomodule>window.unsupported = function () { return "Update your browser"; };</script>`;
+  await writeRoot("index.html", source + '<script type="module" src="./main.js"></script>');
+  const { html: compact } = await buildOutput(createConfig());
+  const dom = new JSDOM(compact, { runScripts: "dangerously" });
+  const { document } = dom.window;
+  expect(document.querySelector("h1")?.outerHTML).toBe("<h1>Still loading</h1>");
+  expect(dom.window.getComputedStyle(document.querySelector("h1")!).color).toBe("rgb(255, 0, 0)");
+  document.querySelector("button")!.click();
+  expect(document.querySelector("h1")?.textContent).toBe("Retrying");
+  expect(document.querySelector("script[nomodule]")?.textContent).not.toMatch(
+    /[=]>|\b(?:let|const)\b/u,
+  );
+  expect(compact).not.toContain("/* recovery */");
+  dom.window.close();
+});
+
 it("omits already imported JavaScript from lazy preload tables, retaining lazy JS and CSS", async () => {
   const config = createConfig();
   await writeFiles({
@@ -223,6 +249,131 @@ it("fetches deep composer code with the root import without evaluating or route-
   expect(html).not.toContain(frameChunk.fileName);
 });
 
+it("fetches a locale's co-registered error catalogs in one lazy request", async () => {
+  const config = createConfig();
+  const prefix = "\0virtual:openclaw-control-ui-locale-namespace/";
+  const errors = ["runtimeErrors", "notificationErrors", "nativeDeviceEditError"];
+  const ids = errors.map((namespace) => `${prefix}de/${namespace}`);
+  const otherLocale = `${prefix}ar/runtimeErrors`;
+  const otherNamespace = `${prefix}de/profilePage`;
+  const modules = new Map(
+    [...ids, otherLocale, otherNamespace].map((id) => [
+      id,
+      `export default ${JSON.stringify({ [id.split("/").at(-1)!]: id })};`,
+    ]),
+  );
+  addModules(
+    config,
+    modules,
+    Object.fromEntries([...modules.keys()].map((id) => [id.slice(1), id])),
+  );
+  await writeRoot(
+    "main.js",
+    [...modules.keys()]
+      .map((id, index) => `globalThis.load${index} = () => import(${JSON.stringify(id.slice(1))});`)
+      .join("\n"),
+  );
+  setOutput(config, { codeSplitting: controlUiCodeSplitting });
+  const { output, html } = await buildOutput(config);
+  const chunks = output.filter((chunk) => chunk.type === "chunk");
+  const errorsChunk = chunks.find((chunk) => Object.hasOwn(chunk.modules, ids[0]!))!;
+  expect(ids.every((id) => id in errorsChunk.modules)).toBe(true);
+  expect(otherLocale in errorsChunk.modules).toBe(false);
+  expect(otherNamespace in errorsChunk.modules).toBe(false);
+  const entry = chunks.find((chunk) => chunk.isEntry)!;
+  expect(entry.dynamicImports.filter((file) => file === errorsChunk.fileName)).toHaveLength(1);
+  expect(entry.imports).not.toContain(errorsChunk.fileName);
+  expect(html).not.toContain(errorsChunk.fileName);
+});
+
+it("preloads only the selected locale's late Chat catalogs before body parsing", async () => {
+  const config = createConfig();
+  const namespaces = [
+    "runtimeErrors",
+    "filePreview",
+    "mcpApp",
+    "worktrees",
+    "newSession",
+    "sessionsView",
+    "mcpServers",
+    "mcpPage",
+    "profilePage",
+    "connection",
+    "attention",
+    "chat",
+  ];
+  const filename = (locale: string, namespace: string) =>
+    namespace === "runtimeErrors"
+      ? `locale-errors-${locale}`
+      : `locale-namespace-${locale}-${namespace}`;
+  await writeRoot("lazy-catalog.js", "export const createCatalog = (value) => value;");
+  for (const locale of ["de", "ar"]) {
+    for (const namespace of namespaces) {
+      await writeRoot(
+        `${filename(locale, namespace)}.js`,
+        `export default "${locale}/${namespace}";`,
+      );
+    }
+    await writeRoot(
+      `${locale}.js`,
+      `import { createCatalog } from "./lazy-catalog.js";
+export default createCatalog({${namespaces.map((namespace) => `${namespace}: () => import("./${filename(locale, namespace)}.js")`).join(",")}});`,
+    );
+  }
+  await writeRoot(
+    "main.js",
+    'globalThis.locales = [() => import("./de.js"), () => import("./ar.js")];',
+  );
+  await writeRoot(
+    "index.html",
+    `<html><head><script>globalThis.beforeBody = { body: document.body, hints: [...document.querySelectorAll('link[rel="modulepreload"]')].map(link => link.getAttribute("href")) };</script></head><body><script type="module" src="./main.js"></script></body></html>`,
+  );
+  const { html, output } = await buildOutput(config);
+  const emitted = new Set(output.map((asset) => asset.fileName));
+  for (const [base, route, saved, language, expected] of [
+    ["", "/chat/main/session", "de", "en-US", "de"],
+    ["/control", "/chat/main/session", "ar", "en-US", "ar"],
+    ["/control", "/chat", null, "de-DE", "de"],
+    ["", "/chat", "en", "de-DE", null],
+    ["", "/new", "de", "de-DE", null],
+    ["", "/settings/appearance", "de", "de-DE", null],
+    ["", "/chatty", "de", "de-DE", null],
+  ] as const) {
+    const page = new JSDOM(
+      html.replace("<html>", `<html data-openclaw-control-ui-base-path="${base}">`),
+      {
+        url: `https://gateway.example${base}${route}`,
+        runScripts: "dangerously",
+        beforeParse(window) {
+          Object.defineProperty(window.navigator, "language", { value: language });
+          if (saved) {
+            window.localStorage.setItem("openclaw.i18n.locale", saved);
+          }
+        },
+      },
+    );
+    try {
+      const beforeBody = Reflect.get(page.window, "beforeBody");
+      expect(beforeBody.body).toBeNull();
+      const hints = beforeBody.hints.filter((href: string) => !href.includes("/index-"));
+      expect(hints).toHaveLength(expected ? 14 : 0);
+      for (const href of hints) {
+        expect(href.startsWith(`${base}/assets/`)).toBe(true);
+        const file = href.slice(base.length + 1);
+        expect(emitted.has(file)).toBe(true);
+        expect(
+          file.startsWith(`assets/${expected}-`) ||
+            file.startsWith(`assets/locale-namespace-${expected}-`) ||
+            file.startsWith(`assets/locale-errors-${expected}-`) ||
+            file.startsWith("assets/lazy-catalog-"),
+        ).toBe(true);
+      }
+    } finally {
+      page.window.close();
+    }
+  }
+});
+
 it("keeps page styles separate from measured JavaScript boot groups", async () => {
   const config = createConfig();
   const pages = fileURLToPath(new URL("../pages/", import.meta.url));
@@ -281,6 +432,40 @@ it("keeps page styles separate from measured JavaScript boot groups", async () =
   const scripts = (await readAssets(names, ".js")).map(({ source }) => source).join("\n");
   expect(scripts).toContain(firstStyle.name);
   expect(scripts).toContain(secondStyle.name);
+});
+
+it("compresses small route boot modules while leaving deferred modules lazy", async () => {
+  const entry = uiPath("pages/chat/route-entry.ts");
+  const source = 'export const message = "Route content loaded".repeat(20);';
+  const config = createConfig();
+  await writeRoot(
+    "main.js",
+    `globalThis.load = () => import(${JSON.stringify(entry)}); globalThis.loadLazy = () => import("./lazy.js");`,
+  );
+  addModules(config, new Map([[entry, source]]));
+  const built = await buildOutput(config);
+  const chunk = built.output.find(
+    (item) => item.type === "chunk" && Object.hasOwn(item.modules, entry),
+  );
+  assert.ok(chunk?.type === "chunk");
+  expect(Buffer.byteLength(chunk.code)).toBeLessThan(4096);
+  expect(built.html).toContain(chunk.fileName);
+  expect(selectControlUiRoutePreloads(built.html, null)).not.toContain(chunk.fileName);
+  for (const [extension, decode] of [
+    ["gz", gunzipSync],
+    ["br", brotliDecompressSync],
+  ] as const) {
+    expect(decode(await fs.readFile(path.join(outDir, `${chunk.fileName}.${extension}`)))).toEqual(
+      Buffer.from(chunk.code),
+    );
+  }
+  const lazy = built.output.find(
+    (item) => item.type === "chunk" && item.facadeModuleId === path.join(root, "lazy.js"),
+  );
+  assert.ok(lazy?.type === "chunk");
+  expect(built.html).not.toContain(lazy.fileName);
+  await missingOutput(`${lazy.fileName}.gz`);
+  await missingOutput(`${lazy.fileName}.br`);
 });
 
 it.each(["login", "attachment"] as const)(

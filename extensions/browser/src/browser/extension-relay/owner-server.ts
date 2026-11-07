@@ -143,8 +143,7 @@ export function attachRelayOwner(params: {
                 void closeStream(id).catch(() => ws.close(1011, "relay cleanup failed"));
               }
             }
-          }, RELAY_OPERATION_TTL_MS);
-          timer.unref?.();
+          }, RELAY_OPERATION_TTL_MS).unref();
           captures.set(ref, {
             resolve: captured,
             isCurrent: captured.isCurrent,

@@ -572,7 +572,7 @@ it.each([390, 768, 1366, 1440])(
     expect(gap()).toBeGreaterThanOrEqual(20);
     expect(gap()).toBeLessThanOrEqual(32);
     await expect
-      .element(page.getByRole("heading", { name: "MCP Servers", exact: true }))
+      .element(page.getByRole("heading", { name: "MCP servers", exact: true }))
       .toBeVisible();
     const server = page.getByText("workspace", { exact: true });
     await server.click();

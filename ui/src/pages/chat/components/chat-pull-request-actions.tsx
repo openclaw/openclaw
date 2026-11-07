@@ -65,7 +65,7 @@ export function PullRequestActions(props: {
     presented: () => presented() && menu?.overlay.open === true,
     onCopied: () => {
       menu?.close();
-      showToast({ message: t("chat.pullRequests.linkCopied") });
+      showToast({ severity: "success", message: t("chat.pullRequests.linkCopied") });
     },
   });
   const checks = () => props.pullRequest?.checks;

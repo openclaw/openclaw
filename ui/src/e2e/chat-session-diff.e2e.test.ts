@@ -400,7 +400,7 @@ suite.define(() => {
 
     await expect
       .poll(() => page.locator(".session-diff .session-diff__note").textContent())
-      .toContain("not a git checkout");
+      .toContain("isn’t a Git checkout");
     expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(1);
   });
@@ -464,10 +464,10 @@ suite.define(() => {
       .poll(() => panelSurface.evaluate((element) => element.getBoundingClientRect().width))
       .toBe(480);
     const scopeControl = panel.getByRole("button", { name: "Choose change scope", exact: true });
-    await expect.poll(() => scopeControl.textContent()).toBe("All Changes");
+    await expect.poll(() => scopeControl.textContent()).toBe("All changes");
     await panel.getByRole("button", { name: "Change view options" }).click();
-    await page.getByRole("menuitem", { name: "Sync Locally", exact: true }).click();
-    const sync = page.getByRole("menu", { name: "Sync Locally", exact: true });
+    await page.getByRole("menuitem", { name: "Sync locally", exact: true }).click();
+    const sync = page.getByRole("menu", { name: "Sync locally", exact: true });
     await sync.getByText("/tmp/checkout", { exact: true }).waitFor();
     await sync.getByText("feature/panel", { exact: true }).waitFor();
     await page.keyboard.press("Escape");
@@ -684,7 +684,7 @@ suite.define(() => {
     expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(0);
     await activateChatHeaderPanelAction(page, "Show session changes");
-    await text(page, ".session-diff .session-diff__note").toContain("not a git checkout");
+    await text(page, ".session-diff .session-diff__note").toContain("isn’t a Git checkout");
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(1);
 
     await gateway.setMethodResponse("sessions.diff", {

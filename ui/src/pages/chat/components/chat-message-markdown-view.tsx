@@ -2,7 +2,6 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { onSettled, Show } from "solid-js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
-import { copyMarkdownLabel } from "../../../components/copy-button-state.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -169,7 +168,6 @@ export function MessageActions(props: {
       <Show when={props.details?.markdown}>
         <CopyButton
           text={props.details!.markdown!}
-          idleLabel={copyMarkdownLabel()}
           bare
           ref={(element) => {
             elements.copy = element;
@@ -203,7 +201,7 @@ export function ReplyButton(props: {
   onReply: (target: MessageReplyTarget) => void;
 }) {
   return (
-    <openclaw-tooltip prop:content={t("chat.messages.reply")}>
+    <openclaw-tooltip prop:content={t("chat.messages.reply")} prop:describe={false}>
       <button
         class="chat-reply-btn"
         type="button"

@@ -45,7 +45,7 @@ import {
 } from "../../tool-fs-policy.js";
 import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
+import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-protocol.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import type { ComputerContextEpoch } from "../../tools/computer-tool.js";
 import type {
@@ -234,6 +234,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     messageChannel: attempt.messageChannel,
     modelProvider: attempt.provider,
     modelId: attempt.modelId,
+    modelAuthProfileId: attempt.authProfileId,
     modelApi: attempt.model.api,
     modelBaseUrl: attempt.model.baseUrl,
     modelParams: attempt.model.params,

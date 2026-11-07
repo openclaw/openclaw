@@ -126,14 +126,16 @@ test("session-only members edit their own instructions without shared file acces
     expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
 
     for (const change of ["role revocation", "profile merge"] as const) {
+      using requester = await connect(alice, "operator.sessions.read");
       const current = await gateway.rpcReq<UsersPersonalFileGetResult>(
-        reader.ws,
+        requester.ws,
         "users.personalFile.get",
         { agentId: "main" },
       );
       expect(current.ok, JSON.stringify(current.error)).toBe(true);
       const prepared = createDeferredCore();
       const resume = createDeferredCore();
+      let writeSettled = Promise.resolve();
       const openRoot = safeFs.root;
       using observation = vi.spyOn(safeFs, "root");
       observation.mockImplementation(async (...args) => {
@@ -142,15 +144,14 @@ test("session-only members edit their own instructions without shared file acces
           const write = handle.write.bind(handle);
           // Pause only I/O after the handler's preparation and hash check. Keep the real
           // profile catalog, committed writer, filesystem and final authority callback.
-          vi.spyOn(handle, "write").mockImplementation(async (...writeArgs) => {
+          vi.spyOn(handle, "write").mockImplementation((...writeArgs) => {
             prepared.resolve();
-            await resume.promise;
-            return write(...writeArgs);
+            return (writeSettled = resume.promise.then(() => write(...writeArgs)));
           });
         }
         return handle;
       });
-      const pending = gateway.rpcReq(reader.ws, "users.personalFile.set", {
+      const pending = gateway.rpcReq(requester.ws, "users.personalFile.set", {
         agentId: "main",
         content: "Must not reach either personal file",
         expectedHash: current.payload!.hash,
@@ -167,11 +168,9 @@ test("session-only members edit their own instructions without shared file acces
         expect((await gateway.rpcReq(peer.ws, "users.self", {})).ok).toBe(true);
       } finally {
         resume.resolve();
+        await writeSettled.catch(() => {});
       }
-      expect(await pending).toMatchObject({
-        ok: false,
-        error: { code: expect.stringMatching(/^(FORBIDDEN|UNAVAILABLE)$/) },
-      });
+      await expect(pending).rejects.toThrow("closed 4001: gateway policy changed");
       for (const [profileId, content] of [
         [profiles[0]!, "Prefer concise answers."],
         [profiles[1]!, "Prefer worked examples."],

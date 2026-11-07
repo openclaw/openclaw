@@ -287,11 +287,8 @@ describe("AppSidebar session mutation feedback", () => {
       hello: gatewayHelloForMethods(["sessions.assignOwner"], ["operator.write"]),
     });
     sidebar.setSessionOwnerFilter(null);
-    const result = harness.sessions.state.result;
-    const row = result?.sessions.find((session) => session.key === "agent:main:a");
-    if (!result || !row) {
-      throw new Error("expected session owner fixture");
-    }
+    const result = harness.result;
+    const row = harness.row("agent:main:a");
     row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     row.owner = { actor: row.createdActor };
     result.owners = [
@@ -385,14 +382,14 @@ describe("AppSidebar session mutation feedback", () => {
     menu.querySelector<HTMLElement>('[value="stop-cloud-worker"]')?.click();
     const actions = await waitForConfirmDialogActions();
     expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      'Stop the cloud worker for "a"?',
+      "Stop this cloud device?",
     );
     answerConfirmDialog(actions, "confirm");
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
       "agent:main:a",
-      "Worker stop requested. Review the initial message before retrying.",
+      "Device stop requested. Review the initial message before retrying.",
       { readSessionPlacementRecovery, pauseSessionPlacementRecovery },
     );
     expect(context.placementStartup.pause).toHaveBeenCalledBefore(request);
@@ -440,7 +437,7 @@ describe("AppSidebar session mutation feedback", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
       "agent:main:a",
-      "Worker stop requested. Review the initial message before retrying.",
+      "Device stop requested. Review the initial message before retrying.",
       { readSessionPlacementRecovery, pauseSessionPlacementRecovery },
     );
     expect(context.placementStartup.pause).toHaveBeenCalledBefore(request);

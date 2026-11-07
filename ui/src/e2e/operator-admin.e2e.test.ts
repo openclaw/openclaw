@@ -96,8 +96,9 @@ async function expectDenied(control: Locator, gateway: MockGatewayControls, meth
 async function expectAgentCreationDenied(page: Page, gateway: MockGatewayControls) {
   const createAgent = page.getByRole("button", { name: "New agent", exact: true });
   await expect.poll(() => createAgent.isDisabled()).toBe(true);
-  expect(await createAgent.getAttribute("title")).toContain("openclaw.chat");
-  expect(await createAgent.getAttribute("title")).toContain("operator.admin");
+  expect(await createAgent.getAttribute("title")).toContain(
+    "You need admin access to set up OpenClaw.",
+  );
   const url = page.url();
   await createAgent.click({ force: true });
   expect(page.url()).toBe(url);

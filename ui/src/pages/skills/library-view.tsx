@@ -1,7 +1,10 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import "../../components/modal-dialog.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
@@ -67,7 +70,9 @@ export function SkillLibrary(props: {
       <SettingsSection title={t(`skillLibrary.${current().view}`)} count={entries().length}>
         <Show
           when={entries().length > 0}
-          fallback={<SettingsEmpty message={t("skillLibrary.empty")} />}
+          fallback={
+            <SettingsEmpty message={t(query() ? "skillLibrary.noMatches" : "skillLibrary.empty")} />
+          }
         >
           <For each={entries()} keyed={(entry) => entry.skillId}>
             {(entry) => (
@@ -169,18 +174,18 @@ export function SkillLibraryFeedback(props: {
           current().error && (props.dialog || (!current().draft && !props.library.local.importOpen))
         }
       >
-        <div class="callout danger" role="alert">
+        <InlineAlert tone="danger" role="alert">
           {current().error}
-        </div>
+        </InlineAlert>
       </Show>
       <Show
         when={
           current().notice && (props.dialog === "editor" || (!props.dialog && !current().draft))
         }
       >
-        <div class="callout success" role="status">
+        <InlineAlert tone="success" role="status">
           {current().notice}
-        </div>
+        </InlineAlert>
       </Show>
     </>
   );
@@ -226,6 +231,24 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
   const busy = () => props.library.saving() || current().busy;
   const disabled = () => busy() || !props.library.canEdit() || current().loading;
   const support = () => draft().files.find((file) => file.path === draft().selectedFile);
+  const deleteSelectedFile = async () => {
+    const active = draft();
+    const path = active.selectedFile;
+    const confirmed = await showConfirmDialog({
+      title: t("skillLibrary.deleteFileConfirm", { path }),
+      message: t("skillLibrary.deleteFileBody"),
+      confirmLabel: t("common.remove"),
+      danger: true,
+    });
+    if (!confirmed || draft() !== active) {
+      return;
+    }
+    props.library.edit((state) => {
+      state.draft!.files = state.draft!.files.filter((file) => file.path !== path);
+      state.draft!.selectedFile = "SKILL.md";
+      state.draft!.dirty = true;
+    });
+  };
   const text = createMemo(() =>
     draft().selectedFile === "SKILL.md"
       ? draft().content
@@ -374,17 +397,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
             type="button"
             class="btn"
             disabled={disabled()}
-            onClick={() =>
-              props.library.edit((state) => {
-                const path = state.draft!.selectedFile;
-                if (!window.confirm(t("skillLibrary.deleteFileConfirm", { path }))) {
-                  return;
-                }
-                state.draft!.files = state.draft!.files.filter((file) => file.path !== path);
-                state.draft!.selectedFile = "SKILL.md";
-                state.draft!.dirty = true;
-              })
-            }
+            onClick={() => void deleteSelectedFile()}
           >
             {t("skillLibrary.deleteFile")}
           </button>
@@ -392,8 +405,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
       </div>
       <Show when={support() && props.library.canEdit()}>
         <label class="field checkbox">
-          <input
-            type="checkbox"
+          <Checkbox
             name="library-file-executable"
             disabled={disabled()}
             checked={support()!.executable === true}

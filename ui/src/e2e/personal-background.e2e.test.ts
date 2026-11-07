@@ -229,11 +229,11 @@ suite.define(() => {
           "users.background.upload",
           backgroundReply(asset, preference),
         );
-        await section.getByRole("status").filter({ hasText: "Background image saved." }).waitFor();
+        await expect.poll(() => section.locator("[data-background-upload]").isEnabled()).toBe(true);
         await expectSelected(section, "custom");
         expect((await gateway.getRequests("users.prefs.set")).length).toBe(priorWrites);
         await expectPlacement(page, "New session page", true);
-        await expectPlacement(page, "Conversations", false);
+        await expectPlacement(page, "Sessions", false);
         await expect
           .poll(() =>
             section
@@ -263,13 +263,13 @@ suite.define(() => {
           preference = { ...preference, ...patch };
           await changePreference(page, gateway, action, preference, previous, asset);
         };
-        await change(() => placement(page, "Conversations").click(), { showInSessions: true });
+        await change(() => placement(page, "Sessions").click(), { showInSessions: true });
         await expectPlacement(page, "New session page", true);
         await change(() => placement(page, "New session page").click(), {
           showOnNewSession: false,
           visibility: 0.5,
         });
-        await expectPlacement(page, "Conversations", true);
+        await expectPlacement(page, "Sessions", true);
         await openRoute(page, "new", "new-session");
         await expectCount(page, ".new-session-page openclaw-session-background img", 0);
         await visitAppearance(page);
@@ -367,7 +367,7 @@ suite.define(() => {
       const gateway = await installBackground(page, preference, {
         methodResponses: { "users.background.upload": { status: "conflict" } },
       });
-      const section = await visitAppearance(page);
+      const section = await visitAppearance(page, true);
       const image = await imageFixture(page);
       await uploadImage(page, section, "replacement.png", image.png);
       await gateway.waitForRequest("users.background.upload");

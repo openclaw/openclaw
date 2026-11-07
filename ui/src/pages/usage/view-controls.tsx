@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo } from "solid-js";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
@@ -348,9 +349,9 @@ export function createUsageControls(
     ) : undefined;
   const queryWarningCallout = () =>
     queryWarnings().length > 0 ? (
-      <div class="callout warning usage-callout usage-callout--tight">
+      <InlineAlert tone="warning" class="usage-callout usage-callout--tight">
         {queryWarnings().join(" · ")}
-      </div>
+      </InlineAlert>
     ) : undefined;
   const toolbar = () => (
     <>

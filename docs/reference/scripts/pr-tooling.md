@@ -7,6 +7,48 @@ title: "PR wrapper tooling"
 
 # PR wrapper tooling
 
+## Finalized task closeout
+
+Ordinary `scripts/pr gc [--pr <number>] [--dry-run]` discovers native `pr-*`
+worktrees. To close an already-authorized, completed task with a custom worktree
+name or root proof directories, select its exact resources:
+
+```bash
+scripts/pr gc --pr 123 --finalized-task <codex-thread-id> --expected-head <full-head-sha> \
+  --worktree .worktrees/task-123 \
+  --artifact .worktrees/task-123/.artifacts \
+  --artifact .worktrees/task-123/node_modules \
+  --artifact .artifacts/task-123-proof --dry-run
+```
+
+Re-inventory and establish task ownership before selecting resources. Inspect the
+dry-run, then repeat without `--dry-run`. Finalization is the owning task's explicit
+declaration, not another operator approval. Paths are relative to the physical
+canonical repository root or absolute. Worktrees must be immediate children of
+`.worktrees`; artifacts must be directories or symlinks below that selected
+worktree or the canonical `.artifacts` directory. Select each independently; omit
+`--worktree` for artifact-only closeout. Symlink targets, unrelated resources,
+credential directories, and shared dependency consumers are preserved. Unselected
+ignored or untracked entries prevent worktree removal.
+
+The landing-class wrapper and existing PR operation/removal owners remain in
+charge. The command verifies repository identity, merged PR state, exact PR and
+worktree HEAD, physical boundaries, Git metadata, process holders, session
+references, and unresolved native operations. It reads metadata from the existing
+Codex daemon. Add `--known-thread <id>` for additional known sessions or select
+`--codex-socket <path>` for an independent daemon; unavailable known owners block
+removal. This does not claim a complete host-wide census. Native managed worktrees
+must use their managing owner's removal path.
+
+Dry-run does not acquire/recover an operation lock or delete files. Execution
+rechecks relevant conditions, reports removed/already absent resources, and safely
+retries partially completed selections. Branches and remote resources are
+untouched. External merges need no synthetic receipt; existing native recovery
+evidence and uncertain operations still require their normal recovery route.
+See the [merge recovery contract](/reference/scripts/merge-recovery).
+
+## Wrapper execution and dependencies
+
 - Supervised PR operations disable automatic Git maintenance through inherited process configuration, preserving repository settings. Explicit maintenance must still join before completion. PR source fetches also disable automatic maintenance: fetching one PR does not authorize repository-wide pruning of unrelated worktree metadata.
 
 - `scripts/pr` serializes review, prepare, and merge operations per PR across linked worktrees; `scripts/pr gc` skips active or indeterminate locks. Its subcommand classification table is the canonical wrapper trust boundary: a mismatched local wrapper may run only a classified `advisory` subcommand with `--dev-wrapper` or `OPENCLAW_PR_DEV_WRAPPER=1`; classified `landing` subcommands always require canonical/origin-main wrapper code. A worktree whose wrapper differs from origin/main (stale base or wrapper-editing branch) loudly substitutes the canonical checkout's wrapper when that checkout is clean and byte-identical to fetched `refs/remotes/origin/main`; it refuses only when no anchor-matching wrapper is available. A successful command return is the trusted synchronous-completion contract: every PR-state-mutating child must be joined before returning, and such work must never daemonize or explicitly escape both the operation group and lock-notification FD. Release on clean exit requires the leader's completion marker; an escaped descendant that merely holds the notify pipe then produces a loud warned release instead of retention (#124583). A failed command auto-releases while its explicit pre-side-effect validation marker remains active, or after side effects when it exits on its own (status 1-127, no signal) and the full drain observes its group dead and every notification-pipe holder gone; that leaves only the fd-closing escapee residual a clean exit already accepts. Interruptions, lingering group work, a still-open pipe, and controller loss stay locked because detached children cannot be disproved. After verifying no child tools remain, use the reported exact-OID `scripts/pr lock-recover` command. Never bypass or delete these refs manually.
@@ -19,6 +61,9 @@ Before an operation child starts, authenticated creator cleanup may retire the
 anchor. After dispatch, the supervisor retires it only after the process group
 has exited and the notification pipe has closed. A creator crash, uncertain drain,
 or changed creation evidence never authorizes releasing dependency holds.
+A closed output reader, as in `scripts/pr --help | head`, is an ordinary exit: the
+creator still retires its anchor and releases its holds, then exits 141. A selected
+revision older than the lifetime owner cannot release the hold its parent took.
 There is no startup stale-anchor sweep: PID death, age, and path disappearance do
 not prove that inherited consumers finished. A retained PR operation lock requires
 its separate `lock-recover` procedure after verifying that no child tools remain.
@@ -308,6 +353,68 @@ Completion reviews retain the observed run ID and attempt. Missing or older
 observations retry within the existing recovery budget; exhaustion fails the
 scheduled pass so its scan window remains eligible. A newer active run or attempt
 keeps the status pending until that run completes.
+
+## Recover dependency-cache device identities
+
+The lifetime ledger binds the cache, database, and installations to their device
+numbers, inodes, owners, and modes. A device-number change can make ordinary
+commands refuse the ledger. Matching inodes or a recent reboot do not prove that
+the same volume remains mounted. Ordinary commands never repair this mismatch.
+
+After independently inspecting the complete cache and accepting its current
+identity, an operator can adopt only its device numbers:
+
+```bash
+scripts/pr dependency-cache-recover <plan.json> \
+  --plan-sha256 <SHA256> --confirmed-operator-recovery
+```
+
+This shared-cache operation uses the existing metadata mutex, not a PR lock or
+workflow binding. It requires the official OpenClaw origin and authenticates the
+complete official-main wrapper before opening the ledger, using only Git and
+Node built-ins. Origin admission runs before wrapper substitution or bootstrap.
+Review and land tooling repairs before use. Developer-wrapper opt-in and unlanded
+code do not authorize recovery. The command does not install packages or select
+another dependency donor.
+
+When source selection materializes a temporary wrapper, recovery retains that
+directory and prints its path on both success and failure. Ordinary anchor
+retirement opens the ledger and could roll back an unresolved SQLite journal.
+Recovery therefore performs no exit-time cache cleanup or hold settlement.
+
+The SHA-256 seals exact UTF-8 JSON bytes. The version-1 plan contains:
+
+- `version: 1`, the physical `cache` path returned by `dependencyCacheRoot()`, and
+  a nonempty `reason` recording the operator's identity decision.
+- `before`: complete `owner`, `installations`, and `holds` row arrays. Include
+  every column and preserve SQLite value types. Sort owner rows by `id`,
+  installations by `key`, and holds by `entry_key`, `anchor_path`, `anchor_dev`,
+  then `anchor_ino`.
+- `physical`: `cache` and `database` identities, plus an `installations` array
+  ordered by key. Each installation has `key` and its physical identity.
+  Identities contain decimal strings for `dev`, `ino`, `uid`, and `mode` from
+  `lstat`. The database is the existing `lifetime.sqlite` file.
+
+Preserve the sealed plan until reconciliation finishes. Exclude manual ledger
+writers and cache-directory replacement throughout inspection and recovery; the
+metadata mutex serializes native owners only. The cache must contain exactly the
+ledger and registered installations, with no unresolved journal or unknown
+entries. Recorded cache, database, and installation device numbers must identify
+one old device, and their current identities must identify one new device. Inodes,
+owners, modes, schema, and integrity must match.
+
+The owner compares the complete logical preimage inside one synchronous SQLite
+write transaction. It updates only `owner.cache_dev`, `owner.db_dev`, and each
+registered `installations.dev`. It preserves all holds, including absent anchors,
+and preserves sequence, settlement, reuse order, and installed contents. Recovery
+grants no collection, anchor retirement, or hold-release authority.
+
+Success prints `recovered` with the plan seal and installation count. After an
+interruption or lost response, repeat only the same sealed plan: the exact
+postimage returns `already-recovered` without changing rows. Any third state
+refuses and requires fresh inspection. A failure is not proof that no commit
+occurred. After verified recovery, use the original command's ordinary admission;
+its existing source, dependency, and workflow requirements still apply.
 
 ## Recover a retained dependency projection
 

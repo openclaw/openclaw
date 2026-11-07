@@ -203,7 +203,14 @@ it(
             expect.soft(errors, scenario).toEqual([
               expect.objectContaining({
                 role: "custom",
-                openclawRunError: { runId: started.runId, summary: expect.stringMatching(/\S/) },
+                openclawRunError: {
+                  runId: started.runId,
+                  summary: expect.stringMatching(/\S/),
+                  cause: {
+                    provider: "stream-fixture",
+                    ...(scenario === "started-tool" ? {} : { failoverReason: "timeout" }),
+                  },
+                },
               }),
             ]);
             if (scenario.endsWith("text")) {

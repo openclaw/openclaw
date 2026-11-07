@@ -1,0 +1,3 @@
+# Publish retained adoption/recovery boundary regressions with the installed closure.
+# Includes real fd9 admission, crash/replay, continuity, native identity, and profiling failures.
+1993

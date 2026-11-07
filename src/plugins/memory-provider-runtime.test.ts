@@ -398,33 +398,33 @@ it("reports legacy health without host filesystem paths", async () => {
   });
 });
 
-const vectorState = (indexState: "empty" | "complete" | "incomplete" | "unverified") => ({
-  vector: { enabled: true, index: { state: indexState } },
-});
 const providerState = (mode: string, requestedProvider?: string) => ({
   requestedProvider,
   custom: { providerState: { mode } },
+});
+const vectorState = (
+  indexState: "empty" | "complete" | "incomplete" | "unverified",
+  mode = "active",
+) => ({
+  ...providerState(mode, "local"),
+  vector: { enabled: true, index: { state: indexState } },
 });
 const keywordState = (mode: string, requested?: string) => ({
   provider: "none",
   ...providerState(mode, requested),
 });
 it.each<[string, Partial<MemoryProviderStatus>, boolean]>([
-  [
-    "pending embeddings after reacquisition",
-    { custom: { providerState: { mode: "pending" }, indexIdentity: { status: "valid" } } },
-    false,
-  ],
+  ["unknown pending index", providerState("pending", "local"), false],
   ["incomplete vectors", vectorState("incomplete"), false],
   ["unverified vectors", vectorState("unverified"), false],
-  ["degraded provider", providerState("degraded"), false],
+  ["degraded provider", vectorState("complete", "degraded"), false],
   ["keyword fallback", keywordState("fts-only", "openai"), false],
   ["keyword-only before initialization", keywordState("pending", "none"), true],
-  ["dirty sources", { dirty: true }, false],
+  ["dirty sources", { ...vectorState("complete"), dirty: true }, false],
   ["failed sync", { lastSyncError: "worker ran out of memory" }, false],
-  ["complete semantic index", vectorState("complete"), true],
-  ["empty semantic index", vectorState("empty"), true],
-  ["keyword-only index", { ...keywordState("fts-only"), ...vectorState("incomplete") }, true],
+  ["complete pending index", vectorState("complete", "pending"), true],
+  ["empty pending index", vectorState("empty", "pending"), true],
+  ["keyword-only index", { ...vectorState("incomplete"), ...keywordState("fts-only") }, true],
 ])("reports health and search coverage for %s", async (_name, facts, complete) => {
   const bound = await bindLegacy({
     status: () => ({ backend: "builtin", provider: "test", ...facts }),

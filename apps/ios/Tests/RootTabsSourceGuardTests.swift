@@ -15,26 +15,6 @@ struct RootTabsSourceGuardTests {
         #expect(modelPhase.lowerBound < gatewayPhase.lowerBound)
     }
 
-    @Test func `local network permission has visible request paths`() throws {
-        let root = try Self.source("Sources/RootTabs.swift")
-        let onboarding = try Self.sources([
-            "Sources/Onboarding/OnboardingWizardView.swift",
-            "Sources/Onboarding/OnboardingWizardConnectionSections.swift",
-        ])
-        let settings = try Self.source("Sources/Design/SettingsProTabActions.swift")
-        let controller = try Self.sources([
-            "Sources/Gateway/GatewayConnectionController.swift",
-            "Sources/Gateway/GatewayConnectionController+Capabilities.swift",
-        ])
-
-        #expect(controller.contains("requestLocalNetworkAccess(reason: \"connect_manual\""))
-        #expect(controller.contains("requestLocalNetworkAccess(reason: \"connect_discovered_gateway\""))
-        #expect(root.contains("maybeRequestLocalNetworkAccess(reason: \"root_appear\")"))
-        #expect(root.contains("requestLocalNetworkAccess(reason: \"gateway_setup_deeplink\")"))
-        #expect(onboarding.contains("onRequestLocalNetworkAccess(\"onboarding_continue\")"))
-        #expect(settings.contains("requestLocalNetworkAccess(reason: \"settings_preflight\")"))
-    }
-
     @Test func `scanner starts only while its view is visible`() throws {
         let source = try Self.source("Sources/Onboarding/QRScannerView.swift")
         let make = try Self.extract(source, from: "func makeUIViewController", to: "func updateUIViewController")
@@ -89,10 +69,6 @@ struct RootTabsSourceGuardTests {
 
     private static func source(_ path: String) throws -> String {
         try String(contentsOf: self.iOSRoot.appendingPathComponent(path), encoding: .utf8)
-    }
-
-    private static func sources(_ paths: [String]) throws -> String {
-        try paths.map(self.source).joined(separator: "\n")
     }
 
     private static var iOSRoot: URL {

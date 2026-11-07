@@ -54,6 +54,8 @@ describe("ClawSweeper review regressions", () => {
     const revocation = await signStatement(
       "Revocation",
       {
+        claw_id: world.state.claw_id,
+        seq: world.state.seq,
         target_fp: await fingerprint(world.device2.pub),
         target_kind: "owner_device",
         reason: "lost",

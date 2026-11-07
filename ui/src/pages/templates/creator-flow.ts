@@ -350,6 +350,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
         this.modalOpen = false;
         this.error = null;
         showToast({
+          severity: result.publicationStatus === "published" ? "success" : undefined,
           message: t(
             result.publicationStatus === "published"
               ? "templatesDraft.published"

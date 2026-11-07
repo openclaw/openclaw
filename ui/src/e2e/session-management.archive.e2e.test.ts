@@ -346,9 +346,7 @@ suite.define(() => {
         await page.keyboard.press("ArrowLeft");
         await activateSelfRemovingControl(archiveItem);
         const dialog = await waitForConfirmModal(page);
-        await dialog
-          .getByText("Active work in this session will be stopped.", { exact: false })
-          .waitFor();
+        await dialog.getByText("Active work in this session stops.", { exact: false }).waitFor();
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         await dialog.getByRole("button", { name: "Archive session", exact: true }).click();
         const patch = await waitArchive(gateway, "agent:main:research", true);

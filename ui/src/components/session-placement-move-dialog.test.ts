@@ -97,7 +97,7 @@ describe.each(["dispatch", "move", "restart"] as const)("%s machine selection", 
         ],
       });
       click("cloud:cloud");
-      const menu = await openChoices(modal, "Machine");
+      const menu = await openChoices(modal, "Device size");
       if (selectionKind === "explicit") {
         choice(menu, "Large").click();
         flush();
@@ -231,7 +231,7 @@ it("moves with the selected OS and limits machine choices to that OS", async () 
     ],
   });
   click("cloud:aws");
-  let machines = await openChoices(modal, "Machine");
+  let machines = await openChoices(modal, "Device size");
   expect(choice(machines, "Linux tiny").getAttribute("aria-checked")).toBe("true");
   expect(machines.textContent).not.toContain("Windows tiny");
   choice(machines, "Linux fast").click();
@@ -240,7 +240,7 @@ it("moves with the selected OS and limits machine choices to that OS", async () 
   expect(choice(operatingSystems, "Linux").getAttribute("aria-checked")).toBe("true");
   choice(operatingSystems, "Windows (WSL2)").click();
   flush();
-  machines = await openChoices(modal, "Machine");
+  machines = await openChoices(modal, "Device size");
   expect(machines.textContent).not.toContain("Linux fast");
   expect(choice(machines, "Windows tiny").getAttribute("aria-checked")).toBe("true");
   expect(machines.textContent).not.toContain("Linux tiny");
@@ -261,7 +261,7 @@ it.each([undefined, "Gateway unavailable"])(
   async (gatewayDisabledReason) => {
     const { result, modal, button, submit } = await openDialog({ gatewayDisabledReason });
     expect(button("gateway").disabled).toBe(Boolean(gatewayDisabledReason));
-    expect(button("gateway").getAttribute("aria-pressed")).toBe("false");
+    expect(button("gateway").getAttribute("aria-checked")).toBe("false");
     expect(submit.disabled).toBe(true);
     modal.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
     flush();
@@ -314,14 +314,16 @@ it.each([
     click("cloud:cloud");
     if (unchanged) {
       // A supported source remains selected in configuration, but is not a move.
-      const machines = await openChoices(modal, "Machine");
+      const machines = await openChoices(modal, "Device size");
       expect(choice(machines, "Large").getAttribute("aria-checked")).toBe("true");
       expect(submit.disabled).toBe(true);
       choice(machines, "Small").click();
       flush();
     } else {
       // The only replacement class is static; it must still be submittable.
-      expect(modal.querySelector('button[aria-haspopup="menu"][aria-label="Machine"]')).toBeNull();
+      expect(
+        modal.querySelector('button[aria-haspopup="menu"][aria-label="Device size"]'),
+      ).toBeNull();
       expect(modal.querySelector(".session-move__fixed-value")?.textContent).toContain("Small");
     }
     expect(submit.disabled).toBe(false);
