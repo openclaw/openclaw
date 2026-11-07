@@ -26,6 +26,8 @@ export type PluginHookToolAuthority = {
 export type PluginHookAgentContext = PluginHookContextWindow & {
   runId?: string;
   jobId?: string;
+  /** Opaque definition revision captured by the cron executor, never a current-job lookup. */
+  jobConfigRevision?: string;
   trace?: DiagnosticTraceContext;
   agentId?: string;
   sessionKey?: string;
