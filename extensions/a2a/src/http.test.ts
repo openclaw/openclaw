@@ -174,6 +174,7 @@ async function startHttpHarness(options?: {
 
   return {
     baseUrl,
+    registry,
     stop: async () => {
       controller.abort();
       await lifecycle;
@@ -757,5 +758,17 @@ describe("A2A HTTP authentication with unresolved token references", () => {
       // Only the resolved peer reached the agent; the forged request created no task.
       expect(dispatched).toEqual(["kept"]);
     });
+  });
+});
+
+describe("A2A gateway route ownership", () => {
+  it("owns its prefix so unknown subpaths answer JSON instead of the app shell", async () => {
+    const harness = await startHttpHarness();
+    const route = harness.registry.httpRoutes.find((entry) => entry.path === "/a2a/v1");
+
+    expect(route?.match).toBe("prefix");
+    const response = await harness.get("/a2a/v1/agent-card");
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({ error: "Not found" });
   });
 });

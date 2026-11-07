@@ -17,8 +17,14 @@ describe("A2A gateway account lifecycle", () => {
 
     await vi.waitFor(() => expect(fixture.ctx.getStatus().lifecycle).toBe("ready"));
     expect(fixture.registry.httpRoutes).toEqual(
-      ["/.well-known/agent-card.json", "/.well-known/agent.json", "/a2a/v1"].map((path) =>
-        expect.objectContaining({ path, auth: "plugin", match: "exact", pluginId: "a2a" }),
+      [
+        { path: "/.well-known/agent-card.json", match: "exact" },
+        { path: "/.well-known/agent.json", match: "exact" },
+        // The JSON-RPC prefix owns unknown subpaths so API clients get a JSON 404 rather than
+        // the Control-UI app shell.
+        { path: "/a2a/v1", match: "prefix" },
+      ].map(({ path, match }) =>
+        expect.objectContaining({ path, auth: "plugin", match, pluginId: "a2a" }),
       ),
     );
     expect(fixture.ctx.getStatus()).toEqual(

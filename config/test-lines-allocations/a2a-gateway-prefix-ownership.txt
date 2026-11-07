@@ -1,0 +1,2 @@
+# Cover that the A2A gateway prefix owns unknown subpaths so API clients get a JSON 404 instead of the app shell.
+8
