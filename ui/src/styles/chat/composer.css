@@ -2526,11 +2526,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   overscroll-behavior: none;
 }
 
-/* Group/list hosts keep their accessible structure; one window owns row geometry. */
-.chat-controls__model-options[data-chat-model-window] {
-  display: block;
-}
-
 .chat-controls__model-virtual-content {
   flex: none;
   position: relative;
@@ -2546,6 +2541,11 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   position: absolute;
   inset: 0 0 auto;
   padding-bottom: 2px;
+}
+
+.chat-controls__model-virtual-row--natural {
+  position: relative;
+  inset: auto;
 }
 
 .chat-controls__model-virtual-row .chat-controls__model-option {

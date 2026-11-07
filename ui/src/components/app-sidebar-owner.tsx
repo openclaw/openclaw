@@ -547,7 +547,11 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           }}
         >
           {rail}
-          <div class="sidebar-shell" onMouseDown={beginNativeWindowDragFromTopInset}>
+          <div
+            class="sidebar-shell"
+            inert={this.navigationCollapsed || !this.navigationVisible}
+            onMouseDown={beginNativeWindowDragFromTopInset}
+          >
             <div
               class="sidebar-shell__content"
               aria-busy={this.connectionPending ? "true" : undefined}
