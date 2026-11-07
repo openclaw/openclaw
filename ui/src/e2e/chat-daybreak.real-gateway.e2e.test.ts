@@ -657,22 +657,77 @@ suite.define(() => {
             preferenceMobile: false,
             preferencePatch,
           });
-          await open();
-          if (value === "standard") {
-            await toggle.uncheck();
-          } else if (value) {
-            await toggle.check();
-            await select.locator(`[data-chat-access-option="${value}"]`).click();
-          } else {
-            // Automatic is an owner-level reset; the picker now offers an explicit on/off choice.
-            await evaluateControlUiContext(
-              page,
-              (context, sessionKey) =>
-                context.sessions.patch(sessionKey, { cyberAccessProgram: null }),
-              key,
-            );
-          }
           try {
+            await open();
+            await page.evaluate((activationChoice) => {
+              type ActivationEvent = Record<string, string | boolean>;
+              const activationWindow = window as typeof window & {
+                daybreakToggleActivation?: {
+                  choice: number;
+                  abort: AbortController;
+                  events: ActivationEvent[];
+                };
+              };
+              activationWindow.daybreakToggleActivation?.abort.abort();
+              const abort = new AbortController();
+              const events: ActivationEvent[] = [];
+              const initial = document.querySelector(
+                ".chat-controls__effort-picker .chat-controls__effort-menu [role='switch']",
+              );
+              activationWindow.daybreakToggleActivation = {
+                choice: activationChoice,
+                abort,
+                events,
+              };
+              for (const capturePhase of [true, false]) {
+                const observe = (event: Event) => {
+                  const target = event.target;
+                  if (
+                    !(target instanceof HTMLInputElement) ||
+                    !target.matches(
+                      ".chat-controls__effort-picker .chat-controls__effort-menu [role='switch']",
+                    )
+                  ) {
+                    return;
+                  }
+                  events.push({
+                    type: event.type,
+                    capture: capturePhase,
+                    checked: target.checked,
+                    disabled: target.disabled,
+                    prevented: event.defaultPrevented,
+                    connected: target.isConnected,
+                    initial: target === initial,
+                    firstPicker:
+                      target.closest(".chat-controls__effort-picker") ===
+                      document.querySelector(".chat-controls__effort-picker"),
+                  });
+                  if (events.length > 16) {
+                    events.shift();
+                  }
+                };
+                for (const type of ["pointerdown", "click", "input", "change"]) {
+                  document.addEventListener(type, observe, {
+                    capture: capturePhase,
+                    signal: abort.signal,
+                  });
+                }
+              }
+            }, choice);
+            if (value === "standard") {
+              await toggle.uncheck();
+            } else if (value) {
+              await toggle.check();
+              await select.locator(`[data-chat-access-option="${value}"]`).click();
+            } else {
+              // Automatic is an owner-level reset; the picker now offers an explicit on/off choice.
+              await evaluateControlUiContext(
+                page,
+                (context, sessionKey) =>
+                  context.sessions.patch(sessionKey, { cyberAccessProgram: null }),
+                key,
+              );
+            }
             await expect
               .poll(async () => (await row()).cyberAccessProgram)
               .toBe(value || undefined);
@@ -681,30 +736,45 @@ suite.define(() => {
               .toBe(Boolean(value && value !== "standard"));
           } catch (error) {
             await withTimeout(
-              page.evaluate((expected) => {
-                const element = document.querySelector(".chat-controls__effort-picker");
-                const selected = [
-                  ...(element?.querySelectorAll('[data-chat-access-option][aria-pressed="true"]') ??
-                    []),
-                ];
-                return {
-                  preferencePickerPresent: Boolean(element),
-                  preferenceMenuOpen: element?.hasAttribute("open") ?? false,
-                  preferenceToggleDisabled:
-                    element?.querySelector<HTMLInputElement>('[role="switch"]')?.disabled ?? null,
-                  preferenceToggleChecked:
-                    element?.querySelector<HTMLInputElement>('[role="switch"]')?.checked ?? null,
-                  preferenceAnyPressed: selected.length > 0,
-                  preferenceExpectedPressed:
-                    Boolean(element) &&
-                    (expected && expected !== "standard"
-                      ? selected.some(
-                          (option) => option.getAttribute("data-chat-access-option") === expected,
-                        )
-                      : selected.length === 0),
-                  preferenceSnapshot: Boolean(element?.closest("[data-composer-catalog-state]")),
-                };
-              }, value),
+              page.evaluate(
+                ({ expected, choice: expectedChoice }) => {
+                  const activation = (
+                    window as typeof window & {
+                      daybreakToggleActivation?: {
+                        choice: number;
+                        events: Record<string, string | boolean>[];
+                      };
+                    }
+                  ).daybreakToggleActivation;
+                  const observed = activation?.choice === expectedChoice ? activation : undefined;
+                  const element = document.querySelector(".chat-controls__effort-picker");
+                  const selected = [
+                    ...(element?.querySelectorAll(
+                      '[data-chat-access-option][aria-pressed="true"]',
+                    ) ?? []),
+                  ];
+                  return {
+                    preferenceActivationObserved: Boolean(observed),
+                    preferenceActivationEvents: observed?.events ?? [],
+                    preferencePickerPresent: Boolean(element),
+                    preferenceMenuOpen: element?.hasAttribute("open") ?? false,
+                    preferenceToggleDisabled:
+                      element?.querySelector<HTMLInputElement>('[role="switch"]')?.disabled ?? null,
+                    preferenceToggleChecked:
+                      element?.querySelector<HTMLInputElement>('[role="switch"]')?.checked ?? null,
+                    preferenceAnyPressed: selected.length > 0,
+                    preferenceExpectedPressed:
+                      Boolean(element) &&
+                      (expected && expected !== "standard"
+                        ? selected.some(
+                            (option) => option.getAttribute("data-chat-access-option") === expected,
+                          )
+                        : selected.length === 0),
+                    preferenceSnapshot: Boolean(element?.closest("[data-composer-catalog-state]")),
+                  };
+                },
+                { expected: value, choice },
+              ),
               500,
             )
               .then((facts) =>

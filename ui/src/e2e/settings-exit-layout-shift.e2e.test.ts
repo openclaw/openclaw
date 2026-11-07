@@ -73,17 +73,63 @@ suite.define(() => {
           }
           await page.evaluate(() => {
             const shifts: unknown[] = [];
+            const timeline: unknown[] = [];
+            const actions = document.querySelector(".topnav-shell__actions");
+            const observe = (reason: string, sizes?: number[][]) => {
+              if (timeline.length < 24) {
+                timeline.push({
+                  reason,
+                  at: performance.now(),
+                  pageActions: document.querySelector(".topnav-shell__page-actions")
+                    ?.childElementCount,
+                  buttons: actions?.querySelectorAll("button").length,
+                  fontStatus: document.fonts.status,
+                  sizes,
+                });
+              }
+            };
+            observe("start");
+            // Observe published records without forcing layout inside mutation callbacks.
+            const mutations = new MutationObserver(() => observe("actions"));
+            const resizes = new ResizeObserver((entries) =>
+              observe(
+                "resize",
+                entries
+                  .slice(0, 4)
+                  .map(({ contentRect }) => [contentRect.width, contentRect.height]),
+              ),
+            );
+            if (actions) {
+              mutations.observe(actions, { childList: true, subtree: true });
+              resizes.observe(actions);
+            }
+            const fontsLoaded = () => observe("fonts-loaded");
+            document.fonts.addEventListener("loadingdone", fontsLoaded);
             const record = (entries: PerformanceEntryList) => {
               for (const entry of entries) {
                 const shift = entry as PerformanceEntry & {
                   value: number;
-                  sources?: { node?: Node | null }[];
+                  sources?: {
+                    node?: Node | null;
+                    previousRect: DOMRectReadOnly;
+                    currentRect: DOMRectReadOnly;
+                  }[];
                 };
                 shifts.push({
                   value: shift.value,
+                  at: shift.startTime,
                   nodes: shift.sources?.map((source) =>
                     source.node instanceof Element ? source.node.className : source.node?.nodeName,
                   ),
+                  rectangles: shift.sources?.slice(0, 4).map(({ previousRect, currentRect }) => ({
+                    previous: [
+                      previousRect.x,
+                      previousRect.y,
+                      previousRect.width,
+                      previousRect.height,
+                    ],
+                    current: [currentRect.x, currentRect.y, currentRect.width, currentRect.height],
+                  })),
                 });
               }
             };
@@ -91,6 +137,15 @@ suite.define(() => {
             observer.observe({ type: "layout-shift" });
             Reflect.set(window, "__drainLayoutShifts", () => {
               record(observer.takeRecords());
+              if (mutations.takeRecords().length) {
+                observe("pending-actions");
+              }
+              observe("end");
+              observer.disconnect();
+              mutations.disconnect();
+              resizes.disconnect();
+              document.fonts.removeEventListener("loadingdone", fontsLoaded);
+              Reflect.set(window, "__layoutShiftTimeline", timeline);
               return shifts;
             });
           });
@@ -126,6 +181,12 @@ suite.define(() => {
                 );
               }),
           );
+          if (Array.isArray(shifts) && shifts.length) {
+            console.info("settings-navigation-layout-shift", {
+              shifts,
+              timeline: await page.evaluate(() => Reflect.get(window, "__layoutShiftTimeline")),
+            });
+          }
           if (phoneUsageActions) {
             // Adding a page action may grow the pill, but must not move existing controls.
             expect(await page.locator(".header-new-session").boundingBox()).toEqual(

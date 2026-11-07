@@ -16,45 +16,115 @@ export type PanelLoadingSkeletonVariant =
   | "terminal";
 
 type LineWidth = "short" | "medium" | "long";
+type SkeletonNode = readonly [
+  className: string,
+  children?: readonly SkeletonNode[],
+  style?: Readonly<JSX.CSSProperties>,
+];
 
-function Line(props: { width?: LineWidth }) {
-  return <div class={["skeleton line", props.width ?? "long"]} />;
+const lineClasses: Readonly<Record<LineWidth, string>> = {
+  short: "skeleton line short",
+  medium: "skeleton line medium",
+  long: "skeleton line long",
+};
+
+function shape(
+  className: string,
+  children?: readonly SkeletonNode[],
+  style?: Readonly<JSX.CSSProperties>,
+): SkeletonNode {
+  return [className, children, style];
 }
 
-function Lines(props: { widths: readonly LineWidth[] }) {
-  return <For each={props.widths}>{(width) => <Line width={width} />}</For>;
+function line(width: LineWidth = "long"): SkeletonNode {
+  return shape(lineClasses[width]);
 }
 
-function Rows() {
-  return (
-    <For each={[0, 1, 2, 3, 4]}>
-      {(index) => (
-        <div class="row">
-          <div class="skeleton icon" />
-          <div class="copy">
-            <Line width={index % 2 === 0 ? "long" : "medium"} />
-            <div class="skeleton meta" />
-          </div>
-        </div>
-      )}
-    </For>
+function lines(...widths: LineWidth[]): readonly SkeletonNode[] {
+  return widths.map(line);
+}
+
+function rows(): readonly SkeletonNode[] {
+  return Array.from({ length: 5 }, (_, index) =>
+    shape("row", [
+      shape("skeleton icon"),
+      shape("copy", [line(index % 2 === 0 ? "long" : "medium"), shape("skeleton meta")]),
+    ]),
   );
 }
 
-function Widget(props: { columns: number; rows: number; lines: LineWidth[] }) {
+function widget(columns: number, rowSpan: number, widths: readonly LineWidth[]): SkeletonNode {
+  return shape(
+    "widget",
+    [
+      shape("widget-bar", [shape("skeleton icon"), line("short")]),
+      shape("widget-body", lines(...widths)),
+    ],
+    { "grid-column": `span ${columns}`, "grid-row": `span ${rowSpan}` },
+  );
+}
+
+// Immutable presentation data only; never shared JSX or DOM.
+const layouts: Readonly<
+  Record<Exclude<PanelLoadingSkeletonVariant, "desktop">, readonly SkeletonNode[]>
+> = {
+  board: [
+    shape("board-tabs", [shape("skeleton tab"), shape("skeleton tab")]),
+    shape("board-grid", [
+      widget(6, 4, ["long", "medium", "short"]),
+      widget(6, 4, ["medium", "long"]),
+      widget(4, 3, ["medium", "short"]),
+      widget(8, 3, ["long", "medium", "long"]),
+    ]),
+  ],
+  browser: [
+    shape("toolbar", [
+      shape("skeleton button"),
+      shape("skeleton button"),
+      shape("skeleton address"),
+    ]),
+    shape("skeleton viewport"),
+  ],
+  "browser-viewport": [shape("skeleton viewport")],
+  chat: [
+    shape("conversation", [
+      shape("bubble", [shape("copy", lines("long", "medium"))]),
+      shape("bubble user", [shape("copy", lines("medium"))]),
+      shape("bubble", [shape("copy", lines("long", "short"))]),
+    ]),
+  ],
+  discussion: [
+    shape("discussion-frame", [shape("conversation", lines("medium", "long", "long", "short"))]),
+  ],
+  "file-list": [shape("rows", rows())],
+  document: [
+    shape("skeleton file-heading medium"),
+    shape("code", lines("long", "long", "medium", "long", "short")),
+  ],
+  review: [
+    shape("summary", [shape("skeleton pill"), shape("skeleton pill")]),
+    shape("skeleton file-heading"),
+    shape("code", lines("long", "long", "medium", "long", "short")),
+  ],
+  terminal: [
+    shape("toolbar", [shape("skeleton pill"), shape("skeleton pill")]),
+    shape("terminal", lines("medium", "long", "short", "long")),
+  ],
+  files: [
+    shape("toolbar", [shape("skeleton address"), shape("skeleton button")]),
+    shape("rows", rows()),
+  ],
+};
+
+function SkeletonNodes(props: { nodes: readonly SkeletonNode[] }) {
   return (
-    <div
-      class="widget"
-      style={{ "grid-column": `span ${props.columns}`, "grid-row": `span ${props.rows}` }}
-    >
-      <div class="widget-bar">
-        <div class="skeleton icon" />
-        <Line width="short" />
-      </div>
-      <div class="widget-body">
-        <Lines widths={props.lines} />
-      </div>
-    </div>
+    <For each={props.nodes}>
+      {(node) => (
+        <div class={node[0]} style={node[2]}>
+          {node[1] && <SkeletonNodes nodes={node[1]} />}
+        </div>
+      )}
+    </For>
   );
 }
 
@@ -66,112 +136,18 @@ export function PanelLoadingSkeleton(props: {
 }) {
   const variant = createMemo(() => props.variant ?? "files");
   const content = (): JSX.Element => {
-    switch (variant()) {
-      case "board":
-        return (
-          <>
-            <div class="board-tabs">
-              <div class="skeleton tab" />
-              <div class="skeleton tab" />
-            </div>
-            <div class="board-grid">
-              <Widget columns={6} rows={4} lines={["long", "medium", "short"]} />
-              <Widget columns={6} rows={4} lines={["medium", "long"]} />
-              <Widget columns={4} rows={3} lines={["medium", "short"]} />
-              <Widget columns={8} rows={3} lines={["long", "medium", "long"]} />
-            </div>
-          </>
-        );
-      case "browser":
-        return (
-          <>
-            <div class="toolbar">
-              <div class="skeleton button" />
-              <div class="skeleton button" />
-              <div class="skeleton address" />
-            </div>
-            <div class="skeleton viewport" />
-          </>
-        );
-      case "browser-viewport":
-        return <div class="skeleton viewport" />;
-      case "chat":
-        return (
-          <div class="conversation">
-            <For each={[["long", "medium"], ["medium"], ["long", "short"]] satisfies LineWidth[][]}>
-              {(widths, index) => (
-                <div class={["bubble", { user: index() === 1 }]}>
-                  <div class="copy">
-                    <Lines widths={widths} />
-                  </div>
-                </div>
-              )}
-            </For>
-          </div>
-        );
-      case "desktop":
-        return (
-          <div class="desktop-loading">
-            <span class="desktop-spinner" aria-hidden="true" />
-            <span>{props.label}</span>
-          </div>
-        );
-      case "discussion":
-        return (
-          <div class="discussion-frame">
-            <div class="conversation">
-              <Lines widths={["medium", "long", "long", "short"]} />
-            </div>
-          </div>
-        );
-      case "file-list":
-        return (
-          <div class="rows">
-            <Rows />
-          </div>
-        );
-      case "document":
-      case "review":
-        return (
-          <>
-            {variant() === "review" ? (
-              <div class="summary">
-                <div class="skeleton pill" />
-                <div class="skeleton pill" />
-              </div>
-            ) : undefined}
-            <div class={["skeleton file-heading", { medium: variant() === "document" }]} />
-            <div class="code">
-              <Lines widths={["long", "long", "medium", "long", "short"]} />
-            </div>
-          </>
-        );
-      case "terminal":
-        return (
-          <>
-            <div class="toolbar">
-              <div class="skeleton pill" />
-              <div class="skeleton pill" />
-            </div>
-            <div class="terminal">
-              <Lines widths={["medium", "long", "short", "long"]} />
-            </div>
-          </>
-        );
-      default:
-        return (
-          <>
-            <div class="toolbar">
-              <div class="skeleton address" />
-              <div class="skeleton button" />
-            </div>
-            <div class="rows">
-              <Rows />
-            </div>
-          </>
-        );
+    const current = variant();
+    if (current === "desktop") {
+      return (
+        <div class="desktop-loading">
+          <span class="desktop-spinner" aria-hidden="true" />
+          <span>{props.label}</span>
+        </div>
+      );
     }
+    return <SkeletonNodes nodes={layouts[current] ?? layouts.files} />;
   };
+
   return (
     <openclaw-panel-loading-skeleton
       role="status"

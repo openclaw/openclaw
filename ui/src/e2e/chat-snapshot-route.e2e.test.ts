@@ -2,6 +2,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { pathForSession } from "../app-session-path-builder.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
@@ -238,6 +239,7 @@ suite.define(() => {
                     : {}),
                 };
           await gateway.setMethodResponse("sessions.resolve", resolution);
+          const preReleasePathname = new URL(page.url()).pathname;
           await gateway.resolveDeferred("sessions.resolve", resolution);
           if (outcome === "deleted") {
             await page.locator(".session-route-not-found").waitFor();
@@ -250,7 +252,32 @@ suite.define(() => {
               new URL(suite.server.baseUrl).pathname,
               { displayName: row.displayName },
             );
-            await page.waitForURL((url) => url.pathname === targetPath);
+            const routeFacts = (url: URL) => ({
+              expectedAgentPathMatches: url.pathname.startsWith(`/chat/${movedAgent}/`),
+              expectedCanonicalPathMatches: url.pathname === targetPath,
+              originalDashedIdPresent: url.pathname.includes(id),
+              matchesPreReleasePath: url.pathname === preReleasePathname,
+            });
+            let urlChecksUpTo32 = 0;
+            let lastUrlCheck: ReturnType<typeof routeFacts> | null = null;
+            try {
+              await page.waitForURL((url) => {
+                urlChecksUpTo32 = Math.min(urlChecksUpTo32 + 1, 32);
+                lastUrlCheck = routeFacts(url);
+                return url.pathname === targetPath;
+              });
+            } catch (error) {
+              recordControlUiE2eFailureFacts(page, {
+                snapshotRoute: {
+                  outcome,
+                  resolutionReleaseReturned: true,
+                  urlChecksUpTo32,
+                  lastUrlCheck,
+                  atFailure: routeFacts(new URL(page.url())),
+                },
+              });
+              throw error;
+            }
             // Parked route presentations retain selected panes until their owner retires.
             const paneSelector = '.chat-pane-cache__pane--active[aria-hidden="false"]:not([inert])';
             await page.waitForFunction(

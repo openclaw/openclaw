@@ -80,7 +80,36 @@ suite.define(() => {
             await page.setViewportSize({ width: mode === "edit" ? 320 : 390, height: 707 });
             await expect
               .poll(() => footer.evaluate((element) => element.getBoundingClientRect().height))
-              .toBeGreaterThan(originalHeight);
+              .toBeGreaterThan(originalHeight)
+              .catch(async (error: unknown) => {
+                const facts = await footer
+                  .evaluate(
+                    (element) => {
+                      const rect = element.getBoundingClientRect();
+                      return {
+                        width: rect.width,
+                        height: rect.height,
+                        buttons: [...element.querySelectorAll("button")].map((button) => {
+                          const bounds = button.getBoundingClientRect();
+                          return { width: bounds.width, height: bounds.height, top: bounds.top };
+                        }),
+                        reasonPresent: Boolean(element.querySelector(".cron-submit-reason")),
+                        fontStatus: document.fonts.status,
+                      };
+                    },
+                    undefined,
+                    { timeout: 500 },
+                  )
+                  .catch(() => null);
+                console.info("cron-footer-no-growth", {
+                  mode,
+                  enabled,
+                  narrow,
+                  originalHeight,
+                  facts,
+                });
+                throw error;
+              });
           }
           // Keyboard focus uses the scroll padding published by ResizeObserver.
           // A taller footer alone does not mean that clearance has been applied.

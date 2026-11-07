@@ -1,11 +1,18 @@
 // CI resource owner; the disposable credentialless runner is the isolation boundary.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { root as openCaptureRoot } from "@openclaw/fs-safe/root";
 import { readProcessIdentity } from "@openclaw/proc-safe/identity";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
-import { runManagedCommand, waitForManagedProcessGroupExit } from "./lib/managed-child-process.mts";
+import { runMlxSettingsProducer } from "./lib/macos-mlx-settings-producer.mts";
+import {
+  hasUnjoinedWork,
+  runManagedCommand,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
+import { NativeCiBudget } from "./lib/native-ci-budget.mts";
 
 function validateSwiftTestingCompletion(eventStreamPath: string, expectedFilter?: string): void {
   const functions = new Set<string>();
@@ -102,6 +109,102 @@ await runWithFailedTrailer("macos-native", async () => {
   }
   const [profileMode, ...args] = process.argv.slice(2);
   const appHost = profileMode === "app-host";
+  const settingsUpgrade = profileMode === "settings-upgrade";
+  let settings:
+    | {
+        stable: { sourceRoot: string; sha: string };
+        fixed: { sourceRoot: string; sha: string };
+        overlays: Record<string, string>;
+        proofDir: string;
+        budget: NativeCiBudget;
+        phaseEnd: number;
+        observations: object[];
+        proofComplete: boolean;
+        defaultsRemoved: boolean;
+        keychainRemoved: boolean;
+      }
+    | undefined;
+  if (settingsUpgrade) {
+    const [manifestPath, started, proofPath] = args;
+    if (!manifestPath || !started || !proofPath) {
+      throw new Error("Settings upgrade requires prepared sources and the original job clock");
+    }
+    const runnerTemp = fs.realpathSync(env.RUNNER_TEMP);
+    const manifest = fs.realpathSync(manifestPath);
+    const proofDir = fs.realpathSync(proofPath);
+    if (![manifest, proofDir].every((p) => p.startsWith(runnerTemp + path.sep))) {
+      throw new Error("Settings proof must use owned runner scratch");
+    }
+    const prepared = JSON.parse(fs.readFileSync(manifest, "utf8"));
+    if (Object.keys(prepared.overlays).length !== 2) {
+      throw new Error("Settings requires both test overlays");
+    }
+    if (
+      Object.keys(prepared.testBuildManifests ?? {})
+        .toSorted()
+        .join(",") !== "fixed,stable"
+    ) {
+      throw new Error("Settings requires both focused manifest receipts");
+    }
+    for (const name of ["stable", "fixed"] as const) {
+      const source = prepared[name];
+      if (
+        !/^[a-f0-9]{40}$/.test(source.sha) ||
+        fs.realpathSync(source.sourceRoot) !== source.sourceRoot
+      ) {
+        throw new Error("Invalid prepared settings source");
+      }
+      const manifestReceipt = prepared.testBuildManifests[name];
+      if (
+        manifestReceipt.semanticVerified !== true ||
+        !/^[a-f0-9]{40}$/.test(manifestReceipt.originalBlob) ||
+        ![
+          manifestReceipt.originalSHA256,
+          manifestReceipt.effectiveSHA256,
+          manifestReceipt.originalDumpSHA256,
+          manifestReceipt.effectiveDumpSHA256,
+        ].every((hash) => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash)) ||
+        createHash("sha256")
+          .update(fs.readFileSync(path.join(source.sourceRoot, "apps/macos/Package.swift")))
+          .digest("hex") !== manifestReceipt.effectiveSHA256
+      ) {
+        throw new Error("Settings focused manifest is unverified or changed");
+      }
+      for (const [relative, hash] of Object.entries(prepared.overlays)) {
+        if (
+          ![
+            "test/helpers/macos-mlx-settings-producer.ts",
+            "apps/macos/Tests/OpenClawIPCTests/MLXSettingsUpgradeTests.swift",
+          ].includes(relative)
+        ) {
+          throw new Error("Unexpected settings overlay");
+        }
+        if (
+          createHash("sha256")
+            .update(fs.readFileSync(path.join(source.sourceRoot, relative)))
+            .digest("hex") !== hash
+        ) {
+          throw new Error("Settings test overlay changed");
+        }
+      }
+    }
+    if (
+      prepared.fixed.sourceRoot !== fs.realpathSync(process.cwd()) ||
+      !prepared.stable.sourceRoot.startsWith(runnerTemp + path.sep)
+    ) {
+      throw new Error("Settings sources do not match owned preparation");
+    }
+    settings = {
+      ...prepared,
+      proofDir,
+      budget: new NativeCiBudget(started),
+      phaseEnd: performance.now() + 3 * 60_000,
+      observations: [],
+      proofComplete: false,
+      defaultsRemoved: false,
+      keychainRemoved: false,
+    };
+  }
   let appHostConfiguration:
     | {
         executable: string;
@@ -126,10 +229,10 @@ await runWithFailedTrailer("macos-native", async () => {
       filters,
     };
   }
-  if (profileMode !== "default" && profileMode !== "named" && !appHost) {
+  if (profileMode !== "default" && profileMode !== "named" && !appHost && !settingsUpgrade) {
     throw new Error("Select default or named profile semantics before the Swift test arguments.");
   }
-  if (!appHost && !args.includes("--skip-build")) {
+  if (!appHost && !settingsUpgrade && !args.includes("--skip-build")) {
     throw new Error(
       "Build tests first with swift build --build-tests; this launcher requires --skip-build.",
     );
@@ -139,11 +242,14 @@ await runWithFailedTrailer("macos-native", async () => {
   // Foundation's Darwin temp directory belongs to the disposable OS worker instead.
   const root = fs.realpathSync(fs.mkdtempSync("/tmp/oc-test-"));
   let canRemove = true;
+  // Joined launchctl children do not establish that the Gateway service retired.
+  let appHostServiceRetired = !appHost;
   let ownedProfileState: string | undefined;
   try {
     const resourceHome = path.join(root, "home");
     const home = appHost ? fs.realpathSync(env.HOME) : resourceHome;
-    const profile = profileMode === "named" || appHost ? `test-${randomUUID()}` : "default";
+    const profile =
+      profileMode === "named" || appHost || settingsUpgrade ? `test-${randomUUID()}` : "default";
     const state = appHost ? path.join(home, `.openclaw-${profile}`) : path.join(root, "state");
     const tmp = path.join(root, "tmp");
     const menuCaptures = path.join(root, "menu-captures");
@@ -215,19 +321,50 @@ await runWithFailedTrailer("macos-native", async () => {
       bin: string,
       commandArgs: string[],
       timeoutMs?: number,
-      outputFd?: number,
+      {
+        cwd,
+        cleanup = false,
+        outputFd,
+      }: { cwd?: string; cleanup?: boolean; outputFd?: number } = {},
     ) => {
+      let effectiveTimeoutMs = timeoutMs;
+      if (settings) {
+        effectiveTimeoutMs = settings.budget.timeout(timeoutMs ?? 30_000, cleanup);
+        if (!cleanup) {
+          effectiveTimeoutMs = Math.min(
+            effectiveTimeoutMs,
+            Math.floor(settings.phaseEnd - performance.now()),
+          );
+        }
+        if (effectiveTimeoutMs < 1) {
+          throw new Error("Ordered settings phase budget exhausted");
+        }
+      }
       canRemove = false;
-      const code = await runManagedCommand({
-        bin,
-        args: commandArgs,
-        env: childEnv,
-        stdio: outputFd === undefined ? "inherit" : ["ignore", outputFd, outputFd],
-        requireProcessTreeExit: true,
-        timeoutMs,
-      });
-      canRemove = true;
-      return code;
+      try {
+        const code = await runManagedCommand({
+          bin,
+          args: commandArgs,
+          env: childEnv,
+          cwd,
+          stdio: outputFd === undefined ? "inherit" : ["ignore", outputFd, outputFd],
+          requireProcessTreeExit: true,
+          timeoutMs: effectiveTimeoutMs,
+          ...(settings
+            ? {
+                timeoutKillGraceMs: 5_000,
+                signalKillGraceMs: 5_000,
+                abortKillGraceMs: 5_000,
+                cleanupDrainTimeoutMs: 5_000,
+              }
+            : {}),
+        });
+        canRemove = true;
+        return code;
+      } catch (error) {
+        canRemove = !hasUnjoinedWork(error);
+        throw error;
+      }
     };
     const serviceTarget = `gui/${process.getuid?.()}/ai.openclaw.${profile}`;
     const gatewayPids = new Set<number>();
@@ -235,13 +372,16 @@ await runWithFailedTrailer("macos-native", async () => {
       const output = path.join(root, "service-inspection.txt");
       const fd = fs.openSync(output, "w", 0o600);
       try {
-        const code = await run("launchctl", ["print", serviceTarget], 30_000, fd);
+        const code = await run("launchctl", ["print", serviceTarget], 30_000, { outputFd: fd });
         const text = fs.readFileSync(output, "utf8");
         const pid = /^\tpid = ([0-9]+)$/mu.exec(text)?.[1];
         if (code === 0 && pid) {
           gatewayPids.add(Number(pid));
         }
         return { code, text };
+      } catch (error) {
+        canRemove = !hasUnjoinedWork(error);
+        throw error;
       } finally {
         fs.closeSync(fd);
       }
@@ -263,7 +403,114 @@ await runWithFailedTrailer("macos-native", async () => {
         }
       }
       const eventStreamPath = path.join(root, "swift-testing-events.jsonl");
-      if (appHostConfiguration) {
+      if (settings) {
+        const configPath = childEnv.OPENCLAW_CONFIG_PATH!;
+        const writtenPath = path.join(state, "stable-written-config.json");
+        const responsePath = path.join(state, "talk-config-response.json");
+        const hash = (file: string) =>
+          createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+        const swift = async (source: string, filter: string) => {
+          fs.writeFileSync(path.join(state, "mlx-settings-stage"), filter, { mode: 0o600 });
+          const code = await run(
+            "swift",
+            [
+              "test",
+              "--package-path",
+              "apps/macos",
+              "--build-system",
+              "native",
+              "--enable-code-coverage",
+              "--disable-index-store",
+              "-Xswiftc",
+              "-gline-tables-only",
+              "--skip-build",
+              "--filter",
+              filter,
+              "--event-stream-output-path",
+              eventStreamPath,
+              "--event-stream-version",
+              "6.3",
+            ],
+            45_000,
+            { cwd: source },
+          );
+          if (code !== 0) {
+            throw new Error(`Settings Swift stage ${filter} failed (exit ${code})`);
+          }
+          validateSwiftTestingCompletion(eventStreamPath, filter);
+        };
+        await swift(settings.stable.sourceRoot, "MLXSettingsSeedProofTests");
+        const stableWritten = hash(writtenPath);
+        if (hash(configPath) !== stableWritten) {
+          throw new Error("Stable writer receipt does not match actual config");
+        }
+        settings.observations.push({
+          stage: "stable-seed",
+          sourceSHA: settings.stable.sha,
+          rawSHA256: stableWritten,
+          actualSwiftCompleted: true,
+        });
+        for (const source of [settings.stable, settings.fixed]) {
+          if (hash(configPath) !== stableWritten) {
+            throw new Error("Retained config changed before producer");
+          }
+          console.error(`[macos-native] Settings producer sourceSHA=${source.sha}`);
+          const observation: Record<string, unknown> = {
+            stage: "producer",
+            sourceSHA: source.sha,
+            rawSHA256: stableWritten,
+          };
+          settings.observations.push(observation);
+          canRemove = false;
+          let code: number;
+          try {
+            code = await runMlxSettingsProducer({
+              args: [
+                "--import",
+                "./scripts/tsx.mjs",
+                "test/helpers/macos-mlx-settings-producer.ts",
+                configPath,
+                responsePath,
+              ],
+              cwd: source.sourceRoot,
+              env: childEnv,
+              observation,
+              remainingMs: (ceiling) =>
+                Math.min(
+                  settings.budget.timeout(ceiling),
+                  Math.floor(settings.phaseEnd - performance.now()),
+                ),
+            });
+            canRemove = true;
+          } catch (error) {
+            canRemove = !hasUnjoinedWork(error);
+            throw error;
+          }
+          if (code !== 0) {
+            throw new Error(`Actual talk.config producer failed (exit ${code})`);
+          }
+          if (hash(configPath) !== stableWritten) {
+            throw new Error("Producer changed stable config bytes");
+          }
+          Object.assign(observation, {
+            responseSHA256: hash(responsePath),
+            actualTalkConfigCompleted: true,
+          });
+          await swift(source.sourceRoot, "MLXSettingsConsumerProofTests");
+          if (hash(configPath) !== stableWritten) {
+            throw new Error("Consumer changed stable config bytes");
+          }
+          settings.observations.push({
+            stage: "consumer",
+            sourceSHA: source.sha,
+            rawSHA256: stableWritten,
+            responseSHA256: hash(responsePath),
+            actualSwiftCompleted: true,
+          });
+        }
+        settings.proofComplete = true;
+        return;
+      } else if (appHostConfiguration) {
         const diagnostics = fs.mkdtempSync(path.join(env.RUNNER_TEMP, "openclaw-recovery-events-"));
         console.error(`[macos-native] App-host event artifacts: ${diagnostics}`);
         if (env.GITHUB_OUTPUT) {
@@ -413,6 +660,49 @@ await runWithFailedTrailer("macos-native", async () => {
         }
       }
     } finally {
+      // A joined cleanup child retires only its process. Physical removal also
+      // requires BOTH resource facts, including exceptions between these stages.
+      if (settings && canRemove) {
+        try {
+          const cleanupEvents = path.join(root, "settings-cleanup-events.jsonl");
+          fs.writeFileSync(path.join(state, "mlx-settings-stage"), "MLXSettingsCleanupProofTests", {
+            mode: 0o600,
+          });
+          const code = await run(
+            "swift",
+            [
+              "test",
+              "--package-path",
+              "apps/macos",
+              "--build-system",
+              "native",
+              "--enable-code-coverage",
+              "--disable-index-store",
+              "-Xswiftc",
+              "-gline-tables-only",
+              "--skip-build",
+              "--filter",
+              "MLXSettingsCleanupProofTests",
+              "--event-stream-output-path",
+              cleanupEvents,
+              "--event-stream-version",
+              "6.3",
+            ],
+            45_000,
+            { cwd: settings.fixed.sourceRoot, cleanup: true },
+          );
+          if (code !== 0) {
+            process.exitCode ||= code;
+            console.error(`[macos-native] Settings Swift cleanup failed (exit ${code})`);
+          } else {
+            validateSwiftTestingCompletion(cleanupEvents, "MLXSettingsCleanupProofTests");
+            settings.defaultsRemoved = true;
+          }
+        } catch (error) {
+          process.exitCode ||= 1;
+          console.error("[macos-native] Settings Swift cleanup failed", error);
+        }
+      }
       if (appHost && canRemove) {
         await inspectService();
         await run("launchctl", ["bootout", serviceTarget], 30_000);
@@ -425,6 +715,7 @@ await runWithFailedTrailer("macos-native", async () => {
           });
           retired &&= groupGone && readProcessIdentity(pid) === null;
         }
+        appHostServiceRetired = retired;
         canRemove = retired;
         if (!canRemove) {
           process.exitCode ||= 1;
@@ -433,17 +724,47 @@ await runWithFailedTrailer("macos-native", async () => {
       }
       // A completed failed create may leave a database. Never delete it until every child closed.
       if (canRemove && fs.existsSync(keychain)) {
-        const cleanupCode = await run("security", ["delete-keychain", keychain], 30_000);
-        if (cleanupCode !== 0) {
-          canRemove = false;
-          process.exitCode ||= cleanupCode;
-          console.error(`[macos-native] security delete-keychain failed (exit ${cleanupCode})`);
+        try {
+          const cleanupCode = await run("security", ["delete-keychain", keychain], 30_000, {
+            cleanup: true,
+          });
+          if (cleanupCode !== 0) {
+            if (!settings) {
+              canRemove = false;
+            }
+            process.exitCode ||= cleanupCode;
+            console.error(`[macos-native] security delete-keychain failed (exit ${cleanupCode})`);
+          }
+        } catch (error) {
+          if (!settings) {
+            canRemove = false;
+          }
+          process.exitCode ||= 1;
+          console.error("[macos-native] security delete-keychain cleanup failed", error);
+        }
+      }
+      if (settings && canRemove) {
+        try {
+          fs.lstatSync(keychain);
+          process.exitCode ||= 1;
+          console.error("[macos-native] Settings Keychain retirement is unverified");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            settings.keychainRemoved = true;
+          } else {
+            process.exitCode ||= 1;
+            console.error("[macos-native] Settings Keychain retirement inspection failed", error);
+          }
         }
       }
     }
   } finally {
-    // Retain evidence/resources if process-tree completion could not be established.
-    if (canRemove) {
+    // Resource state remains pending even if run() has joined its last child.
+    const resourcesRetired =
+      canRemove &&
+      appHostServiceRetired &&
+      (!settings || (settings.defaultsRemoved && settings.keychainRemoved));
+    if (resourcesRetired) {
       if (ownedProfileState) {
         fs.rmSync(ownedProfileState, { recursive: true, force: true });
       }
@@ -453,6 +774,30 @@ await runWithFailedTrailer("macos-native", async () => {
       if (ownedProfileState) {
         console.error(`[macos-native] retained profile state: ${ownedProfileState}`);
       }
+    }
+    if (settings) {
+      fs.writeFileSync(
+        path.join(settings.proofDir, "settings-consumers.json"),
+        JSON.stringify(
+          {
+            complete: settings.proofComplete && resourcesRetired,
+            sameProfile: true,
+            candidateReseeded: false,
+            observations: settings.observations,
+            finalCleanup: {
+              separateLaunch: true,
+              sourceSHA: settings.fixed.sha,
+              actualSwiftCompleted: settings.defaultsRemoved,
+            },
+            defaultsRemoved: settings.defaultsRemoved,
+            keychainRemoved: settings.keychainRemoved,
+            processesRetired: canRemove,
+            resourcesRemoved: resourcesRetired,
+          },
+          null,
+          2,
+        ) + "\n",
+      );
     }
   }
 });

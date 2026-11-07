@@ -59,6 +59,7 @@ export function adoptBootComposer(applicationRoute: boolean): void {
 
 /** The live element for a chat loading frame, or null once taken or retired. */
 export function bootComposerElement(): HTMLTextAreaElement | null {
+  snapshotBootComposerScroll();
   return element;
 }
 

@@ -136,57 +136,71 @@ async function mountInventory(
   };
 }
 
-it("flushes a pending config draft before enabling and refreshes afterward", async () => {
-  await import("./settings-view.tsx");
-  vi.useFakeTimers();
-  let config: Record<string, unknown> = { pending: false };
-  let hash = "hash-1";
-  const enabled = createPlugin({ enabled: true, state: "enabled" });
-  const fixture = runtimeFixture({
-    "config.get": () => {
-      return sourceConfigSnapshot(config, hash);
-    },
-    "config.set": (params) => {
-      config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
-      hash = "hash-2";
-      return { config, hash };
-    },
-    "plugins.setEnabled": () => {
-      config = { ...config, pluginMutation: "enable" };
-      hash = "hash-3";
-      return { ok: true, plugin: enabled, restartRequired: true };
-    },
-    "plugins.inspect": () => {
-      return createInspectResult();
-    },
-    "config.schema": () => {
-      return { schema: { type: "object", properties: {} }, uiHints: {} };
-    },
-    "plugins.list": () => {
-      return createResult(enabled);
-    },
-  });
-  const { runtimeConfig } = fixture;
-  await runtimeConfig.ensureLoaded();
-  const { page } = await fixture.mount();
-  await settlePlugins();
-  fixture.request.mockClear();
-  const order = () => fixture.request.mock.calls.map(([method]) => method);
-  runtimeConfig.patchForm(["pending"], true);
-  await clickPluginAction(page, "Enable Workboard");
-  await waitForSolid(() => expect(order()).toContain("plugins.list"));
-  expect(order().slice(0, 4)).toEqual([
-    "config.set",
-    "plugins.setEnabled",
-    "config.get",
-    "plugins.list",
-  ]);
-  expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
-  expect(runtimeConfig.state.configForm).toMatchObject({
-    pending: true,
-    pluginMutation: "enable",
-  });
-});
+it.each([
+  { suffix: "", refreshBeforeEnable: false },
+  { suffix: " after catalog refresh", refreshBeforeEnable: true },
+])(
+  "flushes a pending config draft before enabling and refreshes afterward$suffix",
+  async ({ refreshBeforeEnable }) => {
+    await import("./settings-view.tsx");
+    vi.useFakeTimers();
+    let config: Record<string, unknown> = { pending: false };
+    let hash = "hash-1";
+    const enabled = createPlugin({ enabled: true, state: "enabled" });
+    let inventory = createResult();
+    const fixture = runtimeFixture({
+      "config.get": () => {
+        return sourceConfigSnapshot(config, hash);
+      },
+      "config.set": (params) => {
+        config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
+        hash = "hash-2";
+        return { config, hash };
+      },
+      "plugins.setEnabled": () => {
+        config = { ...config, pluginMutation: "enable" };
+        hash = "hash-3";
+        inventory = createResult(enabled);
+        return { ok: true, plugin: enabled, restartRequired: true };
+      },
+      "plugins.inspect": () => {
+        return createInspectResult();
+      },
+      "config.schema": () => {
+        return { schema: { type: "object", properties: {} }, uiHints: {} };
+      },
+      "plugins.list": () => {
+        return inventory;
+      },
+    });
+    const { runtimeConfig } = fixture;
+    await runtimeConfig.ensureLoaded();
+    const { page } = await fixture.mount();
+    await settlePlugins();
+    if (refreshBeforeEnable) {
+      fixture.request.mockClear();
+      fixture.publishGeneration(1);
+      await fixture.waitForCall("plugins.list");
+      await settlePlugins();
+    }
+    fixture.request.mockClear();
+    const order = () => fixture.request.mock.calls.map(([method]) => method);
+    runtimeConfig.patchForm(["pending"], true);
+    await clickPluginAction(page, "Enable Workboard");
+    await waitForSolid(() => expect(order()).toContain("plugins.list"));
+    expect(order().slice(0, 4)).toEqual([
+      "config.set",
+      "plugins.setEnabled",
+      "config.get",
+      "plugins.list",
+    ]);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
+    expect(runtimeConfig.state.configForm).toMatchObject({
+      pending: true,
+      pluginMutation: "enable",
+    });
+  },
+);
 
 it("waits for uninstall confirmation and sends nothing when cancelled", async () => {
   const { client, request } = scriptedClient({
