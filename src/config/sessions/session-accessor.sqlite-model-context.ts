@@ -5,7 +5,7 @@ import {
   isSyntheticMissingToolResult,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
-import { jsonValid } from "../../infra/database-engine/json-values.js";
+import { jsonNativeFieldsValid, jsonValid } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -33,6 +33,8 @@ import type {
   SessionModelContextLimits,
   SessionTranscriptModelContext,
 } from "./session-history-read.types.js";
+import { projectSessionModelContextEntry } from "./session-model-context-entry.js";
+import { projectSessionModelContextNavigation } from "./session-model-context-navigation.js";
 import { readModelContextNavigationPages } from "./session-model-context-pages.js";
 import {
   projectModelContextEventSql,
@@ -347,31 +349,73 @@ function withTranscriptContextSnapshot<T>(
             ),
             *readRows(after, end) {
               const page = base.where("seq", ">", after).where("seq", "<=", end);
-              const query = isPostgresSqlConnection(database.db)
-                ? db
-                    .selectFrom(
-                      projectPostgresModelContextRowsSql(
-                        page.select(["seq", "event_json", "navigation_json"]),
-                      ).as("context"),
-                    )
-                    .selectAll()
-                : page
-                    .select([
-                      "seq",
-                      transcriptEventModelNavigationSql(database.db).as("navigation_json"),
-                      transcriptEventModelBytesSql(database.db, sql.lit(0)).as("model_bytes"),
-                      transcriptEventModelBytesSql(database.db, sql.lit(1)).as("retained_bytes"),
-                    ])
-                    .orderBy("seq", "asc");
-              for (const row of iterateSqliteQuerySync(database.db, query)) {
-                // SAFETY: SQL preserves entry discriminants; this fresh object has no other owner.
-                const entry = JSON.parse(row.navigation_json) as ContextEntry;
-                entry.seq = row.seq;
-                yield {
-                  entry,
-                  bytes: row.model_bytes,
-                  withoutCheckpointBytes: row.retained_bytes,
-                };
+              if (isPostgresSqlConnection(database.db)) {
+                const query = db
+                  .selectFrom(
+                    projectPostgresModelContextRowsSql(
+                      page.select(["seq", "event_json", "navigation_json"]),
+                    ).as("context"),
+                  )
+                  .selectAll();
+                for (const row of iterateSqliteQuerySync(database.db, query)) {
+                  if (row.raw_event !== null) {
+                    // PostgreSQL cannot decode this event (unmatched surrogate escapes).
+                    // Project it with the shared JavaScript owners, mirroring the
+                    // SQLite deep fallback; stored bytes and code units are preserved.
+                    const raw = JSON.parse(row.raw_event) as SessionTreeEntry;
+                    const entry = projectSessionModelContextNavigation(raw) as ContextEntry;
+                    entry.seq = row.seq;
+                    yield {
+                      entry,
+                      bytes: Buffer.byteLength(
+                        JSON.stringify(
+                          projectSessionModelContextEntry(raw, {
+                            entry: raw,
+                            omitCheckpoint: false,
+                          }),
+                        ),
+                        "utf8",
+                      ),
+                      withoutCheckpointBytes: Buffer.byteLength(
+                        JSON.stringify(
+                          projectSessionModelContextEntry(raw, {
+                            entry: raw,
+                            omitCheckpoint: true,
+                          }),
+                        ),
+                        "utf8",
+                      ),
+                    };
+                    continue;
+                  }
+                  // SAFETY: SQL preserves entry discriminants; this fresh object has no other owner.
+                  const entry = JSON.parse(row.navigation_json!) as ContextEntry;
+                  entry.seq = row.seq;
+                  yield {
+                    entry,
+                    bytes: row.model_bytes!,
+                    withoutCheckpointBytes: row.retained_bytes!,
+                  };
+                }
+              } else {
+                const query = page
+                  .select([
+                    "seq",
+                    transcriptEventModelNavigationSql(database.db).as("navigation_json"),
+                    transcriptEventModelBytesSql(database.db, sql.lit(0)).as("model_bytes"),
+                    transcriptEventModelBytesSql(database.db, sql.lit(1)).as("retained_bytes"),
+                  ])
+                  .orderBy("seq", "asc");
+                for (const row of iterateSqliteQuerySync(database.db, query)) {
+                  // SAFETY: SQL preserves entry discriminants; this fresh object has no other owner.
+                  const entry = JSON.parse(row.navigation_json) as ContextEntry;
+                  entry.seq = row.seq;
+                  yield {
+                    entry,
+                    bytes: row.model_bytes,
+                    withoutCheckpointBytes: row.retained_bytes,
+                  };
+                }
               }
             },
           });
@@ -441,6 +485,7 @@ function withTranscriptContextSnapshot<T>(
               const payloads = new Map<ContextEntry, SessionTreeEntry>();
               for (const batch of chunkItems(requests, MODEL_CONTEXT_PAYLOAD_BATCH_SIZE)) {
                 const { bySeq, omitCheckpoint, omission } = modelContextBatchSql(batch);
+                const byRequest = new Map(batch.map((request) => [request.entry.seq, request]));
                 // Bound both IN lists while keeping payload selection inside the navigation snapshot.
                 // SQL removes obsolete replay/private fields before they enter JavaScript.
                 const query = base
@@ -454,11 +499,29 @@ function withTranscriptContextSnapshot<T>(
                       transcriptPredicateSql(database.db, "message_role"),
                       nativeJsonValid,
                     ).as("event_json"),
+                    (isPostgresSqlConnection(database.db)
+                      ? jsonNativeFieldsValid(database.db, transcriptEventJsonSql(database.db))
+                      : sql.lit(true)
+                    ).as("json_decodable"),
                   ])
                   .where("seq", "in", [...bySeq.keys()]);
                 for (const row of iterateSqliteQuerySync(database.db, query)) {
                   const entry = bySeq.get(row.seq)!;
-                  const hydrated = hydrateContextEntry(row.event_json, entry);
+                  const request = byRequest.get(row.seq)!;
+                  // PostgreSQL cannot decode some events (unmatched surrogate escapes);
+                  // those rows arrive as raw text and are projected with the shared
+                  // JavaScript owners, mirroring the SQLite deep fallback. Stored
+                  // bytes and code units are preserved.
+                  const hydrated = row.json_decodable
+                    ? hydrateContextEntry(row.event_json, entry)
+                    : projectSessionModelContextEntry(
+                        JSON.parse(row.event_json) as SessionTreeEntry,
+                        {
+                          entry,
+                          omitCheckpoint: request.omitCheckpoint,
+                          toolResultOmission: request.toolResultOmission,
+                        },
+                      );
                   if (
                     entry.type === "message" &&
                     entry.message.role === "toolResult" &&

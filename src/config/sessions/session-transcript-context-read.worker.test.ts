@@ -19,6 +19,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { upsertSessionEntryCore, withTranscriptWriteLock } from "./session-accessor.js";
 import type { SessionTranscriptRawDeltaResult } from "./session-accessor.sqlite-contract.js";
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
+import { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
 import {
   readSessionTranscriptContextProjectionAsync,
@@ -616,3 +617,25 @@ it.each(["worker", "native"] as const)(
     });
   },
 );
+
+it("keeps unmatched surrogate text readable through both model-context readers", async () => {
+  await withOpenClawTestState({ label: "model-context-surrogate" }, async (state) => {
+    const target = createTranscriptTarget("surrogate-text", state.statePath("transcript.sqlite"));
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(target);
+    // JSON-escaped lone surrogate, exactly what the physical inserter stores.
+    const text = "before\ud800after";
+    await manager.appendMessageAsync({ role: "user", content: text, timestamp: 1 });
+    await waitForSessionTranscriptProjection(target);
+    // Canonical reader.
+    const canonical = readSessionTranscriptModelContext(target);
+    const canonicalMessage = canonical.events.find((entry) => entry.type === "message");
+    expect(canonicalMessage).toMatchObject({ type: "message" });
+    if (canonicalMessage && canonicalMessage.type === "message") {
+      expect(canonicalMessage.message.content).toBe(text);
+    }
+    // Public async reader serves the same history with original code units.
+    const opened = await SessionManager.openModelContextAsync(target);
+    expect(opened.buildSessionContext().messages.at(-1)?.content).toBe(text);
+  });
+});

@@ -1,16 +1,19 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData } from "node:worker_threads";
+import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql, type Compilable } from "kysely";
 import { expect, it } from "vitest";
 import {
   LEGACY_MISSING_TOOL_RESULT_TEXT,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { projectSessionModelContextEntry } from "../../config/sessions/session-model-context-entry.js";
 import {
   legacyModelContextEventSql,
   legacyModelNavigationSql,
 } from "../../config/sessions/session-model-context-legacy.test-support.js";
+import { projectSessionModelContextNavigation } from "../../config/sessions/session-model-context-navigation.js";
 import {
   projectModelContextEventSql,
   projectModelContextNavigationSql,
@@ -171,7 +174,17 @@ it.skipIf(typeof connection !== "string")(
               )
               .selectAll(),
           );
-        expect(native()).toEqual(legacy);
+        // Rows PostgreSQL cannot decode travel through raw_event; valid rows keep
+        // the native four-column projection unchanged.
+        const nativeProjection = (rows: ReturnType<typeof native>) =>
+          rows.map(({ seq, navigation_json, model_bytes, retained_bytes }) => ({
+            seq,
+            navigation_json,
+            model_bytes,
+            retained_bytes,
+          }));
+        expect(nativeProjection(native())).toEqual(legacy);
+        expect(native().every((row) => row.raw_event === null)).toBe(true);
         // Existing stored envelopes bypass canonical JSON parsing even when its text is unavailable.
         setEnvelope(
           JSON.stringify({
@@ -182,7 +195,7 @@ it.skipIf(typeof connection !== "string")(
           "{ unavailable",
         );
         try {
-          expect(native()).toEqual(legacy);
+          expect(nativeProjection(native())).toEqual(legacy);
         } finally {
           setEnvelope(null, JSON.stringify(fixtures[0]));
         }
@@ -255,6 +268,149 @@ it.skipIf(typeof connection !== "string")(
           });
           expect(copies[1]).toEqual(copies[0]);
           expect(copies[1]).toEqual({ ...fixtures[source], parentId });
+        }
+      } finally {
+        try {
+          remote.exec(`DROP SCHEMA "${namespace}" CASCADE`);
+        } finally {
+          remote.close();
+        }
+      }
+    });
+  },
+);
+
+it.skipIf(typeof connection !== "string")(
+  "keeps unmatched surrogate transcript text readable on PostgreSQL",
+  () => {
+    withEngineStoreAdmission(() => {
+      using anchor = openNodeSqliteDatabase(":memory:");
+      const namespace = `reader_surrogate_${randomUUID().replaceAll("-", "")}`;
+      const remote = new PostgresSyncConnection(connection!, namespace, anchor, namespace);
+      // Session owners still annotate handles as DatabaseSync; exercise their real PostgreSQL branch.
+      // @ts-expect-error -- The PostgreSQL bridge deliberately lacks unused SQLite-only methods.
+      const postgres: DatabaseSync = remote;
+      const surrogateText = "before\ud800after";
+      const lowSurrogateText = "before\udc00after";
+      // Stored as the JSON-escaped sequences, exactly how the physical inserter writes them.
+      const events = [
+        messageEvent({
+          role: "user",
+          content: surrogateText,
+          __openclaw: { upstreamUserText: "private" },
+          providerReplay: { type: "fixture" },
+        }),
+        messageEvent({ role: "user", content: lowSurrogateText }),
+        messageEvent({
+          role: "toolResult",
+          content: [{ type: "text", text: surrogateText }],
+          providerReplay: { type: "fixture" },
+        }),
+      ].map((event, index) =>
+        Object.assign({ id: `surrogate-${index}`, parentId: "old-parent" }, event),
+      );
+      // Adjacent matched surrogates decode natively and must never take the raw path.
+      const pairedEscapeJson =
+        '{"type":"message","id":"paired-user","parentId":null,"message":{"role":"user","content":"before \\uD83E\\uDD9E after"}}';
+      try {
+        remote.exec(`CREATE SCHEMA "${namespace}"`);
+        postgres.exec(schema);
+        const insert = createTranscriptEventInserter(postgres, "conformance");
+        const storedJson = [...events.map((event) => JSON.stringify(event)), pairedEscapeJson];
+        storedJson.forEach((eventJson, seq) => insert({ seq, eventJson, createdAt: 1 }));
+        const rows = readRows(
+          postgres,
+          getNodeSqliteKysely(postgres)
+            .selectFrom(
+              projectPostgresModelContextRowsSql(
+                getNodeSqliteKysely<DB>(postgres)
+                  .selectFrom("transcript_events")
+                  .select(["seq", "event_json", "navigation_json"]),
+              ).as("context"),
+            )
+            .selectAll(),
+        );
+        for (const row of rows) {
+          if (row.seq < events.length) {
+            // Undecodable events keep their raw stored text; navigation and native
+            // byte accounting stay empty and the read owner projects in JavaScript.
+            expect(row.raw_event).toBe(storedJson[row.seq]);
+            expect(row.navigation_json).toBeNull();
+            expect(row.model_bytes).toBeNull();
+            expect(row.retained_bytes).toBeNull();
+            const raw = JSON.parse(row.raw_event!) as SessionTreeEntry;
+            expect(projectSessionModelContextNavigation(raw)).toMatchObject({
+              type: "message",
+              id: `surrogate-${row.seq}`,
+            });
+            const projected = projectSessionModelContextEntry(raw, {
+              entry: raw,
+              omitCheckpoint: false,
+            });
+            expect(projected).toMatchObject({ type: "message" });
+            if (projected.type === "message") {
+              if (row.seq === 0) {
+                expect(projected.message).toMatchObject({ content: surrogateText });
+                expect(projected.message).not.toHaveProperty("__openclaw");
+              } else if (row.seq === 1) {
+                expect(projected.message).toMatchObject({ content: lowSurrogateText });
+              } else {
+                const content = projected.message as { content?: Array<{ text?: unknown }> };
+                expect(content.content?.[0]?.text).toBe(surrogateText);
+              }
+            }
+          } else {
+            expect(row.raw_event).toBeNull();
+            expect(JSON.parse(row.navigation_json!)).toMatchObject({
+              type: "message",
+              id: "paired-user",
+            });
+            expect(row.model_bytes).toBeGreaterThan(0);
+          }
+        }
+        // Durable stored bytes never change for the undecodable rows.
+        const persisted = readRows(
+          postgres,
+          getNodeSqliteKysely<DB>(postgres)
+            .selectFrom("transcript_events")
+            .select(["seq", "event_json"])
+            .orderBy("seq"),
+        );
+        for (const [seq, stored] of storedJson.entries()) {
+          expect(persisted[seq]?.event_json).toBe(stored);
+        }
+        // Payload and navigation projections hand undecodable text back raw and
+        // project matched surrogate pairs natively.
+        const event =
+          /* kysely-allow-raw: The fixture table owns this fixed JSON column. */ sql.ref<string>(
+            "event_json",
+          );
+        const projections = readRows(
+          postgres,
+          getNodeSqliteKysely<DB>(postgres)
+            .selectFrom("transcript_events")
+            .select([
+              "seq",
+              projectModelContextEventSql(postgres, event, sql.lit(0)).as("model_json"),
+              projectModelContextNavigationSql(postgres, event).as("navigation_json"),
+            ])
+            .orderBy("seq"),
+        );
+        for (const row of projections) {
+          if (row.seq < events.length) {
+            expect(row.model_json).toBe(storedJson[row.seq]);
+            expect(row.navigation_json).toBe(storedJson[row.seq]);
+          } else {
+            const model = JSON.parse(row.model_json) as SessionTreeEntry;
+            expect(model).toMatchObject({ type: "message" });
+            if (model.type === "message") {
+              expect(model.message).toMatchObject({ content: "before 🦞 after" });
+            }
+            expect(JSON.parse(row.navigation_json)).toMatchObject({
+              type: "message",
+              id: "paired-user",
+            });
+          }
         }
       } finally {
         try {

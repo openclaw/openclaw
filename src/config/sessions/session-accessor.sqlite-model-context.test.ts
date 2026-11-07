@@ -239,3 +239,30 @@ it("reuses freshly decoded model payloads while keeping stored and subsequent co
       expect(decoded).toContain(event);
     }
   }));
+
+it("keeps unmatched surrogate text readable through both model-context readers", () =>
+  withOpenClawTestState({ label: "model-context-surrogate" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "surrogate",
+      sessionKey: "agent:main:surrogate",
+      storePath: state.statePath("transcript.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await SessionManager.openAsync(scope);
+    const text = "before\ud800after";
+    await appendTranscriptMessage(scope, {
+      eventId: "surrogate-message",
+      message: { role: "user", content: text, timestamp: 1 },
+    });
+    await waitForSessionTranscriptProjection(scope);
+    const canonical = readSessionTranscriptModelContext(scope);
+    const canonicalMessage = canonical.events.find((entry) => entry.id === "surrogate-message");
+    assert(canonicalMessage?.type === "message");
+    expect(canonicalMessage.message.content).toBe(text);
+    // The public async reader serves the same history with original code units.
+    const opened = await SessionManager.openModelContextAsync(scope);
+    expect(opened.buildSessionContext().messages.at(-1)?.content).toBe(text);
+    // Stored transcript bytes keep the JSON-escaped surrogate; reads never sanitize them.
+    expect(JSON.stringify(loadTranscriptEventsSync(scope))).toContain("\\ud800");
+  }));

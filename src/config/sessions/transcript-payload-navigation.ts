@@ -1,5 +1,6 @@
 import { sql, type Expression, type RawBuilder } from "kysely";
 import {
+  jsonNativeFieldsValid,
   jsonObjectValue,
   jsonRemovePaths,
   jsonValid,
@@ -54,7 +55,7 @@ function navigationProjection(
     return /* kysely-allow-raw: the same stored navigation envelope uses PostgreSQL native JSON and byte accounting. */ sql<
       string | null
     >`CASE
-      WHEN ${jsonValid(database, originalEvent)} AND ${jsonValid(database, report)} THEN CASE
+      WHEN ${jsonValid(database, originalEvent)} AND ${jsonNativeFieldsValid(database, originalEvent)} AND ${jsonValid(database, report)} THEN CASE
       WHEN json_typeof(${originalEvent}::json) != 'object'
         OR coalesce(json_typeof(${originalEvent}::json -> 'message'), 'null') NOT IN ('object', 'null') THEN NULL
       ELSE json_build_object('version', 1,

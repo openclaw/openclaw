@@ -8,6 +8,7 @@ import {
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
   jsonArrayValue,
+  jsonNativeFieldsValid,
   jsonObjectValue,
   jsonPathValue,
   jsonPickObject,
@@ -83,8 +84,14 @@ export function projectModelContextEventSql(
           THEN jsonb_set(${model}, '{message,content}', jsonb_build_array(jsonb_build_object('type', 'text', 'text', ${toolResultOmission}::text)))
           ELSE ${model} END`
       : model;
-    return /* kysely-allow-raw: Serialize once at the model payload boundary. */ sql<string>`(CASE WHEN ${omitCheckpoint} = 1
+    const native = /* kysely-allow-raw: Serialize once at the model payload boundary. */ sql<string>`(CASE WHEN ${omitCheckpoint} = 1
       THEN ${bounded} #- '{message,providerReplay}' ELSE ${bounded} END)::text`;
+    // PostgreSQL rejects JSON text it cannot decode, like unmatched surrogate escapes
+    // (SQLSTATE 22P02), before any projection runs. Return such text raw instead so
+    // the read owner projects it in JavaScript, mirroring the SQLite deep fallback.
+    // Stored transcript bytes and code units stay untouched.
+    return /* kysely-allow-raw: fence undecodable JSON before any JSONB parsing. */ sql<string>`CASE WHEN ${jsonNativeFieldsValid(db, event)}
+      THEN ${native} ELSE ${event} END`;
   }
   const paths = MODEL_CONTEXT_PRIVATE_METADATA_KEYS.map((key) => `$.message.__openclaw.${key}`);
   const projected = jsonRemovePaths(
@@ -257,11 +264,16 @@ export function projectModelContextNavigationSql(
     const type =
       entryType ??
       /* kysely-allow-raw: Discriminant lookup from the once-parsed event. */ sql`${source} ->> 'type'`;
-    return /* kysely-allow-raw: Parse the event once and keep navigation intermediates native. */ sql<string>`(
+    const native = /* kysely-allow-raw: Parse the event once and keep navigation intermediates native. */ sql<string>`(
       WITH nav_input AS MATERIALIZED (SELECT ${event}::jsonb AS event),
       nav_parts AS MATERIALIZED (SELECT event, event -> 'message' AS message,
         event #> '{message,content}' AS content FROM nav_input)
       SELECT ${postgresModelNavigationSql(source, message, content, type)}::text FROM nav_parts)`;
+    // PostgreSQL rejects JSON text it cannot decode (unmatched surrogate escapes) at
+    // the JSONB cast. Return such events raw: tree and navigation consumers read only
+    // identity fields, which the raw event still parses to in JavaScript.
+    return /* kysely-allow-raw: fence undecodable JSON before any JSONB parsing. */ sql<string>`CASE WHEN ${jsonNativeFieldsValid(db, event)}
+      THEN ${native} ELSE ${event} END`;
   }
   const sqliteEntryType = entryType ?? jsonPathValue(db, event, sql.lit("$.type"));
   const entry = jsonPickObject(db, event, MODEL_CONTEXT_NAVIGATION_KEYS);
@@ -319,9 +331,10 @@ export function projectPostgresModelContextRowsSql(
   rows: Expression<{ seq: number; event_json: string | null; navigation_json: string | null }>,
 ): RawBuilder<{
   seq: number;
-  navigation_json: string;
-  model_bytes: number;
-  retained_bytes: number;
+  navigation_json: string | null;
+  model_bytes: number | null;
+  retained_bytes: number | null;
+  raw_event: string | null;
 }> {
   const event =
     /* kysely-allow-raw: Fixed parsed-event column from this page projection. */ sql.ref<string>(
@@ -342,21 +355,36 @@ export function projectPostgresModelContextRowsSql(
     ),
     /* kysely-allow-raw: Native role lookup in the once-derived message. */ sql`context_parts.message ->> 'role'`,
   );
+  // Events PostgreSQL cannot decode (like unmatched surrogate escapes, SQLSTATE
+  // 22P02) keep their raw text in raw_event with null native projections. The
+  // read owner projects them in JavaScript, mirroring the SQLite deep fallback;
+  // stored transcript bytes stay untouched.
   return /* kysely-allow-raw: One bounded read shares parsed JSONB and native model bytes across its projections. */ sql`(
-    WITH context_input AS MATERIALIZED (
-      SELECT seq, CASE WHEN navigation_json IS NULL THEN event_json::jsonb END AS event,
-        navigation_json::jsonb AS metadata FROM (${rows}) AS selected
+    WITH context_decodable AS MATERIALIZED (
+      SELECT seq, event_json, navigation_json,
+        event_json IS NOT NULL AND coalesce(pg_input_is_valid(event_json, 'jsonb'), false) AS decodable
+      FROM (${rows}) AS selected
+    ), context_input AS MATERIALIZED (
+      SELECT seq,
+        CASE WHEN navigation_json IS NULL AND decodable THEN event_json::jsonb END AS event,
+        CASE WHEN navigation_json IS NULL AND event_json IS NOT NULL AND NOT decodable THEN event_json END AS raw_event,
+        CASE WHEN navigation_json IS NOT NULL THEN navigation_json::jsonb END AS metadata
+      FROM context_decodable
     ), context_parts AS MATERIALIZED (
       SELECT *, event -> 'message' AS message, event #> '{message,content}' AS content FROM context_input
     ), context_projected AS MATERIALIZED (
       SELECT *, ${model} AS model FROM context_parts
     ) SELECT seq,
-      CASE WHEN metadata IS NULL THEN ${postgresModelNavigationSql(event, message, content, type)}::text
+      CASE WHEN raw_event IS NOT NULL THEN NULL
+        WHEN metadata IS NULL THEN ${postgresModelNavigationSql(event, message, content, type)}::text
         ELSE (metadata -> 'model')::text END AS navigation_json,
-      CASE WHEN metadata IS NULL THEN octet_length(model::text)
+      CASE WHEN raw_event IS NOT NULL THEN NULL
+        WHEN metadata IS NULL THEN octet_length(model::text)
         ELSE (metadata ->> 'modelBytes')::double precision END AS model_bytes,
-      CASE WHEN metadata IS NULL THEN octet_length((model #- '{message,providerReplay}')::text)
-        ELSE (metadata ->> 'modelWithoutCheckpointBytes')::double precision END AS retained_bytes
+      CASE WHEN raw_event IS NOT NULL THEN NULL
+        WHEN metadata IS NULL THEN octet_length((model #- '{message,providerReplay}')::text)
+        ELSE (metadata ->> 'modelWithoutCheckpointBytes')::double precision END AS retained_bytes,
+      raw_event
     FROM context_projected ORDER BY seq
   )`;
 }
