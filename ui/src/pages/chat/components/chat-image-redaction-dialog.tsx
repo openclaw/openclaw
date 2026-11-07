@@ -1,4 +1,4 @@
-import { createSignal, onSettled } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import { withPromiseModalHost } from "../../../components/promise-modal-host.ts";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerImageRedactionEnglish } from "../../../i18n/locales/en-image-redaction.ts";
@@ -9,17 +9,45 @@ import { paintImageRedactions, type ImageRedactionRectangle } from "./chat-image
 registerEnglishCatalog(registerChatComposerEnglish);
 registerEnglishCatalog(registerImageRedactionEnglish);
 
-export async function showImageRedaction(blob: Blob, signal?: AbortSignal): Promise<string | null> {
+function RetireRedaction(props: { finish: () => void }) {
+  onSettled(() => props.finish());
+  return null;
+}
+
+export async function showImageRedaction(
+  blob: Blob,
+  scope: {
+    signal: AbortSignal;
+    isCurrent: () => boolean;
+    canApply: () => boolean;
+    apply: (dataUrl: string) => boolean;
+  },
+): Promise<void> {
   const image = await createImageBitmap(blob);
   try {
-    if (signal?.aborted) {
-      return null;
+    if (!scope.isCurrent() || !scope.canApply()) {
+      return;
     }
     if (image.width * image.height > 16_000_000) {
       throw new Error(t("chat.attachments.redactionTooLarge"));
     }
-    return await withPromiseModalHost<string | null>({ signal, value: null }, (modal) =>
-      modal.render(() => <ImageRedaction image={image} onFinish={modal.finish} />),
+    return await withPromiseModalHost<void>({ signal: scope.signal, value: undefined }, (modal) =>
+      modal.render(() => (
+        <Show
+          when={scope.isCurrent()}
+          fallback={<RetireRedaction finish={() => modal.finish(undefined)} />}
+        >
+          <ImageRedaction
+            image={image}
+            disabled={!scope.canApply()}
+            onFinish={(result) => {
+              if (result === null || scope.apply(result)) {
+                modal.finish(undefined);
+              }
+            }}
+          />
+        </Show>
+      )),
     );
   } finally {
     image.close();
@@ -28,6 +56,7 @@ export async function showImageRedaction(blob: Blob, signal?: AbortSignal): Prom
 
 export function ImageRedaction(props: {
   image: ImageBitmap;
+  disabled?: boolean;
   onFinish: (value: string | null) => void;
 }) {
   const drag = createPointerDrag();
@@ -152,7 +181,7 @@ export function ImageRedaction(props: {
           <button
             class="btn primary"
             type="button"
-            disabled={count() === 0}
+            disabled={props.disabled || count() === 0}
             onClick={() => {
               drag.cancel();
               props.onFinish(canvas.toDataURL("image/png"));

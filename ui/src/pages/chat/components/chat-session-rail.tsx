@@ -192,6 +192,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       attachmentReads: reads,
       readSignal,
       attachmentLimits: props.attachmentLimits,
+      cameraActive: props.presented,
       selectionContextOnly: true,
       imagesOnly: true,
       disabled: !props.connected,

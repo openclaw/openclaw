@@ -272,6 +272,7 @@ function ChatComposerView(input: ChatViewInput) {
   return (
     <ChatComposer
       {...input.props}
+      cameraActive={input.presented && input.props.cameraActive !== false}
       questions={input.questions}
       getTranscriptElement={input.getTranscriptElement}
       getScrollToLatestElement={input.getScrollToLatestElement}
