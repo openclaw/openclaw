@@ -1,0 +1,3 @@
+# Regressions for Kie and PixVerse video polling honoring the provider's private-network
+# request policy through the real guarded fetch path (the existing provider tests mock it out).
+98

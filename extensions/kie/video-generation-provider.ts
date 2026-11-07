@@ -404,7 +404,7 @@ export function buildKieVideoGenerationProvider(): VideoGenerationProvider {
         deadline,
         defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         fetchFn: fetch,
-        allowPrivateNetwork: http.allowPrivateNetwork,
+        ssrfPolicy: { allowPrivateNetwork: http.allowPrivateNetwork },
         dispatcherPolicy: http.dispatcherPolicy,
         maxAttempts: Math.ceil((req.timeoutMs ?? DEFAULT_TIMEOUT_MS) / POLL_INTERVAL_MS),
         pollIntervalMs: POLL_INTERVAL_MS,
