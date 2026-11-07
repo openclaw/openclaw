@@ -73,7 +73,7 @@ it("loads Devices from the connection current after the route module yield", asy
   );
   const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
   onTestFinished(() => runtimeConfig.dispose());
-  const refresh = vi.spyOn(runtimeConfig, "refresh").mockResolvedValue(undefined);
+  vi.spyOn(runtimeConfig, "refresh").mockResolvedValue(undefined);
   const context = {
     gateway: harness.gateway,
     runtimeConfig,
@@ -91,7 +91,6 @@ it("loads Devices from the connection current after the route module yield", asy
 
   expect(oldRequest).not.toHaveBeenCalled();
   expect(currentRequest).toHaveBeenCalledWith("node.list", {});
-  expect(refresh).toHaveBeenCalledExactlyOnceWith({ background: true });
   expect(data).toMatchObject({
     gateway: harness.gateway,
     gatewaySnapshot: harness.gateway.snapshot,

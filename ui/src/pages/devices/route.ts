@@ -22,8 +22,6 @@ export const page = defineSolidPage<"devices", ApplicationContext, DevicesRouteD
       const auth = gatewaySnapshot.hello?.auth ?? null;
       const canPair = !auth || hasOperatorPairingAccess(auth);
       const canAdmin = hasOperatorAdminAccess(auth);
-      // Prepare editable bindings independently of inventory and approvals.
-      void context.runtimeConfig.refresh({ background: true }).catch(() => undefined);
       await Promise.all([
         loadNodes(devices),
         Promise.allSettled([

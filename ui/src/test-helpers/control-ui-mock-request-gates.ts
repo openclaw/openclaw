@@ -15,7 +15,7 @@ export function createControlUiMockMethodDelays(initial: Record<string, number |
         window.setTimeout(dispatch, delay ?? 0);
       }
     },
-    set(method: string, delay: number | "forever" | null) {
+    set: (method: string, delay: number | "forever" | null) => {
       if (delay === null) {
         delete delays[method];
       } else {

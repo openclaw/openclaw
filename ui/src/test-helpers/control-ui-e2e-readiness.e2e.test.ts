@@ -182,13 +182,12 @@ suite.define(() => {
         methodDelays: { "sessions.list": "forever" },
         sessions: [{ key, label: "Method-delayed roster", kind: "direct", updatedAt: 1 }],
       });
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("sessions.list");
-      expect(await page.evaluate(() => window.openclawControlUi?.snapshot().rosterReady)).toBe(
-        false,
-      );
+      expect(await row.count()).toBe(0);
       await gateway.setMethodDelay("sessions.list", null);
-      await page.locator(`.sidebar-recent-session[data-session-key="${key}"]`).waitFor();
+      await row.waitFor();
       await waitForControlUiGatewayReady(page);
     });
   });
