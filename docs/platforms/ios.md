@@ -700,6 +700,30 @@ Expected operator flow:
 4. The app publishes `push.apns.register` once it has an APNs token, the operator session is connected, and relay registration succeeds.
 5. After that, `push.test`, reconnect wakes, and wake nudges can use the stored relay-backed registration.
 
+## Unread app-icon badge reconciliation
+
+The app derives its badge from canonical unread **sessions**, including manual unread,
+not from a separate message counter. It requests the authorized cross-agent roster
+with `sessions.list` and `unreadOnly: true`, then uses `totalCount` rather than the
+returned page length. Archived sessions and execution-only subagent sessions are
+excluded; user-openable child conversations count separately.
+
+Reconciliation runs on foreground, authenticated reconnect, session invalidations,
+accepted session mutations, and existing silent-push/background-refresh wakes.
+A failed same-scope read retains the last accepted projection. Leaving an account
+or pairing clears the displayed badge without marking conversations read. Badge
+settings are independent of alert/sound settings; no additional prompt is requested.
+
+The app applies badge values locally. APNs payloads remain badge-free so delayed
+notifications cannot apply an old count to another pairing. If iOS does not execute
+the app, the badge cannot update; background reconciliation is best effort.
+
+**Partial implementation:** automatic assistant-activity APNs wakes are not yet
+wired. Existing device registrations do not bind an authenticated operator profile,
+so selecting disconnected recipients safely requires an accepted registration and
+revocation design. A successful `push.test` is only transport proof, not proof of
+an automatic unread notification or an app-icon update.
+
 ## Background alive beacons
 
 When iOS wakes the app for a silent push, background refresh, or significant-location event, the app attempts a short node reconnect and then calls `node.event` with `event: "node.presence.alive"`. The Gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only after the authenticated node device identity is known.
