@@ -53,7 +53,6 @@ import {
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./shared/legacy-config-migrations.runtime.models.js";
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
-import { prepareExplicitModelReplacement } from "./shared/model-replacement-preparation.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import {
   resolveConfigWideDoctorPluginMetadataSnapshot,
@@ -379,6 +378,8 @@ export async function runDoctorRepairSequence(params: {
     // Route retirement reads canonical credentials. Finish auth migration first,
     // and preserve model refs while configured plugin installation needs a retry.
     if (params.modelReplacements?.length) {
+      const { prepareExplicitModelReplacement } =
+        await import("./shared/model-replacement-preparation.js");
       appendRepairNotes(
         await prepareExplicitModelReplacement({
           cfg: state.candidate,
