@@ -6,7 +6,7 @@ import type * as BoardSchema from "./schema/board.js";
 import type { CanvasDocumentPreviewParams, CanvasDocumentViewParams } from "./schema/canvas.js";
 import type { CatalogBrowseParams, CatalogSearchKeywordsParams } from "./schema/catalog.js";
 import type { CommandsListParams } from "./schema/commands.js";
-import type { CronHistoryParams } from "./schema/cron.js";
+import type { CronHistoryParams, CronLiveOutputParams } from "./schema/cron.js";
 import type {
   EnvironmentsSessionCreateParams,
   EnvironmentsSessionStatusParams,
@@ -47,6 +47,7 @@ export type GatewayCoreRequestParams = {
   "storage.locations.probe": StorageLocationsProbeParams;
   "presence.activity": PresenceActivityParams;
   "cron.history": CronHistoryParams;
+  "cron.liveOutput": CronLiveOutputParams;
   "users.personalFile.get": UsersSchema.UsersPersonalFileGetParams;
   "users.personalFile.set": UsersSchema.UsersPersonalFileSetParams;
   "canvas.document.preview": CanvasDocumentPreviewParams;

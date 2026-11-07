@@ -366,6 +366,16 @@ const enCron = {
         "Couldn’t identify this conversation. Refresh the activity history and try again.",
       next: "Next {rel}",
     },
+    liveOutput: {
+      title: "Live output",
+      hint: "Following the running command. Only recent output is kept while it runs.",
+      waiting: "Waiting for output...",
+      truncated: "Earlier output was dropped.",
+      ended: "The run is finishing. Its recorded result will appear in the history below.",
+      unavailable: "Live output is unavailable right now.",
+      jumpToLatest: "Jump to latest",
+      streamLabel: "Live command output",
+    },
     events: {
       label: "Event",
       server: "MCP server",

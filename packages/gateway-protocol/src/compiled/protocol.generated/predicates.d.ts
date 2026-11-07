@@ -1535,6 +1535,11 @@ export function isCronHistoryParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").CronHistoryParamsSchema
 >;
+export function isCronLiveOutputParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").CronLiveOutputParamsSchema
+>;
 export function isCronScratchGetParams(
   value: unknown,
 ): value is import("typebox").Static<
