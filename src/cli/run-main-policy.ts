@@ -168,7 +168,9 @@ export function shouldStartProxyForCli(argv: string[]): boolean {
 }
 
 /** Bare `openclaw` has no command path, so its launch target decides the TTY rule and proxy routing. */
-export function resolveBareRootLaunchPolicy(target: BareRootLaunchTarget): {
+export function resolveBareRootLaunchPolicy(
+  target: Exclude<BareRootLaunchTarget, { kind: "config-read-failure" }>,
+): {
   ttyMessage: string;
   startProxy: boolean;
 } {

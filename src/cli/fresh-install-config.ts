@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
+import { isConfigReadFailure } from "../config/io.invalid-config.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isNativeSessionCatalogOptOutOnly } from "../plugins/native-session-catalog-config.js";
+import type { BareRootLaunchTarget } from "./run-main.gateway-types.js";
 
 const UNCONFIGURED_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta"]);
 
@@ -61,4 +63,37 @@ export async function shouldStartLocalOnboarding(
     (await readLocalOnboardingStateForConfigAsync(snapshot.path, snapshot.sourceConfig))?.status ===
     "pending"
   );
+}
+
+export async function resolveBareRootLaunchTarget(
+  resolveConfiguredTarget: (
+    config: OpenClawConfig,
+    options: { hasConfiguredGateway: boolean },
+  ) => Promise<BareRootLaunchTarget>,
+): Promise<BareRootLaunchTarget> {
+  const { readConfigSnapshotForEngineSelection } =
+    await import("../commands/config-preflight-snapshot.js");
+  const selected = await readConfigSnapshotForEngineSelection();
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const snapshot =
+    isConfigReadFailure(selected) ||
+    selected.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
+      ? selected
+      : await readConfigFileSnapshot();
+  if (!snapshot.valid) {
+    const { formatConfigReadFailureForCli } = await import("./config-validation-output.js");
+    const diagnostic = formatConfigReadFailureForCli(snapshot);
+    if (diagnostic) {
+      return { kind: "config-read-failure", diagnostic };
+    }
+  }
+  if (await shouldStartLocalOnboarding(snapshot)) {
+    return { kind: "onboarding" };
+  }
+  if (!snapshot.valid) {
+    return { kind: "onboarding", classic: true };
+  }
+  return resolveConfiguredTarget(snapshot.config ?? snapshot.sourceConfig, {
+    hasConfiguredGateway: snapshot.sourceConfig.gateway !== undefined,
+  });
 }
