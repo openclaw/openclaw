@@ -12,9 +12,13 @@
  * All non-build modes consume contiguous bytes, matching the guarded Blob body path.
  * scenarioHashes must match across revisions: tool turns, moved cache boundaries, hook edits.
  * Run five alternating base/candidate arms per workload and instrumentation mode.
+ * --restored replays 199 restored messages with 40 KiB tool results through attempt
+ * preparation and the real transport, appending a tool turn per iteration (use 20).
+ * In restored mode --baseline-dir overlays the owner, including the real serializer.
  * Acceptance: identical wireSha256, lower allocation/CPU per request, no controlled
  * material GC regression. Gate CPU/GC on untraced passes, allocation separately.
- * This measures request preparation, not fetch, provider calls or Gateway latency.
+ * Restored mode includes transport/SSE replay; other modes measure preparation only.
+ * No mode measures live provider calls or whole-Gateway latency.
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
@@ -33,11 +37,12 @@ const { values } = parseArgs({
   options: {
     messages: { type: "string", default: "40" },
     mode: { type: "string", default: "full" },
-    iterations: { type: "string", default: "2000" },
+    iterations: { type: "string" },
     allocation: { type: "boolean", default: false },
     retained: { type: "boolean", default: false },
     "prepared-system": { type: "boolean", default: false },
     images: { type: "boolean", default: false },
+    restored: { type: "boolean", default: false },
     "baseline-dir": { type: "string" },
   },
 });
@@ -49,13 +54,18 @@ assert(
 const messageCount = values.images ? 48 : Number(values.messages);
 const iterations = parseStrictIntegerOption({
   raw: values.iterations,
-  fallback: 2000,
+  fallback: values.restored ? 20 : 2000,
   min: 1,
   label: "iterations",
 });
 if (values["baseline-dir"]) {
   process.env.OPENCLAW_BENCH_BASELINE_DIR = path.resolve(values["baseline-dir"]);
   await import("./worker-retained-heap-preload.js");
+}
+if (values.restored) {
+  const { measureRestoredAnthropicSession } = await import("./anthropic-restored-session.js");
+  await measureRestoredAnthropicSession({ iterations, allocation: values.allocation });
+  process.exit(0);
 }
 const { prepareSystemPrompt, SYSTEM_PROMPT_CACHE_BOUNDARY } =
   await import("../../packages/ai/src/utils/system-prompt-cache-boundary.js");
