@@ -3,9 +3,14 @@ import {
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
+import { resolveSafeProviderId } from "../agents/failover/user-copy.js";
 import type { ModelAuthRefreshOutcome } from "../commands/models/auth-refresh.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MessagePresentation } from "../interactive/payload.js";
-import type { ProviderChannelLoginChoice } from "../plugins/provider-login-options.js";
+import {
+  resolveProviderChannelLoginChoice,
+  type ProviderChannelLoginChoice,
+} from "../plugins/provider-login-options.js";
 import {
   ProviderAuthConfigApplyError,
   ProviderCredentialsSavedError,
@@ -54,6 +59,57 @@ export type ProviderLoginRecovery = {
   hint: string;
   presentation: MessagePresentation;
 };
+
+/**
+ * Tappable sign-in buttons for an unauthenticated provider: one button per
+ * declared login route (for example subscription OAuth versus API key).
+ * Unlike buildProviderLoginRecovery (which requires OAuth evidence), this is
+ * keyed by the failure's provider name, so it only offers routes that channel
+ * login resolution actually returns for that provider; an unsupported
+ * resolution yields no buttons rather than a dead-end `/login` command.
+ * Callers should pass the runtime config when available so disabled-plugin
+ * settings are honored exactly as `/login` honors them. Chat clients cannot
+ * copy bare commands easily, so failure copy must never rely on typed
+ * commands alone.
+ */
+export function buildProviderAuthLoginPresentation(
+  provider?: string,
+  config?: OpenClawConfig,
+): MessagePresentation | undefined {
+  const safeProvider = resolveSafeProviderId(provider);
+  if (!safeProvider) {
+    return undefined;
+  }
+  let choices: ProviderChannelLoginChoice[] | undefined;
+  try {
+    const resolution = resolveProviderChannelLoginChoice(
+      safeProvider,
+      config ? { config } : undefined,
+    );
+    choices =
+      resolution.status === "resolved"
+        ? [resolution.choice]
+        : resolution.status === "ambiguous"
+          ? resolution.choices
+          : undefined;
+  } catch {
+    choices = undefined;
+  }
+  if (!choices || choices.length === 0) {
+    return undefined;
+  }
+  const buttons = choices.slice(0, 4).map((choice) => ({
+    label:
+      choice.mode === "chat" || choice.mode === "sign-in"
+        ? `Sign in — ${choice.label}`
+        : choice.label,
+    action: {
+      type: "command" as const,
+      command: formatProviderLoginCommand(choice.command),
+    },
+  }));
+  return { blocks: [{ type: "buttons", buttons }] };
+}
 
 const AUTH_PROFILE_LOGIN_REASONS = new Set<FailoverReason>([
   "auth",

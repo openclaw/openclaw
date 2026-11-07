@@ -10,6 +10,7 @@ import {
   MODEL_PICKER_CHANGED_MESSAGE,
 } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { formatProviderLoginCommand } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -17,6 +18,7 @@ import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-tran
 import { prepareSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
+  fitsTelegramCallbackData,
   hasTelegramApprovalCallbackPrefix,
   parseTelegramApprovalCallbackData,
 } from "./approval-callback-data.js";
@@ -71,6 +73,7 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 import {
+  buildTelegramNativeCommandCallbackData,
   hasTelegramOpaqueCallbackPrefix,
   parseTelegramNativeCommandCallbackData,
   parseTelegramOpaqueCallbackData,
@@ -557,6 +560,9 @@ export function createTelegramCallbackRouter({
               currentModel: currentSelection.model,
               modelCatalog: modelData.modelCatalog,
               canPersistStickyModelSelection: false,
+              // The shared selection owner enforces the picker auth policy
+              // from these menu facts; this adapter only renders its result.
+              authReadinessMenu: modelData.modelMenu,
               request: {
                 provider: selection.provider,
                 model: selection.model,
@@ -567,6 +573,23 @@ export function createTelegramCallbackRouter({
             }),
           );
           if (applied.status !== "applied") {
+            if (applied.status === "rejected" && applied.reason === "auth" && applied.authBlock) {
+              const authBlock = applied.authBlock;
+              const signInCallback = buildTelegramNativeCommandCallbackData(
+                formatProviderLoginCommand(selection.provider),
+              );
+              const signInRow =
+                authBlock.loginSupported &&
+                signInCallback !== undefined &&
+                fitsTelegramCallbackData(signInCallback)
+                  ? [[{ text: "🔐 Sign in", callback_data: signInCallback }]]
+                  : [];
+              await showModelReply(
+                `⚠️ Model not changed: ${selection.provider}/${selection.model} needs a working sign-in first.\n\n${authBlock.notice}\n\nAfter connecting, select the model again. Your current model is unchanged.`,
+                [...signInRow, ...buildProviderKeyboard(providerInfos)],
+              );
+              return;
+            }
             await showModelReply(`❌ ${applied.message}`, []);
             return;
           }
