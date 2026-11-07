@@ -24,6 +24,11 @@ const distDir = path.join(rootDir, "dist");
 const outputPath = path.join(distDir, "cli-startup-metadata.json");
 const extensionsDir = path.join(rootDir, "extensions");
 const ROOT_HELP_RENDER_TIMEOUT_MS = 120_000;
+const ROOT_HELP_RENDER_PHASES = [
+  "root-help: importing",
+  "root-help: rendering",
+  "root-help: rendered",
+];
 const COMMAND_HELP_RENDER_TIMEOUT_MS = 120_000;
 const COMMAND_HELP_RENDER_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const COMMAND_HELP_RENDER_KILL_GRACE_MS = 5_000;
@@ -455,6 +460,7 @@ async function spawnText(
     onTerminalFailure?: (error: Error) => void;
     signal?: AbortSignal;
     spawnProcess?: typeof spawn;
+    stderrPhases?: readonly string[];
     timeoutMs: number;
   },
 ): Promise<string> {
@@ -530,14 +536,17 @@ async function spawnText(
       kind: Parameters<typeof createSpawnTextFailure>[0]["kind"],
       detail: string,
       cause?: unknown,
-    ) =>
-      createSpawnTextFailure({
+    ) => {
+      // Report only a caller-owned fixed phase, never arbitrary stderr on a timeout.
+      const phase = options.stderrPhases?.findLast((marker) => stderr.includes(marker));
+      return createSpawnTextFailure({
         cause,
-        detail,
+        detail: phase ? `${detail} (last phase: ${phase})` : detail,
         failureMessage: options.failureMessage,
         kind,
         startedAt,
       });
+    };
     const fail = (
       kind: Parameters<typeof createSpawnTextFailure>[0]["kind"],
       detail: string,
@@ -740,11 +749,14 @@ async function renderBundledRootHelpText(
     env: renderContext.env,
   } satisfies RootHelpRenderOptions;
   const inlineModule = [
+    `process.stderr.write(${JSON.stringify(ROOT_HELP_RENDER_PHASES[0] + "\n")});`,
     `const mod = await import(${JSON.stringify(moduleUrl)});`,
     "if (typeof mod.outputRootHelp !== 'function') {",
     `  throw new Error(${JSON.stringify(`Bundle ${bundleIdentity.bundleName} does not export outputRootHelp.`)});`,
     "}",
+    `process.stderr.write(${JSON.stringify(ROOT_HELP_RENDER_PHASES[1] + "\n")});`,
     `await mod.outputRootHelp(${JSON.stringify(renderOptions)});`,
+    `process.stderr.write(${JSON.stringify(ROOT_HELP_RENDER_PHASES[2] + "\n")});`,
     "process.exit(0);",
   ].join("\n");
   return await spawnText(["--input-type=module", "--eval", inlineModule], {
@@ -754,6 +766,7 @@ async function renderBundledRootHelpText(
     failureMessage: `Failed to render bundled root help from ${bundleIdentity.bundleName}`,
     onTerminalFailure: taskContext?.reportFailure,
     signal: taskContext?.signal,
+    stderrPhases: ROOT_HELP_RENDER_PHASES,
     timeoutMs: ROOT_HELP_RENDER_TIMEOUT_MS,
   });
 }
@@ -775,11 +788,14 @@ async function renderSourceRootHelpText(
     env: renderContext.env,
   } satisfies RootHelpRenderOptions;
   const inlineModule = [
+    `process.stderr.write(${JSON.stringify(ROOT_HELP_RENDER_PHASES[0] + "\n")});`,
     `const mod = await import(${JSON.stringify(moduleUrl)});`,
     "if (typeof mod.outputRootHelp !== 'function') {",
     `  throw new Error(${JSON.stringify("Source root-help module does not export outputRootHelp.")});`,
     "}",
+    `process.stderr.write(${JSON.stringify(ROOT_HELP_RENDER_PHASES[1] + "\n")});`,
     `await mod.outputRootHelp(${JSON.stringify(renderOptions)});`,
+    `process.stderr.write(${JSON.stringify(ROOT_HELP_RENDER_PHASES[2] + "\n")});`,
     "process.exit(0);",
   ].join("\n");
   return await spawnText(["--import", "tsx", "--input-type=module", "--eval", inlineModule], {
@@ -788,6 +804,7 @@ async function renderSourceRootHelpText(
     failureMessage: "Failed to render source root help",
     onTerminalFailure: taskContext?.reportFailure,
     signal: taskContext?.signal,
+    stderrPhases: ROOT_HELP_RENDER_PHASES,
     timeoutMs: ROOT_HELP_RENDER_TIMEOUT_MS,
   });
 }

@@ -1,0 +1,4 @@
+# Exact +7 LF lines: +5 extend existing timeout/descendant regression with
+# fixed-phase localization and stderr privacy; +2 establish idle pointer state
+# in the existing theme palette test. No new runtime test case or longer deadline.
+7
