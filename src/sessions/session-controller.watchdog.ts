@@ -67,7 +67,11 @@ export type SessionControllerWatchdog = {
   tick(now?: number): Promise<SessionWatchdogDecision>;
   progress(kind: SessionWatchdogProgress, reason?: string): boolean;
   beginWait(wait: OwnedWait): SessionWatchdogWait;
-  attachAttempt(params: { assertCurrent: () => void }): SessionControllerWatchdogAttempt;
+  attachAttempt(params: {
+    assertCurrent: () => void;
+    /** Nested maintenance shares the current attempt's lifetime without replacing it. */
+    nested?: boolean;
+  }): SessionControllerWatchdogAttempt;
   describeStop(): { staleReason: "no_activity" | "rate_limited"; error: Error };
   beginFinalization(): void;
   beginTerminal(deadlineAtMs?: number): void;
@@ -133,6 +137,7 @@ export function createSessionControllerWatchdog(params: {
   let cleanupAt: number | undefined;
   let executionAt: number | undefined;
   let attempt: SessionControllerWatchdogAttempt | undefined;
+  let attemptReleases: Set<() => void> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let started = false;
   let warningAt: number | undefined;
@@ -482,6 +487,7 @@ export function createSessionControllerWatchdog(params: {
       finalizationWork.clear();
       executions.clear();
       attempt = undefined;
+      attemptReleases = undefined;
     },
     snapshot,
     decide,
@@ -549,7 +555,7 @@ export function createSessionControllerWatchdog(params: {
         finalizationWork.delete(work);
       };
     },
-    attachAttempt({ assertCurrent }) {
+    attachAttempt({ assertCurrent, nested }) {
       if (!current() || recovery) {
         throw new Error("Cannot attach attempt to retired or recovering operation");
       }
@@ -558,7 +564,20 @@ export function createSessionControllerWatchdog(params: {
       if (!current() || recovery || attempt !== previousAttempt) {
         throw new Error("Operation retired while attaching attempt");
       }
-      previousAttempt?.close();
+      const parent = nested ? previousAttempt : undefined;
+      const parentReleases = parent ? attemptReleases : undefined;
+      if (parent) {
+        if (!parent.isCurrent()) {
+          throw new Error("Cannot attach maintenance to a retired attempt");
+        }
+      } else {
+        previousAttempt?.close();
+      }
+      // Maintenance owns its deadline and resources, not the enclosing run's binding.
+      const maintenanceExecution: OwnedExecution | undefined = parent ? {} : undefined;
+      if (maintenanceExecution) {
+        executions.add(maintenanceExecution);
+      }
       let attemptClosed = false;
       const ownedReleases = new Set<() => void>();
       const emittedTools = new Map<string, (completed?: boolean) => void>();
@@ -566,14 +585,14 @@ export function createSessionControllerWatchdog(params: {
       const valid = () =>
         current() &&
         !attemptClosed &&
-        attempt === next &&
+        (parent ? parent.isCurrent() : attempt === next) &&
         live(() => {
           assertCurrent();
           return true;
         }) &&
         current() &&
         !attemptClosed &&
-        attempt === next;
+        (parent ? parent.isCurrent() : attempt === next);
       const next: SessionControllerWatchdogAttempt = {
         isCurrent: valid,
         progress: (kind, nextReason) => valid() && progress(kind, nextReason),
@@ -696,11 +715,19 @@ export function createSessionControllerWatchdog(params: {
         },
         setExecutionDeadline(deadlineAtMs) {
           if (valid()) {
-            executionAt = deadlineAtMs;
+            if (maintenanceExecution) {
+              maintenanceExecution.deadlineAtMs = deadlineAtMs;
+            } else {
+              executionAt = deadlineAtMs;
+            }
           }
         },
         close() {
           attemptClosed = true;
+          parentReleases?.delete(next.close);
+          if (maintenanceExecution) {
+            executions.delete(maintenanceExecution);
+          }
           for (const release of ownedReleases) {
             release();
           }
@@ -709,11 +736,17 @@ export function createSessionControllerWatchdog(params: {
           if (attempt === next) {
             assessment.clear();
             attempt = undefined;
+            attemptReleases = undefined;
             executionAt = undefined;
           }
         },
       };
-      attempt = next;
+      if (parent) {
+        parentReleases?.add(next.close);
+      } else {
+        attempt = next;
+        attemptReleases = ownedReleases;
+      }
       return next;
     },
   };
