@@ -703,6 +703,9 @@ export function createEngineRapidNavigationScenarios(): EngineScenario[] {
         await page.keyboard.press("ControlOrMeta+k");
         await page.locator(".cmd-palette__input").fill("Interaction");
         await page.locator('.cmd-palette__item[aria-selected="true"]').waitFor();
+        await page.waitForFunction(() =>
+          document.querySelector(".cmd-palette__input")?.getAttribute("aria-activedescendant"),
+        );
       },
       run: async (page) => {
         const input = page.locator(".cmd-palette__input");
