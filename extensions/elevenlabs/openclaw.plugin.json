@@ -20,7 +20,8 @@
   "contracts": {
     "speechProviders": ["elevenlabs"],
     "mediaUnderstandingProviders": ["elevenlabs"],
-    "realtimeTranscriptionProviders": ["elevenlabs"]
+    "realtimeTranscriptionProviders": ["elevenlabs"],
+    "tools": ["elevenlabs_dialogue"]
   },
   "mediaUnderstandingProviderMetadata": {
     "elevenlabs": {
