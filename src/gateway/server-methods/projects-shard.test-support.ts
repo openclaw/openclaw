@@ -10,12 +10,16 @@ export const projectConfig = (workspace: string) => ({
   agents: { entries: { main: { workspace } } },
 });
 
-export function expectProjectAccessChanged(
+export function expectProjectListingChanged(
   result: Awaited<ReturnType<typeof invokeProjectMethod>>,
 ) {
   expect(result).toMatchObject({
     ok: false,
-    error: { code: "UNAVAILABLE", message: expect.stringContaining("Project access changed") },
+    error: {
+      code: "UNAVAILABLE",
+      message: "Projects changed while loading. Try again.",
+      retryable: true,
+    },
   });
   expect(result?.payload).toBeUndefined();
 }

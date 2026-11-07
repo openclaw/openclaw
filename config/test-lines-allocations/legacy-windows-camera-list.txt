@@ -1,0 +1,2 @@
+# CLI text and JSON regressions for the released Windows camera-list response.
+19

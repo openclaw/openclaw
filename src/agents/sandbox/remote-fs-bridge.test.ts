@@ -485,9 +485,10 @@ describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shel
     await expect(bridge.readFile({ filePath: "..note.txt", maxBytes: 5 })).resolves.toEqual(
       Buffer.from("hello"),
     );
-    await expect(bridge.readFile({ filePath: "..note.txt", maxBytes: 4 })).rejects.toThrow(
-      /bounded read limit/i,
-    );
+    await expect(bridge.readFile({ filePath: "..note.txt", maxBytes: 4 })).rejects.toMatchObject({
+      code: "too-large",
+      message: expect.stringContaining("bounded read limit"),
+    });
     await expect(bridge.readFile({ filePath: "..note.txt", maxBytes: -1 })).rejects.toThrow(
       /non-negative safe integer/i,
     );

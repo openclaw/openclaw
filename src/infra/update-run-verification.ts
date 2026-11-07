@@ -1,4 +1,6 @@
+import { hasUpdateGatewayStopIntent } from "./update-run-gateway-stop.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import { upsertStep } from "./update-run-step-upsert.js";
 
 export function isUpdateRunVerificationConfirmed(
   verification: UpdateRunRecord["verification"],
@@ -22,6 +24,15 @@ export function recordUpdateRunVerificationRecord(
   // committed after the Gateway read the run but before this transaction.
   if (options.onlyIfRunning && record.status !== "running") {
     return;
+  }
+  // Preserve post-stop liveness independently of readiness and a later operator
+  // stop. Pre-handoff snapshots and patches without a running observation do not count.
+  if (verification.serviceRunning === true && hasUpdateGatewayStopIntent(record)) {
+    upsertStep(record, {
+      step: "service-running",
+      status: "completed",
+      endedAtMs: Date.now(),
+    });
   }
   // A skipped observer cannot revoke the durable receipt of a delivered notice.
   let observedVerification = verification;

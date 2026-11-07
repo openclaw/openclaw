@@ -1,3 +1,4 @@
+import { readFile } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -535,8 +536,17 @@ async function assertWorktreeGitOperationsIdle(
     if (primary.some((name) => ["rebase-merge", "rebase-apply", "BISECT_LOG"].includes(name))) {
       throw busy();
     }
-    const read = async (directory: string, name: string) =>
-      await fs.readFile(path.join(directory, name), "utf8").catch(ignoreMissingPath);
+    // Expected-missing reservations otherwise pay fs/promises' rejection and async stack capture.
+    const read = (directory: string, name: string) =>
+      new Promise<string | undefined>((resolve, reject) => {
+        readFile(path.join(directory, name), "utf8", (error, contents) => {
+          if (error && error.code !== "ENOENT") {
+            reject(error);
+          } else {
+            resolve(error ? undefined : contents);
+          }
+        });
+      });
     // Rebase exec can reattach HEAD; reservations cannot be inferred from detached status.
     // Read only reservation files, with bounded I/O and no per-worktree directory listing.
     const checked = await runTasksWithConcurrency({

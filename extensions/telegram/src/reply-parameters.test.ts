@@ -39,6 +39,7 @@ describe("telegram reply parameters", () => {
     expect(
       buildTelegramThreadReplyParams({
         replyToMessageId: 77,
+        replyQuoteMessageId: 77,
         replyQuoteText: " \n\t",
       }),
     ).toEqual({

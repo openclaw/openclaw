@@ -11,7 +11,11 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
-import { ADMIN_SCOPE } from "./method-scopes.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  openclawIdTunnelRolePolicy,
+} from "./openclaw-id/tunnel-principal.js";
+import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -192,6 +196,15 @@ export function resolveOperatorRolePolicy(
   cfg: OpenClawConfig,
 ): GatewayOperatorRoleDefinition | undefined {
   const actor = resolveGatewayOperatorRoleActor(client);
+  // An OpenClaw ID member's membership role caps its connection, independently of named roles.
+  const principal = client?.internal?.openclawIdPrincipal;
+  if (principal) {
+    if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
+      throw new Error("OpenClaw ID membership authority changed");
+    }
+    client?.internal?.operatorRunAuthority?.assertCurrent();
+    return openclawIdTunnelRolePolicy(principal);
+  }
   if (actor?.kind === "system") {
     return undefined;
   }
@@ -204,6 +217,9 @@ export function resolveOperatorRolePolicy(
     }
     if (authority.profileId !== actor.profileId) {
       throw new Error("Gateway requester profile changed");
+    }
+    if (roleFacts?.policy) {
+      return roleFacts.policy;
     }
     if (!cfg.gateway?.roles || authority.profileId === GATEWAY_OWNER_PROFILE_ID) {
       return undefined;

@@ -11,13 +11,20 @@ import type {
 } from "./workspace-manifest.js";
 import type {
   StagedWorkerWorkspaceInventory,
-  StagedWorkerWorkspaceReadEntry,
+  StagedWorkerWorkspaceResult,
   WorkerWorkspaceGitHistory,
 } from "./workspace-result-inventory.js";
 
 export type WorkspaceComputationHashes = {
   owner: "gateway" | "worker";
   entries: Array<[string, string]>;
+};
+
+export type WorkspaceManifestHostEffects = {
+  "workspace.manifest.read": {
+    input: { knownTreeRoot?: string };
+    output: Uint8Array<ArrayBuffer>;
+  };
 };
 
 export type WorkspaceComputationHashResult<T> = {
@@ -64,6 +71,12 @@ export type WorkspaceManifestValueInputs = {
     prepared: WorkerWorkspaceManifest;
     incoming: WorkerWorkspaceManifest;
   };
+  "workspace.reconcile.patch": {
+    root: string;
+    stagingRoot: string;
+    baseEntries: WorkerWorkspaceManifestEntry[];
+    appliedEntries: WorkerWorkspaceManifestEntry[];
+  };
   "workspace.reconcile.preflight": WorkspacePreflightInput & {
     root: string;
     hashes?: WorkspaceComputationHashes;
@@ -76,6 +89,8 @@ export type WorkspaceStageInputSource<Raw = Uint8Array<ArrayBuffer>> =
       currentManifestRef: string;
       baseManifestRaw: Raw;
       currentManifestRaw: Raw;
+      /** Immutable blob facts supplied by the accepted checkpoint owner, never the worker. */
+      existingObjects?: Array<[string, string]>;
     }
   | {
       publication: {
@@ -109,6 +124,12 @@ export type WorkspaceManifestValueOutputs = {
   "workspace.manifest.tree-input": null;
   "workspace.manifest.serialize": { raw: string; manifestRef: string };
   "workspace.manifest.overlay": WorkspaceManifestCapture;
+  "workspace.reconcile.patch": {
+    patch: Uint8Array<ArrayBuffer>;
+    baseTree: string;
+    basePack: Uint8Array<ArrayBuffer>;
+    basePackSha256: string;
+  };
   "workspace.reconcile.preflight": WorkspaceComputationHashResult<{
     applyPaths: Set<string>;
     conflictPaths: string[];
@@ -122,8 +143,12 @@ export type WorkspaceManifestComputationOperations = {
     output: WorkspaceManifestValueOutputs[Type];
   };
 } & {
+  "workspace.reconcile.diff": {
+    input: { root: string; baseTree: string; currentTree: string };
+    output: Uint8Array<ArrayBuffer>;
+  };
   "workspace.manifest.local": {
-    input: { snapshot: Uint8Array<ArrayBuffer> };
+    input: { owner: string };
     output: LocalWorkspaceManifestValue;
   };
   "workspace.manifest.base-refresh": {
@@ -187,15 +212,19 @@ export type WorkspaceManifestComputationOperations = {
     };
   };
   "workspace.manifest.staged": {
-    input: { root: string; ref: string; buildCacheInputs?: string[] };
-    output: StagedWorkerWorkspaceInventory;
-  };
-  "workspace.manifest.entries": {
     input: {
       root: string;
-      entries: StagedWorkerWorkspaceReadEntry[];
+      ref: string;
+      buildCacheInputs?: string[];
+      stagingRoot?: string;
+      verifyContents?: boolean;
+      reconciliation?: { baseManifestRef: string; alreadyAccepted?: boolean };
     };
-    output: Uint8Array;
+    output: StagedWorkerWorkspaceInventory;
+  };
+  "workspace.manifest.result": {
+    input: WorkspaceManifestComputationOperations["workspace.manifest.staged"]["input"];
+    output: StagedWorkerWorkspaceResult;
   };
   "workspace.manifest.stage-input": {
     input: WorkspaceStageInput;

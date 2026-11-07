@@ -56,6 +56,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     context: () => metadata.current,
     matching: (...args) => matching(...args),
     referenced: (ref) => referenced(ref),
+    readChildLinks: (row) => readChildLinks(row, true),
   });
   const creators = createSessionRowCreatorIndex();
   const membership = createSessionMembershipProjection();
@@ -450,6 +451,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     env,
     state: () => ({
       cfg,
+      stores,
       disposed,
       topologyDirty: topologyDirty || !profiles.isUserProfileCatalogReady(profileCatalogPath),
       registryPrepared: Boolean(inOwnerContext(subagents.snapshotIdentity)),
@@ -555,9 +557,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     for (const unsubscribe of stop) {
       unsubscribe();
     }
-    for (const map of [rows, stores, byStore, byAgent, byParent, byKey, dirty]) {
-      map.clear();
-    }
+    [rows, stores, byStore, byAgent, byParent, byKey, dirty].forEach((map) => map.clear());
     rowFacts.clear();
     creators.dispose();
     recents.dispose();
@@ -640,7 +640,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     readPreparedSpawnedBy,
     describe,
     ...rowRelations.createSessionRowAncestorReads({
-      state: () => ({ cfg, context: metadata.current }),
+      state: () => ({ cfg, context: metadata.current, catalog }),
       referenced,
       lookup,
       prepareExactRows,

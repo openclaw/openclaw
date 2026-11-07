@@ -2,7 +2,11 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import {
+  isConfiguredCommandOwner,
+  prepareCommandOwnerAuthority,
+} from "../../auto-reply/command-auth.js";
+import { prepareChannelOperatorAuthority } from "../../gateway/channel-operator-authority.js";
 import { wrapCurrentPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
 import { prepareUserChannelIdentityAuthority } from "../../state/user-channel-identity-operations.js";
@@ -387,10 +391,31 @@ async function resolveChannelMessageIngressForOwner(
       verifiedPrincipal && participantGatewayContext
         ? await prepareUserChannelIdentityAuthority(verifiedPrincipal)
         : undefined;
-    const commandOwnerAuthority =
+    // An admitted sender can match an explicit configured owner without
+    // upgrading its asserted channel identifier into an attested personal link.
+    const commandOwnerPrincipal =
+      verifiedPrincipal ??
+      (subject.identifiers[0]?.authentication === "asserted" &&
+      senderId &&
+      participantGatewayContext &&
+      isConfiguredCommandOwner(participantGatewayContext.getRuntimeConfig(), {
+        channel: channelId,
+        accountId: params.accountId,
+        senderId,
+      })
+        ? { channelId, accountId: params.accountId ?? DEFAULT_ACCOUNT_ID, senderId }
+        : undefined);
+    const operatorAuthority =
       verifiedPrincipal && participantGatewayContext
-        ? await prepareCommandOwnerAuthority(participantGatewayContext.getRuntimeConfig(), {
+        ? await prepareChannelOperatorAuthority(participantGatewayContext.getRuntimeConfig(), {
             identity: verifiedPrincipal,
+            prepared: requester,
+          })
+        : undefined;
+    const commandOwnerAuthority =
+      commandOwnerPrincipal && participantGatewayContext
+        ? await prepareCommandOwnerAuthority(participantGatewayContext.getRuntimeConfig(), {
+            identity: commandOwnerPrincipal,
             prepared: requester,
           })
         : undefined;
@@ -422,7 +447,9 @@ async function resolveChannelMessageIngressForOwner(
             isCurrent: requester.isCurrent,
           }
         : undefined,
+      operatorAuthority,
       commandOwnerAuthority,
+      commandOwnerPrincipal,
       promptedAt,
       owner: participantOwner,
       gatewayContext: participantGatewayContext,

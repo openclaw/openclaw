@@ -3,12 +3,9 @@ import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import { describe, expect, it } from "vitest";
 import { createOpenAICompletionsTransportStreamFn } from "../../../packages/ai/src/transports/openai-completions-transport.js";
 import { materializeRuntimeConfig } from "../../config/materialize.js";
-import type {
-  ModelCompatConfig,
-  ModelDefinitionConfig,
-  ModelProviderConfig,
-} from "../../config/types.models.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ModelCompatConfig } from "../../config/zod-schema.model-compat.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";

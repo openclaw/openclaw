@@ -65,7 +65,8 @@ const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 
 const closeGateway = createGatewayCloseTestHandlerFactory(await import("./server-close.js"));
-const { finishGatewayRestartTrace, startGatewayRestartTrace } = await import("./restart-trace.js");
+const { finishGatewayRestartTrace, startGatewayRestartTrace, formatGatewayPendingCloseSteps } =
+  await import("./restart-trace.js");
 type GatewayCloseClient = GatewayCloseParams["clients"] extends Set<infer T> ? T : never;
 type DrainActiveSessionsForShutdown = NonNullable<
   GatewayCloseParams["drainActiveSessionsForShutdown"]
@@ -156,7 +157,7 @@ describe("createGatewayCloseHandler", () => {
     sharedStateLifecycle,
   });
 
-  it.each(["shutdown", "pre-restart", "harness", "sdk"] as const)(
+  it.each(["shutdown", "pre-restart", "harness", "sdk", "session"] as const)(
     "retains shared SQLite through actual %s cleanup after grace",
     async (owner) => {
       const { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
@@ -188,7 +189,6 @@ describe("createGatewayCloseHandler", () => {
       await inspection.release();
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const finished = createDeferredCore();
       const reads: unknown[] = [];
       const failures: unknown[] = [];
       const cleanup = vi.fn(async () => {
@@ -196,22 +196,28 @@ describe("createGatewayCloseHandler", () => {
         try {
           await release.promise;
           reads.push(database.db.prepare("SELECT 1 AS value").get());
-          expect(sdkDatabase.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
-          expect(preparedDatabase.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
+          for (const db of [sdkDatabase, preparedDatabase]) {
+            expect(db.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
+          }
         } catch (error) {
           failures.push(error);
-        } finally {
-          finished.resolve();
         }
       });
       const eventKey = `gateway:${owner === "pre-restart" ? "pre-restart" : "shutdown"}`;
-      if (owner === "sdk") {
-        await expect(
-          sdkHost.track(async () => {
-            void trackAsyncWork(cleanup);
-            return "public SDK result";
-          }),
-        ).resolves.toBe("public SDK result");
+      if (owner === "session") {
+        const { source, release: releaseSource } = await createCloseSource(
+          "retained-session",
+          {},
+          { holdProducer: true },
+        );
+        source.input.abortSignal.addEventListener(
+          "abort",
+          () => void cleanup().then(releaseSource),
+        );
+      } else if (owner === "sdk") {
+        await sdkHost.track(async () => {
+          void trackAsyncWork(cleanup);
+        });
       } else if (owner === "harness") {
         const harnesses = await vi.importActual<typeof import("../agents/harness/registry.js")>(
           "../agents/harness/registry.js",
@@ -231,9 +237,7 @@ describe("createGatewayCloseHandler", () => {
         hooks.registerInternalHook(eventKey, cleanup);
         mocks.triggerInternalHook.mockImplementation(hooks.triggerInternalHook);
       }
-      const httpClose = vi.fn((callback: (error?: Error | null) => void) => callback(null));
       const close = createGatewayCloseHandler({
-        httpServer: createHttpServer(httpClose) as never,
         closeSdkResources: () => sdkHost.close(),
         drainSdkWork: () => sdkHost.drainWork(),
       });
@@ -247,26 +251,23 @@ describe("createGatewayCloseHandler", () => {
         // Advance the owner's grace and both retained-work joins.
         await vi.advanceTimersByTimeAsync(15_000);
         expect(isGatewayCleanupRetainedError(await closing)).toBe(true);
+        if (owner === "session") {
+          expect(formatGatewayPendingCloseSteps()).toContain("session-admissions");
+        }
         expect(database.db.isOpen).toBe(true);
-        expect(sdkDatabase.isOpen).toBe(true);
-        expect(preparedDatabase.isOpen).toBe(true);
+        expect([sdkDatabase.isOpen, preparedDatabase.isOpen]).toEqual([true, true]);
         expect(sdkDisposalReads).toEqual([]);
         expect(sharedStateLifecycle.has("open")).toBe(true);
-        release.resolve();
-        await finished.promise;
-        expect(failures).toEqual([]);
-        expect(reads).toEqual([{ value: 1 }]);
       } finally {
         release.resolve();
-        await finished.promise;
+        await cleanup.mock.results[0]?.value;
         await closing;
         await sdkHost.close().catch(() => undefined);
-        if (sdkDatabase.isOpen) {
-          sdkDatabase.close();
-        }
         unregisterPrepared();
-        if (preparedDatabase.isOpen) {
-          preparedDatabase.close();
+        for (const db of [sdkDatabase, preparedDatabase]) {
+          if (db.isOpen) {
+            db.close();
+          }
         }
         hooks.unregisterInternalHook(eventKey, cleanup);
         vi.useRealTimers();
@@ -274,7 +275,6 @@ describe("createGatewayCloseHandler", () => {
         await state.cleanup();
         sharedStateLifecycle.clear();
       }
-      expect(cleanup).toHaveBeenCalledOnce();
       expect(failures).toEqual([]);
       expect(reads).toEqual([{ value: 1 }]);
     },

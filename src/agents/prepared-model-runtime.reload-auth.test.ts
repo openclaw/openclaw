@@ -6,16 +6,18 @@ import {
 } from "./prepared-model-runtime.test-harness.js";
 import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createChannelIngressDrainOwner } from "../channels/message/ingress-drain.js";
 import {
   createTestIngressQueue,
   withTempState,
 } from "../channels/message/ingress-drain.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { deferGatewayRestartUntilIdle } from "../infra/restart.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { isGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import {
   beginPreparedModelRuntimePluginDrain,
   acquireAgentRunPreparedModelRuntime,
@@ -213,6 +215,85 @@ describe("prepared model runtime reload auth adoption", () => {
       });
     },
   );
+
+  it("preserves inbound recovery attempts while restart preparation is live and resumes after cancellation", async ({
+    signal,
+  }) => {
+    let now = 10_000;
+    using _ = vi.spyOn(Date, "now").mockImplementation(() => now);
+    await start();
+    const failure = new Error("configured model publication unavailable");
+    mocks.resolveAmbientCredentials.mockRejectedValue(failure);
+    mutate();
+    await expect(dispatch()).rejects.toBe(failure);
+    mocks.resolveAmbientCredentials.mockClear();
+
+    const preparing = createDeferred();
+    const releasePreparation = createDeferred();
+    const prepared = createDeferred();
+    const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const restart = deferGatewayRestartUntilIdle({
+      getPendingCount: () => 0,
+      prepareEmission: async () => {
+        preparing.resolve();
+        try {
+          await releasePreparation.promise;
+        } finally {
+          prepared.resolve();
+        }
+      },
+      emitHooks: { emitRestart },
+    });
+    try {
+      await withinTest(preparing.promise, signal);
+      expect(isGatewayRestartDraining()).toBe(false);
+      await withTempState(async (stateDir) => {
+        const queue = createTestIngressQueue(stateDir, { now: () => now });
+        await queue.enqueue("unavailable", { text: "retained during restart preparation" });
+        const drain = createChannelIngressDrainOwner({
+          queue,
+          now: () => now,
+          dispatchClaimedEvent: async () => {
+            await dispatch();
+          },
+        });
+        try {
+          for (const eligibleAt of [10_000, 15_000]) {
+            now = eligibleAt;
+            expect(await drain.drainOnce()).toEqual({ started: 1 });
+            await drain.waitForIdle();
+            expect(mocks.resolveAmbientCredentials).not.toHaveBeenCalled();
+            expect(await queue.listPending()).toMatchObject([{ id: "unavailable", attempts: 0 }]);
+            expect(await queue.listFailed?.()).toEqual([]);
+          }
+          expect(isGatewayRestartDraining()).toBe(false);
+          restart.cancel();
+          releasePreparation.resolve();
+          await withinTest(prepared.promise, signal);
+          for (const [eligibleAt, attempts] of [
+            [20_000, 1],
+            [25_000, 2],
+          ] as const) {
+            now = eligibleAt;
+            expect(await drain.drainOnce()).toEqual({ started: 1 });
+            await drain.waitForIdle();
+            expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(attempts);
+          }
+          expect(await queue.listPending()).toEqual([]);
+          expect(await queue.listFailed?.()).toMatchObject([
+            { id: "unavailable", reason: "runtime-recovery-failed" },
+          ]);
+          expect(emitRestart).not.toHaveBeenCalled();
+        } finally {
+          drain.dispose();
+        }
+      });
+    } finally {
+      restart.cancel();
+      releasePreparation.resolve();
+      await withinTest(prepared.promise, signal);
+    }
+  });
 
   it("does not record an obsolete catalog attempt after its owner is superseded", async () => {
     const snapshot = await staticSnapshot();

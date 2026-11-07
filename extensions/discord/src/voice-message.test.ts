@@ -245,7 +245,6 @@ describe("sendVoiceMessageDiscord uploads", () => {
     ).toHaveLength(2);
     expect(successfulUpload.wasCanceled()).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(4);
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(4);
     expect(fetchWithSsrFGuardMock.mock.calls.map(([params]) => params.auditContext)).toEqual([
       "discord.voice.upload-url",
       "discord.voice.attachment-upload",

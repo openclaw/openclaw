@@ -80,13 +80,26 @@ if (args[0] === "workspace") {
   state.observations = 0;
   if (state.mode === "delete-failure" && state.pending === "first") failure = "delete failed";
 } else if (args[3] === "list") {
-  if (state.pending && ++state.observations >= 2 && state.mode !== "stuck") {
+  if (args.includes("--limit") || args.includes("--offset") || !args.includes("--page-size")) {
+    throw new Error("unsupported sandbox list arguments");
+  }
+  const tokenIndex = args.indexOf("--page-token");
+  const token = tokenIndex < 0 ? "" : args[tokenIndex + 1];
+  if (!token && state.pending && ++state.observations >= 2 && state.mode !== "stuck") {
     state.names = state.names.filter(name => name !== state.pending);
     state.pending = "";
   }
   if (state.mode === "read-failure" && state.deletes.length) failure = "database is locked";
-  const limit = Number(args[args.indexOf("--limit") + 1]);
-  console.log(state.inventory ?? JSON.stringify(state.names.slice(0, limit).map(name => ({ name }))));
+  const names = [...state.names];
+  if (state.mode === "unowned") names.push("someone-else");
+  if (state.mode === "duplicate") names.push("first");
+  const tokens = names.map((_, index) => index === 0 ? "" : "opaque-page-" + index);
+  const offset = tokens.indexOf(token);
+  if (offset < 0 && names.length) throw new Error("invalid page token");
+  console.log(state.inventory ?? JSON.stringify({
+    sandboxes: names.slice(Math.max(0, offset), Math.max(0, offset) + 1).map(name => ({ name })),
+    next_page_token: tokens[offset + 1] ?? "",
+  }));
 } else {
   throw new Error("unexpected fixture command");
 }
@@ -109,9 +122,23 @@ if (state.mode === "stuck" && state.observations > 0) fs.writeFileSync(stateFile
   };
 }
 
+it.runIf(process.platform !== "win32")(
+  "cleans every inventory page before deleting the workspace",
+  async () => {
+    const fixture = await createCleanupFixture();
+    await fixture.cleanup();
+    expect(await fixture.read()).toMatchObject({
+      names: [],
+      deletes: sandboxNames,
+      workspaceDeletes: 1,
+    });
+  },
+);
+
 it.runIf(process.platform !== "win32").each([
   ["invalid-json", "not json", "", []],
-  ["unowned", '[{"name":"someone-else"}]', "", []],
+  ["unowned", undefined, "Unexpected sandbox inventory", []],
+  ["duplicate", undefined, "Unexpected sandbox inventory", []],
   ["read-failure", undefined, "database is locked", sandboxNames],
   ["delete-failure", undefined, "delete failed", sandboxNames],
   ["stuck", undefined, "120 seconds", ["first"]],
@@ -127,7 +154,7 @@ it.runIf(process.platform !== "win32").each([
         () => startedAt + (fixture.deadlineExpired() ? 120_000 : 0),
       );
     }
-    if (inventory !== undefined || mode === "workspace-failure") {
+    if (inventory !== undefined || ["unowned", "duplicate", "workspace-failure"].includes(mode)) {
       await expect(fixture.cleanup()).rejects.toThrow(message);
     } else {
       const cleanup = fixture.cleanup();

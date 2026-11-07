@@ -118,7 +118,7 @@ async function narrowSendAndStop(touch: boolean): Promise<void> {
       await expectComposerFocus(page);
     }
     const runId = await streamReply(gateway, touch ? undefined : () => expectComposerFocus(page));
-    const stop = page.getByRole("button", { name: "Stop generating" });
+    const stop = page.getByRole("button", { name: "Stop", exact: true });
     await expect.poll(() => stop.isVisible()).toBe(true);
     await textarea.focus();
     if (touch) {
@@ -239,7 +239,7 @@ suite.define(() => {
         .toBe(true);
       await keyboardSend.press("Enter");
       const runId = await streamReply(gateway);
-      const stop = page.getByRole("button", { name: "Stop generating" });
+      const stop = page.getByRole("button", { name: "Stop", exact: true });
       await stop.focus();
       await stop.press("Space");
       const abortRequest = await gateway.waitForRequest("chat.abort");

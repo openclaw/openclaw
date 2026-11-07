@@ -59,6 +59,14 @@ it("derives membership from source models, aliases, wildcards, and explicit empt
         ["second", ["other"], false],
       ],
     },
+    {
+      // A role ceiling must also exclude the model named by the wildcard's literal prefix.
+      policy: { allow: ["vendor/*"], deny: ["vendor/restricted-v1*"] },
+      checks: [
+        ["vendor", ["restricted-v1", "restricted-v1-mini"], false],
+        ["vendor", ["primary", "restricted-v2"], true],
+      ],
+    },
     { policy: undefined, checks: [] },
     { policy: { allow: [] }, models: [], checks: [["vendor", ["primary"], false]] },
   ];

@@ -174,19 +174,17 @@ export function isWindowsPlatform(platform?: string | null): boolean {
   return normalized.startsWith("win");
 }
 
-const WINDOWS_UNSAFE_CMD_META = /[%`]|\$(?=[A-Za-z_{(?$])/;
-
 export function windowsEscapeArg(value: string): { ok: true; escaped: string } | { ok: false } {
   if (value === "") {
     return { ok: true, escaped: '""' };
   }
-  if (WINDOWS_UNSAFE_CMD_META.test(value)) {
+  const escaped = value.replace(/"/g, '""');
+  if (findWindowsUnsupportedToken(`"${escaped}"`)) {
     return { ok: false };
   }
   if (/^[a-zA-Z0-9_./:~\\=-]+$/.test(value)) {
     return { ok: true, escaped: value };
   }
-  const escaped = value.replace(/"/g, '""');
   return { ok: true, escaped: `"${escaped}"` };
 }
 

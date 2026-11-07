@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
@@ -9,21 +8,16 @@ import { Value } from "typebox/value";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { SessionGitHubReadinessResultSchema } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as identity from "../../agents/github-tool-identity.js";
-import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import * as gatewayTransport from "../../agents/tools/gateway.js";
-import { createGitHubPublishTool } from "../../agents/tools/github-publish-tool.js";
-import { runGit } from "../../agents/worktrees/git.js";
-import { insertRegistryWorktree, updateRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { updateRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
-import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   addSessionMember,
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.js";
+import * as readCandidates from "../../config/sessions/session-store-read-candidates.js";
+import * as targetInventory from "../../config/sessions/session-store-target-inventory.js";
 import {
   historyLane,
   projectionLane,
@@ -32,9 +26,11 @@ import {
 } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OpenClawSchema } from "../../config/zod-schema.js";
+import * as sqliteBackup from "../../infra/sqlite-backup.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "../../infra/sqlite-private-directory.js";
+import { SQLITE_SNAPSHOT_PREFIX } from "../../infra/sqlite-snapshot-retirement.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { holdStateRead } from "../../state/github-publication-fixtures.test-support.js";
 import { repositoryRow } from "../../state/github-publication.worker.test-support.js";
 import {
@@ -59,7 +55,6 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import * as oauth from "../github-oauth-lifecycle.js";
 import { digestGitHubPublicationRequest } from "../github-publication-receipt.js";
 import {
   claimGitHubPublicationExecutionFixture,
@@ -67,66 +62,28 @@ import {
   insertRepositoryGitHubPublicationFixture,
 } from "../github-publication-store.test-support.js";
 import { insertGitHubPublicationRequest } from "../github-publication-store.worker.js";
-import * as publicationTarget from "../github-publication-target.js";
-import { createGitHubPublicationCoordinator } from "../github-publication.js";
 import { repositoryGitHubPublicationDigest } from "../github-repository-publication.kernel.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
-import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { sessionKey, sessionId, type ReadFixture } from "./sessions-github-read.test-support.js";
 import {
-  sessionKey,
-  sessionId,
-  withReadFixture,
-  type ReadFixture,
-} from "./sessions-github-read.test-support.js";
+  bind,
+  fixture,
+  git,
+  githubOrigin,
+  temporary,
+  tool,
+} from "./sessions-github-readiness.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
-const githubOrigin = "https://github.com/example/project.git";
 const unbound = {
   policy: { read: "admitted", write: "unknown" },
   custody: { kind: "unbound_workspace" },
   target: { kind: "unknown", reason: "not-qualified" },
   request: { kind: "none", selection: "current" },
+  remedies: [],
 };
-
-async function fixture(
-  run: (f: ReadFixture) => Promise<void>,
-  options: Parameters<typeof withReadFixture>[1] = {},
-) {
-  await withReadFixture(async (f) => {
-    Object.assign(f.context, createContext([], f.context.getRuntimeConfig));
-    const service = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore(),
-      getCommittedRuntimeConfig: f.context.getRuntimeConfig,
-    });
-    f.context.githubPublicationService = service;
-    const forbidden = () => {
-      throw new Error("Readiness attempted an external effect or credential preparation");
-    };
-    const effects = [
-      vi.spyOn(service, "requestForSessionV2").mockImplementation(forbidden),
-      vi.spyOn(service, "preparePersonalStatus").mockImplementation(forbidden),
-      vi.spyOn(service, "personalPending").mockImplementation(forbidden),
-      vi.spyOn(identity, "prepareGitHubPublicationIdentity").mockImplementation(forbidden),
-      vi.spyOn(identity, "prepareGitHubPublicationOptionsIdentity").mockImplementation(forbidden),
-      vi.spyOn(oauth, "requestCurrentGitHubOAuthRefresh").mockImplementation(forbidden),
-      vi.spyOn(publicationTarget, "prepareGitHubPublicationTarget").mockImplementation(forbidden),
-      vi.spyOn(gatewayTransport, "callGatewayTool").mockImplementation(forbidden),
-    ];
-    try {
-      await run(f);
-    } finally {
-      for (const effect of effects) {
-        expect(effect).not.toHaveBeenCalled();
-        effect.mockRestore();
-      }
-      expect(f.personalConnectionStatus).not.toHaveBeenCalled();
-    }
-  }, options);
-}
 
 async function call(f: ReadFixture, params: Record<string, unknown> = {}, internal = false) {
   const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
@@ -151,50 +108,7 @@ async function observe(f: ReadFixture, params: Record<string, unknown> = {}, int
   assert(Value.Check(SessionGitHubReadinessResultSchema, value), JSON.stringify(value));
   return value;
 }
-async function tool(f: ReadFixture, input: Record<string, unknown>) {
-  const publisher = createGitHubPublishTool();
-  // Fixture precondition: supplied arguments satisfy the schema before direct execution.
-  expect(Value.Check(publisher.parameters, input)).toBe(true);
-  return withPluginRuntimeGatewayRequestScope(
-    { context: f.context, client: f.client, isWebchatConnect: () => false },
-    () =>
-      withGatewayToolCallerIdentity(
-        { agentId: "main", sessionKey, gatewayContextResolver: () => f.context },
-        () => publisher.execute("readiness-observation", input),
-      ),
-  );
-}
-async function git(root: string, ...args: string[]) {
-  const result = await runGit(root, args);
-  assert(result.code === 0, result.stderr);
-  return result.stdout.trim();
-}
-async function bind(origin = githubOrigin) {
-  const root = await fs.realpath(temporary.make("readiness-git-"));
-  await git(root, "init", "--initial-branch=feature");
-  await git(root, "config", "user.name", "Publication Fixture");
-  await git(root, "config", "user.email", "publication@example.invalid");
-  await git(root, "config", "commit.gpgsign", "false");
-  await git(root, "commit", "--allow-empty", "-m", "fixture");
-  if (origin) {
-    await git(root, "remote", "add", "origin", origin);
-  }
-  const repository = await managedWorktrees.resolveRepositoryIdentity(root);
-  const worktree = makeWorktreeRecord(repository.repoRoot, randomUUID(), {
-    path: root,
-    repoFingerprint: repository.fingerprint,
-    branch: "feature",
-    ownerId: sessionKey,
-  });
-  await insertRegistryWorktree(process.env, worktree);
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey },
-    {
-      worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
-    },
-  );
-  return worktree;
-}
+
 function seed(worktree: Awaited<ReturnType<typeof bind>>, key = sessionKey) {
   ensureGitHubPublicationSchema(openOpenClawStateDatabase().db);
   const requestId = randomUUID();
@@ -218,31 +132,35 @@ function seed(worktree: Awaited<ReturnType<typeof bind>>, key = sessionKey) {
     }),
   );
 }
+// Readiness reads through the live owner: stored bytes stay unchanged and no private
+// whole-database copy is staged. SQLite's own -wal/-shm on open are not custody changes.
 async function databaseArtifacts(
   paths = [resolveOpenClawStateSqlitePath(), resolveOpenClawAgentSqlitePath({ agentId: "main" })],
 ) {
   const values: Record<string, string> = {};
   for (const pathname of paths) {
-    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
-      try {
-        values[pathname + suffix] = createHash("sha256")
-          .update(await fs.readFile(pathname + suffix))
-          .digest("hex");
-      } catch (error) {
-        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
-          throw error;
-        }
+    try {
+      values[pathname] = createHash("sha256")
+        .update(await fs.readFile(pathname))
+        .digest("hex");
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+        throw error;
       }
     }
   }
-  return values;
+  const staging = resolvePrivateSqliteSnapshotStagingRoot();
+  const copies = (await fs.readdir(staging).catch(() => [] as string[])).filter((name) =>
+    name.startsWith(SQLITE_SNAPSHOT_PREFIX),
+  );
+  return { ...values, snapshotCopies: copies.length };
 }
 async function cold() {
   await closeOpenClawAgentDatabasesAsync();
   await closeStateDatabaseForTest();
 }
 
-it("observes an unbound source through the validated publisher and registered Gateway", async () => {
+it("observes an unbound source without requiring a different bound session", async () => {
   await fixture(async (f) => {
     expect((await tool(f, { action: "readiness" })).details).toMatchObject(unbound);
   });
@@ -254,27 +172,60 @@ it("registers a separate source-qualified read for broad and internal operators"
     }
   });
 });
-it("qualifies real managed Git, retains cached freshness, and never stages files", async () => {
-  await fixture(async (f) => {
-    const worktree = await bind();
-    await fs.writeFile(path.join(worktree.path, "unpublished.txt"), "preserve me");
-    const head = await git(worktree.path, "rev-parse", "HEAD");
-    const status = await git(worktree.path, "status", "--porcelain");
-    const first = await observe(f);
-    expect(first).toMatchObject({
-      custody: { kind: "qualified", source: "worktree" },
-      target: { kind: "supported", basis: "registered-repository", freshness: "observed" },
+it.each(["github.com", "github.example.test"])(
+  "qualifies real managed Git for %s without cross-host cache reuse or file staging",
+  async (host) => {
+    await fixture(async (f) => {
+      const config = f.context.getRuntimeConfig();
+      const selectHost = (selected: string) => {
+        const next = {
+          ...config,
+          gateway: {
+            ...config.gateway,
+            github: {
+              ...config.gateway?.github,
+              host: selected,
+              apiBaseUrl:
+                selected === "github.com" ? "https://api.github.com" : `https://${selected}/api/v3`,
+            },
+          },
+        };
+        expect(OpenClawSchema.safeParse(next).success).toBe(true);
+        setRuntimeConfigSnapshot(next);
+      };
+      selectHost(host);
+      const worktree = await bind(`https://${host}/example/project.git`);
+      await fs.writeFile(path.join(worktree.path, "unpublished.txt"), "preserve me");
+      const head = await git(worktree.path, "rev-parse", "HEAD");
+      const status = await git(worktree.path, "status", "--porcelain");
+      openOpenClawStateDatabase();
+      const backups = vi.spyOn(sqliteBackup, "backupNodeSqliteDatabase");
+      const repositoryReads = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
+      const first = await observe(f);
+      expect(first).toMatchObject({
+        custody: { kind: "qualified", source: "worktree" },
+        target: { kind: "supported", basis: "registered-repository", freshness: "observed" },
+      });
+      expect(repositoryReads).toHaveBeenCalledTimes(1);
+      expect((await observe(f)).target).toMatchObject({ freshness: "cached" });
+      expect(repositoryReads).toHaveBeenCalledTimes(1);
+      selectHost(host === "github.com" ? "github.example.test" : "github.com");
+      expect((await observe(f)).target).toEqual({ kind: "unsupported" });
+      expect(repositoryReads).toHaveBeenCalledTimes(2);
+      selectHost(host);
+      expect((await observe(f)).target).toMatchObject({ kind: "supported", freshness: "cached" });
+      expect(repositoryReads).toHaveBeenCalledTimes(2);
+      expect(backups).not.toHaveBeenCalled();
+      expect(await git(worktree.path, "rev-parse", "HEAD")).toBe(head);
+      expect(await git(worktree.path, "status", "--porcelain")).toBe(status);
+      expect(await fs.readFile(path.join(worktree.path, "unpublished.txt"), "utf8")).toBe(
+        "preserve me",
+      );
+      await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
+      expect((await observe(f)).custody).toEqual({ kind: "changed" });
     });
-    expect((await observe(f)).target).toMatchObject({ freshness: "cached" });
-    expect(await git(worktree.path, "rev-parse", "HEAD")).toBe(head);
-    expect(await git(worktree.path, "status", "--porcelain")).toBe(status);
-    expect(await fs.readFile(path.join(worktree.path, "unpublished.txt"), "utf8")).toBe(
-      "preserve me",
-    );
-    await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
-    expect((await observe(f)).custody).toEqual({ kind: "changed" });
-  });
-});
+  },
+);
 it.each(["", "https://example.test/project.git"])(
   "distinguishes an unsupported origin %s from unbound custody",
   async (origin) => {
@@ -385,6 +336,7 @@ it("observes repository-only shared receipts while personal receipts remain priv
       };
       personal.request_digest = repositoryGitHubPublicationDigest(personal);
       insertRepositoryGitHubPublicationFixture(personal, () => {});
+      const backups = vi.spyOn(sqliteBackup, "backupNodeSqliteDatabase");
       expect(await observe(f)).toMatchObject({
         custody: { kind: "qualified", source: "repository" },
         target: { kind: "supported", basis: "repository-url" },
@@ -402,6 +354,7 @@ it("observes repository-only shared receipts while personal receipts remain priv
         reason: "not-observable",
         selectedRequestId: personal.request_id,
       });
+      expect(backups).not.toHaveBeenCalled();
     },
     { personal: true },
   );
@@ -468,8 +421,8 @@ it.each([
           assertCurrent: () => grant.signal.throwIfAborted(),
         },
       };
-      // Reacquire agent authority from a private snapshot. The live profile catalog
-      // keeps its existing shared-store admission for method-policy checks.
+      // Start cold so the held read reacquires the agent source. The live profile
+      // catalog keeps its existing shared-store admission for method-policy checks.
       await closeOpenClawAgentDatabasesAsync();
       const original = resolveOpenClawAgentSqlitePath({ agentId: "main" });
       const replacement = original + ".replacement";
@@ -525,6 +478,7 @@ it.each([
         }
         held.release();
         const [ok, payload, error] = await pending;
+        expect((await databaseArtifacts([])).snapshotCopies, "no agent snapshot copies").toBe(0);
         if (kind.startsWith("registry-") || kind === "published-replacement") {
           const registered = listOpenClawRegisteredAgentDatabases({ env: process.env }).some(
             (row) => row.agentId === "main" && row.path === original,
@@ -757,8 +711,8 @@ it.each([
         ).toBe(false);
         const before = await databaseArtifacts(sourcePaths);
         expect(before).toHaveProperty(databasePath);
-        expect(before[databasePath + "-wal"]).toBeUndefined();
-        expect(before[databasePath + "-shm"]).toBeUndefined();
+        expect(fsSync.existsSync(databasePath + "-wal")).toBe(false);
+        expect(fsSync.existsSync(databasePath + "-shm")).toBe(false);
         const counts = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 4));
         const create = workerCpu.createCpuTrackedWorker;
         const observer = vi
@@ -784,53 +738,21 @@ it.each([
               setEnvironmentData(key, previous);
             }
           });
-        const hostReads: Record<string, string[]> = { cold: [], warm: [] };
-        let observation: "cold" | "warm" = "cold";
-        const stat = fsSync.statSync;
-        const realpath = fsSync.realpathSync.native;
-        const hostStat = vi.spyOn(fsSync, "statSync").mockImplementation((...args) => {
-          if (args[0] === databasePath) {
-            hostReads[observation]!.push(new Error("statSync").stack ?? "statSync");
-          }
-          return Reflect.apply(stat, fsSync, args);
-        });
-        const hostRealpath = vi
-          .spyOn(fsSync.realpathSync, "native")
-          .mockImplementation((...args) => {
-            if (args[0] === databasePath) {
-              hostReads[observation]!.push(new Error("realpathSync").stack ?? "realpathSync");
-            }
-            return Reflect.apply(realpath, fsSync.realpathSync, args);
-          });
-        const asyncStat = fs.stat;
-        const asyncRealpath = fs.realpath;
-        const hostAsyncStat = vi.spyOn(fs, "stat").mockImplementation((...args) => {
-          if (args[0] === databasePath) {
-            hostReads[observation]!.push(new Error("stat").stack ?? "stat");
-          }
-          return Reflect.apply(asyncStat, fs, args);
-        });
-        const hostAsyncRealpath = vi.spyOn(fs, "realpath").mockImplementation((...args) => {
-          if (args[0] === databasePath) {
-            hostReads[observation]!.push(new Error("realpath").stack ?? "realpath");
-          }
-          return Reflect.apply(asyncRealpath, fs, args);
-        });
-        syncBuiltinESMExports();
+        // Path qualification stays in discovery workers. Live reads still take the
+        // per-read admission identity check every Gateway session read performs.
+        const hostQualification = [
+          vi.spyOn(targetInventory, "prepareSessionStoreTargetInventory"),
+          vi.spyOn(targetInventory, "captureSessionStoreReadCandidates"),
+          vi.spyOn(readCandidates, "captureSessionStoreReadCandidate"),
+        ];
         try {
           expect(await observe(f)).toMatchObject(unbound);
-          observation = "warm";
           expect(await observe(f)).toMatchObject(unbound);
-          hostStat.mockRestore();
-          hostRealpath.mockRestore();
-          hostAsyncStat.mockRestore();
-          hostAsyncRealpath.mockRestore();
-          syncBuiltinESMExports();
           expect(await databaseArtifacts(sourcePaths)).toEqual(before);
-          expect(hostReads, "Gateway must not stat or realpath the original database").toEqual({
-            cold: [],
-            warm: [],
-          });
+          expect(
+            hostQualification.map((spy) => spy.mock.calls.length),
+            "Gateway thread must not qualify session-store paths",
+          ).toEqual([0, 0, 0]);
           const nativeReadCounts = Array.from(counts);
           if (roleReader) {
             const member = f.client.authenticatedUserProfile!.profileId;
@@ -901,7 +823,11 @@ it.each([
           expect(nativeReadCounts[0], "real worker SQLite opens must be observed").toBeGreaterThan(
             0,
           );
-          expect(nativeReadCounts[1], "readiness must open private images, not the source").toBe(0);
+          // A private image of a live multi-GB agent database stalls the whole Gateway.
+          expect(
+            nativeReadCounts[1],
+            "readiness must read the source through its owner, not a private image",
+          ).toBeGreaterThan(0);
           expect(
             nativeReadCounts[2],
             "worker must inspect original source identity",
@@ -911,11 +837,9 @@ it.each([
             "worker must resolve original source identity",
           ).toBeGreaterThan(0);
         } finally {
-          hostStat.mockRestore();
-          hostRealpath.mockRestore();
-          hostAsyncStat.mockRestore();
-          hostAsyncRealpath.mockRestore();
-          syncBuiltinESMExports();
+          for (const spy of hostQualification) {
+            spy.mockRestore();
+          }
           observer.mockRestore();
         }
       },

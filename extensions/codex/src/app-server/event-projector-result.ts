@@ -169,7 +169,10 @@ export abstract class CodexTurnProjection {
     );
     this.contextTokens = options.initialContextTokens;
     this.contextTokensSource = options.initialContextTokens === undefined ? undefined : "resolved";
-    this.diagnostics = new CodexProjectionDiagnostics(threadId, turnId);
+    // Terminal diagnostics remain observable after ordinary projection is retired.
+    this.diagnostics = new CodexProjectionDiagnostics(threadId, turnId, (data) =>
+      emitCodexAgentEvent(this.params, { stream: "codex_app_server.diagnostic", data }),
+    );
     this.nativeToolLifecycleProjector = new CodexNativeToolLifecycleProjector(
       params,
       threadId,
@@ -228,7 +231,12 @@ export abstract class CodexTurnProjection {
     this.reasoningProjection = new CodexReasoningProjection(
       this.settlement.params,
       (event) => this.emitAgentEvent(event),
-      options.onNativePlanUpdate,
+      {
+        turnId,
+        nextTimestamp: this.transcriptCheckpoint.nextTimestamp,
+        checkpointMessage: this.transcriptCheckpoint.enqueue,
+        onNativePlanUpdate: options.onNativePlanUpdate,
+      },
     );
   }
 
@@ -356,7 +364,7 @@ export abstract class CodexTurnProjection {
       runParams,
       turnId,
       upstreamUserText,
-      reasoningText,
+      reasoningMessages: this.reasoningProjection.collectMessages(),
       asyncMessages,
       commentaryMessages,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
@@ -451,6 +459,12 @@ export abstract class CodexTurnProjection {
     for (const toolResult of toolTelemetry.coreTtsToolResults ?? []) {
       transferTtsProvenance?.(toolResult, result, toolAutoDeliveryMediaUrls ?? []);
     }
+    this.diagnostics.recordNoAnswer(
+      runParams.runId,
+      result,
+      completedTurn,
+      toolTelemetry.finalSourceReplyDelivered === true,
+    );
     return result;
   }
 

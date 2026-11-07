@@ -604,6 +604,14 @@ describe("installPluginFromArchive", () => {
         ]);
       } else {
         expectFailedInstallResult(result, PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+        expect(result).toMatchObject({
+          installPolicyWarning: {
+            reason: "review package policy",
+            requestMode: "install",
+            targetName: pluginId,
+            targetType: "plugin",
+          },
+        });
         expect(requests).toHaveLength(1);
       }
       expect(fs.existsSync(path.join(extensionsDir, pluginId, "index.js"))).toBe(approved);

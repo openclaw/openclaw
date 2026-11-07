@@ -324,7 +324,7 @@ describe("service fingerprint", () => {
       mockProcessPlatform(platform);
       const windows = platform === "win32";
       const startup = "C:\\Startup\\Gateway.vbs";
-      const unit = "custom-selected.service";
+      const unit = "openclaw-gateway-selected.service";
       const observedUnit = scenario === "other native unit" ? "custom-sibling.service" : unit;
       const selectedEnv: Record<string, string> = { HOME: home, OPENCLAW_PROFILE: "selected" };
       if (!windows) {
@@ -407,7 +407,7 @@ describe("service fingerprint", () => {
           windows
             ? {}
             : {
-                serviceEnv: selectedEnv,
+                serviceEnv: { ...environment, OPENCLAW_SYSTEMD_UNIT: unit },
                 serviceManagerUid: 501,
               },
         ),

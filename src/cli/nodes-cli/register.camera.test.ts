@@ -153,6 +153,25 @@ describe("nodes camera snap CLI option forwarding", () => {
     await expect(runCamera([option, value])).rejects.toThrow(error);
   });
 
+  it.each([false, true])("lists legacy Windows cameras (JSON: %s)", async (json) => {
+    // Response captured in #181348, with a shortened device ID.
+    vi.mocked(rpc.callNodesGatewayCli).mockResolvedValueOnce({
+      payload: { cameras: [{ DeviceId: "windows-camera", Name: "EasyCamera", IsDefault: true }] },
+    });
+
+    await runCamera(json ? ["--json"] : [], "list");
+
+    if (json) {
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith([
+        { id: "windows-camera", name: "EasyCamera", IsDefault: true },
+      ]);
+    } else {
+      const output = vi.mocked(defaultRuntime.log).mock.calls.join("\n");
+      expect(output).toContain("EasyCamera");
+      expect(output).toContain("windows-camera");
+    }
+  });
+
   it("strips node-reported control characters from the camera list table", async () => {
     vi.mocked(rpc.callNodesGatewayCli).mockResolvedValueOnce({
       payload: {

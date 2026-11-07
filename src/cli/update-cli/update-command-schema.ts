@@ -293,7 +293,7 @@ export async function preflightUpdateCommandSchemas(params: {
   expectedForeground?: true;
   candidateAdmissionChecks?: readonly string[];
   malformedConfig?: ConfigFileSnapshot;
-  opts: Pick<UpdateCommandOptions, "dryRun" | "json" | "run">;
+  opts: Pick<UpdateCommandOptions, "dryRun" | "json" | "run" | "runtimeRecoveryEnv">;
   refuseUpdate: RefuseUpdate;
 }): Promise<
   | {
@@ -439,6 +439,8 @@ export async function preflightUpdateCommandSchemas(params: {
           timeoutMs: updateStepTimeoutMs,
           alreadyCurrent: params.packageAlreadyCurrent,
           service,
+          runtimeRecovery:
+            engineOnly && opts.runtimeRecoveryEnv ? { env: opts.runtimeRecoveryEnv } : undefined,
           installedRoot: params.packageAlreadyCurrent ? root : undefined,
         });
         if (!runtime.ok) {

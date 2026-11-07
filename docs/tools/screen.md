@@ -38,6 +38,14 @@ absent rather than failing at call time.
 | `desktop_show` / `desktop_hide`   | Show or hide a remote desktop              | `environmentId`, `sessionKey`, `dock` (default `right`) |
 | `portal_show` / `portal_hide`     | Show or hide a web application portal      | `portalId`, `sessionKey`, `dock` (default `right`)      |
 
+`github_identity_settings` opens the current agent's **Tools** settings in the
+requesting browser so the operator can reconnect GitHub. It requires the
+`ui-agent-github-settings` client capability. Authorization stays in the existing
+Control UI flow; no credentials or authorization codes enter model context.
+After reconnecting, the agent can check `github_identity_status` again. When the
+client or tool policy does not support this action, open **Settings → Agents →
+Tools** manually.
+
 Every action accepts optional `user`, the person's verified `requester_profile.id`
 from the Control UI message's conversation context. When several people have
 steered the turn, `user` is required; the agent chooses the person who asked or

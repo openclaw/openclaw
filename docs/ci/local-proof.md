@@ -266,6 +266,9 @@ pre-commit run zizmor --all-files
 
 ## Surface ratchets
 
+Release branches keep line limits non-blocking and skip line-count ratchets, except explicit pruning.
+Oxlint emits line-limit warnings rather than disabling the rules, so existing
+size suppressions remain valid while unused non-size suppressions still fail.
 Size, length, count, and measured performance limits are errors locally and
 warnings in GitHub Actions. `scripts/lib/check-limits.mts` owns this decision
 using GitHub's `GITHUB_ACTIONS=true` signal. `CI=1` alone does not soften checks:
@@ -324,12 +327,14 @@ comparison base is positive; non-growing changes pass with an over-ceiling notic
 while runs without a base retain the absolute ceiling check.
 
 When allocation keys or values change, positive effective-ceiling growth must
-not exceed positive net test-line growth against the same comparison base.
-This includes scalar changes in the same diff, prevents overlapping grants
-from counting the same growth twice, and does not forgive inherited debt.
+not exceed net test-line growth plus the comparison base's existing overage,
+floored at zero. An explicitly approved exact grant can reconcile that debt
+without creating extra headroom. This includes scalar changes in the same diff
+and prevents overlapping grants from counting the same growth twice. Debt still
+fails the ceiling check unless a grant covers it.
 Comments do not change credit. Untracked records are ignored; `--staged` reads
 the index exactly. Scalar-only raises retain the explicit review-owned warning
-route and need approval under the
+route. Raises beyond this change's net regression growth need approval under the
 [testing policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#baseline-and-expected-failure-exceptions).
 
 `pnpm check:test-lines-ratchet --prune` folds the measured total into the scalar
@@ -450,10 +455,22 @@ For its remote exceptions, `.crabbox.yaml` defaults to `blacksmith-testbox`.
 That workflow hydrates credentials: untrusted contributor/fork code requires
 secretless fork CI or sanitized direct AWS, never local execution or Testbox.
 The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
-cloud-worker profiles require Crabbox 0.79.2 or newer. This includes task-owned
+cloud-worker profiles require Crabbox 0.80.0 or newer. This includes task-owned
 Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
-Testboxes alive. Missing or older binaries use a verified managed 0.79.2 release
+Testboxes alive. Missing or older binaries use a verified managed 0.80.0 release
 before provider discovery or lease work. The original binary stays untouched.
+
+For native Linux/WSL command-lifecycle or cancellation proof, verify the selected
+binary's runtime pack before allocating a lease. Use a complete matching Crabbox
+distribution, or set `CRABBOX_RUNTIME_ARTIFACTS` to a verified manifest. The
+companions must come from the same frozen source, and the manifest must bind the
+exact controller binary. Follow Crabbox's
+[runtime artifact instructions](https://github.com/openclaw/crabbox/blob/main/scripts/runtime-artifacts/README.md)
+for preparation and verification. A development CLI without a runtime pack uses
+legacy SSH supervision; its version string alone does not establish native
+supervision. Keep CLI-only results separate from native lifecycle and
+cancellation evidence.
+
 Provider readiness and broker authentication still determine
 which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
@@ -474,7 +491,7 @@ The outer GitHub deadline can terminate active SSH commands. Both profiles have
 a separate 15-minute idle limit; active SSH prevents idle expiry, not the outer
 job deadline. Individual test deadlines also remain separate limits. The standard
 workflow accepts an explicit `timeout_minutes` input up to 240 minutes, but
-managed Crabbox 0.79.2 does not forward arbitrary workflow inputs, including
+managed Crabbox 0.80.0 does not forward arbitrary workflow inputs, including
 `timeout_minutes`, and `--ttl` does not extend a Testbox job. Plan routine proof
 within its total-job budget rather than treating TTL or a larger runner as a
 deadline override.
@@ -738,7 +755,7 @@ Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-cl
 
 `.crabbox.yaml` owns provider, sync, and GitHub Actions hydration defaults. Crabbox sync never transfers `.git`, so the hydrated Actions checkout keeps its own remote Git metadata instead of syncing maintainer-local remotes and object stores, and the repo config additionally excludes local runtime/build artifacts (such as `.artifacts` and test reports) that should never be transferred. `.github/workflows/crabbox-hydrate.yml` owns checkout, Node/pnpm setup, `origin/main` fetch, and the non-secret environment handoff for owned-cloud `crabbox run --id <cbx_id>` commands.
 
-Direct leases require Crabbox 0.79.2 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
+Direct leases require Crabbox 0.80.0 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
 
 Plain heartbeats, setup, synchronization, and desktop activity do not extend total lifetime. `run` may extend only while a command executes, subject to provider support, budget, and policy. Creation-fixed providers need sufficient TTL at allocation. `directLeases: deny` requires the configured coordinator route. Do not change providers to avoid that policy. `crabbox list --retained` adds kept terminal resources with unconfirmed cleanup to the default live listing; use exact-ID inspection and a waiting stop to prove cleanup.
 

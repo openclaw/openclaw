@@ -1,12 +1,322 @@
 import { expect, type Page } from "playwright/test";
 import { pathForRoute, type RouteId } from "../../ui/src/app-route-paths.ts";
+import type { BoardSnapshot } from "../../ui/src/lib/board/types.ts";
+import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e-session-urls.ts";
 import {
   navigateToControlUiSession,
+  reconnectMockGateway,
   waitForControlUiRoute,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { parityBaseScenario } from "../control-ui-parity/fixtures.ts";
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
+
+/** A working day's churn in one document, sampled at the same parked route. */
+export function workingDayScenario(
+  rounds: number,
+  mode:
+    | "all"
+    | "sessions"
+    | "sessions-in-page"
+    | "turns"
+    | "routes"
+    | "reconnects"
+    | "overlays" = "all",
+): EngineScenario {
+  const sessions = mode === "all" || mode === "sessions" || mode === "sessions-in-page";
+  const turns = mode === "all" || mode === "turns";
+  const visits = mode === "all" || mode === "routes";
+  const reconnects = mode === "all" || mode === "reconnects";
+  const overlays = mode === "all" || mode === "overlays";
+  const keys = Array.from({ length: 200 }, (_, index) =>
+    index === 0 ? parityBaseScenario.sessionKey! : `agent:main:soak-${index}`,
+  );
+  const settings: RouteId[] = [
+    "connection",
+    "profile",
+    "communications",
+    "notifications",
+    "security",
+    "secrets",
+    "advanced",
+    "approvals",
+    "automation",
+    "mcp",
+    "memory",
+    "search",
+    "talk",
+    "infrastructure",
+    "labs",
+    "updates",
+    "about",
+    "ai-agents",
+    "model-providers",
+    "devices",
+    "cloud-workers",
+    "device",
+    "device-permissions",
+    "skill-settings",
+    "plugin-settings",
+  ];
+  const config = { gateway: { controlUi: { experimental: { templates: true } } } };
+  const board = (revision: number): BoardSnapshot => ({
+    sessionKey: keys[0]!,
+    revision,
+    tabs: [{ tabId: "soak", title: "Soak report", position: 0, chatDock: "right" }],
+    widgets: [
+      {
+        name: "soak-report",
+        tabId: "soak",
+        title: "Soak report",
+        contentKind: "plugin",
+        pluginKind: "session:report",
+        sizeW: 12,
+        sizeH: 4,
+        heightMode: "fixed",
+        position: 0,
+        grantState: "none",
+        revision,
+        instanceId: "soak-report",
+        props: {
+          blocks: [{ type: "metrics", items: [{ label: "Revision", value: `${revision}` }] }],
+        },
+      },
+    ],
+  });
+  return {
+    id: "memory-working-day",
+    route: "/new",
+    expected: `One document: ${mode} churn for ${rounds} rounds, parked on New Session after each round.`,
+    memory: true,
+    explicitOnly: true,
+    fixtureOverrides: () => ({
+      ...parityBaseScenario,
+      terminalEnabled: true,
+      featureMethods: [
+        ...parityBaseScenario.featureMethods!,
+        "terminal.open",
+        "templates.catalog.search",
+        "board.get",
+      ],
+      featureEvents: ["board.changed"],
+      controlUiWidgetKinds: [{ pluginId: "session", kind: "session:report", label: "Report" }],
+      sessions: keys.map((key, index) => ({
+        key,
+        sessionId: `soak-${index}`,
+        agentId: "main",
+        kind: "direct" as const,
+        label: `Soak session ${index}`,
+        updatedAt: 1_800_000_000_000,
+      })),
+      sessionTranscripts: Object.fromEntries(
+        keys.map((key, session) => [
+          key,
+          {
+            messages: Array.from({ length: 100 }, (_, index) => ({
+              role: index % 2 ? "assistant" : "user",
+              content: `Soak session ${session} message ${index}.\n${"Synthetic retained transcript.\n".repeat(4)}`,
+              timestamp: 1_800_000_000_000 + index * 1_000,
+              __openclaw: { id: `soak-${session}-${index}`, seq: index + 1 },
+            })),
+          },
+        ]),
+      ),
+      methodResponses: {
+        ...parityBaseScenario.methodResponses,
+        "config.get": {
+          config,
+          raw: JSON.stringify(config),
+          hash: "soak-config",
+          valid: true,
+          issues: [],
+        },
+        "templates.catalog.search": { entries: [] },
+        "board.get": board(1),
+      },
+    }),
+    prepare: async () => {},
+    run: async (page, gateway, checkpoint) => {
+      if (!checkpoint) {
+        throw new Error("Working-day soak requires memory collection");
+      }
+      const visit = async (id: RouteId) => {
+        // A route-only loop otherwise exceeds WebKit's 100 history writes / 10 seconds.
+        if (mode === "routes") {
+          await page.waitForTimeout(500);
+        }
+        await navigate(page, id);
+      };
+      for (let round = 1; round <= rounds; round++) {
+        if (mode === "sessions-in-page") {
+          await page.evaluate(
+            async (targets) => {
+              const app = window.openclawControlUi;
+              if (!app) {
+                throw new Error("Control UI readiness hook is unavailable");
+              }
+              const basePath = app.snapshot().basePath;
+              const frame = () =>
+                new Promise<void>((resolve) => {
+                  requestAnimationFrame(() => resolve());
+                });
+              for (const { key, path } of targets) {
+                // Match native churn's history-write rate without a driver call per switch.
+                await new Promise<void>((resolve) => {
+                  setTimeout(resolve, 120);
+                });
+                const pathname = basePath + path;
+                app.navigate("chat", { pathname });
+                const deadline = performance.now() + 30_000;
+                await frame();
+                await frame();
+                while (true) {
+                  const state = app.snapshot();
+                  const pane = document.querySelector(".chat-pane-cache__pane--active");
+                  if (
+                    location.pathname === pathname &&
+                    state.routeReady &&
+                    state.route?.status === "success" &&
+                    state.route.pendingMatches.length === 0 &&
+                    state.route.resolvedLocation?.pathname === pathname &&
+                    state.sessionKey === key &&
+                    pane &&
+                    Reflect.get(pane, "sessionKey") === key &&
+                    Reflect.get(pane, "transcriptReady") === true &&
+                    pane.querySelector("textarea")
+                  ) {
+                    break;
+                  }
+                  if (performance.now() >= deadline) {
+                    throw new Error(`In-page session churn did not settle: ${key}`);
+                  }
+                  await frame();
+                }
+              }
+            },
+            keys
+              .slice((round - 1) * 20, round * 20)
+              .map((key) => ({ key, path: controlUiSessionPath(key) })),
+          );
+        }
+        if (mode === "turns" || mode === "overlays") {
+          await navigateToControlUiSession(page, keys[0]!);
+        }
+        for (const [index, candidate] of keys.slice((round - 1) * 20, round * 20).entries()) {
+          if (mode === "sessions-in-page" || (!sessions && (!turns || index % 4 !== 0))) {
+            continue;
+          }
+          const key = sessions ? candidate : keys[0]!;
+          if (sessions) {
+            await navigateToControlUiSession(page, key);
+          }
+          const pane = page.locator(".chat-pane-cache__pane--active");
+          await pane.locator("textarea").first().waitFor();
+          await expect(pane).toHaveJSProperty("sessionKey", key);
+          if (turns && index % 4 === 0) {
+            const turn = (round - 1) * 5 + index / 4;
+            const before = (await gateway.getRequests("chat.send")).length;
+            await pane.locator("textarea").first().fill(`Synthetic soak turn ${turn}`);
+            await pane.locator("textarea").first().press("Enter");
+            const request = await gateway.waitForRequest("chat.send", { after: before });
+            const runId = (request.params as { idempotencyKey: string }).idempotencyKey;
+            let text = "";
+            for (let delta = 1; delta <= 50; delta++) {
+              text += ` token${delta}`;
+              await gateway.emitGatewayEvent("chat", {
+                runId,
+                sessionKey: key,
+                state: "delta",
+                deltaText: ` token${delta}`,
+                message: { role: "assistant", content: [{ type: "text", text }] },
+              });
+            }
+            await pane
+              .locator(".chat-text")
+              .getByText(/token50/u)
+              .waitFor();
+            await gateway.emitChatFinal({
+              runId,
+              sessionKey: key,
+              text: `Soak turn ${turn} complete`,
+            });
+            await pane
+              .locator(".chat-text")
+              .getByText(`Soak turn ${turn} complete`, { exact: true })
+              .waitFor();
+          }
+        }
+        if (overlays) {
+          await page.locator(".chat-pane-cache__pane--active [data-chat-model-select]").click();
+          const search = page.locator(".chat-pane-cache__pane--active [data-chat-model-search]");
+          await search.fill("3");
+          await search.press("Escape");
+          await expect(search).toHaveValue("");
+          await search.press("Escape");
+          await expect(search).not.toBeVisible();
+          await page.keyboard.press("ControlOrMeta+K");
+          await page
+            .locator("openclaw-command-palette .cmd-palette__input:not([disabled])")
+            .waitFor();
+          await page.keyboard.press("Escape");
+          await expect(
+            page.locator("openclaw-command-palette .cmd-palette__input"),
+          ).not.toBeVisible();
+        }
+        if (visits) {
+          for (const { id, ready } of routes) {
+            await visit(id);
+            await page
+              .locator(ready ?? `openclaw-${id}-page`)
+              .first()
+              .waitFor();
+            if (id === "usage") {
+              const before = (await gateway.getRequests("sessions.usage")).length;
+              await page.getByRole("button", { name: "Refresh", exact: true }).click();
+              await gateway.waitForRequest("sessions.usage", { after: before });
+            }
+            if (id === "dashboard") {
+              const before = (await gateway.getRequests("board.get")).length;
+              await gateway.setMethodResponse("board.get", board(round + 1));
+              await gateway.emitGatewayEvent("board.changed", {
+                sessionKey: keys[0],
+                revision: round + 1,
+              });
+              await gateway.waitForRequest("board.get", { after: before });
+              await expect(page.locator(".board-report__metrics dd").first()).toHaveText(
+                `${round + 1}`,
+              );
+            }
+          }
+          for (const id of settings) {
+            await visit(id);
+          }
+        }
+        if (reconnects) {
+          await reconnectMockGateway(page, gateway, `soak-boot-${round}`);
+        }
+        await visit("new-session");
+        await checkpoint(`round-${round}`);
+        console.log(
+          JSON.stringify({
+            mode,
+            soakRound: round,
+            switches: sessions ? round * 20 : 0,
+            streamedTurns: turns ? round * 5 : 0,
+          }),
+        );
+      }
+      return {
+        sessionSwitches: sessions ? rounds * 20 : 0,
+        streamedTurns: turns ? rounds * 5 : 0,
+        streamDeltas: turns ? rounds * 250 : 0,
+        reconnects: reconnects ? rounds : 0,
+        routeVisits: visits ? (routes.length + settings.length) * rounds : 0,
+        pickerCycles: overlays ? rounds : 0,
+        dialogCycles: overlays ? rounds : 0,
+      };
+    },
+  };
+}
 
 async function navigate(page: Page, routeId: RouteId) {
   await page.waitForFunction(() => window.openclawControlUi !== undefined);
@@ -55,7 +365,7 @@ const routes: Array<{ id: RouteId; ready?: string }> = [
   { id: "cron" },
 ];
 
-export function createEngineMemoryScenarios(): EngineScenario[] {
+export function createEngineMemoryScenarios(soakRounds: number): EngineScenario[] {
   const templatesConfig = { gateway: { controlUi: { experimental: { templates: true } } } };
   const routeScenarios: EngineScenario[] = routes.map(({ id, ready }) => ({
     id: `memory-route-${id}`,
@@ -148,6 +458,7 @@ export function createEngineMemoryScenarios(): EngineScenario[] {
     ]),
   );
   return [
+    workingDayScenario(soakRounds),
     ...routeScenarios,
     {
       id: "memory-long-session",

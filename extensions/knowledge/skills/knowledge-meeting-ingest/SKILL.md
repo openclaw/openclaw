@@ -1,6 +1,6 @@
 ---
 name: knowledge-meeting-ingest
-description: Ingest meeting transcripts from any recorder into Knowledge with attendee enrichment, timeline merge, supported decisions and commitments, and verification of substance and sequence. Summary-only input is not a verified meeting ingestion.
+description: Ingest meeting transcripts from any recorder into Knowledge with attendee enrichment, source notes, supported decisions and commitments, and verification of substance and sequence. Summary-only input is not a verified meeting ingestion.
 ---
 
 # Meeting ingestion
@@ -29,11 +29,12 @@ structured claims, then verify them. Read a reference only when its step needs i
 - Speakers are resolved on evidence with a confidence, never guessed. Use every
   real signal; leave a speaker unresolved only when there is none.
 - Every participant (spoke, was addressed, or otherwise took part) gets a
-  profile with a Timeline line and an attendance edge. Invite-list-only names
-  get neither.
+  profile and an `attended` edge whose body is their source note.
+  Invite-list-only names get neither.
 - Every company, project or concept the meeting says something substantive
-  about gets a page (found or created), a Timeline line and links in both
-  directions. Passing mentions don't.
+  about gets a page (found or created), a link from the meeting, and a
+  `discusses` edge (meeting → entity) whose body is its source note. Passing
+  mentions don't. Entity pages get no Timeline line; their Timeline is derived.
 - Pages read like good human notes: names first, few caveats, no process
   commentary.
 - Decisions, commitments and events become claims. Unverified claims don't
@@ -113,7 +114,7 @@ Batch related records ([publish](references/publish.md)).
 - Meeting page per [meeting page](references/meeting-page.md).
 - For each participant and substantive entity, follow the steps in
   `knowledge-entities`' SKILL.md: it resolves the entity, decides whether it gets
-  a page, and writes the profile and Timeline line. Its references with the same
+  a page, and writes the profile and source note. Its references with the same
   names as this skill's are identical copies; use the ones you already read and
   don't reread them. Its only extra reference is enrichment (read its
   "During ingestion" section).
@@ -121,9 +122,11 @@ Batch related records ([publish](references/publish.md)).
   facts and one `source_event: true` event for the meeting itself, with all
   relevant `entities`. Other events keep their own dates.
 - An evidenced `attended` relationship per participant. In the shipped ontology it
-  runs participant → meeting; confirm in the definition. Set `source_page`.
-- Mentioned people with pages get links too. Don't create pages for unknown
-  speakers.
+  runs participant → meeting; confirm in the definition. Set `source_page`. Its
+  body is one sentence on what this person did or said in the meeting.
+- An evidenced `discusses` relationship (meeting → entity) for each substantive
+  non-participant, including mentioned people with pages, with the same kind of
+  one-sentence body. Don't create pages for unknown speakers.
 - For legal or personal content, keep the meeting page factual and limit spread
   to profiles; ask if scope is unclear.
 
@@ -134,10 +137,10 @@ Batch related records ([publish](references/publish.md)).
 Run [verify](references/verify.md) first. Then check:
 
 - **Substance:** required sections have content or a source-grounded reason.
-- **Links:** `knowledge_verify` `expectedLinks` for meeting ↔ each entity, plus
+- **Links:** `knowledge_verify` `expectedLinks` for meeting → each entity, plus
   claim `entities`/`dependencies`, commitment `owner`, and edge
-  `from`/`to`/`label`/`source_page`. Every linked profile has a Timeline line
-  for this meeting.
+  `from`/`to`/`label`/`source_page`. Every linked entity has an `attended` or
+  `discusses` edge with a body for this meeting.
 - **State:** no updated profile has a State topic named for a date or meeting.
 - **Style:** check the drafts in your work files against
   [writing](references/writing.md) before publishing: names first, no stacked
@@ -154,8 +157,9 @@ Run [verify](references/verify.md) first. Then check:
   for related entities. An inversion or impossible place/time is a contradiction;
   never invent transit. Fix and recheck, or record an explicit user waiver as
   WAIVED, not resolved. A waiver covers sequence only. A participant missing from
-  the day's chronicle usually means a missing Timeline line: investigate, don't
-  block. Genuinely ambiguous order is flagged in the report, not blocked.
+  the day's chronicle usually means the meeting's `source_event` claim lacks
+  them in `entities` (an attendance edge alone does not date anyone):
+  investigate, don't block. Genuinely ambiguous order is flagged in the report, not blocked.
 
 **Done when:** all checks pass, or failures are fixed and rechecked.
 

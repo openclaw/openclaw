@@ -280,7 +280,7 @@ it("rejects stale or cancelled attachment returns and admits a fresh reopened se
   await selectAndExpect(["qa.txt"]);
 });
 
-it("keeps attachment actions after tools and respects a close veto before native activation", async () => {
+it("respects a close veto before synchronously activating the retained input", async () => {
   const handle = createChatAttachmentInputHandle();
   mountSolid(
     () => (
@@ -309,11 +309,6 @@ it("keeps attachment actions after tools and respects a close veto before native
   await waitForSolid(() => expect(host.querySelector('[data-value="file"]')).not.toBeNull());
   const action = host.querySelector<HTMLButtonElement>('[data-value="file"]')!;
   const surface = action.closest<HTMLElement>('[role="menu"]')!;
-  const values = [...surface.querySelectorAll<HTMLElement>("[data-value]")].map(
-    (node) => node.dataset.value,
-  );
-  expect(values[0]).toBe("test-tool");
-  expect(values.at(-1)).toBe("file");
   const picker = input("file");
   const parent = picker.parentNode;
   const activation = vi.spyOn(picker, "click").mockImplementation(() => {

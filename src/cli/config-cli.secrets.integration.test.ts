@@ -126,6 +126,32 @@ async function withExecDryRunConfigHarness(
 }
 
 describe("config cli secrets integration", () => {
+  it("redacts inline env reads and preserves the values when saving the displayed map", async () => {
+    const vars = { REDACTION_TEST_INLINE: "synthetic-inline-value" };
+    const envSnapshot = captureEnv([...Object.keys(vars), "REDACTION_TEST_NEW"]);
+    try {
+      await withConfig(JSON.stringify({ env: { vars } }), async ({ configPath }) => {
+        for (const readPath of ["env", "env.vars", "env.vars.REDACTION_TEST_INLINE"]) {
+          await run("get", readPath, "--json");
+          expect(logs.at(-1)).toContain("__OPENCLAW_REDACTED__");
+          expect(logs.at(-1)).not.toContain(vars.REDACTION_TEST_INLINE);
+        }
+        await run("get", "env.vars.REDACTION_TEST_INLINE");
+        expect(logs.at(-1)?.trim()).toBe("__OPENCLAW_REDACTED__");
+        await run("get", "env.vars", "--json");
+        const displayed = JSON.parse(logs.at(-1)!);
+        await set(
+          "env.vars",
+          JSON.stringify({ ...displayed, REDACTION_TEST_NEW: "new" }),
+          "--strict-json",
+        );
+        expect(load(configPath).env.vars).toEqual({ ...vars, REDACTION_TEST_NEW: "new" });
+      });
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
   it.each([
     { name: "literal", token: "existing-gateway-token", redactedToken: "__OPENCLAW_REDACTED__" },
     {

@@ -203,9 +203,7 @@ suite.define(() => {
       .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
       .toBe("1");
     expect(
-      await incognito.evaluate(
-        (element) => element.closest(".new-session-page__incognito-rail") != null,
-      ),
+      await incognito.evaluate((element) => element.closest(".mobile-header__capsule") != null),
     ).toBe(true);
     const [footerBox, attachBox, modelBox] = await Promise.all([
       bounds(footer),
@@ -350,7 +348,7 @@ suite.define(() => {
     await expectLabel(projectTrigger, "packages");
     await pollLocatorText(
       page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
-    ).toBe("Local");
+    ).toBe("This computer");
     await expectAttribute(placeTrigger, "data-worktree", "true");
     await placeTrigger.click();
     await expectValue(checkoutBaseRefInput(page), "release/next");

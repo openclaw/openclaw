@@ -75,6 +75,9 @@ describe("active-memory provider-neutral trigger recall", () => {
     ["reordered words", "flight booking", "booking flight", 0.8, 0.96],
     ["repeated words", "booking a flight", "booking booking flight", 0.5, 0.9],
     ["Unicode and case", "CAFÉ 東京", "café 東京", 1, 1],
+    ["unspaced Chinese", "明天的会议几点开始？", "会议", 0, 0.68],
+    ["unspaced Japanese", "デプロイの手順を教えて", "手順 デプロイ", 0, 0.8],
+    ["Korean particles", "배포 절차를 알려줘", "절차", 0, 0.68],
     ["single-word promotion", "Project status", "project", 0, 0.68],
     ["two of three words", "booking flight", "booking flight seat", 1, 0.7866666667],
     ["upper relevance clamp", "flight booking", "flight booking", 9, 1],
@@ -95,11 +98,8 @@ describe("active-memory provider-neutral trigger recall", () => {
     ["whole words", "This party starts at eight", "art", 0.2],
     ["unrelated message", "Explain SQLite indexes", "flight booking", 0.8],
   ] as const)("rejects weak matches for %s", (_label, message, triggers, score) => {
-    expect(
-      selectStrongTriggerMatches(message, [
-        result({ score, automaticRecall: { eligible: true, triggers } }),
-      ]),
-    ).toEqual([]);
+    const entry = result({ score, automaticRecall: { eligible: true, triggers } });
+    expect(selectStrongTriggerMatches(message, [entry])).toEqual([]);
   });
 
   it("prepares the message once across trigger candidates", () => {

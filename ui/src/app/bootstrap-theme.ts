@@ -3,6 +3,7 @@ import {
   resolveThemeBranding,
 } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createChangeListeners } from "../../../src/shared/listeners.js";
+import { formatUiError } from "../lib/format-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGateway, ApplicationTheme, ApplicationThemePalette } from "./context.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
@@ -34,10 +35,7 @@ function themeBranding(settings: UiPreferences, catalogTheme?: CatalogTheme) {
   );
 }
 
-function subscribeMediaQuery(query: string, onChange: () => void): (() => void) | undefined {
-  if (typeof globalThis.matchMedia !== "function") {
-    return undefined;
-  }
+function subscribeMediaQuery(query: string, onChange: () => void): () => void {
   return listen(globalThis.matchMedia(query), "change", onChange);
 }
 
@@ -87,6 +85,19 @@ function livePreferencesKey(settings: UiPreferences): string {
     ...preferences
   } = settings;
   return JSON.stringify(preferences);
+}
+
+function appearanceKey(settings: UiPreferences): string {
+  return JSON.stringify([
+    settings.theme,
+    settings.themeMode,
+    settings.accent,
+    settings.fontUi,
+    settings.fontChat,
+    settings.textScale,
+    settings.customTheme,
+    settings.background?.visibility,
+  ]);
 }
 
 export function createApplicationTheme(
@@ -171,7 +182,7 @@ export function createApplicationTheme(
       if (!disposed) {
         catalogLoadError = {
           themes: [],
-          error: error instanceof Error ? error.message : String(error),
+          error: formatUiError(error),
         };
         publish();
       }
@@ -205,17 +216,18 @@ export function createApplicationTheme(
   const refresh = (options?: { notify?: boolean }) => {
     const next = loadUiPreferences(gateway.connection.gatewayUrl);
     const changed = livePreferencesKey(next) !== livePreferencesKey(settings);
+    const appearanceChanged = appearanceKey(next) !== appearanceKey(settings);
     settings = next;
-    if (!changed) {
-      // Readiness can change without changing the stored preference values.
-      if (options?.notify) {
-        publish();
-      }
-      return;
+    if (changed) {
+      void loadCatalog();
     }
-    void loadCatalog();
-    publish();
-    syncSystemThemeListener();
+    if (appearanceChanged) {
+      publish();
+      syncSystemThemeListener();
+    } else if (changed || options?.notify) {
+      // Navigation and profile readiness do not reapply or retire the palette.
+      listeners.publish();
+    }
   };
   const stopPreferences = bindUiPreferences({
     gatewayUrl: () => gateway.connection.gatewayUrl,
@@ -269,7 +281,7 @@ export function createApplicationTheme(
     get appliedPalette() {
       return appliedPalette;
     },
-    recordServerSelection: publish,
+    recordServerSelection: listeners.publish,
     setMode(mode: ThemeMode) {
       patchSettings({ themeMode: mode });
     },
@@ -286,7 +298,7 @@ export function createApplicationTheme(
       stopGateway();
       presentationGeneration += 1;
       detachSystemThemeListener();
-      chromeBreakpointCleanup?.();
+      chromeBreakpointCleanup();
       listeners.clear();
     },
   };

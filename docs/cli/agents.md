@@ -42,7 +42,7 @@ For an explicit multi-agent roster, the default badge and JSON `isDefault` field
 use `agents.defaults.systemAgent.agentId`. Doctor preserves the migrated default
 there across restarts. Without a designation, every entry reports `isDefault: false`;
 set one with `openclaw config set agents.defaults.systemAgent.agentId <id>`.
-The Control UI's **Set Default** action writes the same designation.
+The Control UI's **Set default** action writes the same designation.
 
 Provider-status labels include optional account display names beside account IDs.
 Routing rules continue to identify accounts by channel and account ID.
@@ -80,6 +80,13 @@ wait for it to exit, and rerun the same command.
 - `main` is an ordinary agent id. Recreating it after another agent owns the installation can require `openclaw doctor --fix` to repair legacy session or shared-auth ownership first.
 - Interactive mode offers optional auth copying. When the fleet has no default agent, choose a source agent or **Skip copying auth profiles** (the default). Selecting a source still requires confirmation before copying. Only portable static credentials (`api_key` and static `token` profiles) are copied unless a credential opts out with `copyToAgents: false`; OAuth refresh-token profiles are not copied unless a provider opts in with `copyToAgents: true`. Without a copy, OAuth stays available through the shared auth base. If the source agent has its own local OAuth profile, sign in separately for the new agent.
 - An agent id whose deletion has finished can be recreated with `agents add`. Creation claims the finished deletion record when it publishes the new agent, including when the wizard copies or configures auth. An id whose deletion cleanup is still pending is refused until cleanup finishes.
+
+With PostgreSQL agent storage, a retained local anchor must still match an initialized
+server namespace. If that namespace is missing, empty, or belongs to another store,
+creation refuses before changing the workspace or configuration. Restore a matching
+backup, or follow the [manual discard procedure](/gateway/postgresql#recover-a-retained-agent-store)
+if the history is intentionally gone. A failed first creation can be retried normally;
+an incomplete anchor left by an older version requires the same conservative recovery.
 
 #### Role templates
 

@@ -20,6 +20,7 @@ vi.mock("../../scripts/check-tsgo-core-boundary.mts", () => ({
 afterEach(() => inspectGraphs.mockReset());
 
 const source = "src/value.ts";
+const allocation = "config/test-lines-allocations/ci-example.txt";
 const extension = "extensions/example/value.ts";
 function workspace(files = [source]) {
   const cwd = tempDirs.make("ci-type-");
@@ -65,15 +66,19 @@ it("rejects empty, unowned, duplicate and overlapping graphs", () => {
   }
 });
 
-it.for([[], ["src/types/runtime.d.ts"], ["package.json"], [source, "src/deleted.ts"]])(
-  "keeps uncertain or deleted input full: %j",
-  async (paths) => {
-    if (paths.length !== 2) {
-      expect(selectChangedCiTsgoGraphs(paths, graphs())).toBeUndefined();
-    }
-    await expectFull(paths, paths.length === 2 ? { cwd: workspace() } : {});
-  },
-);
+it.for([
+  [],
+  ["src/types/runtime.d.ts"],
+  ["package.json"],
+  [allocation],
+  [source, "src/deleted.ts"],
+  [allocation, "src/deleted.ts"],
+])("keeps uncertain or deleted input full: %j", async (paths) => {
+  if (paths.length !== 2) {
+    expect(selectChangedCiTsgoGraphs(paths, graphs())).toBeUndefined();
+  }
+  await expectFull(paths, paths.length === 2 ? { cwd: workspace() } : {});
+});
 
 it("requires a parallel owner for noncore-only discovery", async () => {
   const paths = [extension, "docs/value.md", "ui/styles/value.css"];
@@ -126,17 +131,18 @@ it.each([
   expect(selectChangedCiTsgoGraphs(paths, inventory, { scope: "noncore" })).toBeUndefined();
 });
 
-it("checks all and only root partitions consuming a shared helper", async () => {
+it.each([false, true])("checks all root consumers with allocation=%s", async (withAllocation) => {
   const file = "test/helpers/shared-type.ts";
+  const paths = withAllocation ? [file, allocation] : [file];
   const consumers = ["test-root-tooling", "test-root-e2e"];
   const cwd = workspace([file]);
   const inventory = graphs((name) =>
     consumers.some((consumer) => consumer === name) ? [file] : [],
   );
   inspectGraphs.mockResolvedValue(inventory);
-  const plan = await createChangedCiTypeCheckPlan([file], { cwd });
+  const plan = await createChangedCiTypeCheckPlan(paths, { cwd });
   expect(plan.mode).toBe("changed");
   expect(plan.graphs.map(({ name }) => name)).toEqual(consumers);
   inspectGraphs.mockResolvedValue(inventory.slice(0, -1));
-  await expectFull([file], { cwd }, true);
+  await expectFull(paths, { cwd }, true);
 });
