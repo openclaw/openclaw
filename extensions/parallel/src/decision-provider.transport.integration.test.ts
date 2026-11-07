@@ -1,7 +1,6 @@
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { DecisionBatchV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { closeProviderTransportDispatcherPool } from "../../../src/agents/provider-transport-dispatcher-pool.js";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { buildParallelDecisionProvider } from "./decision-provider.js";
 // Prepare module loading before measuring the network/authority boundary.
@@ -36,29 +35,32 @@ const batch: DecisionBatchV2 = {
 async function fixture(hostname = "127.0.0.1") {
   const requests: { headers: IncomingHttpHeaders; body: string }[] = [];
   let connections = 0;
-  const server = createServer(async (request, response) => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) {
-      chunks.push(Buffer.from(chunk));
-    }
-    requests.push({ headers: request.headers, body: Buffer.concat(chunks).toString() });
-    response.setHeader("Content-Type", "application/json");
-    response.end(
-      JSON.stringify({
-        mode: "fast",
-        decision_id: "decisions_synthetic",
-        answers: { q: { type: "noul", noul: 0.9 } },
-        usage: { input_tokens: 3, output_tokens: 0 },
-        citations: [],
-      }),
-    );
+  const server = createServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk: string) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      requests.push({ headers: request.headers, body });
+      response.setHeader("Content-Type", "application/json");
+      response.end(
+        JSON.stringify({
+          mode: "fast",
+          decision_id: "decisions_synthetic",
+          answers: { q: { type: "noul", noul: 0.9 } },
+          usage: { input_tokens: 3, output_tokens: 0 },
+          citations: [],
+        }),
+      );
+    });
   });
   server.on("connection", () => {
     connections += 1;
   });
   const port = await listenOnLoopback(server);
   onTestFinished(async () => {
-    await closeProviderTransportDispatcherPool();
+    // The fixture owns its server sockets, not the runtime-owned provider pool.
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {
       server.close((error) => {
