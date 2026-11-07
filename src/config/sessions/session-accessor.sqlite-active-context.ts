@@ -239,20 +239,39 @@ function readIndexedLogicalParents(
   );
 }
 
+type ActiveContextReadOptions = SessionTranscriptContextSelection & {
+  ignoreReadFence?: boolean;
+  readOnly?: boolean;
+  resolvedScope?: ResolvedTranscriptReadScope;
+  transaction?: CurrentTranscriptProjection["database"];
+  onRead?: (
+    projection: CurrentTranscriptProjection,
+    rows: Array<{ rawSeq: number; serializedBytes: number }>,
+    messagePresence: true | undefined,
+  ) => void;
+};
+
 /** Read an active branch bounded by replay limits or the complete compaction window. */
 export function readSessionTranscriptBoundedActiveContextCore(
   scope: SessionTranscriptReadScope,
-  options: SessionTranscriptContextSelection & {
-    ignoreReadFence?: boolean;
-    readOnly?: boolean;
-    resolvedScope?: ResolvedTranscriptReadScope;
-    transaction?: CurrentTranscriptProjection["database"];
-    onRead?: (
-      projection: CurrentTranscriptProjection,
-      rows: Array<{ rawSeq: number; serializedBytes: number }>,
-      messagePresence: true | undefined,
-    ) => void;
-  },
+  options: ActiveContextReadOptions,
+): SessionTranscriptBoundedActiveContext {
+  return readActiveContext(scope, options, true);
+}
+
+/** Plan the same window without retaining message bodies in the hydration worker. */
+export function readSessionTranscriptCompactionPlan(
+  scope: SessionTranscriptReadScope,
+  options: ActiveContextReadOptions,
+): Omit<SessionTranscriptBoundedActiveContext, "events"> {
+  const { events: _events, ...metadata } = readActiveContext(scope, options, false);
+  return metadata;
+}
+
+function readActiveContext(
+  scope: SessionTranscriptReadScope,
+  options: ActiveContextReadOptions,
+  materializeEvents: boolean,
 ): SessionTranscriptBoundedActiveContext {
   const limits = normalizeBoundedContextLimits(options);
   const read = (projection: CurrentTranscriptProjection): SessionTranscriptBoundedActiveContext => {
@@ -562,7 +581,6 @@ export function readSessionTranscriptBoundedActiveContextCore(
       injectedBoundarySeq = undefined;
     }
     const payloadSequences = header ? [header.seq, ...contextSequences] : contextSequences;
-    // One payload read follows all byte decisions; header-first ordering also supports migrated mirrors.
     const payloads = new Map<number, TranscriptEvent>();
     if (payloadSequences.length > 0) {
       for (const row of iterateSqliteQuerySync(
@@ -571,15 +589,28 @@ export function readSessionTranscriptBoundedActiveContextCore(
           .select(["seq", "event_json", "event_zstd", "event_utf8_bytes"])
           .where("seq", "in", transcriptPositionSet(projection, payloadSequences)),
       )) {
-        payloads.set(row.seq, JSON.parse(readTranscriptPayload(row)));
+        const event: TranscriptEvent = JSON.parse(readTranscriptPayload(row));
+        const entry = asOptionalRecord(event);
+        // Keep only facts used by ancestry and retention. In particular, do not retain
+        // message content or compaction summaries beside the acknowledged byte stream.
+        payloads.set(
+          row.seq,
+          materializeEvents || !entry
+            ? event
+            : {
+                type: entry.type,
+                ...("id" in entry ? { id: entry.id } : {}),
+                ...("parentId" in entry ? { parentId: entry.parentId } : {}),
+                firstKeptEntryId: entry.firstKeptEntryId,
+              },
+        );
       }
     }
-    // Retain logical ancestry across the byte cutoff without loading parent payloads.
-    // Raw parent_id can point into an abandoned branch after a leaf control.
+    // Raw parent_id can enter an abandoned branch; retain logical parents across the cutoff.
     const parents = projection.hasUnindexedPrefix
       ? readUnindexedLogicalParents(projection, contextSequences, payloads)
       : readIndexedLogicalParents(projection, contextSequences);
-    const events: TranscriptEvent[] = header ? [payloads.get(header.seq)!] : [];
+    const events = materializeEvents && header ? [payloads.get(header.seq)!] : [];
     const rows = contextSequences.map((seq) => ({ event: payloads.get(seq)!, seq }));
     const opaqueParents = new Map<string, string | null>();
     let previousId: unknown;
@@ -598,18 +629,30 @@ export function readSessionTranscriptBoundedActiveContextCore(
         }
         previousId = entry.id;
       }
-      events.push(event);
+      if (materializeEvents) {
+        events.push(event);
+      }
     }
     const firstSelected = selectedRows.findLast(
       (row) => typeof asOptionalRecord(payloads.get(row.event_seq))?.id === "string",
     );
-    const anchorEntry = firstSelected
-      ? asOptionalRecord(payloads.get(firstSelected.event_seq))
-      : undefined;
-    const injectedEntry =
-      injectedBoundarySeq === undefined
-        ? undefined
-        : asOptionalRecord(payloads.get(injectedBoundarySeq));
+    const readAnchor = (seq: number | undefined) => {
+      if (seq === undefined) {
+        return undefined;
+      }
+      if (materializeEvents) {
+        return asOptionalRecord(payloads.get(seq));
+      }
+      // Cache-TTL checkpoint and indexed-entry validation need the original anchor,
+      // not the reduced navigation facts; at most two anchors are retained.
+      const row = executeSqliteQueryTakeFirstSync(
+        projection.database.db,
+        transcript.select(["event_json", "event_zstd", "event_utf8_bytes"]).where("seq", "=", seq),
+      );
+      return row ? asOptionalRecord(JSON.parse(readTranscriptPayload(row))) : undefined;
+    };
+    const anchorEntry = readAnchor(firstSelected?.event_seq);
+    const injectedEntry = readAnchor(injectedBoundarySeq);
     const anchors = [
       ...(boundary && isIndexedSessionEntry(injectedEntry) && injectedEntry.type === "compaction"
         ? [{ activePosition: boundary.active_position, id: injectedEntry.id, entry: injectedEntry }]
@@ -647,7 +690,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
         ...(header ? [{ rawSeq: header.seq, serializedBytes: headerBytes }] : []),
         ...contextSequences.map((rawSeq) => ({ rawSeq, serializedBytes: sizes.get(rawSeq)! })),
       ],
-      events.some((event) => asOptionalRecord(event)?.type === "message") ? true : undefined,
+      rows.some(({ event }) => asOptionalRecord(event)?.type === "message") ? true : undefined,
     );
     return {
       version,

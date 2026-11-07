@@ -37,8 +37,12 @@ import {
   withRecentActiveTranscriptEvents as visitRecentEvents,
 } from "./session-accessor.sqlite-history.test-support.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
+import { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import { readSessionTranscriptHydrationRequest } from "./session-transcript-hydration-read.worker.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection as waitProjection } from "./session-transcript-reconcile.js";
+import { createSessionHistoryWorkerReaders } from "./session-transcript-worker-readers.js";
+import { createSessionHistoryWorkerRequestStub } from "./session-transcript-worker-readers.test-support.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
 const readSessionTranscriptMessageEventCount = (scope: Parameters<typeof messagePage>[0]): number =>
@@ -659,6 +663,67 @@ it("retains the latest boundary and counts earlier resets before a truncated tai
   );
   expect(context.opaqueParents.get("middle")).toBe("summary");
   expect(context.boundaryCount).toBe(2);
+});
+
+it("streams the selected compaction window with reset retention and an abandoned branch", async ({
+  scope,
+}) => {
+  const manager = SessionManager.open(scope);
+  const append = (text: string) =>
+    manager.appendMessage({ role: "user", content: text, timestamp: 1 });
+  append("discarded before reset");
+  manager.appendResetBoundary("new");
+  const kept = append("kept ".repeat(30000));
+  const abandoned = append("abandoned");
+  manager.branch(kept);
+  const live = append("live ".repeat(30000));
+  manager.appendCompaction("selected summary", kept, 100);
+  const tail = append("tail");
+  manager.flushPendingPersistence();
+  await waitProjection(scope);
+  const expected = boundedContext(scope, { compaction: true });
+  expect(eventIds(expected.events)).toContain(kept);
+  expect(eventIds(expected.events)).toContain(live);
+  expect(eventIds(expected.events)).toContain(tail);
+  expect(eventIds(expected.events)).not.toContain(abandoned);
+  const resolvedScope = resolveSqliteTranscriptReadScope(scope);
+  const controller = new AbortController();
+  let frames = 0;
+  const readers = createSessionHistoryWorkerReaders(
+    createSessionHistoryWorkerRequestStub(async (prepare, _bytes, _signal, receive) => {
+      const request = prepare();
+      assert(request.kind === "transcript-hydration");
+      assert(receive);
+      const result = await readSessionTranscriptHydrationRequest(
+        { ...request, database: { agentId: scope.agentId, path: resolvedScope.path! } },
+        {
+          consumeInput() {},
+          notify() {},
+          async request(chunk) {
+            frames++;
+            await receive(structuredClone(chunk), controller.signal);
+            return { input: undefined, consumed() {} };
+          },
+        },
+        {
+          signal: controller.signal,
+          runNativeSection: async (operation) => operation(),
+          throwIfCancelled: () => controller.signal.throwIfAborted(),
+        },
+      );
+      expect(result.kind).toBe("streamed-bounded");
+      expect("snapshot" in result && "events" in result.snapshot).toBe(false);
+      return result;
+    }),
+  );
+  const actual = await readers.readTranscript({
+    target: scope,
+    resolvedScope,
+    limits: { compaction: true },
+  });
+  expect(frames).toBeGreaterThan(0);
+  expect(actual.kind).toBe("bounded");
+  expect(actual.snapshot).toEqual(expected);
 });
 
 it("keeps reset history closed across compaction with a warm history cache", async ({ scope }) => {
