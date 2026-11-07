@@ -44,6 +44,9 @@ export function GatewayConnectionView(props: {
   };
   const busy = () => !["offline", "paused", "reload"].includes(state());
   const canRetry = () => state() === "offline" && !props.retryPending;
+  // The mascot is the busy indicator; settled, it looks toward the button or up at the news.
+  const pose = () =>
+    busy() ? "busy" : state() === "offline" ? "error" : state() === "reload" ? "updated" : "rest";
   return (
     <section
       class="gateway-connection-view"
@@ -51,12 +54,8 @@ export function GatewayConnectionView(props: {
       data-connection-state={state()}
     >
       <div class="gateway-connection-view__body">
-        <h1 id="gateway-connection-title">
-          <Show when={busy()}>
-            <span class="gateway-connection-view__spin session-run-spinner" aria-hidden="true" />
-          </Show>
-          {t("connection.workspace." + state() + ".title")}
-        </h1>
+        <GatewayMascot pose={pose()} />
+        <h1 id="gateway-connection-title">{t("connection.workspace." + state() + ".title")}</h1>
         <p class="gateway-connection-view__description" role="status" aria-live="polite">
           {t("connection.workspace." + state() + ".description")}
         </p>
@@ -74,6 +73,51 @@ export function GatewayConnectionView(props: {
         </div>
       </div>
     </section>
+  );
+}
+
+/** The OpenClaw mascot from the brand wordmark, split so its claws, eyes and lids can move. */
+function GatewayMascot(props: { pose: "busy" | "error" | "updated" | "rest" }): JSX.Element {
+  return (
+    <span class="gateway-mascot" data-pose={props.pose} aria-hidden="true">
+      <span class="gateway-mascot__ground" />
+      <svg class="gateway-mascot__figure" viewBox="-2 2 124 112" focusable="false">
+        <defs>
+          <linearGradient id="gateway-mascot-shell" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#ff4d4d" />
+            <stop offset="100%" stop-color="#991b1b" />
+          </linearGradient>
+        </defs>
+        <g fill="none" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round">
+          <path d="M45 15 Q35 5 30 8" />
+          <path d="M75 15 Q85 5 90 8" />
+        </g>
+        <g class="gateway-mascot__claw gateway-mascot__claw--left">
+          <path
+            d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z"
+            fill="url(#gateway-mascot-shell)"
+          />
+        </g>
+        <g class="gateway-mascot__claw gateway-mascot__claw--right">
+          <path
+            d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z"
+            fill="url(#gateway-mascot-shell)"
+          />
+        </g>
+        <path
+          d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z"
+          fill="url(#gateway-mascot-shell)"
+        />
+        <g class="gateway-mascot__eyes">
+          <g class="gateway-mascot__lids">
+            <circle cx="45" cy="35" r="6" fill="#181A1F" />
+            <circle cx="75" cy="35" r="6" fill="#181A1F" />
+            <circle cx="46" cy="34" r="2.5" fill="#DDE2E9" opacity="0.82" />
+            <circle cx="76" cy="34" r="2.5" fill="#DDE2E9" opacity="0.82" />
+          </g>
+        </g>
+      </svg>
+    </span>
   );
 }
 

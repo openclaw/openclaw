@@ -4103,14 +4103,16 @@ html.openclaw-native-web-chrome
   position: relative;
   min-height: 100%;
 }
-/* Every status page shares one anatomy: a left-aligned column whose title holds a fixed
-   height a little above centre, so it never jumps between states. */
+/* Every status page shares one anatomy: the OpenClaw mascot stands on its ground above a
+   centred title, and the title holds a fixed height a little above centre, so nothing
+   jumps between states. */
 .gateway-connection-view__body {
   position: absolute;
-  top: 34%;
+  top: 38%;
   left: 50%;
-  width: min(440px, calc(100% - 48px));
+  width: min(460px, calc(100% - 48px));
   transform: translateX(-50%);
+  text-align: center;
 }
 .gateway-connection-view h1 {
   position: relative;
@@ -4122,14 +4124,6 @@ html.openclaw-native-web-chrome
   font-weight: 600;
   text-wrap: balance;
 }
-/* The session spinner hangs in the title's margin, so the text never moves. */
-.gateway-connection-view__spin.session-run-spinner {
-  position: absolute;
-  top: 7px;
-  left: -26px;
-  width: 14px;
-  height: 14px;
-}
 .gateway-connection-view__description {
   margin: 6px 0 0;
   color: var(--muted);
@@ -4140,6 +4134,7 @@ html.openclaw-native-web-chrome
 .gateway-connection-view__actions {
   display: flex;
   align-items: center;
+  justify-content: center;
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 20px;
@@ -4154,6 +4149,176 @@ html.openclaw-native-web-chrome
   font-weight: 500;
 }
 
+/* The mascot sits 24px above the title; its own animation is the busy indicator. */
+.gateway-mascot {
+  --gateway-mascot-size: 88px;
+  --gateway-mascot-ground: radial-gradient(
+    closest-side,
+    rgb(0 0 0 / 0.42),
+    rgb(0 0 0 / 0.16) 60%,
+    transparent
+  );
+  --gateway-mascot-gaze-x: 0px;
+  --gateway-mascot-gaze-y: 0px;
+  position: absolute;
+  top: calc(-24px - var(--gateway-mascot-size));
+  left: 50%;
+  width: var(--gateway-mascot-size);
+  height: var(--gateway-mascot-size);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+:root[data-theme-mode="light"] .gateway-mascot {
+  --gateway-mascot-ground: radial-gradient(
+    closest-side,
+    rgb(32 32 32 / 0.16),
+    rgb(32 32 32 / 0.06) 60%,
+    transparent
+  );
+}
+.gateway-mascot__ground {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 62px;
+  height: 9px;
+  margin-left: -31px;
+  border-radius: 50%;
+  background: var(--gateway-mascot-ground);
+}
+.gateway-mascot__figure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 124 / 112;
+  overflow: visible;
+}
+.gateway-mascot__eyes {
+  transform: translate(var(--gateway-mascot-gaze-x), var(--gateway-mascot-gaze-y));
+  transition: transform 0.5s cubic-bezier(0.3, 0, 0.2, 1);
+}
+.gateway-mascot__lids {
+  transform-origin: 60px 35px;
+}
+.gateway-mascot__claw--left {
+  transform-origin: 28px 52px;
+}
+.gateway-mascot__claw--right {
+  transform-origin: 92px 52px;
+}
+/* Settled, it looks down toward the button, or up at the update with one blink. */
+.gateway-mascot[data-pose="error"] {
+  --gateway-mascot-gaze-y: 2.8px;
+}
+.gateway-mascot[data-pose="updated"] {
+  --gateway-mascot-gaze-y: -1px;
+}
+.gateway-mascot[data-pose="updated"] .gateway-mascot__lids {
+  animation: gateway-mascot-blink-once 0.9s 0.5s linear 1 both;
+}
+/* Busy, it bobs 5px while the ground shadow shrinks, the claws open and the eyes scan. */
+.gateway-mascot[data-pose="busy"] .gateway-mascot__figure {
+  animation: gateway-mascot-bob 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+.gateway-mascot[data-pose="busy"] .gateway-mascot__ground {
+  animation: gateway-mascot-ground 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+.gateway-mascot[data-pose="busy"] .gateway-mascot__claw--left {
+  animation: gateway-mascot-pinch-left 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+.gateway-mascot[data-pose="busy"] .gateway-mascot__claw--right {
+  animation: gateway-mascot-pinch-right 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+.gateway-mascot[data-pose="busy"] .gateway-mascot__eyes {
+  animation: gateway-mascot-gaze 4.8s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+}
+.gateway-mascot[data-pose="busy"] .gateway-mascot__lids {
+  animation: gateway-mascot-blink 4.8s linear infinite;
+}
+@keyframes gateway-mascot-bob {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-5px);
+  }
+}
+@keyframes gateway-mascot-ground {
+  from {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+  to {
+    transform: scaleX(0.82);
+    opacity: 0.7;
+  }
+}
+@keyframes gateway-mascot-pinch-left {
+  from {
+    transform: rotate(0);
+  }
+  to {
+    transform: rotate(-7deg);
+  }
+}
+@keyframes gateway-mascot-pinch-right {
+  from {
+    transform: rotate(0);
+  }
+  to {
+    transform: rotate(7deg);
+  }
+}
+@keyframes gateway-mascot-gaze {
+  0%,
+  8%,
+  82%,
+  100% {
+    transform: translate(0, 0);
+  }
+  18%,
+  40% {
+    transform: translate(-3.2px, 0.6px);
+  }
+  50%,
+  72% {
+    transform: translate(3.2px, 0.6px);
+  }
+}
+@keyframes gateway-mascot-blink {
+  0%,
+  90%,
+  96%,
+  100% {
+    transform: scaleY(1);
+  }
+  93% {
+    transform: scaleY(0.12);
+  }
+}
+@keyframes gateway-mascot-blink-once {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(0.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gateway-mascot[data-pose="busy"] .gateway-mascot__eyes {
+    animation-duration: 12s;
+  }
+  .gateway-mascot[data-pose] :is(.gateway-mascot__figure, .gateway-mascot__ground),
+  .gateway-mascot[data-pose] :is(.gateway-mascot__claw, .gateway-mascot__lids) {
+    animation: none;
+  }
+}
+
 @media (pointer: coarse) {
   .gateway-connection-view__actions .btn {
     height: 36px;
@@ -4164,7 +4329,7 @@ html.openclaw-native-web-chrome
 
 @media (max-width: 768px) {
   .gateway-connection-view__body {
-    top: 30%;
+    top: 36%;
     right: 24px;
     left: 24px;
     width: auto;
@@ -4174,8 +4339,8 @@ html.openclaw-native-web-chrome
     font-size: 20px;
     line-height: 26px;
   }
-  .gateway-connection-view__spin.session-run-spinner {
-    display: none;
+  .gateway-mascot {
+    --gateway-mascot-size: 80px;
   }
 }
 
