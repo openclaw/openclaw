@@ -430,8 +430,8 @@ struct GatewayNetworkPathRecoveryTests {
         }
     }
 
-    @Test
-    func `inbound frames during missed pongs keep a busy socket`() async throws {
+    @Test(arguments: [false, true])
+    func `inbound frames between or during missed pongs keep a busy socket`(duringPing: Bool) async throws {
         let keepalive = PathRecoverySleep()
         try await withPathRecoveryFixture { fixture in
             await fixture.channel.setKeepaliveSleep(keepalive)
@@ -442,9 +442,11 @@ struct GatewayNetworkPathRecoveryTests {
 
             for round in 1...3 {
                 await keepalive.started.wait(forCount: round)
-                keepalive.release()
-                await socket.waitForPings(count: round)
-                // A response delivered while the pong is outstanding, as on a link busy with inbound data.
+                if duringPing {
+                    keepalive.release()
+                    await socket.waitForPings(count: round)
+                }
+                // Complete traffic proves liveness both between probes and while a pong is outstanding.
                 let response = Task {
                     try await fixture.channel.request(method: "health", params: nil, timeoutMs: 0)
                 }
@@ -452,6 +454,10 @@ struct GatewayNetworkPathRecoveryTests {
                 let id = try #require(socket.sentRequests(method: "health").last?["id"] as? String)
                 socket.emitResponse(id: id, payload: [:])
                 _ = try await response.value
+                if !duringPing {
+                    keepalive.release()
+                    await socket.waitForPings(count: round)
+                }
                 socket.finishPongs(error: URLError(.timedOut))
                 await keepalive.started.wait(forCount: round + 1)
                 // A replacement socket would never see the next ping, so stop here instead of hanging.
@@ -461,6 +467,18 @@ struct GatewayNetworkPathRecoveryTests {
             #expect(socket.snapshotPingCount() == 3)
             #expect(fixture.session.snapshotMakeCount() == 1)
             #expect(await fixture.channel.currentConnectionGeneration() == generation)
+
+            // A pre-ping response resets earlier misses, but must not forgive that ping's silence.
+            if duringPing {
+                await answerKeepalive(round: 4, sleep: keepalive, socket: socket, error: URLError(.timedOut))
+                await keepalive.started.wait(forCount: 5)
+                try #require(fixture.session.snapshotMakeCount() == 1)
+            }
+            let finalRound = duringPing ? 5 : 4
+            await answerKeepalive(round: finalRound, sleep: keepalive, socket: socket, error: URLError(.timedOut))
+            await keepalive.started.wait(forCount: finalRound + 1)
+            #expect(socket.state == .canceling)
+            #expect(fixture.session.snapshotMakeCount() == 2)
         }
     }
 

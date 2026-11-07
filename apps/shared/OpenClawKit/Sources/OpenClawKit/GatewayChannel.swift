@@ -526,12 +526,15 @@ public actor GatewayChannelActor {
 
     private func keepaliveLoop(connectionGeneration: UInt64) async {
         var misses = 0
+        var inboundBeforePing = self.inboundFrameCount
         while self.shouldReconnect {
             guard await self.sleepBeforeKeepalive() else { return }
             guard self.shouldReconnect, self.isConnected(connectionGeneration: connectionGeneration) else { return }
             guard let task = self.task else { continue }
             // The ping keeps NAT/proxy state alive without RPC load and doubles as a liveness probe.
-            let inboundBeforePing = self.inboundFrameCount
+            // Traffic between probes resets earlier misses; this ping still has its own deadline.
+            if self.inboundFrameCount != inboundBeforePing { misses = 0 }
+            inboundBeforePing = self.inboundFrameCount
             do {
                 try await task.sendPing()
                 misses = 0
