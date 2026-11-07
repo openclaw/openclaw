@@ -1,0 +1,2 @@
+31
+# Real CLI regression preserves chronological and ID ordering across UTC timestamp precisions.
