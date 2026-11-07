@@ -17,11 +17,16 @@ export type FenceScanState = {
     marker: string;
     indent: string;
   };
+  /** Start of a marker line whose indent or marker run the chunk boundary cut. */
+  pendingLine?: string;
 };
 
 // LF alone defines scanner lines; consume CRLF's CR for raw offsets, not opener text.
 const FENCE_LINE_RE = /(?:^|\n)( {0,3})(`{3,}|~{3,})([^\r\n\u2028\u2029]*)\r?(?=\n|$)/g;
 const SINGLE_LINE_FENCE_RE = new RegExp(FENCE_LINE_RE, "gy");
+// A line that is still short of three markers is not a fence line yet: it may gain the rest,
+// and its place, in the next chunk. Anything longer already matched above.
+const PARTIAL_MARKER_LINE_RE = /^ {0,3}(?:`{1,2}|~{1,2})?$/u;
 
 /** Scans fenced-code spans incrementally so chunking can carry an open fence forward. */
 export function scanFenceSpans(
@@ -29,15 +34,20 @@ export function scanFenceSpans(
   state?: FenceScanState,
 ): { spans: FenceSpan[]; state: FenceScanState } {
   const spans: FenceSpan[] = [];
-  const startsAtLineStart = state?.atLineStart ?? true;
+  // Rejoin the indent or leading markers that ended the previous chunk so the boundary
+  // cannot move a fence line out of reach. Reported offsets stay in this buffer's space.
+  const carried = state?.pendingLine ?? "";
+  const scanText = carried ? `${carried}${buffer}` : buffer;
+  const startsAtLineStart = carried.length > 0 || (state?.atLineStart ?? true);
+  const toBufferOffset = (index: number) => Math.max(0, index - carried.length);
   let open: (NonNullable<FenceScanState["open"]> & { start: number }) | undefined = state?.open
     ? { ...state.open, start: 0 }
     : undefined;
 
   // Without LF, only offset zero can be a fence. Sticky matching skips long prose,
   // including inline marker literals; matchAll leaves both shared patterns untouched.
-  const pattern = buffer.includes("\n") ? FENCE_LINE_RE : SINGLE_LINE_FENCE_RE;
-  for (const match of buffer.matchAll(pattern)) {
+  const pattern = scanText.includes("\n") ? FENCE_LINE_RE : SINGLE_LINE_FENCE_RE;
+  for (const match of scanText.matchAll(pattern)) {
     const [, indent, marker, trailing] = match;
     if (indent === undefined || marker === undefined || trailing === undefined) {
       continue;
@@ -69,8 +79,8 @@ export function scanFenceSpans(
       // CommonMark permits only spaces or tabs after a closing fence. A marker line carrying
       // other trailing text is code content, not a close, so it must not end the block.
       spans.push({
-        start: open.start,
-        end: match.index + match[0].length,
+        start: toBufferOffset(open.start),
+        end: toBufferOffset(match.index + match[0].length),
         openLine: open.openLine,
         marker: open.marker,
         indent: open.indent,
@@ -81,7 +91,7 @@ export function scanFenceSpans(
 
   if (open) {
     spans.push({
-      start: open.start,
+      start: toBufferOffset(open.start),
       end: buffer.length,
       openLine: open.openLine,
       marker: open.marker,
@@ -90,8 +100,17 @@ export function scanFenceSpans(
   }
 
   const atLineStart = buffer.length === 0 ? startsAtLineStart : buffer.endsWith("\n");
+  const lineStart = buffer.lastIndexOf("\n") + 1;
+  const partialLine = lineStart === 0 ? `${carried}${buffer}` : buffer.slice(lineStart);
+  const pendingLine =
+    (lineStart === 0 ? startsAtLineStart : true) &&
+    partialLine.length > 0 &&
+    PARTIAL_MARKER_LINE_RE.test(partialLine)
+      ? partialLine
+      : "";
   const nextState: FenceScanState = {
     atLineStart,
+    ...(pendingLine ? { pendingLine } : {}),
     ...(open
       ? {
           open: {
