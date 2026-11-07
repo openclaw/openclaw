@@ -1,7 +1,9 @@
 import type { Page } from "playwright";
+import type { ChatDetailsSnapshot } from "../../ui/src/pages/chat/session-details-snapshot-schema.ts";
 // Only these structural ports cross Playwright's serialized browser boundary.
 type ChatSessionSnapshot = {
   messages: unknown[];
+  details?: Pick<ChatDetailsSnapshot, "subagents">;
   rowDisplay?: Record<
     string,
     {
@@ -40,12 +42,110 @@ type WarmThumbnail = {
   base64: string;
 };
 
+/** Read the real display receipt before either benchmark freezes its warm input. */
+export function qualifyDetailsSubagentsWarmState(input: {
+  sessionKey: string;
+  rows: Array<{ key: string; label: string }>;
+}) {
+  const pane = document.querySelector(".chat-pane-cache__pane--active");
+  const store: SessionSnapshotStore | undefined = pane
+    ? Reflect.get(pane, "sessionSnapshotStore")
+    : undefined;
+  const cache: Map<string, { snapshot: ChatSessionSnapshot }> | undefined = pane
+    ? Reflect.get(pane, "chatMessagesBySession")
+    : undefined;
+  const entry = cache && [...cache].find(([key]) => key.endsWith(`\u0000${input.sessionKey}`));
+  const matches = (receipt: ChatDetailsSnapshot["subagents"]) => {
+    const ordinary = receipt?.rows.filter((row) => row.listed === false) ?? [];
+    return (
+      input.rows.length > 0 &&
+      ordinary.length === input.rows.length &&
+      receipt?.counts
+        .filter((count) => count.listed === false)
+        .reduce((total, count) => total + count.count, 0) === input.rows.length &&
+      input.rows.every((row) =>
+        ordinary.some((saved) => saved.key === row.key && saved.label === row.label),
+      )
+    );
+  };
+  const group = pane?.querySelector<HTMLElement>('[data-details-group="subagents"]');
+  const labels = [...(group?.querySelectorAll(".chat-subagent-activity__name") ?? [])].map((row) =>
+    row.textContent?.trim(),
+  );
+  if (
+    !store ||
+    !entry ||
+    !matches(entry[1].snapshot.details?.subagents) ||
+    !group ||
+    document.fonts.status !== "loaded" ||
+    labels.length !== input.rows.length ||
+    !input.rows.every((row) => labels.includes(row.label)) ||
+    group
+      .getAnimations({ subtree: true })
+      .some(
+        (animation) =>
+          (animation.pending || animation.playState === "running") &&
+          animation.effect?.getTiming().iterations !== Infinity,
+      )
+  ) {
+    return null;
+  }
+  const height = group.getBoundingClientRect().height;
+  if (height <= 0) {
+    return null;
+  }
+  // Playwright treats a returned Promise as ready; poll synchronous readiness first.
+  return (async () => {
+    await store.flush();
+    if (!(await indexedDB.databases()).some(({ name }) => name === "openclaw-chat-snapshots")) {
+      throw new Error("Qualified ordinary child snapshot was not persisted");
+    }
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("openclaw-chat-snapshots");
+      request.addEventListener("success", () => resolve(request.result), { once: true });
+      request.addEventListener(
+        "error",
+        () => reject(new Error("Unable to open ordinary child snapshot", { cause: request.error })),
+        { once: true },
+      );
+    });
+    try {
+      const record = await new Promise<StoredTranscript | undefined>((resolve, reject) => {
+        const request = database.transaction("snapshots").objectStore("snapshots").get(entry[0]);
+        request.addEventListener("success", () => resolve(request.result), { once: true });
+        request.addEventListener(
+          "error",
+          () =>
+            reject(new Error("Unable to read ordinary child snapshot", { cause: request.error })),
+          { once: true },
+        );
+      });
+      const receipt = record?.snapshot.details?.subagents;
+      const settledHeight = group.getBoundingClientRect().height;
+      if (!record || !receipt || !matches(receipt) || Math.abs(settledHeight - height) > 1) {
+        throw new Error("Persisted ordinary child receipt or settled geometry changed");
+      }
+      return {
+        sessionKey: input.sessionKey,
+        snapshotKey: record.sessionKey,
+        projectionVersion: record.projectionVersion,
+        ordinaryRows: receipt.rows.filter((row) => row.listed === false),
+        labels,
+        settledHeightPx: settledHeight,
+      };
+    } finally {
+      database.close();
+    }
+  })();
+}
+
 export async function persistColdLoadWarmState(input: {
   sessionKey: string;
   sidebarView: "sessions" | "online";
   offRosterSession?: boolean;
   rowFacts?: boolean;
   lateRowFacts?: boolean;
+  detailsSubagentsWarmState?: Awaited<ReturnType<typeof qualifyDetailsSubagentsWarmState>>;
 }) {
   const pane = document.querySelector(".chat-pane-cache__pane--active");
   const store: SessionSnapshotStore | undefined = pane
@@ -127,6 +227,7 @@ export async function persistColdLoadWarmState(input: {
     }
     const displayFacts = Object.values(record.snapshot.rowDisplay ?? {});
     return {
+      detailsSubagentsWarmState: input.detailsSubagentsWarmState,
       rosterContainsSession,
       storage: {
         records: { snapshots, sidebarSnapshots: sidebars, snapshotMetadata: metadata },

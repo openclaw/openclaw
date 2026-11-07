@@ -1,12 +1,7 @@
 import { once } from "node:events";
 import { Agent, createServer, request, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
-import { renderControlUiUnavailableDocument } from "../../../src/gateway/control-ui-availability.ts";
-import {
-  applyControlUiSecurityHeaders,
-  buildControlUiCspHeader,
-  computeInlineScriptHashes,
-} from "../../../src/gateway/control-ui-csp.ts";
+import { serveControlUiStartupRequest } from "../../../src/gateway/control-ui-availability.ts";
 import { classifyControlUiRequest } from "../../../src/gateway/control-ui-routing.ts";
 import { createNodeProxyAgent } from "../../../src/infra/net/node-proxy-agent.ts";
 import { registerManagedProxyGatewayLoopbackBypass } from "../../../src/infra/net/proxy/proxy-lifecycle.ts";
@@ -21,8 +16,6 @@ export async function startDisposableGatewayIngress(port: number) {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
   };
-  const html = renderControlUiUnavailableDocument("Server is temporarily unavailable");
-  const csp = buildControlUiCspHeader({ inlineScriptHashes: computeInlineScriptHashes(html) });
   const directAgent = new Agent({ keepAlive: false });
   const createUpstream = (req: IncomingMessage) => {
     const targetUrl = "http://127.0.0.1:" + port + (req.url ?? "/");
@@ -67,25 +60,28 @@ export async function startDisposableGatewayIngress(port: number) {
       (route.kind === "serve" || route.kind === "redirect")
     );
   };
-  const respondUnavailable = (req: IncomingMessage, res: ServerResponse) => {
+  const respondUnavailable = async (req: IncomingMessage, res: ServerResponse) => {
     if (res.destroyed || res.headersSent) {
       res.destroy();
+      return;
+    }
+    res.setHeader("X-OpenClaw-Proof-Boundary", "disposable-ingress");
+    if (
+      await serveControlUiStartupRequest(
+        req,
+        res,
+        { ok: false, status: "draining", uptimeMs: 0 },
+        new URL(req.url ?? "/", "http://localhost"),
+        { controlUiEnabled: true, controlUiBasePath: "", controlUiRoot: { kind: "missing" } },
+      )
+    ) {
       return;
     }
     res.statusCode = 503;
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Retry-After", "1");
-    res.setHeader("X-OpenClaw-Proof-Boundary", "disposable-ingress");
-    if (documentRequest(req)) {
-      applyControlUiSecurityHeaders(res);
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.setHeader("Content-Security-Policy", csp);
-      res.setHeader("Content-Length", Buffer.byteLength(html));
-      res.end(req.method === "HEAD" ? undefined : html);
-    } else {
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("The upstream server is not reachable.");
-    }
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end("The upstream server is not reachable.");
   };
   const server = createServer((req, res) => {
     requests++;
@@ -94,7 +90,7 @@ export async function startDisposableGatewayIngress(port: number) {
       lastUpstreamStatus = response.statusCode;
       if (documentRequest(req) && [502, 504].includes(response.statusCode ?? 0)) {
         response.resume();
-        respondUnavailable(req, res);
+        void respondUnavailable(req, res).catch(() => res.destroy());
         return;
       }
       res.writeHead(response.statusCode ?? 502, response.headers);
@@ -102,7 +98,7 @@ export async function startDisposableGatewayIngress(port: number) {
     });
     upstream.on("error", () => {
       upstreamErrors++;
-      respondUnavailable(req, res);
+      void respondUnavailable(req, res).catch(() => res.destroy());
     });
     req.once("aborted", () => upstream.destroy());
     req.pipe(upstream);
