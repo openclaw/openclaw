@@ -278,7 +278,12 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
   const shownGroups = createMemo(() => groups.filter((group) => visible(group).length > 0));
   const dismissable = createMemo(() => visible("failed").flat().filter(props.canDismissFailure));
   // Rows stay in Failed; focus moves on once the Gateway reports the read and the control goes.
-  const [dismissal, setDismissal] = createSignal<{ keys: string[]; next?: string }>();
+  const [dismissal, setDismissal] = createSignal<{
+    keys: string[];
+    next?: string;
+    trigger: Element | null;
+    settled?: boolean;
+  }>();
   // A failed child row can sit under an active root, so check every row, not only the Failed group.
   const pendingKeys = (keys: readonly string[]) =>
     props.rows.some((row) => keys.includes(row.session.key) && props.canDismissFailure(row));
@@ -289,8 +294,20 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
     },
     {
       requested: (next) => Boolean(next.request),
-      ready: (next) => next.active && !next.pending,
-      focus: ({ request }) => {
+      ready: (next) => next.active && (!next.pending || next.request?.settled === true),
+      focus: ({ request, pending }) => {
+        // A partial bulk read can remove its trigger while leaving a retry control.
+        // A rejected action whose trigger remains must not move the user's focus.
+        if (pending) {
+          if (request?.trigger && !request.trigger.isConnected) {
+            const retry = request.keys
+              .map((key) => dismissButtons.get(key))
+              .find((button) => button?.isConnected);
+            (retry ?? content).focus({ preventScroll: true });
+          }
+          setDismissal(undefined);
+          return;
+        }
         const next = request?.next ? dismissButtons.get(request.next) : undefined;
         const target = next ?? openButtons.get(request?.keys[0] ?? "");
         (target?.isConnected ? target : content).focus({ preventScroll: true });
@@ -302,12 +319,15 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
     const keys = rows.map((row) => row.session.key);
     const index = dismissable().findIndex((row) => keys.includes(row.session.key));
     const remaining = dismissable().filter((row) => !keys.includes(row.session.key));
-    const request = { keys, next: remaining[Math.min(index, remaining.length - 1)]?.session.key };
+    const request = {
+      keys,
+      next: remaining[Math.min(index, remaining.length - 1)]?.session.key,
+      trigger: document.activeElement,
+    };
     setDismissal(request);
     void props.onDismissFailures(rows).finally(() => {
-      // A rejected write keeps its controls; drop the focus request instead of stealing focus later.
-      if (dismissal() === request && pendingKeys(keys)) {
-        setDismissal(undefined);
+      if (dismissal() === request) {
+        setDismissal({ ...request, settled: true });
       }
     });
   };

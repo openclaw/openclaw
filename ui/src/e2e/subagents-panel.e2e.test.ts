@@ -329,27 +329,13 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
         await openChatSidePanelType(page, "Subagents");
         const panel = page.locator("openclaw-chat-subagents-panel");
-        const surface = panel.locator(".subagents-desktop, .chat-subagents-mobile");
         const failedRows = panel.locator('.subagents-desktop__row[data-group="failed"]');
-        const capture = async (stage: string) => {
-          const frame = await takeControlUiScreenshotFrame(page, surface, [surface], {
-            animations: "disabled",
-            elements: [surface],
-          });
-          await writeFile(path.join(suite.artifactDir, `${stage}.png`), frame.png);
-          await writeFile(
-            path.join(suite.artifactDir, `${stage}-panel.png`),
-            frame.elements[0]!.png,
-          );
-        };
         await expect.poll(() => failedRows.count()).toBe(4);
-        await capture("failed-desktop-before");
 
         await page.setViewportSize({ width: 390, height: 900 });
         await page.locator(".shell--mobile-nav").waitFor();
         await openChatSidePanelType(page, "Subagents");
         await panel.locator(`[data-session-key="${failures[3]!.key}"]`).waitFor();
-        await capture("failed-mobile-before");
         const mobileDismiss = panel.locator(".chat-subagents-mobile__row .oc-icon-button");
         await expect.poll(() => mobileDismiss.count()).toBe(4);
         await panel
@@ -361,7 +347,6 @@ suite.define(() => {
             .locator(`[data-session-key="${failures[3]!.key}"] .chat-subagents-mobile__indicator`)
             .getAttribute("data-status"),
         ).toBe("failed");
-        await capture("failed-mobile-after-one");
 
         await page.setViewportSize({ width: 1440, height: 1000 });
         await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
@@ -383,7 +368,6 @@ suite.define(() => {
         await expect
           .poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label")))
           .toBe(`Mark ${failures[1]!.label} as read`);
-        await capture("failed-desktop-after-one");
 
         await panel.getByRole("button", { name: "Mark all as read", exact: true }).click();
         await expect.poll(() => desktopMark.count()).toBe(0);
@@ -405,7 +389,6 @@ suite.define(() => {
             expectedSessionId: failures[0]!.sessionId,
           }),
         ]);
-        await capture("failed-desktop-after-all");
       },
     );
   });

@@ -85,8 +85,15 @@ export async function dismissSessionFailures(
   } else if (
     rejectionToast &&
     results.length > 0 &&
-    // A retired connection ends a patch without a receipt; that is not a successful retry.
-    results.every((result) => result.status === "fulfilled" && result.value !== null)
+    // A retired connection or a stale manual-unread fence is not a successful retry.
+    results.every(
+      (result) =>
+        result.status === "fulfilled" &&
+        result.value !== null &&
+        "entry" in result.value &&
+        result.value.entry.lastReadAt != null &&
+        result.value.entry.markedUnreadAt == null,
+    )
   ) {
     rejectionToast = undefined;
     showToast({

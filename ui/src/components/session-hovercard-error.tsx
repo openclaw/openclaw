@@ -5,7 +5,7 @@ import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 import { Icon } from "./solid/icon.tsx";
 
-/** The row's own or folded child failure; Dismiss marks the failed session read. */
+/** The row's own failure; Dismiss marks this session read. */
 export function SessionHovercardError(props: {
   attention?: SidebarSessionAttention;
   dismiss?: () => void;

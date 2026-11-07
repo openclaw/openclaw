@@ -181,11 +181,11 @@ describe("session progress hovercard ownership", () => {
     },
   );
 
-  it("dismisses a folded child failure with that child's unread marker and owner role", async () => {
+  it("dismisses the hovered failure with its unread marker and owner role", async () => {
     const patch = vi.fn<ApplicationContext["sessions"]["patch"]>(async () => null);
     const childKey = "agent:research:subagent:child";
     const harness = createHovercard({
-      sessionKey: "agent:research:main",
+      sessionKey: childKey,
       // Session-scoped writers may patch only sessions they own.
       scopes: ["operator.read", "operator.sessions.write"],
       sessionsPatch: patch,
@@ -221,12 +221,12 @@ describe("session progress hovercard ownership", () => {
     await toast.updateComplete;
     const patch = vi
       .fn<ApplicationContext["sessions"]["patch"]>(async (key) =>
-        patchReceipt(key, { sessionId: "child-session" }),
+        patchReceipt(key, { sessionId: "child-session", lastReadAt: 20 }),
       )
       .mockRejectedValueOnce(new Error("Session store unavailable"))
       .mockResolvedValueOnce(null);
     const harness = createHovercard({
-      sessionKey: "agent:research:main",
+      sessionKey: "agent:research:subagent:child",
       scopes: ["operator.read", "operator.write"],
       sessionsPatch: patch,
       rowDetails: {

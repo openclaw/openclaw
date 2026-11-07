@@ -82,7 +82,7 @@ export type SessionProgressHovercardProvider = SolidBridgeElement<
 >;
 const sessionLinkTitlers = new WeakMap<HTMLElement, SessionLinkTitler>();
 
-/** The error may be a child's failure folded into this row; dismiss acknowledges that child. */
+/** Dismiss acknowledges only the hovered session's own failure. */
 function failureDismissal(
   context: ApplicationContext | null,
   row: SidebarSessionHovercardRow | undefined,

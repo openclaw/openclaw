@@ -1,9 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -19,21 +16,15 @@ const suite = createControlUiE2eSuite({ name: "Session failure dismissal" });
 
 const rejectionMessage = "Couldn't mark as read. Try again. Session store unavailable";
 
-async function capture(page: Page, surface: Locator, name: string) {
-  const frame = await takeControlUiScreenshotFrame(page, surface, [surface], {
-    animations: "disabled",
-  });
-  await writeFile(path.join(suite.artifactDir, `${name}.png`), frame.png);
-}
-
-/** Rejects the next acknowledgement the way an unavailable session store does. */
+/** Rejects this session’s acknowledgement the way an unavailable session store does. */
 async function rejectNextAcknowledgement(
   gateway: Awaited<ReturnType<typeof installMockGateway>>,
   control: Locator,
+  key: string,
 ) {
-  await gateway.deferNext("sessions.patch");
+  await gateway.deferNext("sessions.patch", { key });
   await control.click();
-  await gateway.waitForRequest("sessions.patch");
+  await gateway.waitForRequest("sessions.patch", { match: { key } });
   await gateway.rejectDeferred("sessions.patch", {
     code: "UNAVAILABLE",
     message: "Session store unavailable",
@@ -41,7 +32,7 @@ async function rejectNextAcknowledgement(
 }
 
 suite.define(() => {
-  it("reports a rejected Subagents panel mark as read and retries it from the same control", async () => {
+  it("keeps retry focus and feedback after a partial bulk acknowledgement", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1000 }, colorScheme: "dark", locale: "en-US" },
       async ({ page }) => {
@@ -76,7 +67,16 @@ suite.define(() => {
           models: [{ id: "gpt-4.1", name: "Preview model", provider: "openai" }],
           sessionKey: parent.key,
           communityInvite: false,
-          sessions: [parent, failure],
+          sessions: [
+            parent,
+            failure,
+            {
+              ...failure,
+              key: "agent:main:subagent:read",
+              sessionId: "read-session",
+              label: "Check documentation",
+            },
+          ],
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
         await openChatSidePanelType(page, "Subagents");
@@ -86,17 +86,19 @@ suite.define(() => {
           exact: true,
         });
         await mark.waitFor();
-        await rejectNextAcknowledgement(gateway, mark);
+        const bulk = panel.getByRole("button", { name: "Mark all as read", exact: true });
+        await bulk.focus();
+        await rejectNextAcknowledgement(gateway, bulk, failure.key);
+        await expect.poll(() => bulk.count()).toBe(0);
+        await expect
+          .poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label")))
+          .toBe(`Mark ${failure.label} as read`);
         const error = page.locator(".app-toast--error .app-toast__body");
         await expect.poll(() => error.textContent()).toBe(rejectionMessage);
-        expect(await mark.isEnabled()).toBe(true);
-        // Park the pointer so a row tooltip does not cover the toast.
-        await page.mouse.move(0, 0);
-        await capture(page, panel, "panel-mark-read-rejected");
 
         await mark.click();
         await expect.poll(() => mark.count()).toBe(0);
-        expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(3);
         await expect
           .poll(() => page.locator(".app-toast .app-toast__message").textContent())
           .toBe("Marked as read");
@@ -105,8 +107,6 @@ suite.define(() => {
         expect(
           await panel.locator(`[data-session-key="${failure.key}"]`).getAttribute("data-group"),
         ).toBe("failed");
-        await page.mouse.move(0, 0);
-        await capture(page, panel, "panel-mark-read-retried");
       },
     );
   });
@@ -145,11 +145,10 @@ suite.define(() => {
           .locator(".session-progress-hovercard .session-hovercard__error")
           .getByRole("button", { name: "Dismiss", exact: true });
         await dismiss.waitFor({ state: "visible" });
-        await rejectNextAcknowledgement(gateway, dismiss);
+        await rejectNextAcknowledgement(gateway, dismiss, failedKey);
         const error = page.locator(".app-toast--error .app-toast__body");
         await expect.poll(() => error.textContent()).toBe(rejectionMessage);
         await expect.poll(alerting).toContain("sidebar-recent-session--attention-danger");
-        await capture(page, page.locator(".shell"), "hovercard-dismiss-rejected");
 
         await row.hover();
         await dismiss.click();
@@ -159,7 +158,6 @@ suite.define(() => {
           .poll(() => page.locator(".app-toast .app-toast__message").textContent())
           .toBe("Marked as read");
         expect(await error.count()).toBe(0);
-        await capture(page, page.locator(".shell"), "hovercard-dismiss-retried");
       },
     );
   });
