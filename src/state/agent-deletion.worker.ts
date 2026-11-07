@@ -31,6 +31,7 @@ import { unregisterOpenClawAgentDatabases } from "./openclaw-agent-db-registry.j
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
+import { verifyOpenClawStateLeaseOwnership } from "./openclaw-state-lease-storage.js";
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "./openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type {
@@ -38,7 +39,6 @@ import type {
   WorkerWriteOperationContext,
 } from "./worker-operation-registry.js";
 
-/** The caller holds the real lease grant and this transaction's shared-state snapshot. */
 export function assertAgentDeletionWorkerPredicate(
   database: OpenClawStateDatabase,
   predicate: AgentDeletionWorkerPredicate,
@@ -79,16 +79,41 @@ function assertTemplateInstall(
   }
 }
 
+function assertLeaseTarget(lease: OpenClawStateLeaseIdentity, agentId: string): void {
+  if (lease.scope !== "core:agent-deletion" || lease.key !== agentId) {
+    throw new Error("Agent deletion requires its original target lease");
+  }
+}
+
 function assertLease(
   database: OpenClawStateDatabase,
   lease: OpenClawStateLeaseIdentity,
   agentId: string,
   stage: "transaction" | "commit" = "transaction",
 ): void {
-  if (lease.scope !== "core:agent-deletion" || lease.key !== agentId) {
-    throw new Error("Agent deletion requires its original target lease");
-  }
+  assertLeaseTarget(lease, agentId);
   assertOpenClawStateLeaseWorkerOwnedInTransaction(database.db, lease, "write", stage);
+}
+
+function assertCurrent(
+  guard: AgentDeletionWorkerGuard,
+  context: WorkerWriteOperationContext,
+): void {
+  assertLeaseTarget(guard.lease, guard.predicate.agentId);
+  const database = context.open();
+  const verifyLease = () =>
+    verifyOpenClawStateLeaseOwnership({
+      ...guard.lease,
+      leaseLabel: "agent deletion",
+      transaction: database.db,
+    });
+  const expiresAt = verifyLease();
+  requestSqliteWorkerOperationAdmission({
+    stage: "transaction",
+    facts: { kind: "state-lease", identity: guard.lease, expiresAt },
+  });
+  assertAgentDeletionWorkerPredicate(database, guard.predicate);
+  verifyLease();
 }
 
 function guarded<T>(
@@ -190,7 +215,7 @@ export const agentDeletionOperations = {
   "agentDeletion.assertCurrent": (
     input: { guard: AgentDeletionWorkerGuard },
     context: WorkerWriteOperationContext,
-  ) => guarded(input.guard, context, () => undefined),
+  ) => assertCurrent(input.guard, context),
   "agentDeletion.retire": (
     input: { guard: AgentDeletionWorkerGuard },
     context: WorkerWriteOperationContext,
