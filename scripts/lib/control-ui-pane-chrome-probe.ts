@@ -53,6 +53,12 @@ export function installPaneChromeProbe() {
             panelTop: Math.round(panelBox.top),
             panelWidth: Math.round(panelBox.width),
             height: Math.round(box.height),
+            environmentBranchVisible:
+              section.getAttribute("data-details-group") === "environment"
+                ? (section
+                    .querySelector(".chat-environment__branch-name")
+                    ?.checkVisibility({ checkOpacity: true, visibilityProperty: true }) ?? false)
+                : undefined,
             sources: {
               liveSession: facts?.sessionFactsReady === true,
               cachedSession: Boolean(facts?.cachedDetails?.session),

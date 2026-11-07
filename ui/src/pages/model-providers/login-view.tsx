@@ -1,6 +1,6 @@
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -97,14 +97,14 @@ function PickerDialog(props: {
               )}
             </Show>
           </h2>
-          <button
+          <IconButton
+            size={28}
             class="oc-dialog__close"
-            type="button"
-            aria-label={t("common.close")}
+            icon="x"
+            label={t("common.close")}
+            tooltip={false}
             onClick={() => current().onClose()}
-          >
-            <Icon name="x" />
-          </button>
+          />
           <div class="oc-dialog__description">
             <p>{current().description}</p>
             <Show when={current().provider && !props.loading && !props.error}>

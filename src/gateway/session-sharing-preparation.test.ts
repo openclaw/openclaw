@@ -210,7 +210,7 @@ it("refuses a worker sharing result whose captured birthtime differs from its re
   expect(forged).toBe(true);
 });
 
-it.for(["unknown", "rollback"] as const)(
+it.for(["unknown", "rollback", "other", "ops", "main"] as const)(
   "applies %s topology publications to retained sharing facts",
   async (change, { state }) => {
     const storePath = state.statePath("shared.sqlite");
@@ -222,7 +222,7 @@ it.for(["unknown", "rollback"] as const)(
     using prepared = releasing(await harness.prepare());
     if (change === "unknown") {
       sessionChanges.emit({ all: true, scope: "stores" });
-    } else {
+    } else if (change === "rollback") {
       expect(() =>
         runOpenClawStateWriteTransaction(
           () => {
@@ -232,14 +232,28 @@ it.for(["unknown", "rollback"] as const)(
           { env: state.env },
         ),
       ).toThrow("Synthetic registry rollback");
+    } else {
+      sessionChanges.emit({ all: true, scope: { agentId: change, topology: true } });
     }
-    if (change === "rollback") {
+    if (change === "rollback" || change === "other") {
       expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("registry-sharing");
     } else {
       expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
     }
   },
 );
+
+it("invalidates absent shared-store facts when another physical owner becomes available", async ({
+  state,
+}) => {
+  const storePath = state.statePath("missing-shared.sqlite");
+  const cfg = { agents: { entries: { ops: {} } }, session: { store: storePath } };
+  const harness = sharingHarness(cfg, "agent:ops:missing", storePath, "ops");
+  using prepared = releasing(await harness.prepareMissing());
+  expect(prepared.readCurrent(cfg).target).toBeNull();
+  sessionChanges.emit({ all: true, scope: { agentId: "main", topology: true } });
+  expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
+});
 
 it("does not discover registry-only retired stores outside captured roots", async ({ state }) => {
   const storePath = state.statePath("external-retired.sqlite");

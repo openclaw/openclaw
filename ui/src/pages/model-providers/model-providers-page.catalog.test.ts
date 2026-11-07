@@ -113,14 +113,14 @@ describe("Models page catalog publication", () => {
     const page = appendPage(context);
     await waitForProviders(page, config);
     const row = () => page.querySelector('[data-provider-id="workstation"]');
-    await waitForSolid(() => {
-      expect(row()?.textContent).toContain("Research Lab");
-      expect(row()?.querySelector(".provider-brand-icon svg")).not.toBeNull();
-    });
+    await waitForSolid(() => expect(row()?.textContent).toContain("Research Lab"));
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(row()?.querySelector(".provider-brand-icon svg")).not.toBeNull(),
+    );
     expect(displayedCatalog(page)?.models).toEqual([]);
     expect(row()?.textContent).not.toContain("Raw config");
     const initialGeometry = row()?.querySelector(".provider-brand-icon svg")?.innerHTML;
-
     providerName = "Studio";
     iconName = "cloud";
     publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });

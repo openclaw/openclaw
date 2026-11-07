@@ -191,6 +191,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/desktop/desktop-source.ts":
     case "ui/src/components/solid/panel-loading-skeleton.tsx":
     case "ui/src/components/solid/sanitized-html.tsx":
+    case "ui/src/components/solid/checkbox.tsx":
     case "ui/src/lib/session-progress-cards.ts":
     case "ui/src/pages/templates/creator-publication.ts":
     case "src/agents/core-tool-facts.ts":
