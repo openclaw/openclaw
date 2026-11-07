@@ -1,3 +1,4 @@
+import { readSessionManagerBoundedSelection } from "../agents/sessions/session-manager-bounded-selection.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.js";
 import {
@@ -16,7 +17,7 @@ import {
   type CapturedSessionTranscriptTargetBinding,
 } from "../config/sessions/transcript-target-binding.js";
 import { buildSessionPreviewItems } from "./session-display-projection.js";
-import { readBoundedSessionPreviewItemsAsync } from "./session-transcript-preview-reader.js";
+import { readBoundedSessionPreviewItemsAsync } from "./session-transcript-preview-bounds.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
 /** Previews use the selected history backend and retain the existing model-context projection. */
@@ -99,17 +100,11 @@ function readSessionModelPreviewItems(
   maxItems: number,
   maxChars: number,
 ): Promise<SessionPreviewItem[]> {
-  return readBoundedSessionPreviewItemsAsync(maxItems, async (maxEvents, maxBytes) => {
-    let truncated = false;
+  return readBoundedSessionPreviewItemsAsync(maxItems, async ({ maxEvents, maxBytes }) => {
     const manager = await withSessionTranscriptHydrationCaller("preview", () =>
-      SessionManager.openBoundedAsync(target, {
-        maxEvents,
-        maxBytes,
-        onTruncated: () => {
-          truncated = true;
-        },
-      }),
+      SessionManager.openBoundedAsync(target, { maxEvents, maxBytes }),
     );
+    const selection = readSessionManagerBoundedSelection(manager);
     return {
       items: buildSessionPreviewItems(
         manager.buildSessionContext().messages,
@@ -117,7 +112,9 @@ function readSessionModelPreviewItems(
         maxChars,
         "model-context",
       ),
-      hasOlderEvents: truncated,
+      hasOlderEvents: selection?.truncated ?? false,
+      // A page below its event cap was byte-limited under this window's budget.
+      scannedEvents: selection?.selectedEvents ?? 0,
     };
   });
 }

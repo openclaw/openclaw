@@ -2741,6 +2741,7 @@ src/gateway/session-display-projection.ts
 src/gateway/session-row-transcript-preview.ts
 src/gateway/session-transcript-entry-message.ts
 src/gateway/session-transcript-source-pages.ts
+src/gateway/session-transcript-preview-bounds.ts
 src/gateway/worker-environments/transcript-commit-policy.ts
 src/gateway/worker-environments/worker-ledger-validation.ts
 src/infra/json-utf8-bytes.ts
