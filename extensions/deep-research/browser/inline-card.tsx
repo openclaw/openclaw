@@ -7,30 +7,25 @@ type Tone = "running" | "ready" | "attention" | "failed" | "idle";
 
 const phases = ["planning", "gathering", "assessing", "auditing"];
 
-// Maps a retained job state to the card's status wording and tone.
+const jobStatus: Record<ResearchView["state"], { label: string; tone: Tone }> = {
+  queued: { label: "Starting", tone: "running" },
+  submitting: { label: "Starting", tone: "running" },
+  running: { label: "Researching", tone: "running" },
+  completed: { label: "Report ready", tone: "ready" },
+  partial: { label: "Partial report", tone: "attention" },
+  paused: { label: "Paused", tone: "attention" },
+  indeterminate: { label: "Status unknown", tone: "attention" },
+  failed: { label: "Failed", tone: "failed" },
+  cancelled: { label: "Cancelled", tone: "idle" },
+};
+
+/** Card status wording and tone for a retained job; running jobs also name their phase. */
 export function describeJob(job: Pick<ResearchView, "state" | "phase">): {
   label: string;
   tone: Tone;
 } {
-  switch (job.state) {
-    case "queued":
-    case "submitting":
-      return { label: "Starting", tone: "running" };
-    case "running":
-      return { label: `Researching · ${job.phase}`, tone: "running" };
-    case "completed":
-      return { label: "Report ready", tone: "ready" };
-    case "partial":
-      return { label: "Partial report", tone: "attention" };
-    case "paused":
-      return { label: "Paused", tone: "attention" };
-    case "indeterminate":
-      return { label: "Status unknown", tone: "attention" };
-    case "failed":
-      return { label: "Failed", tone: "failed" };
-    case "cancelled":
-      return { label: "Cancelled", tone: "idle" };
-  }
+  const status = jobStatus[job.state];
+  return job.state === "running" ? { ...status, label: `${status.label} · ${job.phase}` } : status;
 }
 
 // Number of completed phase segments; terminal jobs fill the whole bar.

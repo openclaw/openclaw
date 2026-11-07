@@ -1,7 +1,7 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
+import { RESEARCH_INLINE_VIEW } from "./inline-view-contract.js";
 import { researchToolDefinition } from "./src/contract.js";
-import { RESEARCH_INLINE_VIEW } from "./src/inline-view-contract.js";
 import type { ResearchJobs } from "./src/jobs.js";
 import { registerResearchViewApi } from "./src/view-api.js";
 

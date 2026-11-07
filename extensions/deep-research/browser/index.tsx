@@ -5,7 +5,7 @@ import {
   type ControlUiHost,
   type ControlUiPanel,
 } from "openclaw/plugin-sdk/control-ui";
-import { RESEARCH_INLINE_VIEW } from "../src/inline-view-contract.js";
+import { RESEARCH_INLINE_VIEW } from "../inline-view-contract.js";
 import { createResearchClient } from "./client.js";
 import { ResearchInlineCard } from "./inline-card.js";
 import { ResearchPane } from "./pane.js";

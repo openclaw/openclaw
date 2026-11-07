@@ -3,8 +3,8 @@ import type {
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
+import { RESEARCH_INLINE_VIEW } from "../inline-view-contract.js";
 import { researchToolDefinition, researchToolSchema } from "./contract.js";
-import { RESEARCH_INLINE_VIEW } from "./inline-view-contract.js";
 import type { ResearchJobs } from "./jobs.js";
 import { managedClient } from "./managed.js";
 import { parseValue } from "./validation.js";
@@ -114,8 +114,7 @@ function compactResult(result: unknown): unknown {
       if (!source || typeof source !== "object") {
         return source;
       }
-      const { text: _text, ...rest } = source as Record<string, unknown>;
-      return rest;
+      return Object.fromEntries(Object.entries(source).filter(([key]) => key !== "text"));
     }),
   };
 }
