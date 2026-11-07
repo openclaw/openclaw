@@ -393,11 +393,13 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
       RELEASE_PROFILE: "stable",
     };
     for (const kind of ["ci", "performance"]) {
-      execFileSync("bash", ["-c", String(step("normal_ci", "Dispatch CI").run)], {
+      const log = execFileSync("bash", ["-c", String(step("normal_ci", "Dispatch CI").run)], {
         cwd: root,
         env: { ...env, CHILD_WORKFLOW_KIND: kind },
         timeout: 10_000,
+        encoding: "utf8",
       });
+      expect(log).not.toContain("Artifact dispatch");
     }
     const recorded = readFileSync(calls, "utf8")
       .trim()
@@ -409,6 +411,63 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
     expect(recorded[0]).toEqual(expect.arrayContaining(["ci.yml", `target_ref=${sha}`]));
     expect(readFileSync(output, "utf8")).toContain('child_reuse={"role":"normalCi"}');
     expect(readFileSync(output, "utf8")).toContain("run_id=202");
+  });
+
+  it("emits target-bound dispatch evidence for each artifact producer", () => {
+    const root = tempDirs.make("release-artifact-dispatch-");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const sha = "a".repeat(40);
+    const target = "b".repeat(40);
+    const url = "https://github.com/openclaw/openclaw/actions/runs/202";
+    const gh = join(bin, "gh");
+    writeFileSync(
+      gh,
+      [
+        "#!" + process.execPath,
+        "const args = process.argv.slice(2);",
+        "if (args[0] === 'workflow') console.log('" + url + "');",
+        "else if (args[1].includes('/commits/')) console.log('" + sha + "');",
+        "else if (args[1].includes('/actions/workflows/')) console.log('88');",
+        "else console.log(JSON.stringify({id:202, workflow_id:88, head_branch:'main',",
+        "event:'workflow_dispatch', head_sha:'" + sha + "', run_attempt:2, html_url:'" + url + "',",
+        "display_title:'Full Release Artifacts full-release-validation-77-1-artifacts-' + process.env.ARTIFACT_STAGE}));",
+      ].join("\n"),
+    );
+    chmodSync(gh, 0o755);
+    for (const stage of ["npm", "docker", "candidate"]) {
+      const output = join(root, stage + ".outputs");
+      const log = execFileSync("bash", ["-c", String(step("normal_ci", "Dispatch CI").run)], {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: bin + delimiter + process.env.PATH,
+          GITHUB_OUTPUT: output,
+          GITHUB_STEP_SUMMARY: join(root, "summary"),
+          GITHUB_REPOSITORY: "openclaw/openclaw",
+          GITHUB_RUN_ID: "77",
+          GITHUB_RUN_ATTEMPT: "1",
+          CHILD_WORKFLOW_KIND: "artifact-" + stage,
+          ARTIFACT_STAGE: stage,
+          CHILD_WORKFLOW_REF: "main",
+          PARENT_WORKFLOW_SHA: sha,
+          TARGET_SHA: target,
+          RELEASE_TAG: "v2026.9.37",
+          PREFLIGHT_PHASE: "all",
+          NPM_DIST_TAG: "extended-stable",
+          RELEASE_CANDIDATE_BRANCH: "extended-stable/2026.9.33",
+          CANDIDATE_REQUEST_JSON: "{}",
+          PREPARED_NPM_BUNDLE_JSON: "{}",
+        },
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      expect(log.split("\n").filter((line) => line.startsWith("Artifact dispatch"))).toEqual([
+        "Artifact dispatch " + stage + " target " + target + ": " + url + " (attempt 2)",
+      ]);
+      expect(log).toContain("Dispatched full-release-artifacts.yml: " + url + " (attempt 2)");
+      expect(readFileSync(output, "utf8")).toContain("run_id=202\nrun_attempt=2\n");
+    }
   });
 
   it("starts source validation with artifact producers and releases candidate consumers immediately", () => {

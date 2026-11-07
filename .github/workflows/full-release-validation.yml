@@ -1449,6 +1449,9 @@ jobs:
               echo "::error::${workflow} child run omitted its attempt or URL." >&2
               exit 1
             fi
+            if [[ "$CHILD_WORKFLOW_KIND" == artifact-* ]]; then
+              echo "Artifact dispatch ${CHILD_WORKFLOW_KIND#artifact-} target ${TARGET_SHA}: ${url} (attempt ${child_run_attempt})"
+            fi
             echo "Dispatched ${workflow}: ${url} (attempt ${child_run_attempt})"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
             echo "run_attempt=${child_run_attempt}" >> "$GITHUB_OUTPUT"
