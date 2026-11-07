@@ -298,6 +298,28 @@ describe("Discord action message bodies", () => {
     },
   );
 
+  it("edits agent content with the same outbound rendering as send", async () => {
+    const text = "| svc | state |\n|---|---|\n| api | ok |\n\nstatus __up__ ping @alice";
+    const settings = config({ mentionAliases: { alice: "123456789012345678" } });
+    await invoke(
+      "send",
+      { to: `channel:${channelId}`, message: text },
+      { cfg: settings, conversationReadOrigin: "direct-operator" },
+    );
+    expect(writes()).toHaveLength(1);
+    const sentContent = writes()[0]?.body.content;
+    expect(typeof sentContent).toBe("string");
+    expect(sentContent).toContain("**up**");
+    expect(sentContent).not.toContain("__up__");
+    expect(sentContent).toContain("<@123456789012345678>");
+    expect(sentContent).not.toMatch(/@alice\b/);
+    expect(sentContent).toContain("```");
+
+    await edit(text, settings);
+    expect(writes()).toHaveLength(2);
+    expect(writes()[1]?.body.content).toBe(sentContent);
+  });
+
   it.each([
     ["absent edit content", () => edit(undefined), /required/],
     ["blank message ID", () => edit("caption", cfg, "   "), /required/],
