@@ -301,7 +301,12 @@ class ChatWorkedSummaryTest {
   @Test fun anActiveEarlierRunStaysVisibleAfterANewerUserMessage() {
     val history = messages.map { it.copy(runId = "running") } + message("next-user", "user", 160000)
     val timeline = prepareChatHistory(history, "agent:main:telegram:direct:projection", "agent:main:main").buildTimeline(1, emptyList(), null)
-    assertEquals(timeline.items, prepareChatHistory(history, "main", "main").buildTimeline(1, emptyList(), null, activeRunId = "running").items)
+    // Native completed-work commentary is italic; channel transcripts keep their own style.
+    val expected =
+      timeline.items.map { item ->
+        if (item is ChatTimelineItem.Message && item.message.id == "commentary") item.copy(isCommentary = true) else item
+      }
+    assertEquals(expected, prepareChatHistory(history, "main", "main").buildTimeline(1, emptyList(), null, activeRunId = "running").items)
   }
 
   @Test fun expandedIdentitySurvivesOlderHistoryPrepend() {
@@ -348,7 +353,12 @@ class ChatWorkedSummaryTest {
         message("steer", "user", 4000).copy(steerTargetRunId = "run") +
         message("continued", "assistant", 5000)
     val timeline = prepareChatHistory(history, "agent:main:telegram:direct:projection", "agent:main:main").buildTimeline(1, emptyList(), null)
-    assertEquals(timeline.items, prepareChatHistory(history, "agent:main:dashboard:test", "agent:main:main").buildTimeline(1, emptyList(), null).items)
+    // Native completed-work commentary is italic; channel transcripts keep their own style.
+    val expected =
+      timeline.items.map { item ->
+        if (item is ChatTimelineItem.Message && item.message.id == "commentary") item.copy(isCommentary = true) else item
+      }
+    assertEquals(expected, prepareChatHistory(history, "agent:main:dashboard:test", "agent:main:main").buildTimeline(1, emptyList(), null).items)
   }
 
   @Test fun completedSteeredWorkUsesTerminalReplyAndDistinctStableKeys() {

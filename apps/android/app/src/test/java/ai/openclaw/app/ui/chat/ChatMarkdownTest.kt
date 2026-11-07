@@ -19,6 +19,15 @@ import org.junit.Test
 
 class ChatMarkdownTest {
   @Test
+  fun inlineCodeStaysUprightInsideEmphasis() {
+    val rendered = buildChatInlineMarkdown("*Check `status` now*")
+    assertEquals("Check status now", rendered.text)
+    val code = rendered.spanStyles.single { it.start == 6 && it.end == 12 }
+    assertEquals(FontStyle.Normal, code.item.fontStyle)
+    assertTrue(rendered.spanStyles.any { it.start == 0 && it.end == rendered.length && it.item.fontStyle == FontStyle.Italic })
+  }
+
+  @Test
   fun detailsFoldCollapsedAndExpandedBlocks() {
     val collapsed =
       parseChatMarkdownBlocks(
