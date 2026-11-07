@@ -21,6 +21,7 @@ export {
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
   resolveSessionToolAccess,
+  resolveSessionToolChannelScope,
 } from "./sessions-access.js";
 export {
   resolveCurrentSessionClientAlias,

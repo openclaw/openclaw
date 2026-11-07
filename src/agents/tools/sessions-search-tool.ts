@@ -1,8 +1,10 @@
 import { Type, type Static } from "typebox";
 import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isGatewayTransportError } from "../../gateway/transport-error.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { resolveSessionChannelScope } from "../../plugin-sdk/session-visibility-internal.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -30,7 +32,12 @@ import {
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
 import {
+  withCurrentSessionChannelReadAccess,
+  type SessionChannelReadTarget,
+} from "./sessions-channel-read-result.js";
+import {
   createSessionVisibilityRowChecker,
+  resolveSessionToolChannelScope,
   formatSessionToolAccessDenial,
   isSessionToolMainAlias,
   resolveDisplaySessionKey,
@@ -100,6 +107,12 @@ const SessionsSearchOutputSchema = Type.Union([
 
 type SanitizedSearchHit = Static<typeof SessionsSearchHitSchema>;
 type GatewaySearchHit = Partial<Record<keyof SanitizedSearchHit, unknown>>;
+
+type BufferedSearchHit = {
+  hit: SanitizedSearchHit;
+  target: SessionChannelReadTarget;
+  revalidateCurrent?: () => Promise<void>;
+};
 
 type SearchSessionCandidate = {
   key: string;
@@ -217,6 +230,7 @@ async function listVisibleSearchSessions(params: {
           }
           const visibilityRow = {
             key: row.key,
+            channelScope: resolveSessionChannelScope(row),
             childOwnerSessionKeys: row.childOwnerSessionKeys,
             ...(typeof row.agentId === "string"
               ? { agentId: row.agentId }
@@ -408,7 +422,14 @@ export function createSessionsSearchTool(opts?: {
         };
       }
 
+      const requesterChannelScope = await resolveSessionToolChannelScope({
+        visibility,
+        sessionKey: effectiveRequesterKey,
+        agentId: requesterAgentId,
+        callGateway: gatewayCall,
+      });
       const rowGuard = createSessionVisibilityRowChecker({
+        requesterChannelScope,
         action: "history",
         defaultAgentId: requesterAgentId,
         requesterAgentId,
@@ -476,7 +497,7 @@ export function createSessionsSearchTool(opts?: {
         // Search excerpts are re-persisted in the caller transcript; incognito
         // sessions therefore stay absent even when the caller could otherwise see them.
         .filter((candidate) => !isIncognitoSessionKey(candidate.key));
-      const visibleHits: SanitizedSearchHit[] = [];
+      const bufferedHits: BufferedSearchHit[] = [];
       let indexing = false;
       let archivedTranscriptsExcluded = 0;
       let backendTruncated = false;
@@ -495,12 +516,9 @@ export function createSessionsSearchTool(opts?: {
       for (const [agentId, candidates] of [...sessionsByAgent].toSorted(([left], [right]) =>
         left.localeCompare(right),
       )) {
-        for (
-          let offset = 0;
-          offset < candidates.length;
-          offset += SESSIONS_SEARCH_MAX_SESSION_KEYS
-        ) {
-          const chunk = candidates.slice(offset, offset + SESSIONS_SEARCH_MAX_SESSION_KEYS);
+        const chunkSize = visibility === "channel" ? 1 : SESSIONS_SEARCH_MAX_SESSION_KEYS;
+        for (let offset = 0; offset < candidates.length; offset += chunkSize) {
+          const chunk = candidates.slice(offset, offset + chunkSize);
           const runSearch = () =>
             gatewayCall<{
               results?: GatewaySearchHit[];
@@ -519,17 +537,45 @@ export function createSessionsSearchTool(opts?: {
               },
             });
           const scopedCandidate = chunk.length === 1 ? chunk[0] : undefined;
+          let expectedSessionId = scopedCandidate?.expectedSessionId;
+          let revalidateCurrent: (() => Promise<void>) | undefined;
+          let admissionIdentities: string[] | undefined;
+          if (visibility === "channel" && scopedCandidate) {
+            const freshAccess = await resolveSessionToolAccess({
+              action: "history",
+              displayAction: "search",
+              requesterAgentId,
+              requesterSessionKey: effectiveRequesterKey,
+              sessionReadScopeKey: opts?.sessionReadScopeKey ? effectiveRequesterKey : undefined,
+              mainSessionKey,
+              targetAgentId: agentId,
+              targetSessionKey: scopedCandidate.key,
+              requesterOwned: false,
+              visibility,
+              a2aPolicy,
+              callGateway: gatewayCall,
+            });
+            if (!freshAccess.allowed) {
+              continue;
+            }
+            expectedSessionId = freshAccess.expectedSessionId;
+            revalidateCurrent = freshAccess.revalidateCurrent;
+            admissionIdentities = freshAccess.admissionIdentities;
+          }
           let result: Awaited<ReturnType<typeof runSearch>>;
           try {
-            result = scopedCandidate?.expectedSessionId
-              ? await runWithScopedSessionAccess({
-                  cfg,
-                  agentId,
-                  expectedSessionId: scopedCandidate.expectedSessionId,
-                  targetSessionKey: scopedCandidate.key,
-                  run: runSearch,
-                })
-              : await runSearch();
+            result =
+              scopedCandidate && (expectedSessionId || revalidateCurrent)
+                ? await runWithScopedSessionAccess({
+                    cfg,
+                    agentId,
+                    expectedSessionId,
+                    revalidateCurrent,
+                    admissionIdentities,
+                    targetSessionKey: scopedCandidate.key,
+                    run: runSearch,
+                  })
+                : await runSearch();
           } catch (error) {
             if (
               error instanceof GatewayProtocolRequestTimeoutError ||
@@ -566,32 +612,76 @@ export function createSessionsSearchTool(opts?: {
               mainKey,
             });
             if (sanitized) {
-              visibleHits.push(sanitized);
+              bufferedHits.push({
+                hit: sanitized,
+                target: {
+                  key: candidate.key,
+                  agentId,
+                  ...(visibility === "channel"
+                    ? { storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }) }
+                    : {}),
+                  ...(expectedSessionId ? { expectedSessionId } : {}),
+                },
+                ...(revalidateCurrent ? { revalidateCurrent } : {}),
+              });
             }
           }
         }
       }
-      visibleHits.sort(compareSearchHits);
-      const limited = visibleHits.slice(0, limit);
-      const capped = capSearchHits(limited);
-      const warnings = [
-        indexing ? SESSIONS_SEARCH_INDEXING_WARNING : undefined,
-        archivedTranscriptsExcluded > 0
-          ? `Search excludes ${archivedTranscriptsExcluded} archived transcripts. Restore a transcript to include it in search.`
-          : undefined,
-      ].filter(Boolean);
-      return jsonResult({
-        results: capped.items,
-        ...(opts?.sessionLinkBase
-          ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
-          : {}),
-        ...(indexing ? { indexing: true } : {}),
-        ...(archivedTranscriptsExcluded > 0 ? { archivedTranscriptsExcluded } : {}),
-        ...(warnings.length ? { warning: warnings.join(" ") } : {}),
-        ...(backendTruncated || visibleHits.length > limit || capped.truncated
-          ? { truncated: true }
-          : {}),
-      });
+      const finalAuthorizations = new Map<() => Promise<void>, boolean>();
+      const authorizedHits: BufferedSearchHit[] = [];
+      for (const buffered of bufferedHits) {
+        const revalidateCurrent = buffered.revalidateCurrent;
+        if (revalidateCurrent && !finalAuthorizations.has(revalidateCurrent)) {
+          try {
+            await revalidateCurrent();
+            finalAuthorizations.set(revalidateCurrent, true);
+          } catch {
+            finalAuthorizations.set(revalidateCurrent, false);
+          }
+        }
+        if (!revalidateCurrent || finalAuthorizations.get(revalidateCurrent) === true) {
+          authorizedHits.push(buffered);
+        }
+      }
+      const finalize = (visible: readonly boolean[]) => {
+        const visibleHits = authorizedHits
+          .filter((_, index) => visible[index])
+          .map(({ hit }) => hit);
+        visibleHits.sort(compareSearchHits);
+        const limited = visibleHits.slice(0, limit);
+        const capped = capSearchHits(limited);
+        const warnings = [
+          indexing ? SESSIONS_SEARCH_INDEXING_WARNING : undefined,
+          archivedTranscriptsExcluded > 0
+            ? `Search excludes ${archivedTranscriptsExcluded} archived transcripts. Restore a transcript to include it in search.`
+            : undefined,
+        ].filter(Boolean);
+        return jsonResult({
+          results: capped.items,
+          ...(opts?.sessionLinkBase
+            ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
+            : {}),
+          ...(indexing ? { indexing: true } : {}),
+          ...(archivedTranscriptsExcluded > 0 ? { archivedTranscriptsExcluded } : {}),
+          ...(warnings.length ? { warning: warnings.join(" ") } : {}),
+          ...(backendTruncated || visibleHits.length > limit || capped.truncated
+            ? { truncated: true }
+            : {}),
+        });
+      };
+      return visibility === "channel"
+        ? await withCurrentSessionChannelReadAccess(
+            {
+              requesterAgentId,
+              requesterSessionKey: effectiveRequesterKey,
+              sandboxed: opts?.sandboxed === true,
+              a2aPolicy,
+              targets: authorizedHits.map(({ target }) => target),
+            },
+            finalize,
+          )
+        : finalize(authorizedHits.map(() => true));
     }),
   };
 }
