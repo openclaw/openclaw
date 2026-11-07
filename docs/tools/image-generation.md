@@ -105,6 +105,7 @@ does not force the legacy `response_format` parameter on custom endpoints.
 | ------------------------------------------------ | --------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | OpenAI image generation with API billing         | `openai/gpt-image-2`                                                                                | `OPENAI_API_KEY`                               |
 | OpenAI GPT Image 2.5                             | `openai/gpt-image-2.5-flare` or `openai/gpt-image-2.5-sunburst`                                     | Explicit OpenAI API-key route                  |
+| OpenAI GPT Image 2.6 and animated GIFs           | `openai/gpt-image-2.6-flare` or `openai/gpt-image-2.6-sunburst`                                     | Explicit OpenAI API-key route                  |
 | OpenAI image generation with ChatGPT/Codex OAuth | `openai/gpt-image-2`                                                                                | OpenAI ChatGPT/Codex OAuth                     |
 | OpenAI transparent-background PNG/WebP           | `openai/gpt-image-1.5`                                                                              | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth |
 | DeepInfra image generation                       | `deepinfra/black-forest-labs/FLUX-1-schnell`                                                        | `DEEPINFRA_API_KEY`                            |
@@ -205,8 +206,9 @@ the peer who requested the image.
   Quality hint when the model supports it. GPT Image 2.5 supports `xhigh`
   and `max` through OpenAI and fal.
 </ParamField>
-<ParamField path="outputFormat" type='"png" | "jpeg" | "webp"'>
-  Output format hint when the provider supports it.
+<ParamField path="outputFormat" type='"png" | "jpeg" | "webp" | "gif"'>
+  Output format hint when the provider supports it. `gif` returns an animated
+  GIF from OpenAI GPT Image 2.6 text-to-image generation.
 </ParamField>
 <ParamField path="background" type='"transparent" | "opaque" | "auto"'>
   Background hint when the provider supports it. Use `transparent` with
@@ -220,7 +222,8 @@ the peer who requested the image.
 </ParamField>
 <ParamField path="filename" type="string">Output filename hint.</ParamField>
 <ParamField path="openai" type="object">
-  OpenAI-only hints: `background`, `moderation`, `outputCompression`, and `user`.
+  OpenAI-only hints: `background`, `moderation`, `outputCompression`,
+  `frameCount`, `frameDurationMs`, and `user`.
 </ParamField>
 <ParamField path="fal.creativity" type='"raw" | "low" | "medium" | "high"'>
   fal Krea 2 creativity control. Defaults to `medium`.
@@ -351,6 +354,30 @@ and ComfyUI support 1.
     fal converts aspect-ratio hints to valid dimensions, such as `3:2` to
     `1536x1024`. Invalid explicit sizes fail with a size error. fal does not accept
     `resolution` overrides for these models or infer resolution from edit inputs.
+
+  </Accordion>
+  <Accordion title="GPT Image 2.6 and animated GIFs through OpenAI">
+    Select `openai/gpt-image-2.6-flare` or `openai/gpt-image-2.6-sunburst`
+    explicitly through the [explicit OpenAI API-key route](/providers/openai/image-and-video#gpt-image-2-6-and-animated-gifs).
+    They accept the same sizes and qualities as GPT Image 2.5 and also return
+    animated GIFs:
+
+    ```json
+    {
+      "model": "openai/gpt-image-2.6-flare",
+      "prompt": "A paper lantern swaying in the wind, seamless loop",
+      "outputFormat": "gif",
+      "openai": { "frameCount": 12, "frameDurationMs": 120 }
+    }
+    ```
+
+    `openai.frameCount` accepts 2-64 frames (OpenAI default 9), and
+    `openai.frameDurationMs` accepts 20-2000 ms per frame (default 200).
+    Without `size`, OpenAI chooses the frame size. GIF output is
+    text-to-image only, so GIF requests with reference images fail before
+    a provider request. A GIF over the media size limit fails rather than
+    being re-encoded to a still image. Request fewer frames or a smaller size,
+    or raise `agents.defaults.mediaMaxMb`.
 
   </Accordion>
   <Accordion title="OpenAI gpt-image-2 (and gpt-image-1.5)">

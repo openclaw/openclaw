@@ -3,6 +3,7 @@ import { detectMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
+import { IMAGE_GENERATION_OUTPUT_FORMATS } from "../../image-generation/types.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
 import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
@@ -12,7 +13,6 @@ import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
 import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
 
-const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const IMAGE_QUALITIES = ["low", "medium", "high", "xhigh", "max", "auto"] as const;
 const IMAGE_MODERATIONS = ["low", "auto"] as const;
@@ -39,10 +39,12 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
       .option("--size <size>", "Size hint like 1024x1024")
       .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
       .option("--resolution <value>", "Resolution hint: 1K, 2K, or 4K")
-      .option("--output-format <format>", "Output format hint: png, jpeg, or webp")
+      .option("--output-format <format>", "Output format hint: png, jpeg, webp, or gif")
       .option("--background <value>", "Background hint: transparent, opaque, or auto")
       .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
       .option("--openai-moderation <value>", "OpenAI moderation hint: low or auto")
+      .option("--openai-frame-count <n>", "OpenAI GIF frame count: 2-64")
+      .option("--openai-frame-duration-ms <ms>", "OpenAI GIF milliseconds per frame: 20-2000")
       .option("--quality <value>", "Quality hint: low, medium, high, xhigh, max, or auto")
       .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
       .option("--output <path>", "Output path")
@@ -81,8 +83,16 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const resolution = normalizeImageGenerationResolution(opts.resolution);
           const outputFormat = parseImageOption(
             opts.outputFormat,
-            IMAGE_OUTPUT_FORMATS,
+            IMAGE_GENERATION_OUTPUT_FORMATS,
             "--output-format",
+          );
+          const openaiFrameCount = parseOptionalPositiveInteger(
+            opts.openaiFrameCount,
+            "--openai-frame-count",
+          );
+          const openaiFrameDurationMs = parseOptionalPositiveInteger(
+            opts.openaiFrameDurationMs,
+            "--openai-frame-duration-ms",
           );
           const background = parseImageOption(opts.background, IMAGE_BACKGROUNDS, "--background");
           const openaiBackground = parseImageOption(
@@ -141,11 +151,13 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
             outputFormat,
             background,
             providerOptions:
-              openaiBackground || openaiModeration
+              openaiBackground || openaiModeration || openaiFrameCount || openaiFrameDurationMs
                 ? {
                     openai: {
                       ...(openaiBackground ? { background: openaiBackground } : {}),
                       ...(openaiModeration ? { moderation: openaiModeration } : {}),
+                      ...(openaiFrameCount ? { frameCount: openaiFrameCount } : {}),
+                      ...(openaiFrameDurationMs ? { frameDurationMs: openaiFrameDurationMs } : {}),
                     },
                   }
                 : undefined,

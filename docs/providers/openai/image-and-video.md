@@ -98,6 +98,34 @@ openclaw infer image edit \
 with no edge above 3840 pixels and total pixels between 655,360 and 8,294,400.
 The aspect ratio must be between 1:3 and 3:1.
 
+### GPT Image 2.6 and animated GIFs
+
+Select `openai/gpt-image-2.6-flare` or `openai/gpt-image-2.6-sunburst`
+explicitly with the same API-key setup as GPT Image 2.5. Both accept the
+GPT Image 2.5 sizes and qualities and add animated GIF output for
+text-to-image generation:
+
+```bash
+openclaw infer image generate \
+  --model openai/gpt-image-2.6-flare \
+  --prompt "A paper lantern swaying in the wind, seamless loop" \
+  --output-format gif --openai-frame-count 12 --openai-frame-duration-ms 120 \
+  --json
+```
+
+The `image_generate` tool takes the same controls as `outputFormat: "gif"`
+with `openai.frameCount` (2-64, default 9) and `openai.frameDurationMs`
+(20-2000 ms, default 200). Without `size`, OpenAI chooses the frame size; an
+explicit `size` sets each frame and only needs dimensions divisible by 16.
+OpenAI enforces the total pixel budget across frames.
+
+GIF output uses the direct Images API generations endpoint only:
+
+- GIF requests with reference images fail before a provider request.
+- The ChatGPT/Codex OAuth backend rejects GIF output.
+- Other OpenAI image models report `outputFormat: "gif"` as an ignored
+  override and return a still image.
+
 ### Other Image Models
 
 OpenClaw maps size and aspect-ratio hints to the selected model's supported
