@@ -10,6 +10,25 @@ import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-
 import { catalogAgentFacts } from "./prepared-model-catalog-worker.shared.test-support.js";
 
 describe("prepared model catalog worker input", () => {
+  it("serializes the bounded fallback directory without changing the agent directory", () => {
+    const agentFacts = catalogAgentFacts(
+      {
+        config: captureRuntimeConfig({}),
+        agentDir: "/tmp/secondary-agent",
+        fallbackAgentDir: "/tmp/system-agent",
+      },
+      {},
+    );
+    const cloned = structuredClone(
+      createPreparedModelCatalogWorkerInput({
+        agentFacts,
+        pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+      }),
+    );
+    expect(cloned.input.agentDir).toBe("/tmp/secondary-agent");
+    expect(cloned.input.fallbackAgentDir).toBe("/tmp/system-agent");
+  });
+
   it("reuses inventory fingerprints across admission overlays and replaces them with the inventory", () => {
     withPluginCache(createPluginCache(), () => {
       const makeSnapshot = (manifestHash: string) => {
