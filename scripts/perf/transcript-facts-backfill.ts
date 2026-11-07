@@ -5,6 +5,8 @@
  * --start-position selects an inclusive active position for offline tail seeding.
  * --duty-ratio 20 models owner pacing from measured BEGIN-through-COMMIT wall;
  * actual host-returned delays and contention require the foreground probe.
+ * --compare-hydration --baseline-tail-rows 512 retains the recent active-path facts
+ * in baseline arms; the default zero compares empty versus complete coverage.
  * node --import ./scripts/tsx.mjs scripts/perf/transcript-facts-backfill.ts \
  *   --output .local/facts-backfill --name ten-million --label paced --pause-ms 250
  */
@@ -46,6 +48,7 @@ const { values } = parseArgs({
     "skip-hydration": { type: "boolean", default: false },
     "skip-backfill": { type: "boolean", default: false },
     "compare-hydration": { type: "boolean", default: false },
+    "baseline-tail-rows": { type: "string", default: "0" },
   },
 });
 assert(values.output && values.label, "--output and a unique --label are required");
@@ -61,6 +64,7 @@ const dutyRatio = positive(values["duty-ratio"]);
 const startPosition = positive(values["start-position"]);
 const maxBatches = positive(values["max-batches"]);
 const allocationIterations = positive(values["allocation-iterations"]);
+const baselineTailRows = positive(values["baseline-tail-rows"]);
 const output = path.resolve(values.output);
 const fixture = path.join(output, `${values.name}.sqlite`);
 const prefix = path.join(output, `${values.name}-${values.label}`);
@@ -223,6 +227,18 @@ async function compareColdHydration() {
     Number(active),
     "Complete selected-session coverage is required before comparison",
   );
+  assert(baselineTailRows < saved.length, "Baseline must leave historical coverage missing");
+  const baselineLabel = baselineTailRows === 0 ? "cold-empty" : "cold-partial";
+  const baselineSequences = new Set(
+    db
+      .prepare(
+        "SELECT event_seq FROM session_transcript_active_events WHERE session_id=? ORDER BY active_position DESC LIMIT ?",
+      )
+      .all(values.session, baselineTailRows)
+      .map((row) => row.event_seq),
+  );
+  const baselineFacts = saved.filter((row) => baselineSequences.has(row.seq));
+  assert.equal(baselineFacts.length, baselineTailRows);
   const insert = db.prepare("INSERT INTO session_transcript_active_event_facts VALUES(?,?,?,?)");
   const populate = (full: boolean) => {
     db.exec("BEGIN IMMEDIATE");
@@ -230,15 +246,13 @@ async function compareColdHydration() {
       db.prepare("DELETE FROM session_transcript_active_event_facts WHERE session_id=?").run(
         values.session,
       );
-      if (full) {
-        for (const row of saved) {
-          assert(
-            row.seq !== undefined &&
-              row.serialized_bytes !== undefined &&
-              row.dependency_navigation_json !== undefined,
-          );
-          insert.run(values.session, row.seq, row.serialized_bytes, row.dependency_navigation_json);
-        }
+      for (const row of full ? saved : baselineFacts) {
+        assert(
+          row.seq !== undefined &&
+            row.serialized_bytes !== undefined &&
+            row.dependency_navigation_json !== undefined,
+        );
+        insert.run(values.session, row.seq, row.serialized_bytes, row.dependency_navigation_json);
       }
       db.exec("COMMIT");
     } catch (error) {
@@ -271,7 +285,7 @@ async function compareColdHydration() {
       assert(os.loadavg()[0]! <= 40, "Host load above40 before fresh-reader comparison pair");
       for (const full of pair % 2 ? [true, false] : [false, true]) {
         populate(full);
-        run(full ? "cold-full" : "cold-empty");
+        run(full ? "cold-full" : baselineLabel);
       }
     }
     if (allocationIterations > 0) {
@@ -292,7 +306,7 @@ async function compareColdHydration() {
             const usage = process.cpuUsage(cpu);
             const { profile } = await inspector.post("HeapProfiler.stopSampling");
             const record = {
-              label: full ? "cold-full-allocation" : "cold-empty-allocation",
+              label: full ? "cold-full-allocation" : `${baselineLabel}-allocation`,
               pair,
               scope: "Fresh-reader open, admission, hydration, equality, and close",
               iterations: allocationIterations,
@@ -317,7 +331,12 @@ async function compareColdHydration() {
     `${JSON.stringify(
       {
         scope:
-          "Fresh native reader per hydration; identical current source with empty/full synthetic facts",
+          "Fresh native reader per hydration; identical current source with baseline/full synthetic facts",
+        baseline: {
+          coverage: baselineTailRows === 0 ? "empty" : "partial",
+          facts: baselineFacts.length,
+          activeRows: Number(active),
+        },
         fixture,
         fixtureRows: fixtureReport.rows,
         session: values.session,
