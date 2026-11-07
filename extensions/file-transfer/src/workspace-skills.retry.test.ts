@@ -102,27 +102,35 @@ it.each(["caller", "binding"])("cancels a read backoff when its %s ends", async 
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it("keeps one read deadline across connection attempts", async () => {
-  let calls = 0;
-  const open = vi.fn<NodeWorkspaceWorkerOptions["openDuplex"]>(
-    async ({ signal }) =>
-      await new Promise<unknown>((resolve, reject) => {
-        if (++calls === 1) {
-          setTimeout(() => reject(disconnected()), 50_000);
-          return;
-        }
-        // An active transport honors the caller's abort; it does not invent its own timeout.
-        signal!.addEventListener("abort", () => resolve(signal!.reason), { once: true });
-      }).then((reason) => {
-        assert(reason instanceof Error);
-        throw reason;
-      }),
-  );
-  const result = reader(open).readInstructions("/node/workspace/skills/tool/SKILL.md", {});
-  const failed = expect(result).rejects.toMatchObject({ name: "TimeoutError" });
-  await vi.advanceTimersByTimeAsync(59_999);
-  expect(open).toHaveBeenCalledTimes(2);
-  await vi.advanceTimersByTimeAsync(1);
-  await failed;
-  expect(vi.getTimerCount()).toBe(0);
-});
+it.each([
+  { disconnectAtMs: 50_000, attempts: 2 },
+  { disconnectAtMs: 59_500, attempts: 1 },
+])(
+  "keeps one read deadline after disconnect at $disconnectAtMs ms",
+  async ({ disconnectAtMs, attempts }) => {
+    let calls = 0;
+    const open = vi.fn<NodeWorkspaceWorkerOptions["openDuplex"]>(
+      async ({ signal }) =>
+        await new Promise<unknown>((resolve, reject) => {
+          if (++calls === 1) {
+            setTimeout(() => reject(disconnected()), disconnectAtMs);
+            return;
+          }
+          // An active transport honors the caller's abort; it does not invent its own timeout.
+          signal!.addEventListener("abort", () => resolve(signal!.reason), { once: true });
+        }).then((reason) => {
+          assert(reason instanceof Error);
+          throw reason;
+        }),
+    );
+    const result = reader(open).readInstructions("/node/workspace/skills/tool/SKILL.md", {});
+    const failed = expect(result).rejects.toMatchObject({ name: "TimeoutError" });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(open).toHaveBeenCalledTimes(attempts);
+    await vi.advanceTimersByTimeAsync(1);
+    await failed;
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.runAllTimersAsync();
+    expect(open).toHaveBeenCalledTimes(attempts);
+  },
+);

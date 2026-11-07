@@ -161,9 +161,10 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
     return envelope.result as T;
   }
   async function read<T>(operation: string, request: unknown, signal?: AbortSignal): Promise<T> {
+    const active = signal ? AbortSignal.any([options.signal, signal]) : options.signal;
     const deadline = buildTimeoutAbortSignal({
       timeoutMs: NODE_WORKSPACE_READ_TIMEOUT_MS,
-      signal: signal ? AbortSignal.any([options.signal, signal]) : options.signal,
+      signal: active,
       operation: "workspace.skills read",
     });
     let pairingRetries = 0;
@@ -184,7 +185,15 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
           if (!isDisconnectedRead(error) || connectionRetries >= MAX_CONNECTION_RETRIES) {
             throw error;
           }
-          await sleepWithAbort(1_000 * 2 ** connectionRetries, deadline.signal);
+          try {
+            await sleepWithAbort(1_000 * 2 ** connectionRetries, deadline.signal);
+          } catch (error) {
+            // Preserve caller cancellation; only the read budget owns this timeout.
+            if (!active.aborted) {
+              deadline.signal?.throwIfAborted();
+            }
+            throw error;
+          }
           connectionRetries += 1;
         }
       }
