@@ -214,7 +214,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-102 plugins
+103 plugins
 
 - **[abliteration](/plugins/reference/abliteration)** (`@openclaw/abliteration-provider`) - npm or ClawHub: `@openclaw/abliteration-provider`. OpenClaw Abliteration provider plugin.
 
@@ -291,6 +291,8 @@ Each entry lists the package, distribution route, and description.
 - **[gradium](/plugins/reference/gradium)** (`@openclaw/gradium-speech`) - npm or ClawHub: `@openclaw/gradium-speech`. Adds text-to-speech provider support.
 
 - **[groq](/plugins/reference/groq)** (`@openclaw/groq-provider`) - npm or ClawHub: `@openclaw/groq-provider`. Adds Groq model provider support to OpenClaw.
+
+- **[heygen-speech](/plugins/reference/heygen-speech)** (`@openclaw/heygen-speech`) - npm or ClawHub: `@openclaw/heygen-speech`. HeyGen Voice hosted text-to-speech with streaming, voice notes, and telephony output.
 
 - **[imessage](/plugins/reference/imessage)** (`@openclaw/imessage`) - npm or ClawHub: `@openclaw/imessage`. OpenClaw iMessage channel plugin using imsg on a signed-in Mac.
 

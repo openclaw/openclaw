@@ -694,6 +694,10 @@
           - "docs/providers/fish-audio.md"
           - "docs/tools/tts.md"
           - "docs/tools/tts/**"
+"extensions: heygen-speech":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/heygen-speech/**"
 "extensions: kilocode":
   - changed-files:
       - any-glob-to-any-file:

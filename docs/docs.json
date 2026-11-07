@@ -2314,6 +2314,7 @@
                       "providers/elevenlabs",
                       "providers/fish-audio",
                       "providers/gradium",
+                      "providers/heygen",
                       "providers/inworld",
                       "providers/senseaudio"
                     ]

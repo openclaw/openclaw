@@ -344,6 +344,7 @@
     "!dist/extensions/gmi/**",
     "!dist/extensions/gradium/**",
     "!dist/extensions/groq/**",
+    "!dist/extensions/heygen-speech/**",
     "!dist/extensions/inworld/**",
     "!dist/extensions/imessage/**",
     "!dist/extensions/irc/**",
