@@ -189,6 +189,9 @@ receiver but its response is lost. An explicit HTTP rejection or a failure prove
 to precede sending records **Not delivered** and allows the in-app fallback
 notification, including when Gateway work admission refuses an alert before its
 transport starts. An unknown outcome does not trigger that fallback.
+When an alert on an owner-targeted route or a route with `directPolicy: "block"` is
+recorded as Not delivered, its fallback turn stays in-session: it is not delivered
+automatically and has no current external conversation for implicit sends.
 
 A model-backed run can finish successfully even when its final reply says the requested task is blocked or could not be completed. The scheduler does not infer execution failure from assistant prose. Such a reply follows normal delivery: `announce` sends it, `none` stays silent, and `NO_REPLY` suppresses a text-only announcement without failing the run. A blocker report does not itself increment the execution-failure streak, trigger error backoff, or request a failure alert or owner-conversation repair. Runtime errors, such as provider failures and execution timeouts, still use the failure policy below.
 
@@ -205,6 +208,7 @@ Failure notification routes resolve in this order:
 1. Route fields in the job's `failureAlert` object.
 2. `job.delivery.failureDestination`, layered over the destination fields in global `cron.failureAlert` (`mode`, `channel`, `to`, `threadId`, `accountId`), or over the creator's `cron.creators.<profileId>.failureAlert` route, else the owning agent's `cron.agents.<agentId>.failureAlert` route, when one exists. A `cron.failureDestination` block is not read directly; `openclaw doctor --fix` merges it into the global object.
 3. The job's primary announce target, including a configured [default destination](#default-destinations).
+   When this tier applies, failure alerts keep the primary target's owner targeting and `directPolicy`.
 
 - `job.failureAlert: false` disables execution and required-delivery failure alerts for that job. The auto-disable safety notification remains active.
 - Global `cron.failureAlert.enabled: false` disables inherited notifications. A per-job `failureAlert` object explicitly re-enables that job; `enabled: true` explicitly enables the global policy.
