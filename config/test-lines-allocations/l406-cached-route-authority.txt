@@ -1,2 +1,2 @@
-# Router-level same/deleted/moved confirmation for both scoped snapshot and persisted roster admission.
-36
+# Router confirmation plus live-metadata browser proof before moved-route admission.
+54
