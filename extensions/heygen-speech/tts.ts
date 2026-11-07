@@ -1,7 +1,5 @@
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
-import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
-import { canonicalizeBase64, rawDataToString } from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import { filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -145,6 +143,9 @@ export async function heygenSocketTtsStream(params: HeyGenTtsRequest): Promise<H
     url.searchParams.set("language", params.language);
   }
 
+  const { toStringifiedError } = await import("openclaw/plugin-sdk/error-runtime");
+  const { canonicalizeBase64, rawDataToString } =
+    await import("openclaw/plugin-sdk/realtime-voice-provider");
   const {
     createProviderHttpError,
     formatProviderErrorPayload,
