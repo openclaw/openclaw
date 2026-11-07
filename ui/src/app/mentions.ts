@@ -24,9 +24,12 @@ type MentionsSnapshot = {
 };
 
 export type MentionsCapability = ReturnType<typeof createMentionsCapability>;
+export type MentionArrival = (item: MentionInboxItem, signal: AbortSignal) => void;
 
 type MentionConnection = {
   retired: boolean;
+  // Handles are bounded by the current Inbox snapshot, not the connection lifetime.
+  notifications: Map<string, AbortController>;
   client: GatewayBrowserClient;
   hello: GatewayHelloOk;
   connectionRevision: number;
@@ -41,10 +44,20 @@ type MentionConnection = {
   retryAttempt: number;
 };
 
+function cancelNotifications(owner: MentionConnection) {
+  for (const notification of owner.notifications.values()) {
+    notification.abort();
+  }
+  owner.notifications.clear();
+}
+
 /** Owns one profile's temporary Inbox even when no Inbox presenter is mounted. */
 export function createMentionsCapability(
   gateway: ApplicationGateway,
-  options: { connectionBootstrap?: ConnectionBootstrapCoordinator } = {},
+  options: {
+    connectionBootstrap?: ConnectionBootstrapCoordinator;
+    onArrival?: MentionArrival;
+  } = {},
 ) {
   let snapshot: MentionsSnapshot = {
     phase: "unavailable",
@@ -86,11 +99,31 @@ export function createMentionsCapability(
       ) {
         return;
       }
+      // The first successful read of every connection is a silent baseline,
+      // including reconnects. Only this owner decides which Inbox items arrived.
+      const previousIds =
+        owner.revision < 0 ? null : new Set(snapshot.items.map((item) => item.id));
       owner.revision = result.revision;
+      const visibleIds = new Set(result.items.map((item) => item.id));
+      for (const [id, notification] of owner.notifications) {
+        if (!visibleIds.has(id)) {
+          notification.abort();
+          owner.notifications.delete(id);
+        }
+      }
       // The Gateway can emit its changed revision while preparing this same snapshot.
       owner.refreshRequested &&= owner.requestedRevision > result.revision;
       owner.retryAttempt = 0;
       publish({ phase: "ready", items: result.items, error: null });
+      if (previousIds && options.onArrival) {
+        for (const item of result.items) {
+          if (!previousIds.has(item.id)) {
+            const notification = new AbortController();
+            owner.notifications.set(item.id, notification);
+            options.onArrival(item, notification.signal);
+          }
+        }
+      }
     } catch (error) {
       if (!isCurrent(owner)) {
         return;
@@ -114,6 +147,7 @@ export function createMentionsCapability(
       } else if (accessLost) {
         // Retire in-flight reads too; an earlier success cannot restore a revoked Inbox.
         clearTimeout(owner.retryTimer);
+        cancelNotifications(owner);
         connection = null;
       }
       publish({
@@ -174,6 +208,7 @@ export function createMentionsCapability(
     if (connection) {
       // Keep its display identity, but never revive pre-disconnect requests.
       connection.retired = true;
+      cancelNotifications(connection);
     }
     const sameIdentity =
       connection?.client === next.client &&
@@ -209,6 +244,7 @@ export function createMentionsCapability(
     }
     const owner: MentionConnection = {
       retired: false,
+      notifications: new Map(),
       client: next.client,
       hello: next.hello,
       connectionRevision: gateway.connectionRevision,
@@ -304,6 +340,9 @@ export function createMentionsCapability(
     dispose() {
       disposed = true;
       clearTimeout(connection?.retryTimer);
+      if (connection) {
+        cancelNotifications(connection);
+      }
       connection = null;
       stopGateway();
       stopEvents();

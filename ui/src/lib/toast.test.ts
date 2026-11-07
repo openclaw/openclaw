@@ -47,6 +47,28 @@ it("requires an explicit severity, including neutral outcomes", () => {
 });
 
 describe("shared toast", () => {
+  it("cancels queued and presented notices with their owner without replay", async () => {
+    const pending = new AbortController();
+    const onDismiss = vi.fn();
+    showToast({ message: "Queued", severity: undefined, signal: pending.signal, onDismiss });
+    pending.abort();
+    const host = await mountHost();
+    expect(titles(host)).toEqual([]);
+    expect(onDismiss).toHaveBeenCalledExactlyOnceWith("cancelled");
+
+    const active = new AbortController();
+    showToast({ message: "Visible", severity: undefined, signal: active.signal, onDismiss });
+    await settleHost(host);
+    expect(titles(host)).toEqual(["Visible"]);
+    active.abort();
+    await settleHost(host);
+    expect(titles(host)).toEqual([]);
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+    showToast({ message: "Retired", severity: undefined, signal: active.signal });
+    await settleHost(host);
+    expect(titles(host)).toEqual([]);
+  });
+
   it("keeps redacted error details collapsed until opened", async () => {
     const host = await mountHost();
     showToast({

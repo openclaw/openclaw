@@ -130,10 +130,13 @@ export function prepareBackgroundSessionCompletion(params: {
                 : "error",
         placement: "top-right",
         avatar: {
-          id: agentId,
-          name: normalizeAgentTargetLabel(agent, identity),
-          avatar: resolveAgentAvatarUrl(agent, identity),
-          textAvatar: resolveAgentTextAvatar(agent, identity),
+          kind: "agent",
+          agent: {
+            id: agentId,
+            name: normalizeAgentTargetLabel(agent, identity),
+            avatar: resolveAgentAvatarUrl(agent, identity),
+            textAvatar: resolveAgentTextAvatar(agent, identity),
+          },
         },
         message: resolveSessionDisplayName(key, row),
         description: status,

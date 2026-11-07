@@ -66,6 +66,13 @@ export const MentionInboxItemSchema = closedObject({
   createdAt: MentionTimestampSchema,
   expiresAt: MentionTimestampSchema,
   excerpt: Type.Optional(Type.String({ maxLength: 280 })),
+  /** UTF-16 offsets of the recipient's selected mention inside `excerpt`. */
+  excerptHighlight: Type.Optional(
+    closedObject({
+      start: Type.Integer({ minimum: 0, maximum: 280 }),
+      end: Type.Integer({ minimum: 1, maximum: 280 }),
+    }),
+  ),
 });
 
 export const MentionsListParamsSchema = closedObject({});

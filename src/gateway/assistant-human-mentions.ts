@@ -108,6 +108,7 @@ export async function injectAssistantMessageWithHumanMentions(
       senderProfileId: params.onBehalfOfProfileId,
       recipientProfileIds: mentions.map((mention) => mention.profileId),
       excerpt: params.text,
+      mentionSpans: mentions,
     });
   }
   return injected;

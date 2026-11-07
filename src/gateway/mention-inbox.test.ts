@@ -518,6 +518,55 @@ it.each(["dismissal", "new input"] as const)(
   },
 );
 
+it("centers each recipient's preview on their own selection across restart", () =>
+  withInbox(async (f) => {
+    // Two people share a label; Bob's selection sits past the old 2,048-character window.
+    const lead = "Ping **@Sam** about **the plan**. ";
+    const filler = "x".repeat(3_000);
+    const tail = " ask @Sam to sign off on 🦞 deploy";
+    const excerpt = `${lead}${filler}${tail}`;
+    const carolStart = lead.indexOf("@Sam");
+    const bobStart = lead.length + filler.length + tail.indexOf("@Sam");
+    await f.post("shared-label-source", {
+      recipientProfileIds: [f.bob.id, f.carol.id],
+      excerpt,
+      mentionSpans: [
+        { profileId: f.carol.id, start: carolStart, end: carolStart + 4 },
+        { profileId: f.bob.id, start: bobStart, end: bobStart + 4 },
+        { profileId: f.bob.id, start: carolStart, end: carolStart + 4 },
+      ],
+    });
+    const highlighted = (item: {
+      excerpt?: string;
+      excerptHighlight?: { start: number; end: number };
+    }) =>
+      item.excerpt && item.excerptHighlight
+        ? [
+            item.excerpt.slice(0, item.excerptHighlight.start),
+            item.excerpt.slice(item.excerptHighlight.start, item.excerptHighlight.end),
+            item.excerpt.slice(item.excerptHighlight.end),
+          ]
+        : undefined;
+    const [bob] = await f.items(f.bobClient);
+    const [carol] = await f.items(f.carolClient);
+    const [bobBefore, bobLabel, bobAfter] = highlighted(bob!)!;
+    expect([bobLabel, bobAfter]).toEqual(["@Sam", " to sign off on 🦞 deploy"]);
+    expect(bobBefore).toMatch(/^…x+ ask $/u);
+    expect(bob!.excerpt!.length).toBeLessThanOrEqual(280);
+    expect(highlighted(carol!)).toEqual([
+      "Ping ",
+      "@Sam",
+      expect.stringMatching(/^ about the plan\. x+…$/u),
+    ]);
+    const result = await f.call("mentions.list", {}, f.carolClient);
+    expect(result.ok && validateMentionsListResult(result.payload)).toBe(true);
+
+    await f.inbox.dispose();
+    const restarted = f.openInbox("restarted-gateway");
+    expect(await f.items(f.bobClient, restarted)).toEqual([bob]);
+    expect(await f.items(f.carolClient, restarted)).toEqual([carol]);
+  }));
+
 it("targets only the named person, synchronizes dismissal, and does not replay consumed input", () =>
   withInbox(async (f) => {
     for (const client of f.clients) {

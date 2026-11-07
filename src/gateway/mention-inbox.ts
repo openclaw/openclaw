@@ -31,7 +31,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-profile-events.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import { createHumanMentionPolicy, humanMentionDisplayLabel } from "./human-mention-policy.js";
-import { mentionInboxUnavailable } from "./mention-inbox-presentation.js";
+import { mentionInboxUnavailable, projectMentionPreview } from "./mention-inbox-presentation.js";
 import {
   createMentionProjection,
   createMentionMutationProjection,
@@ -272,11 +272,11 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     ) {
       return previous.value;
     }
-    const { content } = item.message;
+    const { previews, ...content } = item.message.content;
     const value: MentionInboxItem = {
       ...content,
       id: item.id,
-      excerpt: content.excerpt,
+      ...projectMentionPreview(previews?.[item.id]),
       expiresAt: item.source.expiresAt,
       senderProfileId: current.sender?.profileId ?? content.senderProfileId,
       senderLabel: humanMentionDisplayLabel(current.sender?.label, content.senderProfileId),

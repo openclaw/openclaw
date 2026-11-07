@@ -49,6 +49,7 @@ const enSidebarAttention = {
     },
     mentions: {
       from: "{sender} mentioned you",
+      viewSession: "View session",
       open: "Open",
       dismiss: "Dismiss",
       dismissing: "Dismissing…",

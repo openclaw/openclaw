@@ -66,10 +66,13 @@ it("uses the chosen identity at completion rather than stale roster artwork", as
     expect(showToast).toHaveBeenCalledWith(
       expect.objectContaining({
         avatar: {
-          id: "main",
-          name: "Garden keeper",
-          avatar: "data:image/webp;base64,bmV3",
-          textAvatar: "🌱",
+          kind: "agent",
+          agent: {
+            id: "main",
+            name: "Garden keeper",
+            avatar: "data:image/webp;base64,bmV3",
+            textAvatar: "🌱",
+          },
         },
       }),
     );

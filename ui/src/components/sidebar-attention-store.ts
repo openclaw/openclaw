@@ -115,6 +115,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     // Load with the Inbox, but keep its profile state across presenter unmounts.
     this.mentions = createMentionsCapability(sources.gateway, {
       connectionBootstrap: sources.connectionBootstrap,
+      onArrival: sources.onMention,
     });
     this.loadedClient = null;
     // Reconcile owner scope and publish aggregate attention synchronously for downstream consumers.

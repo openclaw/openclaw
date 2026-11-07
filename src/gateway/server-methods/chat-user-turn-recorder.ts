@@ -365,6 +365,7 @@ export function createGatewayChatUserTurnController(params: {
               senderProfileId,
               recipientProfileIds: retained.map((mention) => mention.profileId),
               excerpt: text,
+              mentionSpans: retained,
             });
             void mentionCommit.catch(onPersistenceError);
           },

@@ -20,6 +20,17 @@ const messageSchema = z.object({
     messageId: reference,
     createdAt: timestamp,
     excerpt: z.string().max(280).optional(),
+    /** Recipient-specific previews keyed by item id; the shared excerpt is their fallback. */
+    previews: z
+      .record(
+        reference,
+        z
+          .object({ excerpt: z.string().max(280), start: timestamp, end: timestamp })
+          .refine(
+            (preview) => preview.start < preview.end && preview.end <= preview.excerpt.length,
+          ),
+      )
+      .optional(),
   }),
 });
 export const mentionStoreSourceSchema = z.object({

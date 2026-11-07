@@ -10,6 +10,8 @@ export type MentionCommittedInput = {
   senderProfileId: string;
   recipientProfileIds: readonly string[];
   excerpt?: string;
+  /** Selected UTF-16 spans in `excerpt`; the first span per recipient centers its preview. */
+  mentionSpans?: readonly { profileId: string; start: number; end: number }[];
 };
 
 export function hasValidMentionReferences(input: MentionCommittedInput): boolean {

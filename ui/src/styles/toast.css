@@ -162,10 +162,15 @@
   width: 32px;
 }
 
-.app-toast__avatar > * {
+.app-toast__avatar > *,
+.app-toast__avatar .viewer-avatar {
   width: 32px;
   height: 32px;
   border-radius: var(--radius-full);
+}
+
+.app-toast__avatar .viewer-avatar {
+  font-size: 12px;
 }
 
 .app-toast--success .app-toast__icon {
@@ -204,6 +209,15 @@
   font-size: calc(13px * var(--control-ui-text-scale));
   line-height: calc(18px * var(--control-ui-text-scale));
   text-wrap: pretty;
+}
+
+/* The recipient's own selected mention, in the same theme color as inline person references. */
+.app-toast__mention {
+  border-radius: var(--radius-sm);
+  padding: 0 0.2em;
+  background: var(--person-reference-bg);
+  color: var(--chat-text-link, var(--link));
+  font-weight: 550;
 }
 
 .app-toast__action--primary {
