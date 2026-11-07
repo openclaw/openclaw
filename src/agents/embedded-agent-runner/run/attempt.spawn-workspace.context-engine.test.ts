@@ -13,6 +13,7 @@ import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtur
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
 import { sumToolResultTextChars } from "../tool-result-context-guard.test-support.js";
 import {
@@ -696,6 +697,41 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(trajectoryEvent("prompt.submitted")).toBeUndefined();
     expect(trajectoryEvent("prompt.skipped")?.data?.reason).toBe("blank_user_prompt");
   });
+
+  it.each([true, false])(
+    "reports the prepared sandbox to the final run gate: %s",
+    async (sandboxed) => {
+      hoisted.resolveSandboxContextMock.mockImplementation(async (options: unknown) => {
+        if (!sandboxed) {
+          return null;
+        }
+        const workspaceDir = requireRecord(options, "sandbox options").workspaceDir;
+        if (typeof workspaceDir !== "string") {
+          throw new Error("Expected sandbox workspaceDir");
+        }
+        return createSandboxTestContext({
+          overrides: { workspaceDir, agentWorkspaceDir: workspaceDir },
+        });
+      });
+      const gate = vi.fn(async (_event: unknown, ctx: unknown) =>
+        requireRecord(ctx, "agent run context").sandboxed === true
+          ? { outcome: "pass" as const }
+          : { outcome: "block" as const, reason: "An actual sandbox is required." },
+      );
+      useHooks([{ hookName: "before_agent_run", pluginId: "sandbox-policy", handler: gate }]);
+      const { sessionPrompt } = capturePrompt();
+      const prompt = vi.fn(sessionPrompt);
+      // No caller-provided sandbox on the positive path; stale caller facts must
+      // not turn an unsandboxed preparation into a trusted sandbox on the negative path.
+      await runAttempt({
+        sessionPrompt: prompt,
+        attemptOverrides: { sandbox: sandboxed ? undefined : createSandboxTestContext() },
+      });
+      expect(gate).toHaveBeenCalledTimes(1);
+      expect(requireRecord(gate.mock.calls[0]?.[1], "agent run context").sandboxed).toBe(sandboxed);
+      expect(prompt).toHaveBeenCalledTimes(sandboxed ? 1 : 0);
+    },
+  );
 
   it.each(["malformed", "windowed"])(
     "preserves preassembly history after %s mutation",

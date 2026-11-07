@@ -128,6 +128,9 @@ async function runEmbeddedAttemptOwned(
     sandbox,
     sessionAgentId,
   } = setup;
+  // Hooks consume this attempt snapshot, while tools consume setup. Publish the
+  // same prepared sandbox fact without trusting or mutating the caller's input.
+  params = { ...params, sandbox: sandbox ?? undefined };
 
   let restoreSkillEnv: (() => void) | undefined;
   const executionState: EmbeddedAttemptExecutionState = {
