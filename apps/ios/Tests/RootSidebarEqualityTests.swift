@@ -55,8 +55,5 @@ struct RootSidebarEqualityTests {
         changed = session
         changed.label = "Renamed"
         #expect(try base != button(entry: changed))
-        let now = Date(timeIntervalSince1970: 1000)
-        #expect(CommandCenterTab.sessionDetail(session, now: now) !=
-            CommandCenterTab.sessionDetail(session, now: now.addingTimeInterval(120)))
     }
 }

@@ -146,10 +146,16 @@ struct RootTabsSidebarRegressionTests {
             source,
             from: "private func sessionsSection(",
             to: "private func pagesSection(")
-        let sessionButton = try Self.extract(
+        let sessionButtonCall = try Self.extract(
             source,
             from: "private func sessionButton(",
             to: "private func destinationButton(")
+        let sessionButton = try String(
+            contentsOf: Self.rootSidebarSourceURL().deletingLastPathComponent()
+                .appendingPathComponent("RootSidebarSessionButton.swift"),
+            encoding: .utf8)
+        #expect(sessionButtonCall.contains("RootSidebarSessionButton("))
+        #expect(sessionButtonCall.contains("open: self.selectSession"))
         let footer = try Self.extract(
             source,
             from: "private var footer: some View",
@@ -177,14 +183,14 @@ struct RootTabsSidebarRegressionTests {
         #expect(footer.contains("self.selectSidebarDestination(.settings)"))
         #expect(footer.contains("RootTabs.Sidebar.Destination.settings"))
 
-        #expect(pages.contains("ForEach(pinnedSessionNodes)"))
+        #expect(pages.contains("ForEach(self.displayRows(pinnedSessionNodes))"))
         #expect(sessions.contains("section.id == \"recent\""))
         #expect(sessions.contains("String(localized: \"Sessions\")"))
         #expect(!sessions.contains("String(localized: \"Recent\")"))
 
         let pin = try #require(sessionButton.range(of: "Image(systemName: \"pin.fill\")"))
         let detail = try #require(sessionButton.range(of: "CommandCenterTab.sessionDetail(session)"))
-        let openChat = try #require(sessionButton.range(of: "self.selectSession(session)"))
+        let openChat = try #require(sessionButton.range(of: "self.open(session)"))
         let contextActions = try #require(sessionButton.range(of: ".commandSessionActions("))
         #expect(pin.lowerBound < detail.lowerBound)
         #expect(openChat.lowerBound < contextActions.lowerBound)
