@@ -10,6 +10,7 @@ import {
   releaseCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
+import { CodexNativeSubagentDeliveryReceipts } from "./native-subagent-delivery-receipts.js";
 import { createCodexNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
@@ -29,7 +30,9 @@ import {
   directSpawnItem,
   observeCompletionAttempts,
   parentRegistration as parentParams,
+  createNativeModelSourceFixture,
 } from "./native-subagent-monitor.test-support.js";
+import type { CodexServerNotification } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 
 async function runtimeFixture(client = createClient(), runtime = createRuntime()) {
@@ -305,6 +308,140 @@ describe("native completion delivery ownership", () => {
     await delivered.promise;
     expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce();
     await owner.unregister();
+  });
+});
+
+// A resumed native parent emits no raw item events; its model input carries the receipt.
+function sampledEnvelope(result = "The build passed.", turnId = "parent-turn", id = "amsg-a") {
+  return {
+    type: "agent_message",
+    id,
+    author: "/root/worker",
+    recipient: "/root",
+    content: [
+      {
+        type: "input_text",
+        text: `Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\n${result}`,
+      },
+    ],
+    internal_chat_message_metadata_passthrough: { turn_id: turnId },
+  };
+}
+
+const compactionItem = { type: "contextCompaction", id: "compaction" };
+const hookStarted = (eventName: string): CodexServerNotification => ({
+  method: "hook/started",
+  params: { threadId: "parent-thread", turnId: "parent-turn", run: { id: "hook", eventName } },
+});
+// Parent activity after the sampled request, before its turn completes.
+type Later = CodexServerNotification | "empty sampling";
+
+async function resumedParentFixture() {
+  const fixture = await monitorFixture(undefined, {
+    modelSource: createNativeModelSourceFixture(["model-a"]),
+  });
+  const { client, monitor, owner } = fixture;
+  await startChild(client, owner, "/root/worker");
+  await client.startTurn("parent-turn", { threadId: "parent-thread" });
+  return {
+    ...fixture,
+    sample: async (...input: ReturnType<typeof sampledEnvelope>[]) => {
+      const capture = await monitor.captureModelSource({
+        threadId: "parent-thread",
+        turnId: "parent-turn",
+        input,
+      });
+      assert.ok(capture);
+      capture.release();
+    },
+    endTurn: (status: "completed" | "failed" | "interrupted") =>
+      client.notify(
+        childTurnCompletedNotification({
+          threadId: "parent-thread",
+          turnId: "parent-turn",
+          status,
+        }),
+      ),
+  };
+}
+
+describe("resumed parent model-input receipts", () => {
+  async function run(
+    later: Later[],
+    status: "completed" | "failed" | "interrupted",
+    turnId?: string,
+  ) {
+    const { client, runtime, owner, sample, endTurn } = await resumedParentFixture();
+    await client.notify(completedChild());
+    await sample(sampledEnvelope("The build passed.", turnId));
+    for (const step of later) {
+      await (step === "empty sampling" ? sample() : client.notify(step));
+    }
+    await endTurn(status);
+    await owner.unregister();
+    return runtime.deliverAgentHarnessCompletion;
+  }
+
+  it.each<[string, Later[]]>([
+    ["no later activity", []],
+    ["a Stop hook", [hookStarted("stop")]],
+  ])("does not redeliver a result the completed turn sampled last: %s", async (_name, later) => {
+    expect(await run(later, "completed")).not.toHaveBeenCalled();
+  });
+
+  // Native can complete a turn whose sampling of the result never completed: preemption or
+  // compaction before the next sampling, or a hook stop without one.
+  it.each<[string, Later[], "completed" | "failed" | "interrupted", string?]>([
+    ["the turn fails", [], "failed"],
+    ["the turn is interrupted", [], "interrupted"],
+    ["the result came from an earlier turn", [], "completed", "earlier-turn"],
+    ["a later sampling lacks it", ["empty sampling"], "completed"],
+    [
+      "context compaction follows",
+      [itemNotification(compactionItem, undefined, undefined, "started")],
+      "completed",
+    ],
+    ["an input hook follows", [hookStarted("userPromptSubmit")], "completed"],
+  ])("keeps a sampled result pending when %s", async (_name, later, status, turnId) => {
+    expect(await run(later, status, turnId)).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ result: "The build passed." }),
+    );
+  });
+
+  it("keeps a sampled result pending and releases it when the parent releases first", async () => {
+    const hold = vi.spyOn(CodexNativeSubagentDeliveryReceipts.prototype, "holdSampled");
+    const { client, runtime, owner, sample, endTurn } = await resumedParentFixture();
+    await client.notify(completedChild());
+    await sample(sampledEnvelope());
+    await owner.unregister();
+    await endTurn("completed");
+    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce();
+    // The released tracker stays reachable from retained children; its sampling must not.
+    const tracker = hold.mock.contexts[0] as CodexNativeSubagentDeliveryReceipts;
+    expect(tracker.takeSampled("parent-turn")).toEqual([]);
+  });
+
+  it.each([
+    { sampled: ["first"], delivered: ["Follow-up complete."] },
+    { sampled: ["first", "next"], delivered: [] },
+  ])("settles only sampled results of a reused child: $sampled", async ({ sampled, delivered }) => {
+    const { client, runtime, owner, sample, endTurn } = await resumedParentFixture();
+    await client.startTurn("child-turn", { error: null });
+    await client.notify(completedChild("child-turn", "The build passed.", "first-result"));
+    await client.item(collabItem("sendInput", ["child-thread"], { id: "followup" }));
+    await client.sendInputOutput({ callId: "followup", submissionId: "next-turn" });
+    await client.startTurn("next-turn", { error: null });
+    await client.notify(completedChild("next-turn", "Follow-up complete.", "next-result"));
+    const envelopes = {
+      first: sampledEnvelope("The build passed.", "parent-turn", "amsg-a"),
+      next: sampledEnvelope("Follow-up complete.", "parent-turn", "amsg-b"),
+    };
+    await sample(...sampled.map((key) => envelopes[key as keyof typeof envelopes]));
+    await endTurn("completed");
+    await owner.unregister();
+    expect(
+      runtime.deliverAgentHarnessCompletion.mock.calls.map(([request]) => request.result),
+    ).toEqual(delivered);
   });
 });
 

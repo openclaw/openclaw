@@ -403,6 +403,33 @@ it.each(["/alpha/search", "/images/generations"])("binds %s ownership", async (p
   }
 });
 
+it.each([
+  { path: "/responses", requestKind: "turn", sampled: true },
+  { path: "/responses/compact", requestKind: "compaction", sampled: false },
+])("offers $path $requestKind input to receipt capture: $sampled", async (request) => {
+  const h = harness();
+  const input = [{ type: "agent_message", id: "native-receipt" }];
+  const model = {
+    assertCurrent: () => {},
+    signal: new AbortController().signal,
+    release: () => {},
+  };
+  const source = { assertCurrent: () => {}, release: () => {}, bindModelExecution: () => model };
+  const captureModelSource = vi.fn(async () => ({ ...captureDefaults, source }));
+  const bind = modelBinding(h.client, { captureModelSource });
+  const execution = await bind(
+    requestFor(new AbortController().signal, {
+      path: request.path,
+      body: { model: "a", input },
+      metadata: { requestKind: request.requestKind, threadId: "root", turnId: "turn" },
+    }),
+  );
+  execution.release();
+  expect(captureModelSource).toHaveBeenCalledWith(
+    request.sampled ? expect.objectContaining({ input }) : expect.not.objectContaining({ input }),
+  );
+});
+
 it.each(["capture", "source", "before forwarding"] as const)("sanitizes %s", async (stage) => {
   const h = harness();
   const controller = new AbortController();
