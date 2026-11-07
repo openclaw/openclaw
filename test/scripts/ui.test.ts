@@ -373,43 +373,60 @@ describe("scripts/ui", () => {
     expect(isDirectScriptExecution(junctionScriptPath, realScriptPath, realpath)).toBe(true);
   });
 
-  it("runs build from isolated dependencies without package shims", () => {
-    const root = fs.realpathSync(tempDirs.make("openclaw-ui-layout-"));
-    const ui = path.join(root, "ui");
-    const modules = path.join(ui, "node_modules");
-    const forwarded = ["--help", "--mode", "fixture with spaces & symbols"];
-    copyUiFixture(root);
-    for (const name of ["vite", "dompurify"]) {
-      writeUiPackageBin(
-        modules,
-        name,
-        `console.log(JSON.stringify({
+  it.each(["build", "test"])(
+    "runs %s from isolated dependencies without package shims",
+    (action) => {
+      const root = fs.realpathSync(tempDirs.make("openclaw-ui-layout-"));
+      const ui = path.join(root, "ui");
+      const modules = path.join(ui, "node_modules");
+      const forwarded = ["--help", "--mode", "fixture with spaces & symbols"];
+      copyUiFixture(root);
+      for (const name of [
+        "vite",
+        "dompurify",
+        "vitest",
+        "@vitest/browser-playwright",
+        "playwright",
+      ]) {
+        writeUiPackageBin(
+          modules,
+          name,
+          `console.log(JSON.stringify({
   args: process.argv.slice(2), cwd: process.cwd(),
-  commit: process.env.GIT_COMMIT, timestamp: process.env.OPENCLAW_BUILD_TIMESTAMP
+  commit: process.env.GIT_COMMIT, timestamp: process.env.OPENCLAW_BUILD_TIMESTAMP,
+  codec: ${name === "vitest" ? "Uint8Array.fromBase64(Uint8Array.of(255).toBase64()).toHex()" : "null"}
 }));
 process.exitCode = 0;\n`,
+        );
+      }
+      const pnpm = path.join(root, "pnpm.cjs");
+      fs.writeFileSync(
+        pnpm,
+        'throw new Error("Installed UI tools must not need package shims");\n',
       );
-    }
-    const pnpm = path.join(root, "pnpm.cjs");
-    fs.writeFileSync(pnpm, 'throw new Error("Installed UI tools must not need package shims");\n');
-    const result = runNode(root, ["scripts/ui.js", "build", ...forwarded], {
-      env: mergeProcessEnv([
-        process.env,
-        {
-          PATH: "",
-          npm_execpath: pnpm,
-          ...buildEnvironment,
-        },
-      ]),
-    });
-    expectExit(result);
-    expect(JSON.parse(result.stdout)).toEqual({
-      args: ["build", ...forwarded],
-      cwd: ui,
-      commit: "a".repeat(40),
-      timestamp: "2026-08-27T00:00:00.000Z",
-    });
-  });
+      const result = runNode(root, ["scripts/ui.js", action, ...forwarded], {
+        env: mergeProcessEnv([
+          process.env,
+          {
+            PATH: "",
+            npm_execpath: pnpm,
+            ...buildEnvironment,
+          },
+        ]),
+      });
+      expectExit(result);
+      expect(JSON.parse(result.stdout)).toEqual({
+        args: [
+          ...(action === "test" ? ["run", "--config", "vitest.config.ts"] : ["build"]),
+          ...forwarded,
+        ],
+        cwd: ui,
+        commit: "a".repeat(40),
+        timestamp: "2026-08-27T00:00:00.000Z",
+        codec: action === "test" ? "ff" : null,
+      });
+    },
+  );
 
   const liveUiBuildSiblings = [
     `control-ui.build-${process.pid}-live`,

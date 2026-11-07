@@ -1062,6 +1062,7 @@ src/infra/format-time/duration-units.ts
 src/infra/format-time/format-duration-exact.ts
 src/infra/format-time/format-duration-internal.ts
 src/infra/fs-safe-copy.worker.ts
+src/infra/fs-safe-drvfs.ts
 src/infra/fs-safe-env.ts
 src/infra/fs-safe-remove.ts
 src/infra/fs-safe.ts
@@ -1444,6 +1445,7 @@ src/infra/update-runtime-staging.ts
 src/infra/update-snapshot-capacity-schema.ts
 src/infra/update-state-inspection-protocol.ts
 src/infra/update-step-identity.ts
+src/infra/utf8-input.ts
 src/infra/warning-filter.ts
 src/infra/windows-appcontainer-spawn.ts
 src/infra/windows-encoding.ts
@@ -1854,6 +1856,7 @@ src/process/process-deadline.ts
 src/process/scoped-child-reaper.ts
 src/process/spawn-broker/child-completion.ts
 src/process/spawn-broker/child-diagnostics.ts
+src/process/spawn-broker/admission.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/commands.ts
@@ -2086,6 +2089,7 @@ src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
+src/state/openclaw-agent-active-event-facts-schema.ts
 src/state/openclaw-agent-memory-path-migration.ts
 src/state/openclaw-agent-memory-revision-migration.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts
@@ -2378,6 +2382,7 @@ src/config/sessions/session-accessor.sqlite-transcript-metadata-read.ts
 src/config/sessions/session-cold-storage-read.ts
 src/config/sessions/session-entry-read-errors.ts
 src/config/sessions/session-transcript-append-postimage.ts
+src/config/sessions/session-transcript-active-facts.ts
 src/config/sessions/session-transcript-fts.ts
 src/config/sessions/session-transcript-index-postgres.ts
 src/config/sessions/session-transcript-index.ts

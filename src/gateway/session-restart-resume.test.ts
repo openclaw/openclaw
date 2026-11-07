@@ -150,7 +150,7 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
           context.agentDatabaseStartup = admission.observation;
           context.resolveGatewayContext = () => context;
           if (crash) {
-            context.restartResumeWindow = { startedAt: 100, endedAt: 200 };
+            context.restartResumeWindows = { main: [{ startedAt: 100, endedAt: 200 }] };
           }
           const params = { context, signal: admission.signal, log: { warn: vi.fn() } };
           const wait = admission.observation.waitForAgentPreparation.bind(admission.observation);
@@ -259,7 +259,13 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
                 reason: "Controlled preparation failure",
               });
             } else {
-              expect(params.log.warn).not.toHaveBeenCalled();
+              expect(params.log.warn.mock.calls.flat()).toEqual(
+                mode === "prepared"
+                  ? []
+                  : [
+                      "Agent main resume deferred: agent database unavailable (agent-database-inspection-pending)",
+                    ],
+              );
               expect(discover).toHaveBeenCalledOnce();
               expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
               expect(loadExactSessionEntry(target)?.entry.lifecycleRunId).toBeUndefined();
@@ -291,8 +297,8 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         return { agentId, sessionKey: `agent:${agentId}:${name}` };
       };
       const cases: Array<[string, Partial<InternalSessionEntry>, boolean]> = [
-        ["crash", {}, mode === "crash" || mode === "markers"],
-        ["yielded", { endedAt: 120 }, mode === "crash" || mode === "markers"],
+        ["crash", {}, mode !== "clean-or-unknown"],
+        ["yielded", { endedAt: 120 }, mode !== "clean-or-unknown"],
         ["stale", { startedAt: 1, updatedAt: 999 }, false],
         ["missing-start", { startedAt: undefined }, false],
         ["new-incarnation", { startedAt: 200 }, false],
@@ -370,7 +376,7 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
                   }
                 : {}),
               ...(mode !== "clean-or-unknown"
-                ? { restartResumeWindow: { startedAt: 100, endedAt: 200 } }
+                ? { restartResumeWindows: { main: [{ startedAt: 100, endedAt: 200 }] } }
                 : {}),
             },
             signal: new AbortController().signal,

@@ -57,10 +57,10 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Generated-name-normalized main measurement plus 64 B toolchain headroom.
-  // Retired copy, browser fallbacks, and unused initializers: measured head plus 64 B.
-  chatBootJsGzipBytes: 1_287_644,
-  newBootJsGzipBytes: 796_760,
+  // Coordinator accepted the sidebar snapshot-save repair; complete build plus 64 B.
+  chatBootJsGzipBytes: 1_294_652,
+  // Channels: raw -159 B, served +22 B; coordinator-accepted normalized trade +64 B.
+  newBootJsGzipBytes: 803_250,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -69,14 +69,17 @@ const controlUiPerformanceBudgets = {
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
-  // Normalized shared application chunk plus 64 B toolchain headroom.
-  largestJsGzipBytes: 559_941,
+  // Same snapshot-save repair, measured shared chunk plus 64 B.
+  // The same shared-chunk trade, measured plus 64 B.
+  largestJsGzipBytes: 564_484,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
   // Retired selectors and supported-browser fallback removal: measured head plus 64 B.
-  totalCssGzipBytes: 324_684,
-  totalCssRawBytes: 1_675_356,
+  // Josh Lehman approved the OpenClaw ID account menu styles (#192352, 2026-11-06):
+  // measured 325,045 B gzip / 1,675,690 B raw; retain 64 B headroom.
+  totalCssGzipBytes: 325_109,
+  totalCssRawBytes: 1_675_754,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

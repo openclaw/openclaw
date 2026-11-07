@@ -8,6 +8,12 @@ read_when:
   - You are changing ClawSweeper dispatch or GitHub activity forwarding
 ---
 
+Blacksmith Linux x64 jobs now request their measured physical size. The planner
+retains its historical profiles and timing keys: 4/8/16/32 profiles select
+2/2/4/8-vCPU runners at admission, raised when a group requires more memory.
+Windows, ARM, hosted routing, coverage, and concurrency remain unchanged.
+See [runner allocation evidence](/ci/routing-costs#blacksmith-physical-allocation).
+
 CI continues during Full Release Validation; the legacy release-priority variable
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
@@ -285,6 +291,21 @@ usable CPUs on this class and reduced median signing preflight plus phone/Wear
 bundle time from 621 to 217 seconds. This trades paid compute for shorter release
 runs; qualification and ordinary screenshot CI retain hosted Ubuntu. See
 [runner evidence and cost](/ci/runners#android-release-runner).
+
+Both Android release destinations restore the shared Gradle user-home cache
+read-only, reusing dependency downloads, compiled scripts, transforms and wrapper
+distributions from main CI. A cache miss or transfer failure keeps the cold build
+path. Release jobs do not save the archive or enable Gradle task-output caching.
+Toolchain setup runs before mobile dependency installation so cache-key hashing
+does not traverse the installed dependency tree.
+The shared toolchain action's `gradle-cache-mode` override leaves Android SDK
+caching off for these jobs; other callers inherit their existing `cache-mode`.
+
+Android's Gradle daemon uses Parallel GC with the existing 3 GiB heap. A controlled
+phone/Wear release comparison with warm dependencies and fresh build outputs
+reduced median bundle time from 158.78 to 149.10 seconds (6.09%), with lower Java
+CPU time and peak memory. Task selection, lint, R8, signing, and upload behavior
+stay unchanged.
 
 Android Release E2E adds one hosted Ubuntu KVM job to exact-source, full-scope
 manual validation when Android is selected, matching the iOS qualification

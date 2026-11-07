@@ -7,7 +7,9 @@ import {
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isMissingPathError } from "../infra/errors.js";
+import { allowDrvfsRenameRecovery } from "../infra/fs-safe-drvfs.js";
 import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { hashConfigIncludeRaw } from "./includes.js";
@@ -235,6 +237,7 @@ export function createConfigFileWriteGuard(
     preserveDirectoryMode?: boolean;
     stateDirectory?: ConfigStateDirectory;
     targetPathProof?: ReturnType<typeof captureConfigFileWritePathProof>;
+    validateUtf8?: boolean;
   },
 ) {
   const includePathProofs = new Map(
@@ -286,6 +289,7 @@ export function createConfigFileWriteGuard(
           fsModule,
           publication?.includeGraph,
           includePathProofs,
+          publication?.validateUtf8,
         );
       }
     } catch (error) {
@@ -386,7 +390,12 @@ export function assertBaseSnapshotStillCurrent(
   ioFs: typeof fs,
   includeGraph?: { hashes: Record<string, string>; targets: Record<string, string> },
   includePathProofs?: ReadonlyMap<string, ReturnType<typeof captureConfigFileWritePathProof>>,
+  validateUtf8 = false,
 ): void {
+  const readSource = (pathname: string) =>
+    validateUtf8
+      ? decodeUtf8Input(ioFs.readFileSync(pathname), pathname)
+      : ioFs.readFileSync(pathname, "utf-8");
   if (snapshot.path !== configPath) {
     throw new ConfigMutationConflictError("config path changed since last load", {
       retryable: false,
@@ -411,7 +420,7 @@ export function assertBaseSnapshotStillCurrent(
       if (expectedTarget === configPath) {
         continue;
       }
-      if (hashConfigIncludeRaw(ioFs.readFileSync(expectedTarget, "utf-8")) !== expectedHash) {
+      if (hashConfigIncludeRaw(readSource(expectedTarget)) !== expectedHash) {
         throw new ConfigMutationConflictError("included config changed since last load");
       }
     } catch (error) {
@@ -428,8 +437,10 @@ export function assertBaseSnapshotStillCurrent(
   const expectedHash = snapshot.raw === null ? null : hashConfigRaw(snapshot.raw);
   let currentRaw: string | null = null;
   let currentExists = true;
+  // Owned fallback bytes may end mid-character until the next short write completes.
   try {
-    currentRaw = ioFs.readFileSync(configPath, "utf-8");
+    currentRaw =
+      snapshot.raw === null ? ioFs.readFileSync(configPath, "utf-8") : readSource(configPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
       throw error;
@@ -500,6 +511,7 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
       replaceFileAtomicSync({
         filePath: params.configPath,
         content: previousRaw,
+        allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(path.dirname(params.configPath)),
         dirMode: params.stateDirectory
           ? (stateRootDirectoryMode(path.dirname(params.configPath), params.stateDirectory.path) ??
             0o700)

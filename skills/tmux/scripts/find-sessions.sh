@@ -60,7 +60,12 @@ list_sessions() {
   fi
 
   if [[ -n "$query" ]]; then
-    sessions="$(printf '%s\n' "$sessions" | grep -i -- "$query" || true)"
+    sessions="$(printf '%s\n' "$sessions" |
+      while IFS= read -r session; do
+        if printf '%s\n' "${session%%$'\t'*}" | grep -Fqi -- "$query"; then
+          printf '%s\n' "$session"
+        fi
+      done)"
   fi
 
   if [[ -z "$sessions" ]]; then
@@ -70,7 +75,7 @@ list_sessions() {
 
   echo "Sessions on $label:"
   printf '%s\n' "$sessions" | while IFS=$'\t' read -r name attached created; do
-    attached_label=$([[ "$attached" == "1" ]] && echo "attached" || echo "detached")
+    attached_label=$([[ "$attached" -gt 0 ]] && echo "attached" || echo "detached")
     printf '  - %s (%s, started %s)\n' "$name" "$attached_label" "$created"
   done
 }

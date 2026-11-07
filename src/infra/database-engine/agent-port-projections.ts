@@ -11,6 +11,8 @@ import {
 import type { PortEndpoint } from "./port-types.js";
 
 export const AGENT_PORT_PROJECTION_TABLES = [
+  // Payload encoding and predicate materialization change across engines; absence keeps fallback exact.
+  "session_transcript_active_event_facts",
   "session_transcript_fts_rows",
   "session_transcript_fts",
   "standing_intents_fts",
@@ -23,7 +25,7 @@ export const AGENT_PORT_PROJECTION_TABLES = [
   ),
 ] as const;
 
-/** Navigation rows are copied exactly; only hot search projections are reconstructed. */
+/** Navigation rows stay exact; hot search is rebuilt and active facts remain unknown. */
 export async function rebuildAgentPortProjections(target: PortEndpoint): Promise<void> {
   const sessions =
     target.engine === "sqlite"

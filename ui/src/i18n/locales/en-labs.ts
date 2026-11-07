@@ -72,6 +72,11 @@ const enLabs = {
       description:
         "Watch and control the computer running OpenClaw from the Desktop panel through its existing VNC or Screen Sharing server.",
     },
+    openclawId: {
+      title: "OpenClaw ID remote access",
+      description:
+        "Open this claw from your other devices and invite people. To get started, sign in from the account menu and choose Turn on remote access. Manage who has access on the Access page. While off, this feature does not contact OpenClaw ID.",
+    },
     workerDesktop: {
       title: "Cloud device desktop",
       description:

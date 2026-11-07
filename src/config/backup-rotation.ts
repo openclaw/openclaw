@@ -5,6 +5,7 @@ import path from "node:path";
 import { tempFile } from "@openclaw/fs-safe/advanced";
 import { replaceFileAtomicSync, type ReplaceFileAtomicSyncOptions } from "@openclaw/fs-safe/atomic";
 import { isRootFileMissingFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { allowDrvfsRenameRecovery } from "../infra/fs-safe-drvfs.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 
@@ -43,6 +44,8 @@ export async function prepareConfigFileWrite(
     }
   };
   assertCurrent?.();
+  // Refuse invalid source bytes before staging them as recovery history.
+  assertBeforeMutation();
   let backup: Awaited<ReturnType<typeof tempFile>> | undefined;
   try {
     if (params.previousRaw !== null) {
@@ -81,6 +84,7 @@ export async function prepareConfigFileWrite(
       return replaceFileAtomicSync({
         filePath: configPath,
         content: params.content,
+        allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(path.dirname(configPath)),
         dirMode: params.dirMode ?? 0o700,
         mode: 0o600,
         copyFallbackOnPermissionError: true,

@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as drvfs from "../infra/fs-safe-drvfs.js";
+import { hashConfigIncludeRaw } from "./includes.js";
 import {
   content,
   createWriteEffectsFixture,
@@ -13,12 +16,92 @@ import {
 } from "./io.write-effects.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  __setFsSafeTestHooksForTest();
+  vi.restoreAllMocks();
+});
 const fixture = () => createWriteEffectsFixture(fs.realpathSync(dirs.make("config-effects-")));
 function identity(file: string) {
   const stat = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
   return { raw: stat ? fs.readFileSync(file, "utf8") : null, ino: stat?.ino };
 }
+
+it.skipIf(process.platform === "win32")(
+  "publishes and rolls back config hidden until its writer closes on verified DrvFS",
+  async () => {
+    const f = fixture();
+    vi.spyOn(drvfs, "allowDrvfsRenameRecovery").mockReturnValue(true);
+    __setFsSafeTestHooksForTest({
+      drvfsMountObservation: () => ({
+        magic: 0x01021997n,
+        fdinfo: "mnt_id:\t42\n",
+        mountinfo: "42 1 0:1 / /state rw - 9p drvfs rw,aname=drvfs;path=C:\n",
+      }),
+    });
+    let stagedFd: number | undefined;
+    let hiddenFd: number | undefined;
+    let hiddenObservations = 0;
+    const io: typeof fs = {
+      ...fs,
+      writeFileSync: new Proxy(fs.writeFileSync, {
+        apply(fn, self, args) {
+          if (typeof args[0] === "number") {
+            stagedFd = args[0];
+          }
+          return Reflect.apply(fn, self, args);
+        },
+      }),
+      renameSync(from, to) {
+        fs.renameSync(from, to);
+        if (to === f.target) {
+          hiddenFd = stagedFd;
+        }
+      },
+      lstatSync: new Proxy(fs.lstatSync, {
+        apply(fn, self, args) {
+          if (args[0] === f.target && hiddenFd !== undefined) {
+            hiddenObservations++;
+            throw Object.assign(new Error("published name hidden by the open writer"), {
+              code: "ENOENT",
+            });
+          }
+          return Reflect.apply(fn, self, args);
+        },
+      }),
+      closeSync(fd) {
+        fs.closeSync(fd);
+        if (fd === hiddenFd) {
+          hiddenFd = undefined;
+        }
+      },
+    };
+    const { prepared: stage, guarded } = await prepare(f, io);
+    await using prepared = stage;
+    prepared.publish();
+    guarded.assertPublishedIdentity();
+    expect(fs.readFileSync(f.target, "utf8")).toBe(content);
+    expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
+    await expect(f.rollback(io, guarded.captureRollbackProof(f.assertCurrent))).resolves.toBe(true);
+    expect(fs.readFileSync(f.target, "utf8")).toBe(original);
+    expect(hiddenObservations).toBe(2);
+  },
+);
+
+it.each(["root", "include"])("refuses invalid %s UTF-8 before staging", async (owner) => {
+  const f = fixture();
+  const target = owner === "root" ? f.target : path.join(f.dir, "include.json");
+  fs.writeFileSync(target, Buffer.from([0xff]));
+  const options = { ...f.options, validateUtf8: true };
+  if (owner === "root") {
+    options.snapshot.raw = "�";
+  } else {
+    options.includeGraph = {
+      hashes: { [target]: hashConfigIncludeRaw("�") },
+      targets: { [target]: target },
+    };
+  }
+  await expect(prepare(f, fs, options)).rejects.toMatchObject({ code: "ERR_INVALID_UTF8" });
+});
 
 it.runIf(process.platform !== "win32").each([
   { name: "foreign state root", foreign: true, stateRoot: true, fileFailure: false },
@@ -108,12 +191,13 @@ it("finishes Windows fallback partial writes through the same descriptor", async
       },
     }),
   };
-  const { prepared: stage, guarded } = await prepare(f, io);
+  const { prepared: stage, guarded } = await prepare(f, io, { ...f.options, validateUtf8: true });
   await using prepared = stage;
   expect(prepared.publish().method).toBe("copy-fallback");
   guarded.assertPublishedIdentity();
   expect(calls).toBeGreaterThan(1);
-  expect(fs.readFileSync(f.target, "utf8")).toBe(content);
+  expect(fs.readFileSync(f.target)).toEqual(Buffer.from(content));
+  expect(fs.readFileSync(`${f.target}.bak`)).toEqual(Buffer.from(original));
 });
 
 it("does not swallow a transient assertion failure during awaited backup preparation", async () => {

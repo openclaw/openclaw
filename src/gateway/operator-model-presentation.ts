@@ -30,6 +30,7 @@ import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import { resolveOperatorRolePolicy } from "./operator-role-policy.js";
 import { SerializedJsonArray } from "./serialized-json.js";
@@ -183,10 +184,17 @@ export function prepareOperatorModelPresentation(params: {
     policy: role.modelPolicy,
     manifestPlugins,
   });
+  const clientScopes = client?.connect.scopes ?? [];
+  // Internal adapters may hold broader RPC scopes than the original requester.
+  const scopes = intersectOperatorScopes(
+    client?.internal?.operatorRunAuthority?.scopes ?? clientScopes,
+    intersectOperatorScopes(clientScopes, role.scopes),
+  );
   return prepareOperatorModelPolicyPresentation({
     cfg,
     policy,
     rolePolicy: role,
+    scopes,
     metadataSnapshot,
   });
 }
@@ -196,9 +204,11 @@ export function prepareOperatorModelPolicyPresentation(params: {
   cfg: OpenClawConfig;
   policy?: PreparedOperatorModelPolicy;
   rolePolicy?: Pick<NonNullable<AdmittedRunOperatorAuthority["rolePolicy"]>, "accessPrograms">;
+  scopes?: readonly string[];
   metadataSnapshot?: PluginMetadataSnapshot | null;
 }) {
   const { cfg, policy, rolePolicy, metadataSnapshot } = params;
+  const accessPolicy = { rolePolicy, scopes: params.scopes ?? [] };
   if (!policy && !rolePolicy) {
     return undefined;
   }
@@ -209,7 +219,7 @@ export function prepareOperatorModelPolicyPresentation(params: {
           ...entry,
           availableAccessPrograms: {
             cyber: entry.availableAccessPrograms.cyber.filter((program) =>
-              isOperatorAccessProgramAllowed(rolePolicy, program),
+              isOperatorAccessProgramAllowed(accessPolicy, program),
             ),
           },
         }
@@ -227,7 +237,7 @@ export function prepareOperatorModelPolicyPresentation(params: {
       const harness = entry.agentRuntime && harnesses.get(entry.agentRuntime.id);
       return resolveAgentHarnessOperatorPolicyError(harness || undefined, {
         modelPolicy: policy,
-        rolePolicy,
+        ...accessPolicy,
       })
         ? { ...projected, available: false, unavailableReason: "unsupported-runtime" }
         : projected;
