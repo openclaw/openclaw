@@ -25,6 +25,9 @@ export function ChatComposerPlusMenuContent(props: ChatComposerPlusMenuBodyProps
     return {
       ...current,
       ...capabilityMenu,
+      get attachments() {
+        return props.menu.attachments;
+      },
       showCapabilities: capabilityMenu !== undefined,
       basePath: capabilityMenu?.basePath ?? "",
       skills: capabilityMenu?.skills ?? null,

@@ -11,7 +11,10 @@ import {
 import { uploadsEnabled } from "../../../lib/uploads.ts";
 import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
 import "./chat-camera-capture.tsx";
-import { useNativeAttachmentSourceMenu } from "./chat-attachment-picker-policy.ts";
+import {
+  composerAttachmentMenuItems,
+  selectComposerAttachment,
+} from "./chat-composer-attachment-menu.tsx";
 import {
   menuChevron,
   renderCapabilityMenuState,
@@ -30,9 +33,13 @@ const Subview = lazy(() => import("./chat-composer-plus-menu-subview.tsx"), {
   export: "ChatComposerPlusMenuSubview",
 });
 
-function rootRenderInputs(menu: ChatComposerPlusMenuContentProps) {
+function rootRenderInputs(
+  menu: ChatComposerPlusMenuContentProps,
+  canUpload: boolean,
+  imagesOnly: boolean,
+) {
   const inputs: unknown[] = [i18nRevision()];
-  inputs.push(uploadsEnabled(menu.attachments.uploadConfig), menu.showCapabilities);
+  inputs.push(canUpload, imagesOnly, menu.showCapabilities);
   for (const toggle of menu.rootToggles ?? []) {
     inputs.push(
       toggle.value,
@@ -55,40 +62,14 @@ function rootRenderInputs(menu: ChatComposerPlusMenuContentProps) {
   return inputs;
 }
 
-function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
+function rootItems(
+  menu: ChatComposerPlusMenuContentProps,
+  canUpload: boolean,
+  imagesOnly: boolean,
+): MenuEntry[] {
   const entries: MenuEntry[] = [];
-  const canUpload = uploadsEnabled(menu.attachments.uploadConfig);
   if (canUpload) {
-    const sources: MenuEntry[] = [];
-    const mediaOption = menu.attachments.imagesOnly
-      ? (["photo", "image", t("chat.composer.attachPhoto")] as const)
-      : (["media", "image", t("chat.composer.attachMedia")] as const);
-    const nativeSourceMenu = useNativeAttachmentSourceMenu();
-    for (const [id, icon, label] of nativeSourceMenu
-      ? ([["file", "paperclip", t("chat.composer.attach")]] as const)
-      : ([
-          ["camera", "camera", t("chat.composer.cameraInput")],
-          mediaOption,
-          // Image-only composers keep the single picker's file input, filtered to images.
-          ...(menu.attachments.imagesOnly
-            ? []
-            : ([["file", "paperclip", t("chat.composer.attachFileOption")]] as const)),
-        ] as const)) {
-      sources.push({
-        id,
-        label,
-        class: nativeSourceMenu
-          ? "agent-chat__attach-menu-option agent-chat__capability-menu-item"
-          : "agent-chat__attach-menu-option",
-        icon: <Icon name={icon} />,
-      });
-    }
-    entries.push({
-      kind: "group",
-      id: "attachment-sources",
-      class: sources.length === 1 ? undefined : "agent-chat__attachment-sources",
-      items: sources,
-    });
+    entries.push(...composerAttachmentMenuItems(imagesOnly));
   }
   if (menu.showCapabilities || menu.rootToggles?.length) {
     if (canUpload) {
@@ -200,11 +181,7 @@ export function ChatComposerPlusMenuBody(props: ChatComposerPlusMenuResolvedProp
   };
   const select = ({ id: value }: MenuItem, event: CustomEvent<MenuItem>) => {
     const menu = props.menu;
-    if (
-      uploadsEnabled(menu.attachments.uploadConfig) &&
-      (value === "camera" || value === "photo" || value === "file" || value === "media")
-    ) {
-      menu.inputHandle.open(value);
+    if (selectComposerAttachment(value, () => props.menu)) {
       return;
     }
     const rootToggle = menu.rootToggles?.find((toggle) => toggle.value === value);
@@ -249,7 +226,13 @@ export function ChatComposerPlusMenuBody(props: ChatComposerPlusMenuResolvedProp
     }
   };
   const rootInputs = createMemo(
-    () => ({ menu: props.menu, values: rootRenderInputs(props.menu) }),
+    () => {
+      // Sample display inputs here; selection and sketch lifetimes still read live controls.
+      const menu = { ...props.menu };
+      const canUpload = uploadsEnabled(menu.attachments.uploadConfig);
+      const imagesOnly = menu.attachments.imagesOnly === true;
+      return { menu, canUpload, imagesOnly, values: rootRenderInputs(menu, canUpload, imagesOnly) };
+    },
     {
       lazy: true,
       equals: (previous, next) =>
@@ -257,7 +240,13 @@ export function ChatComposerPlusMenuBody(props: ChatComposerPlusMenuResolvedProp
         previous.values.every((value, index) => Object.is(value, next.values[index])),
     },
   );
-  const items = createMemo(() => rootItems(rootInputs().menu), { lazy: true });
+  const items = createMemo(
+    () => {
+      const { menu, canUpload, imagesOnly } = rootInputs();
+      return rootItems(menu, canUpload, imagesOnly);
+    },
+    { lazy: true },
+  );
   onSettled(() => {
     if (props.readMenu().overlay.open) {
       props.menu.onLoadSkills();

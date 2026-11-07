@@ -95,6 +95,15 @@ it.each(["root", "skills", "connectors", "libraries", "library:missing"] as cons
     const capability = menu.capabilityMenu!.read()!;
     switch (view) {
       case "root":
+        for (const imagesOnly of [true, false]) {
+          menu.attachments.imagesOnly = imagesOnly;
+          refresh();
+          expect(
+            ["photo", "media", "file"].filter((id) =>
+              content.querySelector(`[data-value="${id}"]`),
+            ),
+          ).toEqual(imagesOnly ? ["photo"] : ["media", "file"]);
+        }
         capability.webSearchBaseEnabled = false;
         refresh();
         expect(item("toggle-web-search")).toMatchObject({ checked: "false", disabled: true });
