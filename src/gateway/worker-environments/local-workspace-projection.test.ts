@@ -54,6 +54,7 @@ import {
   proveWorkerOwnedArchive,
 } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
+import { proveRejectedWorkspaceCheckpoint } from "./local-workspace-recovery.test-support.js";
 import {
   proveConcurrentWorkspacePreparation,
   proveColdPreparationCapacityIsolation,
@@ -182,6 +183,9 @@ afterEach(async () => {
 });
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
+
+it("quarantines rejected checkpoints while allowing new agent work", () =>
+  proveRejectedWorkspaceCheckpoint(owner));
 
 it("reuses warm workspaces and reconciles edits", () => proveWarmWorkspaceReuse(owner));
 

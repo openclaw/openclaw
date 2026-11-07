@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
@@ -9,10 +9,13 @@ import {
 } from "../../media/staged-inputs.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import { withWorkspaceHashContext } from "./workspace-hash-memo.js";
-import type { WorkspaceReconciliationPreparation } from "./workspace-manifest-comparison.js";
-import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
-  MAX_RECONCILIATION_ENTRIES,
+  MAX_WORKSPACE_RESULT_CHANGED_PATHS,
+  WorkspaceResultLimitError,
+} from "./workspace-inventory-limits.js";
+import type { WorkspaceReconciliationPreparation } from "./workspace-manifest-comparison.js";
+import { captureWorkspaceManifest, createWorkspacePatch } from "./workspace-manifest-worker.js";
+import {
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
   type WorkerWorkspaceReconciliationJournal,
@@ -32,7 +35,6 @@ import {
 } from "./workspace-reconcile-derived-paths.js";
 import {
   applyWorkspacePatch,
-  createWorkspacePatch,
   recoverWorkerWorkspaceReconciliation,
 } from "./workspace-reconcile-recovery.js";
 
@@ -60,6 +62,11 @@ export async function applyStagedWorkerWorkspace(params: {
   return await withWorkspaceHashContext(async (): Promise<WorkerWorkspaceApplyResult> => {
     const root = await fs.realpath(params.root);
     const { preflight: preflightInput, includePaths: preparedPaths } = params.reconciliation;
+    if (preflightInput.changedPaths.length > MAX_WORKSPACE_RESULT_CHANGED_PATHS) {
+      throw new WorkspaceResultLimitError(
+        `Workspace result changes ${preflightInput.changedPaths.length} files/directories (limit ${MAX_WORKSPACE_RESULT_CHANGED_PATHS}).`,
+      );
+    }
     const baseNodes = new Map(preflightInput.baseNodes);
     const currentNodes = new Map(preflightInput.currentNodes);
     const changed = new Set(preflightInput.changedPaths);
@@ -185,17 +192,6 @@ export async function applyStagedWorkerWorkspace(params: {
     const appliedDirectories = [...preflight.applyPaths]
       .filter((entryPath) => currentNodes.get(entryPath)?.type === "directory")
       .toSorted();
-    if (
-      baseEntries.length +
-        appliedEntries.length +
-        baseDirectories.length +
-        appliedDirectories.length >
-      MAX_RECONCILIATION_ENTRIES
-    ) {
-      throw new Error(
-        `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
-      );
-    }
     const snapshot = await createWorkspacePatch({
       root,
       stagingRoot: params.stagingRoot,
@@ -220,7 +216,7 @@ export async function applyStagedWorkerWorkspace(params: {
       baseDirectories,
       appliedDirectories,
       baseTree: snapshot.baseTree,
-      basePackSha256: createHash("sha256").update(snapshot.basePack).digest("hex"),
+      basePackSha256: snapshot.basePackSha256,
       basePack: snapshot.basePack,
     };
     params.assertCurrent?.();

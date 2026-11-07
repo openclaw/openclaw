@@ -382,5 +382,16 @@ export async function prepareWorkspaceStageInput(input: WorkspaceStageInput<stri
 export async function prepareWorkspaceTreeInput(
   input: WorkspaceManifestValueInputs["workspace.manifest.tree-input"],
 ): Promise<null> {
+  if (hasGitWorkerContext()) {
+    const { buildWorkspaceTreeInput } = await import("./workspace-result-preparation.runtime.js");
+    return buildWorkspaceTreeInput(input);
+  }
   return computeValue("workspace.manifest.tree-input", input);
+}
+
+/** Patch construction and its output observers belong to the existing Git worker. */
+export async function createWorkspacePatch(
+  input: WorkspaceManifestValueInputs["workspace.reconcile.patch"],
+) {
+  return computeValue("workspace.reconcile.patch", input);
 }

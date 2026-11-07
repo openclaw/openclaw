@@ -16,6 +16,7 @@ import {
   prepareLocalWorkspaceCheckpoint,
   selectLocalWorkspaceCheckpoint,
   stageLocalWorkspaceCheckpoint,
+  createLocalWorkspaceCheckpointRejection,
   type LocalWorkspaceSyncTarget as Direction,
 } from "./local-workspace-checkpoint.js";
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
@@ -98,6 +99,14 @@ export function projectionOperations(
   ) => {
     row = await store.update(current(), patch, owner.workerAuthority, manifest);
   };
+  const rejection = createLocalWorkspaceCheckpointRejection({
+    current,
+    update,
+    removedAt: owner.worktree.removedAt,
+    reject: async (selected, value) => {
+      row = await store.reject(selected, value, owner.workerAuthority);
+    },
+  });
   const repairBaseline = async () => {
     const repair = await store.manifest(current(), {
       kind: "repair",
@@ -258,6 +267,14 @@ export function projectionOperations(
   };
   const settle = async (
     retainAccepted = false,
+    preparedSnapshot?: LocalWorkspaceManifestCheckpoint,
+  ) =>
+    rejection.settle(
+      () => settlePending(retainAccepted, preparedSnapshot),
+      preparedSnapshot?.currentManifestRef,
+    );
+  const settlePending = async (
+    retainAccepted: boolean,
     preparedSnapshot?: LocalWorkspaceManifestCheckpoint,
   ) => {
     await recover();
@@ -454,18 +471,13 @@ export function projectionOperations(
       await cleanupAccepted();
     }
   };
-  const synchronize = async (target: Direction) => {
-    await settle();
-    const snapshot = await scan(target);
-    if (snapshot.resultingRoot !== snapshot.previousRoot) {
-      await update({
-        pending_ref: workerWorkspaceResultRef(randomUUID()),
-        pending_target: target,
-        checkpoint_json: JSON.stringify(snapshot),
-      });
-      await settle(false, snapshot);
-    }
-  };
+  const synchronize = (target: Direction, options?: { captureRejected?: true }) =>
+    rejection.synchronize({
+      target,
+      captureRejected: options?.captureRejected,
+      settle,
+      scan,
+    });
   const prepare = async (dependencies?: {
     sandbox: SandboxConfig;
     allocation: WorktreeAllocationGuard;
@@ -639,7 +651,7 @@ export function projectionOperations(
       current();
     },
     expire: async (retireSnapshot?: (assertCurrent: () => void) => Promise<void>) => {
-      const selected = current();
+      const selected = rejection.assertNotRejected();
       if (
         selected.journal_json ||
         (selected.pending_target && selected.pending_target !== "canonical")
