@@ -4,6 +4,7 @@ import type {
   PortalSummary,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { WRITE_SCOPE } from "../../gateway/operator-scopes.js";
+import { PORTAL_LINK_GUIDANCE } from "../portal-link-guidance.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -38,9 +39,9 @@ export function formatPortalResult(
     "Loopback-only portal: access is local to the Gateway host, even when the app runs on a worker. For a remote viewer, configure private portal ingress or a reachable direct listener; local use is still valid.";
   const text =
     outcome.action === "open"
-      ? `${outcome.result.exposure?.kind === "loopback-only" ? `${loopbackWarning} ` : ""}Portal route allocated at ${outcome.result.url}. Pass PUBLIC_URL=${outcome.result.publicUrl} and PORT=${outcome.result.port} when starting the dev server on the selected environment. Browser access and application rendering remain unverified from the requesting viewer; allocation or a worker/Gateway browser test is not delivery proof. Use the returned URLs unchanged.`
+      ? `${outcome.result.exposure?.kind === "loopback-only" ? `${loopbackWarning} ` : ""}Portal route allocated at ${outcome.result.url}. Pass PUBLIC_URL=${outcome.result.publicUrl} and PORT=${outcome.result.port} when starting the dev server on the selected environment. Browser access and application rendering remain unverified from the requesting viewer; allocation or a worker/Gateway browser test is not delivery proof. ${PORTAL_LINK_GUIDANCE}`
       : outcome.action === "list"
-        ? `${outcome.result.portals.some((portal) => portal.exposure?.kind === "loopback-only") ? `${loopbackWarning} ` : ""}${outcome.result.portals.length} active portal${outcome.result.portals.length === 1 ? "" : "s"}. Inspect each portal's exposure facts; browser access and application rendering remain unverified from the requesting viewer. The Control UI Portals page lists the routes.`
+        ? `${outcome.result.portals.some((portal) => portal.exposure?.kind === "loopback-only") ? `${loopbackWarning} ` : ""}${outcome.result.portals.length} active portal${outcome.result.portals.length === 1 ? "" : "s"}. Inspect each portal's exposure facts; browser access and application rendering remain unverified from the requesting viewer. ${PORTAL_LINK_GUIDANCE} The Control UI Portals page lists the routes.`
         : `Portal ${outcome.id}: ${outcome.result.closed ? "closed" : "not closed"}.`;
   const result = jsonResult(outcome.result);
   return { ...result, content: [{ type: "text", text }, ...result.content] };

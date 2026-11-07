@@ -13,6 +13,13 @@ describe("UI presentation prompt", () => {
       expect(prompt).toContain("worker/Gateway fetch or browser test is not delivery proof");
       expect(prompt).toContain("requesting viewer");
       expect(prompt).toContain("blocked or unverified");
+      expect(prompt).toContain("When the user requests a private app link");
+      expect(prompt).toContain("share the returned url unchanged with the authorized recipient");
+      expect(prompt).toContain(
+        "publicUrl is token-free app configuration, not an authenticated launch link",
+      );
+      expect(prompt).toContain("Never automatically post bearer links to group/public chats");
+      expect(prompt).toContain("Do not offer a loopback-only route as a remote/mobile link");
       if (screenToolName) {
         expect(prompt).toContain('screen(action="portal_show", portalId="<returned id>")');
       } else {
