@@ -3676,7 +3676,6 @@
 ["src/commands/doctor/repair-sequencing-mocks.test-support.ts","../../agents/auth-profiles.js","207035e905fc6cf275659a53afa43fe4e3a546dc5415d73ce5273c82e0154680",1]
 ["src/commands/doctor/repair-sequencing-mocks.test-support.ts","../../agents/auth-profiles/credential-state.js","1fc32b11a20e8cab6bcfd79b6319bdeb255e256abb63899b4e33f027e2d943d7",1]
 ["src/commands/doctor/repair-sequencing-mocks.test-support.ts","../../config/io.plugin-metadata.js","0c2d7483d7a19f412a769851cd13b52ef33eacf8ccc2cd67fe360cfe4dacb8c0",1]
-["src/commands/doctor/repair-sequencing-mocks.test-support.ts","../../config/plugin-auto-enable.js","ebfb1b5c2b49b6487578d54216d310cd4399c27675d1c971355098f27731fd80",1]
 ["src/commands/doctor/repair-sequencing-mocks.test-support.ts","../../plugins/provider-install-catalog.js","35c0b86c8f26d72eae875713d93902f2682c66c7fc0302f5e1c7d67f8e421a59",1]
 ["src/commands/doctor/repair-sequencing-mocks.test-support.ts","../../state/user-profiles-owner-migration.js","ea77c4f181491a1233a995cd0263ec2f7aa3ec6a20c513c75f8c807a671ce048",1]
 ["src/commands/doctor/repair-sequencing-mocks.test-support.ts","../../state/user-profiles-tailscale-migration.js","0d600d2e95db3826c9ccd4a0561b99a95d0e067a0ae62f0b1d7738bfbb77eb28",1]
