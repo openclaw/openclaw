@@ -98,6 +98,7 @@ it("creates the zone when no previous file exists", async () => {
   await expectZoneWrite(true);
   expect(replaceFileAtomicMock).toHaveBeenCalledOnce();
   expect(replaceFileAtomicMock).toHaveBeenCalledWith({
+    allowDrvfsRenameRecovery: false,
     filePath: zonePath,
     content: expect.any(String),
     dirMode: 0o700,

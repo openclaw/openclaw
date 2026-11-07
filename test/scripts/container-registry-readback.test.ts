@@ -95,78 +95,40 @@ const stableParams = {
 };
 
 describe("container registry post-publish readback", () => {
-  it("uses a stored credential only with the registry's authorized HTTPS token realm", async () => {
-    const auth = Buffer.from("release-user:release-secret").toString("base64");
-    const fetchImpl = vi
+  it("delegates authenticated registry reads to bounded Docker buildx inspection", async () => {
+    const ref = vercelImage + ":2026.10.6";
+    const delay = vi.fn(async () => {});
+    const execFileSyncImpl = vi
       .fn()
-      .mockResolvedValueOnce(
-        new Response(null, {
-          status: 401,
-          headers: {
-            "www-authenticate":
-              'Bearer realm="https://vcr.vercel.com/token",service="vcr.vercel.com"',
-          },
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ token: "registry-token" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify(imageManifest()), {
-          status: 200,
-          headers: {
-            "content-type": imageType,
-            "docker-content-digest": digest("a"),
-          },
-        }),
-      );
+      .mockImplementationOnce(() => {
+        throw new Error("registry is still converging");
+      })
+      .mockReturnValueOnce(JSON.stringify({ digest: digest("a"), mediaType: imageType }))
+      .mockReturnValueOnce(JSON.stringify(imageManifest()));
 
-    await expect(
-      readContainerManifest(vercelImage + ":2026.10.6", {
-        delay: async () => {},
-        dockerConfig: { auths: { "vcr.vercel.com": { auth } } },
-        fetchImpl,
+    await expect(readContainerManifest(ref, { delay, execFileSyncImpl })).resolves.toMatchObject({
+      digest: digest("a"),
+      manifest: imageManifest(),
+      ref,
+    });
+    expect(delay).toHaveBeenCalledWith(1_000);
+    expect(execFileSyncImpl).toHaveBeenNthCalledWith(
+      2,
+      "docker",
+      ["buildx", "imagetools", "inspect", ref, "--format", "{{json .Manifest}}"],
+      expect.objectContaining({
+        maxBuffer: 8 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 20_000,
       }),
-    ).resolves.toMatchObject({ digest: digest("a"), ref: vercelImage + ":2026.10.6" });
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-    expect(fetchImpl.mock.calls[1]?.[0].origin).toBe("https://vcr.vercel.com");
-    expect(fetchImpl.mock.calls[1]?.[1]?.headers.authorization).toBe(
-      "Basic " + Buffer.from("release-user:release-secret").toString("base64"),
     );
-    expect(fetchImpl.mock.calls[2]?.[1]?.headers.authorization).toBe("Bearer registry-token");
+    expect(execFileSyncImpl).toHaveBeenNthCalledWith(
+      3,
+      "docker",
+      ["buildx", "imagetools", "inspect", ref, "--raw"],
+      expect.any(Object),
+    );
   });
-
-  it.each(["http://vcr.vercel.com/token", "https://unrelated.example/token"])(
-    "rejects unauthorized token realm %s before credential-bearing I/O",
-    async (realm) => {
-      const fetchImpl = vi.fn().mockResolvedValueOnce(
-        new Response(null, {
-          status: 401,
-          headers: { "www-authenticate": 'Bearer realm="' + realm + '"' },
-        }),
-      );
-
-      await expect(
-        readContainerManifest(vercelImage + ":2026.10.6", {
-          delay: async () => {},
-          dockerConfig: {
-            auths: {
-              "vcr.vercel.com": {
-                auth: Buffer.from("release-user:release-secret").toString("base64"),
-              },
-            },
-          },
-          fetchImpl,
-        }),
-      ).rejects.toThrow("registry token realm is not an authorized HTTPS origin");
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
-      expect(fetchImpl.mock.calls[0]?.[1]?.headers).not.toHaveProperty("authorization");
-    },
-  );
-
   it.each([
     {
       ref: "docker.io/openclaw/openclaw:2026.10.6-slim-arm64",

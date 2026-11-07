@@ -309,7 +309,7 @@ suite.define(() => {
           expect(response?.status(), JSON.stringify(ingress.diagnostics())).toBe(503);
           expect(response?.headers()["x-openclaw-proof-boundary"]).toBe("disposable-ingress");
           const title = page.getByRole("heading", {
-            name: "Server is temporarily unavailable",
+            name: "OpenClaw is temporarily unavailable",
             exact: true,
           });
           expect(await title.isVisible()).toBe(true);

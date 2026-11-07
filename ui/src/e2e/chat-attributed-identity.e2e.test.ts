@@ -296,6 +296,7 @@ suite.define(() => {
             const runId = readRunId(request.params);
             await expect(pane.locator(".chat-working-indicator"), label).toBeVisible();
             const working = pane.locator(".chat-group--working > .chat-group-messages");
+            await expect(working, label).toBeVisible();
             await expectColumn(working, "working indicator");
             await expect(working, label).toHaveCSS("padding-inline-start", "0px");
             const toolCallId = `mobile-read-${width}`;

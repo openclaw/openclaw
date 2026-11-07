@@ -104,6 +104,8 @@ process.env = {
 const cfg: OpenClawConfig = JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH!, "utf8"));
 const agent = await import("../../src/state/openclaw-agent-db.js");
 const state = await import("../../src/state/openclaw-state-db.js");
+const { readConfigMachineState } = await import("../../src/state/config-machine-state.js");
+const { writeConfigMachineState } = await import("../../src/state/config-machine-state-write.js");
 agent.openOpenClawAgentDatabase({ agentId: "main" });
 if (values.seed) {
   const { writeSessionEntry } =
@@ -201,6 +203,7 @@ type MeasureInput = {
   context: {
     getRuntimeConfig: () => OpenClawConfig;
     restartResumeWindow?: { startedAt: number; endedAt: number };
+    restartResumeWindows?: Record<string, Array<{ startedAt: number; endedAt: number }>>;
   };
   signal: AbortSignal;
   log: { warn: (message: string) => void };
@@ -289,7 +292,9 @@ const seedMarkers = () =>
     },
     { agentId: "main" },
   );
-const seedResume = () =>
+const seedResume = () => {
+  // Include the candidate's durable acknowledgement; fixture writes stay outside timing.
+  writeConfigMachineState("gateway.restartRecovery", { main: [predecessor] });
   agent.runOpenClawAgentWriteTransaction(
     (owned) => {
       assert.equal(seededRows.length, 12);
@@ -310,6 +315,7 @@ const seedResume = () =>
     },
     { agentId: "main" },
   );
+};
 let admissions = 0;
 const admissionDiagnostics = channel("openclaw.perf.restart-resume-admission");
 const onAdmission = () => {
@@ -364,7 +370,12 @@ const measureOwner = async (arm: number) => {
   } else if (values.resume) {
     await owners[arm]!.resumeMarkedSessions({
       ...input,
-      context: { getRuntimeConfig: () => cfg, restartResumeWindow: predecessor },
+      context: {
+        getRuntimeConfig: () => cfg,
+        // Supply both owner contracts when comparing a saved pre-ledger implementation.
+        restartResumeWindow: predecessor,
+        restartResumeWindows: { main: [predecessor] },
+      },
     });
   } else {
     assert.equal(typeof (await owners[arm]!.prepareAgentRestartRecovery(input)), "function");
@@ -455,6 +466,9 @@ try {
           sampledBytes += sumSampledHeapBytes(
             (await inspector.post("HeapProfiler.stopSampling")).profile.head,
           );
+        }
+        if (values.resume && arm === 1 && !values.control) {
+          assert.equal(readConfigMachineState("gateway.restartRecovery"), undefined);
         }
         if (values.mark) {
           assert.equal(

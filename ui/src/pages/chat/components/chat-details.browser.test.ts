@@ -7,8 +7,7 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { stubResizeObserver } from "../../../test-helpers/resize-observer.ts";
 import { phase } from "../../../test-helpers/solid-menu.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
-import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./chat-details.tsx";
@@ -380,21 +379,23 @@ describe("chat Details presentation", () => {
     panel.style.cssText = "position:relative;inset:auto;width:600px;max-width:none;height:400px";
     document.body.append(panel);
     mounted.push(panel, styles);
-    mountSolid(
-      () =>
-        createComponent(ChatDetailsDesktopBody, {
-          presented: true,
-          get children() {
-            return () =>
-              createComponent(ChatDetailsEnvironment, {
-                details: props({
-                  detailsWorkspace: {
-                    root: "/workspace/details",
-                    label: null,
-                    branch: "feature/details",
-                  },
-                }),
-                presented: true,
+    const mountContent = () =>
+      mountSolid(
+        () =>
+          createComponent(ChatDetailsDesktopContent, {
+            presented: true,
+            dismissed: false,
+            cachedReady: true,
+            progressMenuRef: () => {},
+            onHideProgress: () => {},
+            chat: props({
+              progressCard: undefined,
+              detailsWorkspace: {
+                root: "/workspace/details",
+                label: null,
+                branch: "feature/details",
+              },
+              environment: {
                 onOpenUncommitted: openChanges,
                 uncommitted: {
                   sessionKey: card.sessionKey,
@@ -404,11 +405,18 @@ describe("chat Details presentation", () => {
                   additions: 3,
                   deletions: 1,
                 },
-              });
-          },
-        }),
-      { container: panel },
-    );
+              },
+            }),
+          }),
+        { container: panel },
+      );
+    // Load the public boundary, then measure a fresh scroll owner before its first layout turn.
+    const prepared = mountContent();
+    await expect
+      .poll(() => panel.querySelector(".chat-environment__branch-controls button.chat-pr__diff"))
+      .not.toBeNull();
+    prepared.unmount();
+    mountContent();
     flush();
     const heading = panel.querySelector(".chat-details-desktop-section__heading")!;
     const expectHeadingInsets = () => {
@@ -422,10 +430,6 @@ describe("chat Details presentation", () => {
       panel.style.width = width + "px";
       expectHeadingInsets();
     }
-    // The Environment body loads lazily; capture its controls only after it renders.
-    await expect
-      .poll(() => panel.querySelector(".chat-environment__branch-controls button.chat-pr__diff"))
-      .not.toBeNull();
     const navigation = panel.querySelector<HTMLButtonElement>(
       ".chat-environment__branch-controls button.chat-pr__diff",
     )!;

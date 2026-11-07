@@ -56,6 +56,7 @@ const repositoryScriptEntries = [
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
+  "scripts/perf/gateway-crash-record-measure.mts!",
   "scripts/perf/native-pr-bootstrap-measure.mjs!",
   "scripts/perf/backup-verify-fixture.mjs!",
   "scripts/perf/backup-verify-measure.mjs!",
