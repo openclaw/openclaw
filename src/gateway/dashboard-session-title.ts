@@ -24,6 +24,7 @@ import { withTimeout } from "../infra/fs-safe.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import {
   SESSION_TITLE_SOURCE_MAX_CHARS,
+  needsSkillCommandsForSessionTitle,
   resolveSessionTitleSource,
 } from "../sessions/session-title-source.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
@@ -376,16 +377,20 @@ export async function prepareDashboardSessionTitle(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   try {
-    const sourceText =
-      resolveSessionTitleSource(params.userMessage) ??
-      resolveSessionTitleSource(
-        params.userMessage,
-        await prepareTitleSkillCommands({
-          cfg: params.cfg,
-          agentId: params.agentId,
-          assertCurrent: params.assertCurrent,
-        }),
-      );
+    // Slash-prefixed text needs the skill registry to distinguish registered
+    // skill commands (their arguments title the session) from pasted paths and
+    // free-form commands (the de-slashed text titles it); plain text stays
+    // lazy and never loads skill commands.
+    const sourceText = needsSkillCommandsForSessionTitle(params.userMessage)
+      ? resolveSessionTitleSource(
+          params.userMessage,
+          await prepareTitleSkillCommands({
+            cfg: params.cfg,
+            agentId: params.agentId,
+            assertCurrent: params.assertCurrent,
+          }),
+        )
+      : resolveSessionTitleSource(params.userMessage);
     return sourceText
       ? await generateDashboardSessionTitle({ ...params, sourceText, utilityOnly: true })
       : null;
