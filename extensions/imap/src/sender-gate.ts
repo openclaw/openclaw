@@ -76,8 +76,53 @@ function matchingSenderToken(
 
 type AuthenticationHeader = { authservId: string; dmarc?: string; spf?: string };
 
+// Comments are CFWS, not tokens or result clauses. Preserve their boundary so
+// removing one cannot join fragments into a trusted identifier or a method.
+function normalizeImapAuthResults(value: string): string | undefined {
+  let normalized = "";
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (const char of value.replace(/\r?\n[\t ]+/gu, " ")) {
+    if (char === "\0" || char === "\r" || char === "\n") {
+      return undefined;
+    }
+    if (escaped) {
+      escaped = false;
+      if (!depth) {
+        normalized += "_";
+      }
+    } else if ((depth > 0 || quoted) && char === "\\") {
+      escaped = true;
+    } else if (depth > 0) {
+      if (char === "(") {
+        depth++;
+      } else if (char === ")") {
+        depth--;
+      }
+    } else if (char === '"') {
+      quoted = !quoted;
+      normalized += char;
+    } else if (quoted) {
+      // Quoted property values may contain semicolons, but never result clauses.
+      normalized += "_";
+    } else if (char === "(") {
+      depth = 1;
+      normalized += " ";
+    } else if (char === ")" || char === "\\") {
+      return undefined;
+    } else {
+      normalized += char;
+    }
+  }
+  return depth || quoted || escaped ? undefined : normalized;
+}
+
 function parseImapAuthResults(value: string): AuthenticationHeader | undefined {
-  const unfolded = value.replace(/\r?\n[\t ]+/gu, " ");
+  const unfolded = normalizeImapAuthResults(value);
+  if (unfolded === undefined) {
+    return undefined;
+  }
   const separator = unfolded.indexOf(";");
   if (separator < 1) {
     return undefined;
@@ -89,9 +134,18 @@ function parseImapAuthResults(value: string): AuthenticationHeader | undefined {
   if (!/^[A-Za-z0-9][A-Za-z0-9.-]*$/u.test(authservId)) {
     return undefined;
   }
-  const methods = unfolded.slice(separator + 1);
-  const dmarc = /(?:^|;)\s*dmarc\s*=\s*([a-z]+)/iu.exec(methods)?.[1]?.toLowerCase();
-  const spf = /(?:^|;)\s*spf\s*=\s*([a-z]+)/iu.exec(methods)?.[1]?.toLowerCase();
+  const methods = unfolded
+    .slice(separator + 1)
+    .split(";")
+    .map((method) =>
+      /^[\t ]*(dmarc|spf)[\t ]*=[\t ]*([a-z]+)(?=[\t ]*$|[\t ]+(?:reason|[a-z][a-z0-9_-]*[\t ]*\.[\t ]*[a-z][a-z0-9_-]*)[\t ]*=)/iu.exec(
+        method,
+      ),
+    );
+  const dmarc = methods
+    .find((method) => method?.[1]?.toLowerCase() === "dmarc")?.[2]
+    ?.toLowerCase();
+  const spf = methods.find((method) => method?.[1]?.toLowerCase() === "spf")?.[2]?.toLowerCase();
   return { authservId, ...(dmarc ? { dmarc } : {}), ...(spf ? { spf } : {}) };
 }
 

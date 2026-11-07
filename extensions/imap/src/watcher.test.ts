@@ -444,6 +444,57 @@ describe("IMAP watcher protocol boundary", () => {
       }),
   );
 
+  it.each([
+    "mx.example.com (Postfix)",
+    String.raw`(receiving MTA) mx.example.com (nested (note); escaped \) delimiter) 1`,
+  ])("admits trusted authserv-id CFWS through the watcher: %s", (id) =>
+    checkAdmission({
+      auth: "none",
+      headers: authHeader(id),
+      evidence: "strength=asserted",
+      account: { senderAuth: senderAuth("asserted", true) },
+    }),
+  );
+
+  it.each([
+    ["mx.example.com (Postfix); dmarc=pass", "strength=asserted"],
+    ["(receiver) mx.example.com(comment) 1; dmarc=pass", "strength=asserted"],
+    ["mx.example.com (nested (note); hidden); dmarc=pass", "strength=asserted"],
+    [String.raw`mx.example.com (escaped \( \) \\); dmarc=pass`, "strength=asserted"],
+    ["mx.example.com\r\n\t(comment); dmarc=pass", "strength=asserted"],
+    ["mx.example.com; (not a ; method) dmarc (policy)= (result) pass", "strength=asserted"],
+    ["mx.example.com; dmarc=pass header(comment).from=example.com", "strength=asserted"],
+    ["mx.example.com; dmarc=pass header.(comment)from=example.com", "strength=asserted"],
+    [
+      'mx.example.com; dmarc=pass reason="text (; spf=fail)" header.from=example.com',
+      "strength=asserted",
+    ],
+    ["(mx.example.com) attacker.example; dmarc=pass", "gate=unverified-authentication"],
+    ["mx.(comment)example.com; dmarc=pass", "gate=dmarc-none"],
+    ["mx.example.com(comment)attacker.example; dmarc=pass", "gate=dmarc-none"],
+    ["mx.example.com (unfinished; dmarc=pass", "gate=dmarc-none"],
+    ["mx.example.com (invalid\0comment); dmarc=pass", "gate=dmarc-none"],
+    [String.raw`mx.example.com (escaped close\); dmarc=pass`, "gate=dmarc-none"],
+    ["mx.example.com); dmarc=pass", "gate=dmarc-none"],
+    ["mx.example.com; (dmarc=pass)", "gate=dmarc-none"],
+    ["mx.example.com; spf=pass (; dmarc=pass)", "gate=unverified-authentication"],
+    ["mx.example.com; dmar(comment)c=pass", "gate=dmarc-none"],
+    ["mx.example.com; dmarc=pa(comment)ss", "gate=dmarc-none"],
+    ["mx.example.com; dmarc=pass(comment)fail", "gate=dmarc-none"],
+    ["mx.example.com; dmarc=pass!", "gate=dmarc-none"],
+    ['mx.example.com; spf=pass reason="; dmarc=pass"', "gate=unverified-authentication"],
+    ['mx.example.com; dmarc=pass reason="unterminated', "gate=dmarc-none"],
+    ["mx.example.com; dmarc=pass (unterminated", "gate=dmarc-none"],
+    ["mx.example.com; dmarc=pass (dangling\\", "gate=dmarc-none"],
+  ])("keeps comment syntax outside sender authority: %s (%s)", (value, evidence) =>
+    checkAdmission({
+      auth: "none",
+      headers: `Authentication-Results: ` + value + "\r\n",
+      evidence,
+      account: { senderAuth: senderAuth("asserted", true) },
+    }),
+  );
+
   it("rejects stale mail at the weakest floor", () =>
     checkAdmission({
       ageMs: 72 * 60 * 60_000,
