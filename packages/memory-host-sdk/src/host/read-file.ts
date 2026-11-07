@@ -33,6 +33,7 @@ export async function readMemoryFile(params: {
   relPath: string;
   from?: number;
   lines?: number;
+  heading?: string;
   defaultLines?: number;
   maxChars?: number;
 }): Promise<MemoryReadResult> {
@@ -92,6 +93,7 @@ export async function readMemoryFile(params: {
       relPath,
       from: params.from,
       lines: params.lines,
+      heading: params.heading,
       defaultLines: params.defaultLines,
       maxChars: params.maxChars,
       suggestReadFallback: allowedWorkspace,
@@ -158,6 +160,7 @@ export async function readAgentMemoryFile(params: {
   relPath: string;
   from?: number;
   lines?: number;
+  heading?: string;
 }): Promise<MemoryReadResult> {
   const settings = resolveMemoryHostSearchPathConfig(params.cfg, params.agentId);
   if (!settings) {
@@ -172,6 +175,7 @@ export async function readAgentMemoryFile(params: {
     relPath: params.relPath,
     from: params.from,
     lines: params.lines,
+    heading: params.heading,
     maxChars: contextLimits?.memoryGetMaxChars,
   });
 }
