@@ -455,7 +455,7 @@ it.for(["resume", "followup", "failed-reload"] as const)(
                 ["error", "forbidden", "uncertain", "not_delivered"].includes(
                   String(outcome.status),
                 ),
-                "Retained send replay must not fail before target execution",
+                `Retained send replay must not fail before target execution: ${JSON.stringify(outcome)}`,
               ).toBe(false);
               return Promise.all([completed.promise, childAnnouncement.promise]);
             }),

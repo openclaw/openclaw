@@ -128,7 +128,7 @@ it.each([false, true])("never replays a Git write whose response was lost (merge
   const f = fixture(true, merge);
   const result = runPublisher(f, undefined, [
     ...metadata,
-    'pr_git() { if [ "$1" = push ]; then echo push >> .local/events; command git "$@" || return $?; echo "connection lost after write" >&2; return 74; fi; command git "$@"; }',
+    'pr_git() { if [ "$1" = push ]; then echo push >> .local/events; command git "$@" || return $?; echo "14b7fc74cef829a7c3d4035fc7995a23b13abdfb connection lost after write" >&2; return 74; fi; command git "$@"; }',
   ]);
   expect(result.status, result.stdout + result.stderr).toBe(74);
   expect(hosted(f)).toBe(f.candidate);

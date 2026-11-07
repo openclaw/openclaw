@@ -339,7 +339,8 @@ push_prep_head_once() {
     printf '%s\n' "$push_output" >&2
     # Only an actual Git permission failure may change transports. GraphQL
     # failures and uncertain Git outcomes never authorize another publication.
-    if [ "${PREP_PUBLICATION_PURPOSE:-qualified}" != proof ] && [ -z "$merge_commit" ] && printf '%s' "$push_output" | grep -qiE '(permission|denied|403|forbidden)' &&
+    # Match complete tokens so commit OIDs containing 403 are not permission errors.
+    if [ "${PREP_PUBLICATION_PURPOSE:-qualified}" != proof ] && [ -z "$merge_commit" ] && printf '%s' "$push_output" | grep -qiE '(^|[^[:alnum:]_])(permission|denied|403|forbidden)([^[:alnum:]_]|$)' &&
       [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
       echo "Permission denied on git push; trying GraphQL with the same lease." >&2
       graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$pr_head" "$lease_sha" "$pr" "$observation" "$prep_head_sha"
