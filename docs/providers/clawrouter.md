@@ -633,3 +633,37 @@ their normal credential cooldown behavior.
     OpenClaw usage and status surfaces.
   </Card>
 </CardGroup>
+
+## OpenCode proxy session identity
+
+For OpenCode Console and Go, the current key's catalog must grant an exact
+HTTP POST offer for the selected model and paired Chat, Responses, or Messages
+format. Provider-wide compatibility flags or a route declaration alone do not
+make a model executable. The selected native or unified URL stays bound to its
+model and proxy origin; unsupported or ambiguous offers remain unavailable.
+
+OpenClaw carries conversation identity in `x-clawrouter-session-id`. An explicit
+`x-opencode-session` overrides the automatic conversation ID. Header names are
+case-insensitive; conflicting caller, model, router, or legacy session values
+fail before dispatch. Explicit identities must contain 1–256 characters from
+`A-Z`, `a-z`, digits, `. _ ~ : / + @ = -`. Automatic conversation IDs outside
+that format use a stable, bounded hash, preserving distinct identities.
+
+Native session overrides are removed from both SDK header carriers. Static
+router and legacy session headers cannot create a shared standalone identity.
+Console calls without an identity leave it absent; the Worker creates a distinct
+standalone nonce. Go retains the native hook's host-provided turn ID fallback
+when that hook runs. Conversations never receive a random per-turn replacement.
+
+This header is attribution, not authorization. The Worker derives the upstream
+session handle from the authenticated caller, selected provider, original grant
+and credential lineage. Reusing the conversation identity with another caller
+or grant cannot authorize that grant or reuse its upstream session. The client
+continues to send only its selected proxy credential, without borrowing an
+OpenCode or Anthropic key or impersonating the OpenCode client.
+
+The bridge uses the existing transport-turn and streaming hooks, including
+simple completions. It adds no model families, prices, limits, or provider
+activation. Google/Gemini and WebSocket OpenCode session transports remain
+unqualified. Actual client-plus-Worker qualification is required before enabling
+new native offers; SDK fixtures alone do not establish grant binding.

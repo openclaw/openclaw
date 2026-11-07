@@ -46,6 +46,7 @@ import { clawrouterEmbeddingProvider } from "./embedding-provider.js";
 import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { listClawRouterImageModelCatalog } from "./image-model-catalog.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { bridgeOpenCodeProxySession, resolveOpenCodeProxyTurnState } from "./opencode-session.js";
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
   buildClawRouterProviderConfig,
@@ -249,7 +250,13 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
           },
         }) ?? underlying)
       : underlying;
-    const response = stream({ ...preparedModel, headers }, context, options);
+    const requestOptions = bridgeOpenCodeProxySession({
+      model,
+      sourceApi: ctx.sourceApi,
+      headers,
+      options,
+    });
+    const response = stream({ ...preparedModel, headers }, context, requestOptions);
     if (preparedModel.id === model.id) {
       return response;
     }
@@ -681,6 +688,7 @@ export default defineSingleProviderPluginEntry({
         // Isolated completions share routing/auth but must remain tool-free.
         wrapClawRouterProviderStream({ ...ctx, nativeWebSearchAllowedByToolPolicy: false }),
       wrapStreamFn: wrapClawRouterProviderStream,
+      resolveTransportTurnState: resolveOpenCodeProxyTurnState,
       buildReplayPolicy: (ctx) => {
         if (ctx.modelApi === "openai-completions" && ctx.modelId?.startsWith("mistral/")) {
           return mistralReplay.buildReplayPolicy?.(ctx);
