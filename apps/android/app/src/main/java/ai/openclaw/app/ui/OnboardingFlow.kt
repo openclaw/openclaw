@@ -792,9 +792,9 @@ fun OnboardingFlow(
             if (nearbyGateway == null) {
               attemptedGatewayName = null
             } else {
-              manualHost = nearbyGateway.host
               manualPort = nearbyGatewayManualPort(nearbyGateway)
               manualTls = nearbyGatewayManualTls(nearbyGateway)
+              manualHost = gatewayManualAddressForEditing(nearbyGateway.host, manualPort, manualTls)
               attemptedGatewayName = nearbyGateway.name
             }
             step = OnboardingStep.Manual
@@ -865,10 +865,6 @@ fun OnboardingFlow(
           onBack = ::goBack,
           onManualHostChange = {
             manualHost = it
-            setupErrorCode = OnboardingErrorCode.None
-          },
-          onManualPortChange = {
-            manualPort = it
             setupErrorCode = OnboardingErrorCode.None
           },
           onManualTlsChange = { manualTls = it },
@@ -1651,7 +1647,6 @@ private fun ManualGatewaySetupScreen(
   mascotMood: MascotMood,
   onBack: () -> Unit,
   onManualHostChange: (String) -> Unit,
-  onManualPortChange: (String) -> Unit,
   onManualTlsChange: (Boolean) -> Unit,
   onTokenChange: (String) -> Unit,
   onPasswordChange: (String) -> Unit,
@@ -1678,25 +1673,19 @@ private fun ManualGatewaySetupScreen(
         }
         item {
           LabeledField(label = nativeString("Gateway URL")) {
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-              if (onboardingFormUsesStackedLayout(maxWidth.value, fontScale)) {
-                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                  ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("Host"), modifier = Modifier.fillMaxWidth())
-                  ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = nativeString("Port"), modifier = Modifier.fillMaxWidth())
-                }
-              } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                  ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("Host"), modifier = Modifier.weight(1f))
-                  ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = nativeString("Port"), modifier = Modifier.width(104.dp))
-                }
-              }
-            }
+            ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("https://gateway.example.test"), modifier = Modifier.fillMaxWidth())
             Text(
               text = nativeString("Use the Gateway computer's LAN address or secure remote hostname."),
               style = ClawTheme.type.caption,
               color = ClawTheme.colors.textMuted,
             )
           }
+        }
+        item {
+          BrowserSignInButton(
+            targetUrl = browserSignInUrl(manualHost, manualPort, transport.effectiveTls),
+            onSignedIn = onPair,
+          )
         }
         item {
           LabeledField(label = nativeString("Token")) {
@@ -1713,26 +1702,28 @@ private fun ManualGatewaySetupScreen(
             ClawTextField(value = password, onValueChange = onPasswordChange, placeholder = nativeString("Password optional"), secret = true)
           }
         }
-        item {
-          LabeledField(label = nativeString("Connection security")) {
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-              val stacked = onboardingFormUsesStackedLayout(maxWidth.value, fontScale)
-              if (stacked) {
-                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                  GatewayTransportChoices(transport, onManualTlsChange, Modifier.fillMaxWidth())
-                }
-              } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                  GatewayTransportChoices(transport, onManualTlsChange)
+        if (!manualHost.contains("://")) {
+          item {
+            LabeledField(label = nativeString("Connection security")) {
+              BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val stacked = onboardingFormUsesStackedLayout(maxWidth.value, fontScale)
+                if (stacked) {
+                  Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    GatewayTransportChoices(transport, onManualTlsChange, Modifier.fillMaxWidth())
+                  }
+                } else {
+                  Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                    GatewayTransportChoices(transport, onManualTlsChange)
+                  }
                 }
               }
-            }
-            transport.helperText?.let { helperText ->
-              Text(
-                text = helperText,
-                style = ClawTheme.type.caption,
-                color = ClawTheme.colors.textMuted,
-              )
+              transport.helperText?.let { helperText ->
+                Text(
+                  text = helperText,
+                  style = ClawTheme.type.caption,
+                  color = ClawTheme.colors.textMuted,
+                )
+              }
             }
           }
         }

@@ -737,6 +737,7 @@ class NodeRuntime internal constructor(
   internal val mode: NodeRuntimeMode = NodeRuntimeMode.Live,
   tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult = ::probeGatewayTlsFingerprint,
   initialForeground: Boolean = true,
+  private val browserAuthorizationProvider: ((GatewayEndpoint) -> ai.openclaw.app.gateway.GatewayIngressAuthorization?)? = null,
   initialReconnectSuppressed: Boolean = false,
   private val externalTranscriptCache: ChatTranscriptCache? = null,
 ) {
@@ -1462,6 +1463,7 @@ class NodeRuntime internal constructor(
       },
       onEvent = ::handleGatewayEvent,
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
+      ingressAuthorizationProvider = browserAuthorizationProvider,
     )
 
   private fun publishOperatorConnection(
@@ -1873,6 +1875,7 @@ class NodeRuntime internal constructor(
         invokeDispatcher.handleInvoke(req.command, req.paramsJson)
       },
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
+      ingressAuthorizationProvider = browserAuthorizationProvider,
     )
 
   /**
@@ -3243,6 +3246,7 @@ class NodeRuntime internal constructor(
                 // Only the focused runtime owns node commands and UI state.
                 onEvent = { _, _ -> },
                 customHeadersProvider = prefs::loadGatewayCustomHeaders,
+                ingressAuthorizationProvider = browserAuthorizationProvider,
               )
             secondaryOperatorSessions[stableId] = SecondaryOperatorRuntime(endpoint, session)
             session.connect(endpoint, operatorAuth.token, operatorAuth.bootstrapToken, operatorAuth.password, options, tls)
@@ -4957,6 +4961,31 @@ class NodeRuntime internal constructor(
         }
       }
     }
+  }
+
+  internal suspend fun retireBrowserConnections(
+    host: String,
+    port: Int,
+  ) {
+    // Discovery metadata can omit TLS even when ConnectionManager requires it.
+    fun matches(endpoint: GatewayEndpoint?): Boolean = endpoint != null && connectionManager.resolveTlsParams(endpoint) != null && endpoint.host.equals(host, ignoreCase = true) && endpoint.port == port
+    val retiring =
+      synchronized(gatewayLifecycleIntentLock) {
+        val secondary = secondaryOperatorSessions.values.filter { matches(it.endpoint) }.map { it.session }
+        val primary = matches(connectedEndpoint) || matches(connectingEndpoint)
+        if (primary) {
+          preferredGatewayReconnectSuppressed = true
+          advanceGatewayLifecycleIntent()
+          disconnect(retireRunState = false)
+        }
+        // Browser identity is shared only by this origin. Other saved Gateways stay connected.
+        secondaryOperatorSessions.entries
+          .filter { matches(it.value.endpoint) }
+          .map { it.key }
+          .forEach(::disconnectSecondaryGatewayConnection)
+        secondary + if (primary) listOf(operatorSession, nodeSession) else emptyList()
+      }
+    retiring.forEach { it.disconnectAndJoin() }
   }
 
   fun disconnect() = disconnectGatewayLifecycle(retireRunState = false)

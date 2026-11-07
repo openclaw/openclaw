@@ -180,8 +180,7 @@ class GatewaySettingsScreenTest {
     openManualSettings()
     val fields =
       listOf(
-        Triple("Host", "127.0.0.1", "192.168.0.25"),
-        Triple("Port", "18789", "18790"),
+        Triple("Gateway URL", "https://127.0.0.1:18789", "http://192.168.0.25:18790"),
         Triple("Token", "Token", "synthetic-token"),
         Triple("Bootstrap", "Bootstrap", "synthetic-bootstrap"),
         Triple("Password", "Password", "synthetic-password"),
@@ -196,7 +195,7 @@ class GatewaySettingsScreenTest {
       field.performScrollTo()
       composeRule.onNodeWithText(label, useUnmergedTree = true).assertIsDisplayed()
       field.assert(
-        if (label == "Host" || label == "Port") {
+        if (label == "Gateway URL") {
           SemanticsMatcher.keyNotDefined(SemanticsProperties.Password)
         } else {
           SemanticsMatcher.keyIsDefined(SemanticsProperties.Password)
@@ -241,6 +240,22 @@ class GatewaySettingsScreenTest {
     }
   }
 
+  @Test
+  fun httpsUrlEditorDoesNotRequireASeparatePort() {
+    showGateway()
+    composeRule.runOnIdle {
+      prefs.setManualHost("gateway.example.test")
+      prefs.setManualPort(443)
+      prefs.setManualTls(true)
+    }
+    openManualSettings()
+    composeRule.onNodeWithContentDescription("Gateway URL").performScrollTo()
+    capture("phone-url")
+    composeRule.onNodeWithContentDescription("Gateway URL").assertIsDisplayed()
+    composeRule.onNodeWithContentDescription("Port").assertDoesNotExist()
+    composeRule.onNode(hasSetTextAction() and hasText("https://gateway.example.test")).assertIsDisplayed()
+  }
+
   private fun openManualSettings() {
     // Baseline already renders the form; the candidate discloses the same replacement action.
     if (composeRule.onAllNodes(hasSetTextAction() and hasText("Setup code")).fetchSemanticsNodes().isEmpty()) {
@@ -256,6 +271,14 @@ class GatewaySettingsScreenTest {
     check(directory.mkdirs())
     val image = (if (dialog) composeRule.onNode(isDialog()) else composeRule.onRoot()).captureToImage().asAndroidBitmap()
     assertTrue("Capture must include the full nonzero screen", image.width >= 360 && image.height >= 700)
+    if (name == "phone-url") {
+      System.getenv("OPENCLAW_PHONE_UX_PROOF_DIR")?.let { root ->
+        val phase = System.getenv("OPENCLAW_PHONE_UX_PROOF_PHASE") ?: "after"
+        File(root, "gateway-$phase-portrait.png").apply { parentFile?.mkdirs() }.outputStream().use {
+          check(image.compress(Bitmap.CompressFormat.PNG, 100, it))
+        }
+      }
+    }
     val file = File(directory, "$name.png")
     file.outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
     println("Gateway settings proof: " + file.absolutePath)

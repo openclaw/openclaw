@@ -1417,7 +1417,7 @@ class GatewaySession(
       } else if (ingressAuthorization != null) {
         // Media stays bound to the grant admitted for this physical socket. A
         // later account must never supply credentials to an older capability.
-        ingressHeaders
+        ingressAuthorization.mediaHeaders(ingressHeaders)
       } else {
         GatewayCustomHeaders.sanitized(customHeadersProvider?.invoke(target.endpoint.stableId).orEmpty())
       }
@@ -1480,6 +1480,9 @@ class GatewaySession(
       writeLock.withLock {
         currentCoroutineContext().ensureActive()
         withEnqueue {
+          ingressAuthorization?.requireCurrent(
+            Request.Builder().url(buildGatewayWebSocketUrl(target.endpoint.host, target.endpoint.port, true, target.endpoint.contextPath)).build(),
+          )
           if (state.get() == ConnectionState.CLOSED || socket?.send(jsonString) != true) {
             // Closing during the lock wait, like an OkHttp false return, means no frame was queued.
             throw GatewayRequestNotEnqueued("gateway send failed")
@@ -1633,8 +1636,9 @@ class GatewaySession(
           // Media's preparation retry interceptor can call proceed repeatedly.
           // Network interceptors guard each exchange; WebSockets use the guard below.
           if (state.get() == ConnectionState.CLOSED) throw GatewayExternalAuthorizationException()
-          authorization.requireCurrent(chain.request())
-          chain.proceed(chain.request())
+          val request = authorization.authorizeHttp(chain.request())
+          authorization.requireCurrent(request)
+          chain.proceed(request)
         }
         builder.addInterceptor { chain ->
           val request = chain.request()
@@ -1644,6 +1648,7 @@ class GatewaySession(
           try {
             if (state.get() == ConnectionState.CLOSED) throw GatewayExternalAuthorizationException()
             authorization.requireCurrent(request)
+            authorization.receiveResponse(response)
             authorization.rejection(response)?.let { throw it }
           } catch (error: Throwable) {
             // A 101 response owns the socket until RealWebSocket adopts it.
@@ -1668,6 +1673,7 @@ class GatewaySession(
           // A queued upgrade can outlive its grant. Pairing starts only after
           // both ingress validity and the physical connection owner admit it.
           ingressAuthorization?.requireCurrent(response.request)
+          ingressAuthorization?.receiveResponse(response)
         } catch (error: Exception) {
           finishTransport("Gateway error: ${error.message}", error)
           cancelSocket(webSocket)

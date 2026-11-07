@@ -108,6 +108,11 @@
             android:name=".ConversationReplyReceiver"
             android:exported="false" />
         <activity
+            android:name=".BrowserSignInActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity
             android:name=".ConversationNotificationLaunchActivity"
             android:excludeFromRecents="true"
             android:exported="false"

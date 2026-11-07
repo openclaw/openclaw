@@ -1520,7 +1520,9 @@ private fun GatewaySettingsScreen(
   val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
   val instanceId by viewModel.instanceId.collectAsState()
   var setupCode by remember { mutableStateOf("") }
-  var hostInput by remember(manualHost) { mutableStateOf(manualHost.ifBlank { "127.0.0.1" }) }
+  var hostInput by remember(manualHost, manualPort, manualTls) {
+    mutableStateOf(gatewayManualAddressForEditing(manualHost.ifBlank { "127.0.0.1" }, manualPort.toString(), manualTls))
+  }
   var portInput by remember(manualPort) { mutableStateOf(manualPort.toString()) }
   var tlsInput by remember(manualTls) { mutableStateOf(manualTls) }
   var tokenInput by remember { mutableStateOf("") }
@@ -1775,6 +1777,12 @@ private fun GatewaySettingsScreen(
             TextButton(onClick = { pendingRenameStableId = entry.stableId }) { Text(nativeString("Rename")) }
             TextButton(onClick = { pendingForgetStableId = entry.stableId }) { Text(nativeString("Forget")) }
           }
+          if (entry.tls && entry.host != null && entry.port != null) {
+            BrowserSignInButton(
+              targetUrl = browserSignInUrl(entry.address, entry.port.toString(), true),
+              onSignedIn = { viewModel.switchToGateway(entry.stableId) },
+            )
+          }
         }
       }
     }
@@ -1884,42 +1892,32 @@ private fun GatewaySettingsScreen(
         }
       }
       ClawPanel(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          ClawTextField(
-            value = hostInput,
-            onValueChange = {
-              hostInput = it
-              manualValidationText = null
-            },
-            placeholder = "",
-            label = nativeString("Host"),
-            modifier = Modifier.weight(1f),
-          )
-          ClawTextField(
-            value = portInput,
-            onValueChange = {
-              portInput = it
-              manualValidationText = null
-            },
-            placeholder = "",
-            label = nativeString("Port"),
-            modifier = Modifier.weight(0.62f),
-          )
-        }
-        Text(text = nativeString("Connection security"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-        ClawSegmentedControl(
-          options = listOf(false, true),
-          selected = transport.effectiveTls,
-          onSelect = { tlsInput = it },
-          enabledOptions = if (transport.requiresTls) setOf(true) else setOf(false, true),
-          optionLabel = { if (it) nativeString("Secure (TLS)") else nativeString("Unencrypted") },
+        ClawTextField(
+          value = hostInput,
+          onValueChange = {
+            hostInput = it
+            manualValidationText = null
+          },
+          placeholder = "",
+          label = nativeString("Gateway URL"),
+          modifier = Modifier.fillMaxWidth(),
         )
-        transport.helperText?.let { helperText ->
-          Text(
-            text = helperText,
-            style = ClawTheme.type.caption,
-            color = ClawTheme.colors.textMuted,
+        if (!hostInput.contains("://")) {
+          Text(text = nativeString("Connection security"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          ClawSegmentedControl(
+            options = listOf(false, true),
+            selected = transport.effectiveTls,
+            onSelect = { tlsInput = it },
+            enabledOptions = if (transport.requiresTls) setOf(true) else setOf(false, true),
+            optionLabel = { if (it) nativeString("Secure (TLS)") else nativeString("Unencrypted") },
           )
+          transport.helperText?.let { helperText ->
+            Text(
+              text = helperText,
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+            )
+          }
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           ClawTextField(
