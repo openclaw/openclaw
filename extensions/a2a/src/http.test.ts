@@ -21,7 +21,10 @@ import { a2aChannelPlugin } from "./channel.js";
 import { createA2aGatewayFixture } from "./gateway.test-support.js";
 import type { dispatchA2aInbound } from "./inbound.js";
 import type { A2aTaskStore } from "./task-store.js";
-import { createTerminalStoreFixture } from "./task-store.test-support.js";
+import {
+  createPendingStoreFixture,
+  createTerminalStoreFixture,
+} from "./task-store.test-support.js";
 import type { A2aChannelConfig } from "./types.js";
 
 type HttpReply = { status: number; json(): Promise<unknown>; text(): Promise<string> };
@@ -101,6 +104,7 @@ afterEach(async () => {
 
 async function startHttpHarness(options?: {
   terminalStore?: ReturnType<typeof createTerminalStoreFixture>;
+  pendingStore?: ReturnType<typeof createPendingStoreFixture>;
   config?: OpenClawConfig;
   a2aConfig?: Partial<A2aChannelConfig>;
   onDispatch?: (message: Parameters<typeof dispatchA2aInbound>[0]) => Promise<void>;
@@ -109,6 +113,7 @@ async function startHttpHarness(options?: {
     cfg: options?.config ?? {},
     version: VERSION,
     terminalStore: options?.terminalStore,
+    pendingStore: options?.pendingStore,
     config: {
       peers: { alpha: { token: "alpha-secret" }, beta: { token: "beta-secret" } },
       ...options?.a2aConfig,
@@ -236,6 +241,101 @@ it("serves the same retained terminal task only to its owner after an account re
   await expectReply(reopened.post(taskRequest(task.id), "beta-secret"), rpcError(-32001));
   await expectReply(reopened.post(sendRequest({ messageId: "restart-message" })), taskResult(task));
 });
+
+it("keeps an interrupted task queryable and does not dispatch its replay after a crash", async () => {
+  const terminalStore = createTerminalStoreFixture();
+  const pendingStore = createPendingStoreFixture();
+  const first = await startHttpHarness({ terminalStore, pendingStore, onDispatch: async () => {} });
+  const request = sendRequest({ messageId: "crash-message", returnImmediately: true });
+  const { result } = (await (await first.post(request)).json()) as {
+    result: { task: { id: string; contextId: string } };
+  };
+  // Capture the durable state before graceful shutdown can settle unfinished work.
+  const crashedRows = structuredClone(terminalStore.rows);
+  const crashedPending = structuredClone(pendingStore.rows);
+  await first.stop();
+  terminalStore.rows.clear();
+  for (const [key, row] of crashedRows) {
+    terminalStore.rows.set(key, row);
+  }
+  for (const [key, row] of crashedPending) {
+    pendingStore.rows.set(key, row);
+  }
+  const reopened = await startHttpHarness({ terminalStore, pendingStore });
+  const interrupted = {
+    id: result.task.id,
+    contextId: result.task.contextId,
+    status: {
+      state: "TASK_STATE_FAILED",
+      message: { parts: [{ text: expect.stringContaining("External effects may have occurred") }] },
+    },
+  };
+  await expectReply(reopened.post(taskRequest(result.task.id)), { result: interrupted });
+  await expectReply(reopened.post(request), taskResult(interrupted));
+  await expectReply(reopened.post(taskRequest(result.task.id), "beta-secret"), rpcError(-32001));
+  expect(first.onDispatch).toHaveBeenCalledOnce();
+  expect(reopened.onDispatch).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  "awaits one durable admission before responding or dispatching (shutdown: %s)",
+  async (shutdown) => {
+    const pendingStore = createPendingStoreFixture();
+    const entered = createDeferred<void>();
+    const gate = createDeferred<void>();
+    const register = pendingStore.register;
+    const admission = vi.spyOn(pendingStore, "register").mockImplementation(async (...args) => {
+      entered.resolve();
+      await gate.promise;
+      await register(...args);
+    });
+    const harness = await startHttpHarness({ pendingStore, onDispatch: async () => {} });
+    const replayEntered = createDeferred<void>();
+    const replayStarted = vi.fn();
+    const start = harness.taskStore.start.bind(harness.taskStore);
+    let starts = 0;
+    vi.spyOn(harness.taskStore, "start").mockImplementation((taskId) => {
+      const starting = start(taskId);
+      if (++starts === 2) {
+        void starting.then(replayStarted);
+        // Observe an already-settled duplicate start before releasing persistence.
+        queueMicrotask(replayEntered.resolve);
+      }
+      return starting;
+    });
+    const request = sendRequest({ messageId: "pending-admission", returnImmediately: true });
+    const returned = vi.fn();
+    const first = harness.post(request).then((response) => {
+      returned();
+      return response.json();
+    });
+    await entered.promise;
+    const replay = shutdown
+      ? undefined
+      : harness.post(request).then((response) => {
+          returned();
+          return response;
+        });
+    const stopping = shutdown ? harness.stop() : undefined;
+    try {
+      if (replay) {
+        await replayEntered.promise;
+      }
+      expect(harness.onDispatch).not.toHaveBeenCalled();
+      expect(returned).not.toHaveBeenCalled();
+      expect(replayStarted).not.toHaveBeenCalled();
+    } finally {
+      gate.resolve();
+    }
+    const original = (await first) as { result: { task: { id: string } } };
+    if (replay) {
+      await expectReply(replay, taskResult({ id: original.result.task.id }));
+    }
+    await stopping;
+    expect(admission).toHaveBeenCalledOnce();
+    expect(harness.onDispatch).toHaveBeenCalledTimes(shutdown ? 0 : 1);
+  },
+);
 
 describe("A2A message replay", () => {
   it("returns the existing task for a peer message ID before and after completion", async () => {
