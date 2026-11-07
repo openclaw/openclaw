@@ -259,6 +259,12 @@ final class RootSidebarModel {
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             sessionRoutingContract: sessionRoutingContract)
+        let resolvedMainSessionKey = ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions,
+            currentSessionKey: mainSessionKey,
+            mainSessionKey: mainSessionKey,
+            activeAgentID: activeAgentID,
+            sessionRoutingContract: sessionRoutingContract)
         let selectedIsHidden = sessions.first { $0.key == selectedSessionKey }
             .map { $0.isArchived || $0.isSnoozed(at: now) } ?? rosterIsComplete
         // Resolve aliases before keeping the selected automation reachable.
@@ -275,6 +281,7 @@ final class RootSidebarModel {
             activeAgentID: activeAgentID,
             groups: groups,
             query: query,
+            additionalSearchText: [resolvedMainSessionKey: CommandCenterTab.mainSessionTitle],
             sessionRoutingContract: sessionRoutingContract)
     }
 

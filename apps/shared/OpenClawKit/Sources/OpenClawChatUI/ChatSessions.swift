@@ -872,12 +872,16 @@ public enum OpenClawChatSessionListOrganizer {
     /// gateway is unreachable and only cached entries are available.
     public static func filter(
         _ sessions: [OpenClawChatSessionEntry],
-        search: String) -> [OpenClawChatSessionEntry]
+        search: String,
+        additionalSearchText: [String: String] = [:]) -> [OpenClawChatSessionEntry]
     {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return sessions }
         return sessions.filter { session in
-            [session.displayName, session.label, session.subject, session.sessionId, session.category, session.key]
+            [
+                session.displayName, session.label, session.subject, session.sessionId, session.category, session.key,
+                additionalSearchText[session.key],
+            ]
                 .contains { $0?.lowercased().contains(query) == true }
         }
     }

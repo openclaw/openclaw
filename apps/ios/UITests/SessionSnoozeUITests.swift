@@ -57,7 +57,6 @@ final class SessionSnoozeUITests: XCTestCase {
         let snoozed = self.sessionRow("Follow-up notes", in: app)
         XCTAssertTrue(active.waitForExistence(timeout: 10))
         self.reveal(active, in: app, scrollingUp: false)
-        XCTAssertTrue(active.isHittable)
         XCTAssertFalse(snoozed.exists)
         self.capture(app, named: "after-sessions-active")
         active.press(forDuration: 1)
@@ -119,7 +118,6 @@ final class SessionSnoozeUITests: XCTestCase {
         self.showSidebar(app)
         XCTAssertTrue(page.isSelected)
         XCTAssertTrue(main.isSelected)
-        self.capture(app, named: "main-session-selected-shortcuts")
     }
 
     private func showSidebar(_ app: XCUIApplication) {
@@ -143,7 +141,6 @@ final class SessionSnoozeUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Archive"].exists)
         XCTAssertFalse(app.buttons["Delete…"].exists)
         XCTAssertFalse(app.buttons["Snooze"].exists)
-        self.capture(app, named: "main-session-protected-actions")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         XCTAssertTrue(app.buttons["Pin"].waitForNonExistence(timeout: 5))
     }

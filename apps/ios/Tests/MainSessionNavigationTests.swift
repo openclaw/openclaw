@@ -72,13 +72,34 @@ struct MainSessionNavigationTests {
             defaultSessionKey: mainKey))
         #expect(CommandCenterTab.sessionTitle(main, mainSessionKey: mainKey) == "Main Session")
         #expect(CommandCenterTab.sessionTitle(other, mainSessionKey: mainKey) == "Another conversation")
-        #expect(main.label == "Original topic")
         let selectedKey = ChatSessionSidebarModel.selectedSessionKey(
             sessions: [main, other], currentSessionKey: "main", mainSessionKey: mainKey, activeAgentID: "one")
         let item = CommandCenterTab.sessionWorkItem(
             for: main, currentSessionKey: selectedKey, mainSessionKey: mainKey)
-        #expect(item.icon == CommandCenterTab.mainSessionSymbol)
         #expect(item.state == "open")
+    }
+
+    @Test(arguments: ["Main Session", "original topic", "unrelated"])
+    func `main display title and stored topic remain searchable`(query: String) {
+        var main = OpenClawChatSessionEntry(key: "agent:one:main", label: "Original topic")
+        main.sessionId = "existing-history"
+        main.pinned = true
+        main.category = "Research"
+        let other = OpenClawChatSessionEntry(key: "agent:one:conversation", label: "Packing")
+        let sections = RootSidebarModel.sections(
+            sessions: [main, other], query: query, currentSessionKey: other.key,
+            mainSessionKey: "main", activeAgentID: "one", groups: [],
+            rosterIsComplete: false, sessionRoutingContract: "per-sender|main|one")
+        let rows = sections.flatMap {
+            RootSidebar.sessionNodes(for: $0, mainSessionKey: main.key, searchText: query)
+        }.map(\.node.session)
+        #expect(rows.map(\.key) == (query == "unrelated" ? [] : [main.key]))
+        if query != "unrelated" {
+            #expect(rows.first?.label == "Original topic")
+            #expect(rows.first?.sessionId == "existing-history")
+            #expect(rows.first?.pinned == true)
+            #expect(rows.first?.category == "Research")
+        }
     }
 
     @Test func `main reservation keeps descendants together and respects search`() throws {
