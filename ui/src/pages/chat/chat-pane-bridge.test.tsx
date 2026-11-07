@@ -7,7 +7,6 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { adoptBootComposer, retireBootComposer } from "../../app/boot-composer.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
-import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -169,10 +168,6 @@ it.each(["ready", "unavailable"] as const)(
   "admits the first pane from a pending snapshot, bounded at 100ms (%s)",
   async (outcome) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const clock = createFrameClock();
-    vi.stubGlobal("requestAnimationFrame", clock.request);
-    vi.stubGlobal("cancelAnimationFrame", clock.cancel);
-    onTestFinished(() => vi.unstubAllGlobals());
     const bootComposer = document.createElement("textarea");
     bootComposer.id = "openclaw-boot-composer";
     bootComposer.value = "Keep the pending draft";
@@ -223,13 +218,6 @@ it.each(["ready", "unavailable"] as const)(
       presentationId: "snapshot-inactive",
       sessionSnapshotStore: new SessionSnapshotStore(),
     });
-    const paintPane = async () => {
-      expect(view.pane.querySelector(".chat-pane__header")).toBeNull();
-      expect(view.pane.querySelector("textarea")).toBe(bootComposer);
-      clock.flush(performance.now());
-      await Promise.resolve();
-      flush();
-    };
     flush();
     await vi.advanceTimersByTimeAsync(99);
     flush();
@@ -259,7 +247,6 @@ it.each(["ready", "unavailable"] as const)(
       await prepared;
       await vi.advanceTimersByTimeAsync(0);
       flush();
-      await paintPane();
       expect(view.pane.querySelector(".chat-pane__header")).not.toBeNull();
       expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
       expect(view.pane.querySelector(".chat-pane__parent-session")?.textContent).toContain(
@@ -271,7 +258,6 @@ it.each(["ready", "unavailable"] as const)(
     } else {
       await vi.advanceTimersByTimeAsync(1);
       flush();
-      await paintPane();
       expect(view.pane.querySelector(".chat-pane__header")).not.toBeNull();
       expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
       const composer = view.pane.querySelector<HTMLTextAreaElement>(composerSelector);

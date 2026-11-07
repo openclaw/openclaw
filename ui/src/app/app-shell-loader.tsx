@@ -12,7 +12,19 @@ import {
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
 
-const LazyShell = lazy(() => import("./app-host.tsx"), { export: "OpenClawShell" });
+const LazyShell = lazy(
+  async () => {
+    const shell = await import("./app-host.tsx");
+    // Finish evaluating the shell graph in its own task before constructing its DOM.
+    if (!document.hidden) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    }
+    return shell;
+  },
+  { export: "OpenClawShell" },
+);
 
 type ShellLoaderProps = OpenClawShellProps & { fallback: SolidJSX.Element };
 

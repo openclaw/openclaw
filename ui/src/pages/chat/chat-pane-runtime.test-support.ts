@@ -11,7 +11,6 @@ import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { createChatPaneView } from "./chat-pane-runtime-view.tsx";
 import { ChatPaneStateOwner } from "./chat-pane-state-owner.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { settleChatMount } from "./test-helpers/chat-mount-frames.ts";
 
 export type PaneRuntimeConstructor<R extends ChatPaneRuntime> = new (
   element: HTMLElement,
@@ -174,7 +173,7 @@ export function connectPaneTestView(pane: { element: HTMLElement }) {
   runtime.dispose = () => ChatPaneStateOwner.prototype.dispose.call(runtime);
   const connect: unknown = Reflect.get(pane.element, "connectedCallback");
   if (typeof connect === "function") {
-    settleChatMount(() => connect.call(pane.element));
+    connect.call(pane.element);
   }
 }
 

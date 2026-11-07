@@ -1,5 +1,0 @@
-# Boot preparation/mount split: exactly +15 LF lines in tests and fixtures.
-# Preserve pending-snapshot draft/caret and single-composer assertions across
-# the scheduled mount; settle initial pane frames before cadence checks.
-# Keep the shared scalar unchanged; retire this grant with the coverage.
-15
