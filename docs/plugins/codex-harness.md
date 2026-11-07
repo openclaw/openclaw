@@ -606,6 +606,13 @@ continues when the expected follow-up arrives. Avoiding this native marker needs
 an upstream completion or per-interrupt reason contract; OpenClaw does not
 disable interruption guidance globally or rewrite the native rollout.
 
+Caller-owned functions sent as `tools` to `/v1/responses` or
+`/v1/chat/completions` stop the turn the same way. Codex sees them as dynamic
+tools; a call is returned to the HTTP caller (a `function_call` item on
+`/v1/responses`, `tool_calls` on `/v1/chat/completions`) instead of running inside
+OpenClaw. Changing the function set between requests starts a new
+native thread, like any other dynamic tool change.
+
 ### Stop and cancellation
 
 Stopping an active Codex run interrupts its turn. After a parent yields to native

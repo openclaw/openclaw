@@ -22,6 +22,7 @@ import {
   prepareAgentRunAdmission,
 } from "./admitted-run-context.js";
 import {
+  createAgentHarnessClientTools,
   findClientToolNameConflicts,
   isClientToolNameConflictError,
   toClientToolDefinitions,
@@ -488,6 +489,36 @@ describe("client tool name conflict checks", () => {
         existingToolNames: ["bash", "edit", "find", "grep", "ls", "read", "write"],
       }),
     ).toEqual(["Bash", "grep"]);
+  });
+
+  it("gives harness client tools the runtime cap, source order and the same conflict error", async () => {
+    const { tools } = createAgentHarnessClientTools({
+      clientTools: [makeClientTool("allowed"), makeClientTool("exec")],
+      toolsAllow: ["allowed"],
+      existingToolNames: ["exec"],
+    });
+    expect(tools.map((tool) => tool.name)).toEqual(["allowed"]);
+    const ordered = createAgentHarnessClientTools({
+      clientTools: [makeClientTool("first"), makeClientTool("second")],
+      toolsAllow: undefined,
+      existingToolNames: [],
+    });
+    ordered.reserve("call-1", "first");
+    ordered.reserve("call-2", "second");
+    // The second call's hooks finish first; the result keeps the model's order.
+    await ordered.tools[1]?.execute("call-2", { q: "b" });
+    await ordered.tools[0]?.execute("call-1", { q: "a" });
+    expect(ordered.calls).toEqual([
+      { name: "first", params: { q: "a" } },
+      { name: "second", params: { q: "b" } },
+    ]);
+    expect(() =>
+      createAgentHarnessClientTools({
+        clientTools: [makeClientTool("exec")],
+        toolsAllow: undefined,
+        existingToolNames: ["exec"],
+      }),
+    ).toThrow(expect.toSatisfy(isClientToolNameConflictError));
   });
 
   it("recognizes conflict errors by their stable prefix", () => {

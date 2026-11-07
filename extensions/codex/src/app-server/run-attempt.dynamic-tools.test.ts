@@ -55,10 +55,12 @@ async function startTool(
   {
     harness = createStartedThreadHarness(),
     clock = false,
+    supportsTools = true,
     ...overrides
   }: Partial<ReturnType<typeof createTestParams>> & {
     harness?: ReturnType<typeof createStartedThreadHarness>;
     clock?: boolean;
+    supportsTools?: boolean;
   } = {},
 ) {
   const params = Object.assign(
@@ -67,7 +69,7 @@ async function startTool(
     overrides,
   );
   setCodexTestToolFactory(params, () => (Array.isArray(tool) ? tool : [tool]));
-  setCodexTestModelSupportsTools(params, true);
+  setCodexTestModelSupportsTools(params, supportsTools);
   onTestFinished(await bindProductionHarnessHostCapabilitiesForTest(params));
   if (clock) {
     fakeClock();
@@ -169,6 +171,69 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       harness.close();
       await run;
       vi.useRealTimers();
+    }
+  });
+
+  it("returns a caller-owned client function call to the caller instead of running it", async () => {
+    const local = createRuntimeDynamicTool("managed_task");
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/interrupt") {
+        queueMicrotask(
+          () => void harness.notify(turnCompleted({ id: "turn-1", status: "interrupted" })),
+        );
+      }
+    });
+    const { run } = await startTool(local, {
+      harness,
+      clientTools: [
+        {
+          type: "function",
+          function: {
+            name: "submit_probe_result",
+            parameters: { type: "object", properties: { greeting: { type: "string" } } },
+          },
+        },
+      ],
+    });
+    try {
+      await run.waitForTurnAccepted();
+      const start = harness.requests.find(({ method }) => method === "thread/start")
+        ?.params as CodexThreadStartParams;
+      expect(
+        flattenCodexDynamicToolFunctions(start.dynamicTools ?? []).map(({ name }) => name),
+      ).toContain("submit_probe_result");
+      await expect(
+        callTool(harness, "submit_probe_result", "client-call", { greeting: "Hello" }),
+      ).resolves.toMatchObject({ success: true });
+      // The delegated call is terminal: the native turn stops instead of continuing.
+      expect((await run).clientToolCalls).toEqual([
+        { name: "submit_probe_result", params: { greeting: "Hello" } },
+      ]);
+      expect(harness.requests.map(({ method }) => method)).toContain("turn/interrupt");
+      expect(local.execute).not.toHaveBeenCalled();
+    } finally {
+      harness.close();
+      await run;
+    }
+  });
+
+  it.each([
+    ["tools are disabled", { disableTools: true }],
+    ["the model cannot call tools", { supportsTools: false }],
+  ])("declares no client function when %s", async (_case, gate) => {
+    const { harness, run } = await startTool(createRuntimeDynamicTool("managed_task"), {
+      ...gate,
+      clientTools: [{ type: "function", function: { name: "submit_probe_result" } }],
+    });
+    try {
+      await run.waitForTurnAccepted();
+      const start = harness.requests.find(({ method }) => method === "thread/start")
+        ?.params as CodexThreadStartParams;
+      expect(flattenCodexDynamicToolFunctions(start.dynamicTools ?? [])).toEqual([]);
+      await completeRun(harness, run);
+    } finally {
+      harness.close();
+      await run;
     }
   });
 

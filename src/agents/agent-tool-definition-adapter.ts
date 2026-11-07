@@ -44,8 +44,10 @@ import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index
 import type { ToolDefinition } from "./sessions/index.js";
 import { ToolInputError } from "./tool-input-error.js";
 import { readToolOperatorHint } from "./tool-operator-hint.js";
+import { createRuntimeToolMatcher } from "./tool-policy-match.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
+import type { AnyAgentTool as HarnessAgentTool } from "./tools/common.js";
 import { jsonResult, payloadTextResult } from "./tools/tool-results.js";
 
 function captureSourceInvocationGuard(tool: AnyAgentTool, signal?: AbortSignal): () => void {
@@ -454,17 +456,92 @@ export function toClientToolDefinitions(
           }
           throw err;
         }
-        // Return a terminal pending result; the client will execute the tool.
-        return {
-          ...jsonResult({
-            status: "pending",
-            tool: func.name,
-            message: "Tool execution delegated to client",
-          }),
-          terminate: true,
-        };
+        return delegatedClientToolResult(func.name);
       },
     } satisfies ToolDefinition;
     return attachAdapterExecutionPreparer(definition);
   });
+}
+
+const NO_PARAMETERS = { type: "object", properties: {} };
+
+/** A terminal pending result; the client will execute the tool. */
+function delegatedClientToolResult(toolName: string): AgentToolResult<unknown> {
+  return {
+    ...jsonResult({
+      status: "pending",
+      tool: toolName,
+      message: "Tool execution delegated to client",
+    }),
+    terminate: true,
+  };
+}
+
+/**
+ * Client functions for harnesses that run tools through their own dispatcher (Codex).
+ * The harness wraps these like its other tools; a call is recorded for the caller,
+ * never executed, and its terminal result ends the turn.
+ */
+export function createAgentHarnessClientTools(params: {
+  clientTools: ClientToolDefinition[] | undefined;
+  /** The attempt's runtime cap; client functions share the attempt's authority. */
+  toolsAllow: string[] | undefined;
+  existingToolNames: Iterable<string>;
+}): {
+  tools: HarnessAgentTool[];
+  /** Completed calls in the order `reserve` saw them; updated in place. */
+  calls: Array<{ name: string; params: Record<string, unknown> }>;
+  /** Call when the harness admits a tool call, before awaiting its hooks, to keep source order. */
+  reserve: (toolCallId: string, toolName: string) => void;
+} {
+  const matchesRuntime = createRuntimeToolMatcher(params.toolsAllow);
+  const clientTools = (params.clientTools ?? []).filter((tool) =>
+    matchesRuntime(tool.function.name),
+  );
+  const conflicts = findClientToolNameConflicts({
+    tools: clientTools,
+    existingToolNames: params.existingToolNames,
+  });
+  if (conflicts.length > 0) {
+    throw new Error(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} ${conflicts.join(", ")}`);
+  }
+  const names = new Set(clientTools.map((tool) => tool.function.name));
+  const slots: Array<{ toolCallId: string; name: string; params?: Record<string, unknown> }> = [];
+  const slotFor = (toolCallId: string, name: string) => {
+    let slot = slots.find((entry) => entry.toolCallId === toolCallId);
+    if (!slot) {
+      slot = { toolCallId, name };
+      slots.push(slot);
+    }
+    return slot;
+  };
+  const calls: Array<{ name: string; params: Record<string, unknown> }> = [];
+  const tools = clientTools.map(({ function: func }): HarnessAgentTool => ({
+    name: func.name,
+    label: func.name,
+    description: func.description ?? "",
+    // The caller's JSON schema passes through as-is, as in toClientToolDefinitions.
+    // SAFETY: harnesses project tool schemas and quarantine ones their model cannot accept.
+    parameters: (func.parameters ?? NO_PARAMETERS) as HarnessAgentTool["parameters"],
+    // The caller may pin this exact function; a deferred catalog entry could not satisfy that.
+    catalogMode: "direct-only",
+    execute: async (toolCallId, toolParams) => {
+      slotFor(toolCallId, func.name).params = coerceParamsRecord(toolParams, func.parameters);
+      calls.splice(
+        0,
+        calls.length,
+        ...slots.flatMap((slot) => (slot.params ? [{ name: slot.name, params: slot.params }] : [])),
+      );
+      return delegatedClientToolResult(func.name);
+    },
+  }));
+  return {
+    tools,
+    calls,
+    reserve: (toolCallId, toolName) => {
+      if (names.has(toolName)) {
+        slotFor(toolCallId, toolName);
+      }
+    },
+  };
 }
