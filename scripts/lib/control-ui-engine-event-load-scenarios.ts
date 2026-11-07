@@ -661,7 +661,7 @@ function installEventLoadProbe() {
           if (schedule.tick >= ticksPerSession || now < schedule.next) {
             continue;
           }
-          const late = now - schedule.next;
+          const late = performance.now() - schedule.next;
           if (late > 25) {
             lateBackgroundEmissions++;
           }
@@ -767,6 +767,7 @@ function installEventLoadProbe() {
       return {
         tools,
         completedTools,
+        backgroundEvents,
         backgroundReceipts,
         targetBackgroundReceipts,
         elapsed: performance.now() - started,
@@ -1014,6 +1015,7 @@ export function createEngineEventLoadScenarios(
         if (engine !== "chromium" && engine !== "webkit" && engine !== "firefox") {
           throw new Error(`Unsupported idle engine: ${engine}`);
         }
+        const beforeIdle = await page.evaluate(() => Reflect.get(window, "__eventLoad").ready());
         const idle = await startEngineMeasurement(page, engine, { trace: false });
         const idlePhase = await phase(page, "idle", async () => {
           evidence.idleObservedMs = await page.evaluate(async () => {
@@ -1025,6 +1027,14 @@ export function createEngineEventLoadScenarios(
           });
         });
         const idleMetrics = (await idle.stop()).metrics;
+        const afterIdle = await page.evaluate(() => Reflect.get(window, "__eventLoad").ready());
+        // Collector calls bracket the phase; retain their uncertainty instead of
+        // attributing their CPU to only the frames received inside the phase.
+        evidence.idleMinimumWindowMs = idlePhase.actionWallMs;
+        evidence.idleMaximumWindowMs = afterIdle.elapsed - beforeIdle.elapsed;
+        evidence.idleMinimumBackgroundFrames = idlePhase.backgroundReceived;
+        evidence.idleMaximumBackgroundFrames =
+          afterIdle.backgroundEvents - beforeIdle.backgroundEvents;
         recordPhase("idle", idlePhase);
         evidence.idleCpuAvailable = idleMetrics.cpuMs !== null;
         if (idleMetrics.cpuMs !== null) {

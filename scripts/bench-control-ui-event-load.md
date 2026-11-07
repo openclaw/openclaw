@@ -75,9 +75,14 @@ item-boundary events; it models the measured durable, tool and narration paths.
 
 The mock producer runs inside the measured renderer. Its producer and delivery
 elapsed diagnostics overlap application work and cannot be subtracted as CPU.
-Use a separate `--cpu-profile` Chromium run to attribute this cost. Divide the
-matched foreground-only idle CPU difference by received background events during
-that same fixed idle interval for an incremental CPU/event estimate. Whole-action
+Use a separate `--cpu-profile` Chromium run to attribute this cost. The idle phase
+and its surrounding collector calls record inner/outer bounds for elapsed time
+and received background frames. Normalize foreground-only idle CPU to the loaded
+interval before subtraction; retain the resulting CPU/frame range when those
+bounds differ materially. This estimates incremental renderer CPU per received
+background frame, including the mock producer. A backlog can make the idle phase
+measure catch-up rather than steady load; inspect actual rates and delivery lag.
+Whole-action
 CPU includes different amounts of background work when an action takes longer;
 do not divide total scenario CPU by offered events or subtract unequal windows.
 
