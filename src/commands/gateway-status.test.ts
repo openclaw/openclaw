@@ -230,6 +230,13 @@ describe("gateway-status command", () => {
     vi.useRealTimers();
   });
 
+  it("rejects a blank --url before reading config or probing", async () => {
+    await expect(run({ url: "" })).rejects.toThrow("--url must not be blank");
+    await expect(run({ url: "   " })).rejects.toThrow("--url must not be blank");
+    expect(readBestEffortConfig).not.toHaveBeenCalled();
+    expect(probeGateway).not.toHaveBeenCalled();
+  });
+
   it.each([1000, 2 ** 31 + 5000])("keeps probes active for the %s ms budget", async (timeoutMs) => {
     vi.useFakeTimers();
     readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig());

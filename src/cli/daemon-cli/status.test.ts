@@ -134,6 +134,17 @@ describe("runDaemonStatus", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
+  it("rejects a blank --url before gathering status", async () => {
+    await expect(
+      runDaemonStatus({ ...statusOptions, rpc: { url: "" }, json: true }),
+    ).rejects.toThrow("__exit__:1");
+    expect(gatherDaemonStatus).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: "Gateway status failed: --url must not be blank" },
+    });
+  });
+
   it("renders disabled-probe validation failures as JSON in JSON mode", async () => {
     await expect(
       runDaemonStatus({ ...statusOptions, probe: false, requireRpc: true, json: true }),
