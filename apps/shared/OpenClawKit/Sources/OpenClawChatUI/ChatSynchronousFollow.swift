@@ -35,7 +35,10 @@ struct ChatSynchronousFollowProbe: UIViewRepresentable {
                 scroll.observe(\.contentSize, options: [.new]) { [weak self] _, _ in
                     MainActor.assumeIsolated { self?.reconcile() }
                 },
-                scroll.observe(\.bounds, options: [.new]) { [weak self] _, _ in
+                scroll.observe(\.bounds, options: [.old, .new]) { [weak self] _, change in
+                    // Origin-only changes are scrolling, not viewport geometry changes.
+                    // Do not undo system navigation before SwiftUI reports its phase.
+                    guard change.oldValue?.size != change.newValue?.size else { return }
                     MainActor.assumeIsolated { self?.reconcile() }
                 },
                 scroll.observe(\.contentInset, options: [.new]) { [weak self] _, _ in
