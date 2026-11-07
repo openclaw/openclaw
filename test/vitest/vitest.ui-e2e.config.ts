@@ -117,6 +117,7 @@ export const uiE2eRuntimeBudgetTestFile = resolveUiTypeScriptPath(
 // These independent fixture/build owners do not share the source optimizer cache.
 // New files stay bundled unless they own every UI server they use.
 export const uiE2eProductionArtifactTestFiles = [
+  "ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts",
   "ui/src/e2e/service-worker-update.e2e.test.ts",
   "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
@@ -127,7 +128,6 @@ const uiE2eStandaloneTestFiles = [
   "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
   "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
   "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
-  "ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
   "ui/src/lib/openclaw-id/onepassword-save.retention.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
