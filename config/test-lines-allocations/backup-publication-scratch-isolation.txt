@@ -1,0 +1,3 @@
+# Exact +5 LF lines: give remaining publication fixtures their own scratch roots
+# so unrelated concurrent backup reclamation cannot preempt traversal admission.
+5
