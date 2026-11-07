@@ -1,13 +1,13 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { t } from "../../i18n/index.ts";
-import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
+import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-session-optional.ts";
 import { formatUiError } from "../format-error.ts";
+import { registerEnglishCatalog, t } from "../reactive/i18n.ts";
 import { readSessionMethodAccess } from "../session-method-access.ts";
 import { showToast, type ToastOptions } from "../toast.ts";
 import { resolveUiSessionRowAgentId } from "./session-key.ts";
 
-registerSessionOrganizationSharedEnglish();
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 // A rejection toast outlives its hovercard; a later result with the same key replaces it.
 const RESULT_TOAST_KEY = "session-failure-dismissal";
@@ -70,7 +70,9 @@ export async function dismissSessionFailures(
   if (rejected) {
     const toast: ToastOptions = {
       dedupeKey: RESULT_TOAST_KEY,
-      message: t("sessionsView.markFailureReadFailed", { error: formatUiError(rejected.reason) }),
+      message: t("chat.subagentsPanel.markFailureReadFailed", {
+        error: formatUiError(rejected.reason),
+      }),
       severity: "error",
       onDismiss: () => {
         if (rejectionToast === toast) {
@@ -90,7 +92,7 @@ export async function dismissSessionFailures(
     showToast({
       dedupeKey: RESULT_TOAST_KEY,
       severity: undefined,
-      message: t("sessionsView.markFailureReadDone"),
+      message: t("chat.subagentsPanel.markFailureReadDone"),
     });
   }
 }

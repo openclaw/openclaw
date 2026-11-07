@@ -374,6 +374,8 @@ const catalog = {
       duration: "Duration",
       markFailureRead: "Mark {name} as read",
       markAllFailuresRead: "Mark all as read",
+      markFailureReadFailed: "Couldn't mark as read. Try again. {error}",
+      markFailureReadDone: "Marked as read",
     },
     sessionHeader: {
       continueInTerminal: {
