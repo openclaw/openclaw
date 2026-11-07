@@ -1699,6 +1699,11 @@ final class NodeAppModel {
         let currentSelectedAgentId = self.selectedAgentId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedAgentChanged = currentSelectedAgentId != nextSelectedAgentId
         let stableID = GatewayStableIdentifier.exact(self.connectedGatewayID)
+        if selectedAgentChanged {
+            // Watch-started Talk may already target the next agent, so its key
+            // comparison cannot retire recognition captured for the old agent.
+            self.voiceWake.invalidatePendingCommand()
+        }
         self.selectedAgentId = nextSelectedAgentId
         if let stableID {
             GatewaySettingsStore.saveGatewaySelectedAgentId(
@@ -3229,7 +3234,14 @@ extension NodeAppModel {
     }
 
     func focusChatSession(_ sessionKey: String?) {
-        self.focusedChatSessionKey = Self.trimmedOrNil(sessionKey)
+        let previousSessionKey = self.chatSessionKey
+        let nextSessionKey = Self.trimmedOrNil(sessionKey)
+        // Talk can temporarily target a Watch-selected chat. Wake still belongs
+        // to phone focus, even when Talk already has the destination key.
+        if previousSessionKey != (nextSessionKey ?? self.mainSessionKey) {
+            self.voiceWake.invalidatePendingCommand()
+        }
+        self.focusedChatSessionKey = nextSessionKey
         if let stableID = self.connectedGatewayID {
             GatewaySettingsStore.saveGatewayFocusedChatSessionKey(
                 stableID: stableID, sessionKey: self.focusedChatSessionKey)
