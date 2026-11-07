@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readRegularFile } from "openclaw/plugin-sdk/file-access-runtime";
 import { asSafeIntegerInRange, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteArtifactError } from "./errors.js";
 import {
@@ -131,7 +132,8 @@ export function findQaSuiteSummaryCompletionError(summary: unknown): string | un
 export async function readCompletedQaSuiteSummaryFile(summaryPath: string): Promise<unknown> {
   let summaryText: string;
   try {
-    summaryText = await fs.readFile(summaryPath, "utf8");
+    const { buffer } = await readRegularFile({ filePath: await fs.realpath(summaryPath) });
+    summaryText = buffer.toString("utf8");
   } catch (error) {
     throw new QaSuiteArtifactError(
       "summary_read_failed",

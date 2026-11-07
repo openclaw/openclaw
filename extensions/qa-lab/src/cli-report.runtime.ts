@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readRegularFile } from "openclaw/plugin-sdk/file-access-runtime";
 import { hasNodeErrorCode } from "openclaw/plugin-sdk/path-existence-runtime";
 import {
   buildQaAgenticParityComparison,
@@ -166,9 +167,8 @@ export async function runQaCoverageReportCommand(opts: {
     }
     const evidencePath = path.resolve(repoRoot, opts.evidence);
     await assertCoverageOutputPreservesInput(evidencePath, outputPath, "evidence");
-    const evidence = validateQaEvidenceSummaryJson(
-      JSON.parse(await fs.readFile(evidencePath, "utf8")),
-    );
+    const { buffer } = await readRegularFile({ filePath: await fs.realpath(evidencePath) });
+    const evidence = validateQaEvidenceSummaryJson(JSON.parse(buffer.toString("utf8")));
     const report = buildQaScorecardGapReport({
       taxonomy: readQaMaturityTaxonomySource(path.resolve(repoRoot, "taxonomy.yaml")),
       scenarios,

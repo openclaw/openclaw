@@ -1,6 +1,17 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { runQaCoverageReportCommand } from "../reporting-api.js";
 import { makeSingleRuntimeParitySummary } from "./agentic-parity-report-test-helpers.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
@@ -8,6 +19,28 @@ import { createTempDirHarness } from "./temp-dir.test-helper.js";
 const tempDirs = createTempDirHarness();
 
 describe("qa coverage command", () => {
+  it.skipIf(process.platform === "win32")("rejects a writerless FIFO evidence input", async () => {
+    // Outlive afterEach so deadline cleanup can release a regressed blocking open.
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "qa-evidence-fifo-"));
+    const input = path.join(directory, "evidence.pipe");
+    execFileSync("mkfifo", [input]);
+    const reading = runQaCoverageReportCommand({
+      repoRoot: directory,
+      evidence: input,
+      output: "report.json",
+    });
+    onTestFinished(async () => {
+      const release = await fs.open(input, fs.constants.O_RDWR | fs.constants.O_NONBLOCK);
+      await release.close();
+      await reading.catch(() => undefined);
+      await fs.rm(directory, { recursive: true, force: true });
+    });
+    await expect(reading).rejects.toThrow("regular file");
+    await expect(fs.stat(path.join(directory, "report.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   let stdoutWrite: MockInstance<typeof process.stdout.write>;
   let priorExitCode: typeof process.exitCode;
 
