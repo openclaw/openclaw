@@ -1033,6 +1033,7 @@ export function createEngineEventLoadScenarios(
                   started - Reflect.get(window, "__eventLoad").ready().phaseStartedAt;
                 const frameTimes: number[] = [];
                 let blank = 0;
+                let firstBlankFrame: string | undefined;
                 let firstFrameMs = 0;
                 for (let step = 0; step < 90; step++) {
                   thread.scrollTop = (thread.scrollHeight - thread.clientHeight) * (1 - step / 89);
@@ -1063,6 +1064,30 @@ export function createEngineEventLoadScenarios(
                   );
                   if (!visibleRow) {
                     blank++;
+                    firstBlankFrame ??= JSON.stringify({
+                      step,
+                      elapsedMs: performance.now() - started,
+                      scrollTop: thread.scrollTop,
+                      scrollHeight: thread.scrollHeight,
+                      viewport: { top, bottom, left, right },
+                      rows: [...thread.querySelectorAll<HTMLElement>(".chat-virtual-row")].map(
+                        (row) => {
+                          const bounds = row.getBoundingClientRect();
+                          return {
+                            index: row.dataset.index,
+                            key: row.dataset.virtualRowKey,
+                            prepared: row.dataset.preparedRow,
+                            preparing: row.dataset.preparingRow,
+                            streaming: row.dataset.streamingRow,
+                            top: bounds.top,
+                            bottom: bounds.bottom,
+                            left: bounds.left,
+                            right: bounds.right,
+                            children: row.childElementCount,
+                          };
+                        },
+                      ),
+                    });
                   }
                 }
                 const observedMs = performance.now() - started;
@@ -1078,14 +1103,18 @@ export function createEngineEventLoadScenarios(
                   scrollObservedMs: observedMs,
                   scrollDeliveryMs: deliveryMs,
                   blankScrollFrames: blank,
+                  firstBlankFrame,
                 };
               },
               undefined,
               { timeout: 120_000 },
             );
-            Object.assign(evidence, scroll);
+            const { firstBlankFrame, ...timings } = scroll;
+            Object.assign(evidence, timings);
             if (scroll.blankScrollFrames > 0) {
-              throw new Error(`Event load exposed ${scroll.blankScrollFrames} blank scroll frames`);
+              throw new Error(
+                `Event load exposed ${scroll.blankScrollFrames} blank scroll frames: ${firstBlankFrame}`,
+              );
             }
           });
           evidence.scrollActionWallMs = scrolling.actionWallMs;
