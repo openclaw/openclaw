@@ -52,6 +52,24 @@ class TestPackageSkillSecurity(TestCase):
         self.assertIn("normal-skill/SKILL.md", names)
         self.assertIn("normal-skill/script.py", names)
 
+    def test_failed_write_preserves_output_and_cleans_staging(self):
+        skill_dir = self.create_skill("failed-skill")
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                out_dir = self.temp_dir / str(existing)
+                out_dir.mkdir()
+                archive = out_dir / "failed-skill.skill"
+                if existing:
+                    self.assertIsNotNone(package_skill(str(skill_dir), str(out_dir)))
+                    original = archive.read_bytes()
+
+                with patch.object(zipfile.ZipFile, "write", side_effect=OSError("disk full")):
+                    self.assertIsNone(package_skill(str(skill_dir), str(out_dir)))
+
+                self.assertEqual(list(out_dir.iterdir()), [archive] if existing else [])
+                if existing:
+                    self.assertEqual(archive.read_bytes(), original)
+
     def test_skips_symlink_to_external_file(self):
         skill_dir = self.create_skill("symlink-file-skill")
         outside = self.temp_dir / "outside-secret.txt"
@@ -141,9 +159,7 @@ class TestPackageSkillSecurity(TestCase):
         self.assertTrue(skill_file.exists())
         with zipfile.ZipFile(skill_file, "r") as archive:
             names = set(archive.namelist())
-        self.assertIn("self-output-skill/SKILL.md", names)
-        self.assertIn("self-output-skill/script.py", names)
-        self.assertNotIn("self-output-skill/self-output-skill.skill", names)
+        self.assertEqual(names, {"self-output-skill/SKILL.md", "self-output-skill/script.py"})
 
     def test_archive_entry_order_is_deterministic(self):
         skill_dir = self.create_skill("order-skill")
