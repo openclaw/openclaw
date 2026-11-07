@@ -13,12 +13,20 @@ it("reads observation metadata once per scan while retaining rename, deletion an
     writesEnabled: false,
   });
   let reads = 0;
+  let writerReads = 0;
   class CountingStore extends SqliteIdentityStore {
     override withDatabase<T>(run: (db: DatabaseSync) => T): T {
       return super.withDatabase((db) => {
         const prepare = db.prepare.bind(db);
         db.prepare = (sql) => {
           const statement = prepare(sql);
+          if (sql.startsWith("SELECT provenance,agent_id,sequence FROM history")) {
+            const get = statement.get.bind(statement);
+            statement.get = (...args) => {
+              ++writerReads;
+              return get(...args);
+            };
+          }
           if (/^SELECT .* FROM "?observations"?\b/i.test(sql)) {
             const count = <Method extends (...args: never[]) => unknown>(method: Method): Method =>
               new Proxy(method, {
@@ -71,9 +79,11 @@ it("reads observation metadata once per scan while retaining rename, deletion an
     { id: "record-a", revision: 1 },
     { id: "record-b", revision: 1 },
   ]);
+  expect(writerReads).toBe(0);
   await rename(a, a + "-renamed.md");
   await rm(b);
   expect(await scan()).toEqual([{ id: "record-a", revision: 2 }]);
+  expect(writerReads).toBe(0);
   await writeFile(b, raw("record-b"));
   expect(await scan()).toEqual([
     { id: "record-a", revision: 2 },
