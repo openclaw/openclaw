@@ -244,6 +244,11 @@ Keep `postJsonRequest` for streaming or binary responses, custom response/error
 parsers, and code that needs to retain the response transport. Those callers
 must release it in `finally`.
 
+Use `getModelProviderRequestTransport` from `openclaw/plugin-sdk/provider-http`
+to read the host-prepared transport policy attached to a selected model. This
+keeps provider HTTP implementations independent of the agent-harness runtime;
+it does not resolve credentials or grant request authority.
+
 Use `fetchWithProviderHttpGuard` from `openclaw/plugin-sdk/provider-http` when
 the provider owns its request admission, response parsing, and release lifetime.
 It accepts guarded-fetch options and returns the response and `release` callback.

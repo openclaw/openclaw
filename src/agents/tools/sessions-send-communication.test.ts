@@ -20,6 +20,7 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { acceptCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
+import { bindSubagentRunRuntimeKey } from "../subagents/registry/subagent-run-generation.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
 const tempDirs = useSessionStoreTempDirs(afterAll, "sessions-send-lineage-");
@@ -495,6 +496,49 @@ describe("sessions_send communication boundary", () => {
       subagentRuns.delete(task.runId);
     }
   });
+
+  it.each(["metadata", "controller", "cleanup", "owner"])(
+    "retained resume checks the current task owner after %s publication",
+    async (change) => {
+      const source = endpoint("source");
+      const input = operation(source, childOf(source));
+      const task = createSubagentRunRecord({
+        runId: "paused",
+        childSessionKey: input.target.sessionKey,
+        requesterSessionKey: source.sessionKey,
+        requesterAgentId: "main",
+        pauseReason: "sessions_yield",
+        endedAt: 1,
+      });
+      subagentRuns.set(task.runId, task);
+      state.task = subagentRuns.get(task.runId);
+      try {
+        using gate = await openGate(input);
+        expect(gate.ownedTask).toBe(true);
+        const next = {
+          ...task,
+          cleanupHandled: true,
+          ...(change === "controller" ? { controllerSessionKey: "agent:main:other" } : {}),
+          ...(change === "cleanup" ? { cleanupCompletedAt: 2 } : {}),
+        };
+        if (change === "owner") {
+          bindSubagentRunRuntimeKey(next, {});
+        }
+        subagentRuns.set(task.runId, next);
+        state.task = subagentRuns.get(task.runId);
+        expect(state.task).not.toBe(task);
+        if (change === "metadata") {
+          await gate.callGateway(agentRequest(input));
+          expect(input.callGateway).toHaveBeenCalledOnce();
+        } else {
+          await expect(gate.callGateway(agentRequest(input))).rejects.toThrow("authority changed");
+          expect(input.callGateway).not.toHaveBeenCalled();
+        }
+      } finally {
+        subagentRuns.delete(task.runId);
+      }
+    },
+  );
 
   it("retained completed-task pins do not grant or require live task authority", async () => {
     const source = endpoint("source");

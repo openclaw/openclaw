@@ -30,6 +30,7 @@ import {
 import { registerActiveEmbeddedRunHumanInputWait } from "../embedded-agent-runner/run-state.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
+import { isSameSubagentRunOwner } from "../subagents/registry/subagent-run-generation.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -281,19 +282,25 @@ export async function prepareSessionsSendCommunication(params: {
     ) {
       throw new SessionCommunicationDeniedError("Child controller access changed before delivery.");
     }
+    if (!ownedTask && params.expectedTask === undefined) {
+      return;
+    }
+    const currentTask = getLatestLiveSubagentRunByChildSessionKey(
+      params.target.sessionKey,
+      undefined,
+      params.target.agentId,
+    );
+    // Pause-notice delivery republishes immutable rows without replacing the task owner.
+    // Revalidate the live row, not the captured metadata snapshot.
     if (
-      (ownedTask || params.expectedTask !== undefined) &&
-      (getLatestLiveSubagentRunByChildSessionKey(
-        params.target.sessionKey,
-        undefined,
-        params.target.agentId,
-      ) !== task ||
-        task?.runId !== taskRunId ||
-        task?.generation !== taskGeneration ||
-        (task?.controllerSessionKey && task.controllerSessionKey !== params.source.sessionKey) ||
-        task?.killIntent ||
-        task?.killReconciliation ||
-        (ownedTask && task?.cleanupCompletedAt !== undefined))
+      (currentTask !== task && !isSameSubagentRunOwner(currentTask, task)) ||
+      currentTask?.runId !== taskRunId ||
+      currentTask?.generation !== taskGeneration ||
+      (currentTask?.controllerSessionKey &&
+        currentTask.controllerSessionKey !== params.source.sessionKey) ||
+      currentTask?.killIntent ||
+      currentTask?.killReconciliation ||
+      (ownedTask && currentTask?.cleanupCompletedAt !== undefined)
     ) {
       if (resumedTask) {
         assertParentSubagentResumeSuccessorCurrent(resumedTask.resume, resumedTask.runId);

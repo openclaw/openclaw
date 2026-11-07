@@ -1,4 +1,3 @@
-import { getModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   DecisionBatchV2,
   DecisionProviderContextV2,
@@ -16,6 +15,7 @@ import {
 import {
   createProviderCredentialMatcher,
   fetchWithProviderHttpGuard,
+  getModelProviderRequestTransport,
   resolveProviderHttpRequestConfig,
   readProviderJsonObjectResponse,
 } from "openclaw/plugin-sdk/provider-http";

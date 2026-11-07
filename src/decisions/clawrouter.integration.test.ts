@@ -98,8 +98,14 @@ it.each(["default", "per-agent"])(
       },
       async (state) => {
         const requests: Array<{ path?: string; auth?: string; body: unknown }> = [];
+        const requestAdmissionTimes: Array<{ path?: string; elapsedMs: number }> = [];
+        let evaluateStartedAt = 0;
         await withServer(
           (request, response) => {
+            requestAdmissionTimes.push({
+              path: request.url,
+              elapsedMs: Math.round(performance.now() - evaluateStartedAt),
+            });
             const chunks: Buffer[] = [];
             request.on("data", (chunk: Buffer) => chunks.push(chunk));
             request.on("end", () => {
@@ -134,10 +140,13 @@ it.each(["default", "per-agent"])(
                 "openai/gpt-6-luna",
                 "main",
               );
-              const evaluateStartedAt = performance.now();
+              evaluateStartedAt = performance.now();
               const outcome = await evaluate();
               const evaluation = {
                 importElapsedMs,
+                requestAdmissionTimes,
+                catalogRequests: requests.filter((request) => request.path === "/v1/catalog")
+                  .length,
                 evaluateElapsedMs: Math.round(performance.now() - evaluateStartedAt),
                 nativeRequests: requests.filter(
                   (request) => request.path === "/v1/native/openai/v1/decisions",

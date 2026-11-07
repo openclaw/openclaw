@@ -1,0 +1,2 @@
+# Exact +44 LF lines: retained resume accepts same-owner metadata and rejects live revocation/replacement.
+44
