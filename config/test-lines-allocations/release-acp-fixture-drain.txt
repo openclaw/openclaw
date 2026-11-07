@@ -1,0 +1,4 @@
+# Exact +23 LF lines: release the ACP streaming gate before session teardown,
+# honor runtime cancellation, and join aborted ACP/catalog fixture bodies.
+# Existing product assertions and all operation/test deadlines are unchanged.
+23

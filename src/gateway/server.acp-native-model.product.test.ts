@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { readRequestText, respondJson } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -34,7 +36,15 @@ type ChatEvent = {
   };
 };
 
-it("preserves ACP across native policy, overrides and failures", { timeout: 120_000 }, async () => {
+const fixture = createFixtureLifetime();
+afterEach(() => fixture.cleanup());
+
+it("preserves ACP across native policy, overrides and failures", { timeout: 120_000 }, ({ signal }) =>
+  fixture.run(() => proveNativeModelPolicy(signal)),
+);
+
+async function proveNativeModelPolicy(signal: AbortSignal) {
+  const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
   const state = await createOpenClawTestState({
     label: "acp-native-model",
     env: {
@@ -50,12 +60,12 @@ it("preserves ACP across native policy, overrides and failures", { timeout: 120_
   await using cleanup = new AsyncDisposableStack();
   cleanup.defer(() => state.cleanup());
   let rejectNativeRequest = false;
-  let releaseAcpStream: (() => void) | undefined;
+  const acpStreamRelease = createDeferred();
   let acpStreamWaiting = false;
   const providerServer = createServer((request, response) => {
     if (request.url === "/v1/acp-stream") {
       acpStreamWaiting = true;
-      releaseAcpStream = () => response.writeHead(200).end();
+      void acpStreamRelease.promise.then(() => response.writeHead(200).end());
       return;
     }
     void (async () => {
@@ -145,14 +155,14 @@ module.exports = {
         if (key === "model") session.model = value;
         return { configOptions: [{ id: "model", currentValue: session.model }] };
       },
-      async *runTurn({ handle, text }) {
+      async *runTurn({ handle, text, signal }) {
         const liveProof = text.includes("Stream live ACP.");
         yield {
           type: "text_delta",
           text: "ACP:" + sessions.get(keyFor(handle)).model + ":" + handle.backendSessionId + (liveProof ? ". " : ""),
         };
         if (liveProof) {
-          await fetch(${JSON.stringify(`${baseUrl}/acp-stream`)});
+          await fetch(${JSON.stringify(`${baseUrl}/acp-stream`)}, { signal });
           yield { type: "text_delta", text: "Complete." };
         }
         yield { type: "done", stopReason: "end_turn" };
@@ -269,7 +279,9 @@ module.exports = {
       });
     }
   });
-  await gateway.server.startupSettled;
+  // Release even before HTTP admission, and before session close joins the active turn.
+  cleanup.defer(() => acpStreamRelease.resolve());
+  await wait(gateway.server.startupSettled);
   const client = gateway.client;
   const findTerminal = (runId: string) =>
     events.find(
@@ -279,8 +291,8 @@ module.exports = {
         ["final", "error", "aborted"].includes(event.payload.state ?? ""),
     );
   const send = async (sessionKey: string, message: string, runId: string) => {
-    await client.request("chat.send", { sessionKey, message, idempotencyKey: runId });
-    await expect.poll(() => findTerminal(runId), { timeout: 30_000 }).toBeDefined();
+    await wait(client.request("chat.send", { sessionKey, message, idempotencyKey: runId }));
+    await wait(expect.poll(() => findTerminal(runId), { timeout: 30_000 }).toBeDefined());
     const terminal = findTerminal(runId);
     expect(terminal?.payload).toMatchObject({ state: "final" });
     return message.startsWith("/btw ")
@@ -323,23 +335,27 @@ module.exports = {
     acpAnswers.set(agentId, acpAnswer);
     if (agentId === "main") {
       const runId = "acp-live-stream";
-      await client.request("chat.send", {
-        sessionKey,
-        message: "Stream live ACP.",
-        idempotencyKey: runId,
-      });
       let firstStreamed = "";
       try {
-        await expect
-          .poll(() => acpStreamWaiting || findTerminal(runId)?.payload, { timeout: 30_000 })
-          .toBe(true);
-        await expect.poll(() => streamedText.get(runId)).toBeDefined();
+        await wait(
+          client.request("chat.send", {
+            sessionKey,
+            message: "Stream live ACP.",
+            idempotencyKey: runId,
+          }),
+        );
+        await wait(
+          expect
+            .poll(() => acpStreamWaiting || findTerminal(runId)?.payload, { timeout: 30_000 })
+            .toBe(true),
+        );
+        await wait(expect.poll(() => streamedText.get(runId)).toBeDefined());
         firstStreamed = streamedText.get(runId) ?? "";
         expect(findTerminal(runId)).toBeUndefined();
       } finally {
-        releaseAcpStream?.();
+        acpStreamRelease.resolve();
       }
-      await expect.poll(() => findTerminal(runId), { timeout: 30_000 }).toBeDefined();
+      await wait(expect.poll(() => findTerminal(runId), { timeout: 30_000 }).toBeDefined());
       const terminalText = extractFirstTextBlock(findTerminal(runId)?.payload?.message) ?? "";
       expect(terminalText).toBe(acpAnswer + ".\n\nComplete.");
       expect(firstStreamed).toContain(acpAnswer);
@@ -431,4 +447,4 @@ module.exports = {
   ).toEqual({ text: acpAnswers.get("main") });
   expect(requests).toHaveLength(requestCount);
   assertOverride(MISSING_AUTH_PROVIDER_ID, missingAuth.modelId);
-});
+}

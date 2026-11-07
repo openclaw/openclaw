@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   getActiveRemoteModelCatalog,
@@ -14,7 +14,16 @@ import * as bootstrap from "./server-startup-bootstrap.js";
 import { createStartupTestState } from "./server-startup.test-support.js";
 import { startGatewayServer } from "./server.js";
 
-it.each([false, true])("captures catalog before bootstrap (absent=%s)", async (absent) => {
+const startupFixture = createFixtureLifetime();
+
+// Join timed-out startup before the outer hooks retire its runtime owners.
+afterEach(() => startupFixture.cleanup());
+
+it.each([false, true])("captures catalog before bootstrap (absent=%s)", (absent, { signal }) =>
+  startupFixture.run(() => captureCatalogBeforeBootstrap(absent, signal)),
+);
+
+async function captureCatalogBeforeBootstrap(absent: boolean, signal: AbortSignal) {
   const modelRef = "anthropic/startup-model";
   const catalog = (model = "startup-model", input = 1, output = 2) =>
     JSON.stringify({
@@ -50,7 +59,10 @@ it.each([false, true])("captures catalog before bootstrap (absent=%s)", async (a
     });
   const startup = startGatewayServerCore(0).catch((error: unknown) => error);
   try {
-    await enteredBootstrap.promise;
+    await withinTest(
+      awaitGateBeforeSettlement(enteredBootstrap.promise, startup, "Gateway did not reach bootstrap"),
+      signal,
+    );
     read.mockReturnValue({ ...stored, bundle_json: catalog("downloaded-model", 3, 4) });
     expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toEqual(
       absent ? undefined : { models: [{ id: "startup-model" }] },
@@ -64,12 +76,7 @@ it.each([false, true])("captures catalog before bootstrap (absent=%s)", async (a
     setRemoteModelCatalogOverlaySourcesForTest();
     expect(outcome).toBe(stopped);
   }
-});
-
-const startupFixture = createFixtureLifetime();
-
-// Join timed-out startup before the outer hooks retire its runtime owners.
-afterEach(() => startupFixture.cleanup());
+}
 
 it(
   "starts with provider settings without model rows when a channel is auto-enabled",
