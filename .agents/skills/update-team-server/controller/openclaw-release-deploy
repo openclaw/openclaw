@@ -2493,6 +2493,26 @@ recover_journal() {
 			printf 'RECOVERED phase=%s action=verified-migrated-candidate-forward session-proof=%s\n' "$phase" "$session_proof"
 			return 0
 		fi
+		recovery_position="$(proof journal-field "$journal_file" nativeUpdate.recovery)" || return 1
+		if [[ "$mode" == recover && "$recovery_position" == forward ]]; then
+			# Only explicit recovery retries a scoped candidate; an unverified live writer stays untouched.
+			recovery_jobs_settled && stopped_system_owners && assert_policy && assert_stop_start_contract || return 1
+			native_update_permit revoke || return 1
+			native_update migrate || return 1
+			assert_policy && stopped_system_owners || return 1
+			atomic_pointer "$candidate_release" "$current_link" || return 1
+			proof journal-phase "$journal_file" C_CURRENT_SELECTED "$session_witness_record" >/dev/null || return 1
+			native_update_permit publish || return 1
+			system_systemctl start openclaw-gateway.service || return 1
+			bind_successor_generation || return 1
+			proof journal-phase "$journal_file" D_VERIFYING "$session_witness_record" >/dev/null || return 1
+			verify_deployed_candidate || return 1
+			verified_markers record "$candidate_sha" || return 1
+			proof unlink-exact "$journal_file" "$root_uid" "$session_witness_record" || return 1
+			finish_native_update
+			printf 'RECOVERED phase=%s action=resumed-scoped-candidate-forward session-proof=%s\n' "$phase" "$session_proof"
+			return 0
+		fi
 		predecessor_stopped=1
 		if ! predecessor_is_stopped "$expected_pid"; then bind_successor_generation || return 1; fi
 		rollback_armed=1

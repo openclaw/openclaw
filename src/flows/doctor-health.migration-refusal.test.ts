@@ -69,7 +69,7 @@ const maintenance = vi.hoisted(() => ({
   finish: vi.fn(),
   releaseState: vi.fn(),
   repairSqliteNoCow: vi.fn(),
-  enableSqliteReclamation: vi.fn(),
+  inspectSqliteReclamation: vi.fn(),
   cleanupRetainedRuntimes: vi.fn(),
   release: vi.fn(),
 }));
@@ -122,7 +122,7 @@ describe("Doctor refused-migration maintenance outcome", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    maintenance.enableSqliteReclamation.mockReset();
+    maintenance.inspectSqliteReclamation.mockReset();
     vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(maintenance);
     mocks.config.mockReturnValue({});
     mocks.packageRoot.mockReturnValue(undefined);
@@ -154,7 +154,7 @@ describe("Doctor refused-migration maintenance outcome", () => {
       });
       for (const [fn, event] of [
         [maintenance.repairSqliteNoCow, "repair"],
-        [maintenance.enableSqliteReclamation, "conversion"],
+        [maintenance.inspectSqliteReclamation, "conversion"],
         [maintenance.cleanupRetainedRuntimes, "cleanup"],
         [maintenance.finish, "restoration"],
       ] as const) {
@@ -165,7 +165,7 @@ describe("Doctor refused-migration maintenance outcome", () => {
       const runtime = createDoctorRuntime();
       const work = runDoctorHealthFlow(runtime, { repair: fix, nonInteractive: true });
       await entered.promise;
-      expectNoCalls(maintenance.repairSqliteNoCow, maintenance.enableSqliteReclamation);
+      expectNoCalls(maintenance.repairSqliteNoCow, maintenance.inspectSqliteReclamation);
       proceed.resolve();
       await work;
       expect(events).toEqual([
@@ -175,7 +175,7 @@ describe("Doctor refused-migration maintenance outcome", () => {
         ...(fix ? ["cleanup"] : []),
         "restoration",
       ]);
-      expect(maintenance.enableSqliteReclamation).toHaveBeenCalledTimes(Number(conversion));
+      expect(maintenance.inspectSqliteReclamation).toHaveBeenCalledTimes(Number(conversion));
       expect(maintenance.repairSqliteNoCow.mock.calls).toEqual(
         repair ? [[["/synthetic/store.sqlite"]]] : [],
       );

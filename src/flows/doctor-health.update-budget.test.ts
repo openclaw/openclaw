@@ -83,6 +83,22 @@ vi.mock("./doctor-config-validation-findings.js", async (importOriginal) => ({
 
 afterEach(() => vi.restoreAllMocks());
 
+it("leaves historical transcript and global plugin-link scans to standalone Doctor", async () => {
+  const standalone = doctorIds(
+    "stale-plugin-runtime-symlinks session-transcript-headers session-transcript-labels",
+  );
+  const required = doctorIds("session-transcripts final-config-validation");
+  const { contributions, executed } = recordContributions([standalone, required]);
+  await runDoctorHealthContributionList(
+    createDoctorHealthFlowContext({ env: updateEnv }),
+    contributions,
+  );
+  expect(new Set(executed)).toEqual(required);
+  executed.length = 0;
+  await runDoctorHealthContributionList(createDoctorHealthFlowContext({ env: {} }), contributions);
+  expect(new Set(executed)).toEqual(new Set([...standalone, ...required]));
+});
+
 it.each(["rehearsal", "partial-markers"])(
   "defers only pure advisory contributions (%s)",
   async (mode) => {

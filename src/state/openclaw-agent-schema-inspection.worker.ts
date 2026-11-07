@@ -21,6 +21,7 @@ import {
 import type { AgentSchemaInspectionSnapshot } from "./openclaw-agent-schema-inspection-worker.js";
 import type { AgentSchemaInspectionInput } from "./openclaw-agent-schema-inspection.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
+import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import type { StateSchemaInspectionInput } from "./openclaw-state-schema-preflight.js";
 
 if (!process.send || !process.disconnect) {
@@ -49,7 +50,16 @@ async function inspectRequest(request: InspectionRequest): Promise<void> {
     if (request.type === "inspect-state") {
       const { input, snapshot } = request;
       const { inspectStateDatabaseSchema } = await import("./openclaw-state-schema-preflight.js");
-      const inspect = (database: DatabaseSync) => inspectStateDatabaseSchema(database, input);
+      const inspect = (database: DatabaseSync) => {
+        const closeAdmission = input.doctorSchemaReadAdmission
+          ? openDoctorStateSchemaReadAdmission(database)
+          : undefined;
+        try {
+          return inspectStateDatabaseSchema(database, input);
+        } finally {
+          closeAdmission?.();
+        }
+      };
       let inspection;
       if (snapshot) {
         readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
@@ -71,7 +81,10 @@ async function inspectRequest(request: InspectionRequest): Promise<void> {
           { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
         );
       } else {
-        inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect)?.value;
+        // Direct maintenance inspection permits SQLite read marks; captured sources use snapshots.
+        inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect, {
+          allowClosedWal: true,
+        })?.value;
       }
       send({
         requestId,

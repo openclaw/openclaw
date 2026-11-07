@@ -10,6 +10,7 @@ import { createAuthProfileImportResult } from "./auth-profile-repair.test-suppor
 import { mocks } from "./repair-sequencing-mocks.test-support.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 import { registerSharedRuntimeReaderDoctorTests } from "./repair-sequencing.shared-runtime.test-support.js";
+import * as pluginRuntimeLinks from "./shared/plugin-runtime-symlinks.js";
 
 const hasDeferredRetirement = vi.hoisted(() => vi.fn(() => false));
 // mock-isolation: Sequencing fixtures own the deferred receipt; never read or write the process update ledger.
@@ -137,6 +138,20 @@ describe("doctor repair sequencing", () => {
   });
 
   registerSharedRuntimeReaderDoctorTests();
+
+  it("omits global runtime-link repair during update but retains standalone repair", async () => {
+    const repair = vi
+      .spyOn(pluginRuntimeLinks, "removeStalePluginRuntimeSymlinks")
+      .mockResolvedValue({ changes: [], warnings: [] });
+    try {
+      await runRepairs({}, { env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" } });
+      expect(repair).not.toHaveBeenCalled();
+      await runRepairs({}, { env: {} });
+      expect(repair).toHaveBeenCalledOnce();
+    } finally {
+      repair.mockRestore();
+    }
+  });
 
   it.each<[string, Record<string, unknown>, string[]]>([
     ["retirement", {}, []],

@@ -11,16 +11,22 @@ import { recordSessionParticipant } from "../../config/sessions/session-accessor
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
+import * as snapshotSources from "../../infra/sqlite-snapshot-source.js";
 import * as snapshots from "../../infra/sqlite-snapshot.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { withLiveStateReads } from "../../state/artifact-preserving-state-reads.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { repairAcpSessionMetaKeysForDoctor } from "./session-meta-doctor.js";
+import {
+  inspectAcpSessionClaimsForDoctor,
+  repairAcpSessionMetaKeysForDoctor,
+} from "./session-meta-doctor.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { createAcpMeta } from "./session-meta-lifecycle.test-support.js";
 import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
@@ -430,3 +436,41 @@ it.each(["ambiguous", "unreadable"])("retains an alias with %s ownership", (cond
     expect(rows(db)).toEqual(before);
   }),
 );
+
+it("inspects empty ACP metadata without a private copy of shared state", () =>
+  withState(async ({ env }) => {
+    stateDatabase.openOpenClawStateDatabase({ env });
+    const copy = vi
+      .spyOn(snapshotSources, "prepareSqliteReadOnlyLocation")
+      .mockRejectedValue(new Error("Shared-state copies are unavailable"));
+    try {
+      await withLiveStateReads(() =>
+        withDoctorSqliteMaintenanceLock({
+          env,
+          operation: "ACP metadata inspection",
+          run: async (authority) => {
+            expect(await repair(env, { authority, targets: [] })).toEqual(noRepairs);
+            expect(
+              await inspectAcpSessionClaimsForDoctor({ config: cfg, env, pluginId: "acpx" }),
+            ).toEqual({ claims: [], incomplete: [] });
+          },
+        }),
+      );
+      expect(copy).not.toHaveBeenCalled();
+    } finally {
+      copy.mockRestore();
+    }
+  }));
+
+it("returns only the requested backend's ACP rows from the shared-state reader", () =>
+  withState(async ({ env }) => {
+    seed(env, key);
+    seed(env, "agent:harness:acp:other", { meta: { ...meta, backend: "other" } });
+    const selected = await executeExistingOpenClawStateRead(
+      { env },
+      { type: "acpSessions.list", backendId: meta.backend },
+    );
+    expect(selected?.rows.map((row) => row.session_key)).toEqual([key]);
+    const all = await executeExistingOpenClawStateRead({ env }, { type: "acpSessions.list" });
+    expect(all?.rows).toHaveLength(2);
+  }));

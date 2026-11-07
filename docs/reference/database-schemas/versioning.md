@@ -895,7 +895,8 @@ Startup migrations default to a verified full-file backup. A migration owner may
 register the tables it rewrites in `src/state/schema-migration-backup-tables.ts`,
 keyed by database kind and destination schema version. Every pending version must
 have a declaration; one missing declaration keeps the whole pending set on full
-backups. General Doctor and updater rollback still use full backups.
+backups. General Doctor and updater rollback still use full backups; native
+supervisor migrations can instead select the forward-only contract below.
 The backup owner adds `schema_meta`, the SQLite user version, and, for shared
 state, `config_machine_state` for deferred schema publication.
 
@@ -947,8 +948,8 @@ declared, while integrity admission uses the same quick-plus-affected-tables
 policy. Backup eligibility and integrity coverage are separate contracts.
 Legacy transformed recovery archives and automatic rollback images retain full
 integrity checks.
-The shared database accompanying agent
-migrations retains its full backup for registry and receipt recovery.
+The shared database accompanying agent migrations retains its full backup for
+registry and receipt rollback, except for native forward-only crossings.
 
 Scoped archives are not complete databases and must never replace a source file.
 Stop the Gateway and other writers, retain the matching backup group, and use the
@@ -969,6 +970,27 @@ recognizes the update-phase markers shipped drivers already set and keeps full
 startup backups in those phases. A scoped archive is never supplied to an older
 updater or to the generic session-file restore command. Both archive formats use
 the existing completion and later-successful-update cleanup rules.
+
+Native supervisor `update migrate` selects scoped checkpoints when every pending
+SQLite migration declares its affected tables and none of those data tables
+already exists. Schema publication metadata is included in the checkpoint.
+Unknown, destructive, rewrite, PostgreSQL, and unsupported scoped migrations keep
+full rollback images, including an explicitly requested NOCOW rewrite. The native receipt records `backup: "scoped"` before Doctor
+starts; Doctor owns the verified checkpoint before each version migration.
+Unchanged shared and agent companions need no rollback copy in this mode.
+
+This mode requires forward recovery with the candidate. `update restore` refuses
+before changing databases, configuration, or release selection; the supervisor
+must retain the journal and never start an older binary against migrated stores.
+Repair the candidate and complete its normal readiness and continuity acceptance.
+An interrupted native migration can resume with `update migrate --backup-root`
+and the original root. It retains the original receipt and checkpoints, requires
+the same physical databases, and refuses a new destructive migration scope.
+The immutable supervisor's explicit `--recover` resumes a stopped scoped
+candidate through this owner, then selects and verifies it before retiring the
+journal. An unverified live process is left untouched.
+Scoped archives remain under the existing migration recovery owner and cleanup
+policy. Separate destructive Doctor repairs retain their own full originals.
 
 ## Durable session creation receipts
 

@@ -373,13 +373,10 @@ export async function prepareDoctorRuntimeChecks(
   const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
   const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");
   const { noteBunCliLauncherIssues } = await import("../commands/doctor-bun-cli-launcher.js");
-  const { noteStalePluginRuntimeSymlinks } =
-    await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
   const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
   await measure("UI protocol", () => maybeRepairUiProtocolFreshness(runtime, prompter));
   await measure("Source install", () => noteSourceInstallIssues(root));
   await measure("CLI launcher", () => noteBunCliLauncherIssues({ root, prompter }));
-  await measure("Plugin runtime links", () => noteStalePluginRuntimeSymlinks(root));
   noteStartupOptimizationHints();
   return { schemas, nocowPaths: nocow.paths, warnings: deletionJournal.warnings };
 }

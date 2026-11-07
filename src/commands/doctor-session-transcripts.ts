@@ -45,6 +45,7 @@ import {
   withDoctorSqliteMaintenanceLock,
   type DoctorSqliteMaintenanceAuthority,
 } from "./doctor-sqlite-maintenance-lock.js";
+import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
 
 const SESSION_TRANSCRIPTS_CHECK_ID = "core/doctor/session-transcripts";
 
@@ -265,10 +266,12 @@ export async function noteSessionTranscriptHealth(options?: {
       authority: maintenanceAuthority,
       integrityCheck: params.integrityCheck,
     });
-    const titleReport = await repairLegacySessionTitles({
-      ...rowRepairParams,
-      authority: maintenanceAuthority,
-    });
+    const titleReport = isUpdateDoctorLintPass(params.env)
+      ? undefined
+      : await repairLegacySessionTitles({
+          ...rowRepairParams,
+          authority: maintenanceAuthority,
+        });
     const worktreeWorkspaceReport = await repairLegacySessionWorktreeWorkspaces({
       ...rowRepairParams,
       // Workspace metadata participates in an unfinished legacy-main source claim.
@@ -424,7 +427,7 @@ export async function noteSessionTranscriptHealth(options?: {
       "ACP session keys",
     );
   }
-  if (titleReport.found > 0 || titleReport.warnings.length > 0) {
+  if (titleReport && (titleReport.found > 0 || titleReport.warnings.length > 0)) {
     note(
       [
         params.shouldRepair

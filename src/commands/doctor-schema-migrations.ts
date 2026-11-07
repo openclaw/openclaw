@@ -1,7 +1,16 @@
+import { realpathSync } from "node:fs";
+import { resolveStateDir } from "../config/paths.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { runSqliteIntegrityOperationSync } from "../infra/sqlite-integrity.js";
+import {
+  inspectScopedMigrationTables,
+  ScopedMigrationSnapshotUnsupportedError,
+} from "../infra/sqlite-migration-scoped-snapshot.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import {
   hasUpdateDoctorMigrationCapture,
@@ -21,8 +30,55 @@ import {
   prepareOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
+import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
+import { SCHEMA_MIGRATION_BACKUP_TABLES } from "../state/schema-migration-backup-tables.js";
+import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import { completeDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
+import { DOCTOR_SQLITE_NOCOW_REPAIR_ENV } from "./doctor/shared/update-phase.js";
+
+/** Only declared migrations that leave existing data tables untouched omit rollback images. */
+export function canUseDoctorScopedForwardRecovery(
+  schemas: DoctorDatabasePreflight,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (
+    !schemas.pendingMigrations?.length ||
+    isTruthyEnvValue(env[DOCTOR_SQLITE_NOCOW_REPAIR_ENV]) ||
+    getDatabaseEngineInput("state") ||
+    getDatabaseEngineInput("agent")
+  ) {
+    return false;
+  }
+  const stateDir = realpathSync.native(resolveStateDir(env));
+  try {
+    return schemas.pendingMigrations.every((migration) => {
+      const tables = resolveSchemaMigrationBackupTables(migration);
+      const metadata = new Set(["schema_meta"]);
+      if (
+        migration.kind === "state" &&
+        Array.from(
+          { length: migration.supportedVersion - migration.foundVersion },
+          (_, offset) => SCHEMA_MIGRATION_BACKUP_TABLES.state[migration.foundVersion + offset + 1],
+        ).every((scope) => scope && !scope.includes("config_machine_state"))
+      ) {
+        metadata.add("config_machine_state");
+      }
+      return (
+        tables !== undefined &&
+        isPathInside(stateDir, realpathSync.native(migration.path)) &&
+        inspectScopedMigrationTables(migration.path, tables).tables.every(
+          (table) => metadata.has(table.name) || table.sql === null,
+        )
+      );
+    });
+  } catch (error) {
+    if (error instanceof ScopedMigrationSnapshotUnsupportedError) {
+      return false;
+    }
+    throw error;
+  }
+}
 
 /** Backups precede both callers; agent lease acquisition must not do shared repair. */
 async function prepareSharedStateForAgentMaintenance(

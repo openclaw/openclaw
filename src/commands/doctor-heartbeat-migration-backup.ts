@@ -17,6 +17,7 @@ export async function prepareDoctorMigrationBackups(params: {
   env: NodeJS.ProcessEnv;
   check: "quick" | "full";
   verifiedSnapshots: readonly BackupSqliteSnapshotFact[];
+  forwardRecoveryOnly?: true;
   automaticRepair: boolean;
   runtime: Pick<RuntimeEnv, "log">;
   measure: DoctorProgressMeasure;
@@ -51,6 +52,7 @@ export async function prepareDoctorMigrationBackups(params: {
       pendingDatabasePaths: schemas.pendingMigrations?.map((database) => database.path) ?? [],
       pendingMigrations: schemas.pendingMigrations,
       verifiedSnapshots,
+      forwardRecoveryOnly: params.forwardRecoveryOnly,
     }),
   );
   for (const message of [...backups.changes, ...backups.warnings]) {
