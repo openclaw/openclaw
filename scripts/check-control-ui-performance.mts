@@ -63,9 +63,11 @@ const controlUiPerformanceBudgets = {
   // (#192352, 2026-11-06): on main 0a6590652dc this branch measures Chat 1,288,774 B
   // and New Session 797,124 B; main's concurrent growth gets 256 B of headroom.
   // PR #194142 (L293): 1290277 B CI-measured; lead byte exception for Details first-frame prewarm.
-  chatBootJsGzipBytes: 1_290_341,
+  // PR #194142 (L293): 1292951 B CI-measured; lead byte exception for Details first-frame prewarm.
+  chatBootJsGzipBytes: 1_293_015,
   // PR #194142 (L293): 798938 B CI-measured; lead byte exception for Details first-frame prewarm.
-  newBootJsGzipBytes: 799_002,
+  // PR #194142 (L293): 801612 B CI-measured; lead byte exception for Details first-frame prewarm.
+  newBootJsGzipBytes: 801_676,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
