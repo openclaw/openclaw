@@ -309,8 +309,10 @@ def run(options):
         raise RuntimeError('OCM version mismatch')
     (root / 'tools').mkdir()
     logged([str(nodebin / 'npm'), 'install', '--prefix', str(root / 'tools'), 'pnpm@12.15.0',
-            '--ignore-scripts', '--no-audit', '--no-fund'], root / 'toolchain.log', BASE_ENV)
+            '--no-audit', '--no-fund'], root / 'toolchain.log', BASE_ENV)
     BASE_ENV['PATH'] = str(root / 'tools' / 'node_modules' / '.bin') + ':' + BASE_ENV['PATH']
+    if captured(['pnpm', '--version'], BASE_ENV) != '12.15.0':
+        raise RuntimeError('pnpm version mismatch')
     kova = root / 'kova'
     logged(['git', 'clone', '--no-hardlinks', '--no-checkout', str(options.kova_repo.resolve()), str(kova)], root / 'toolchain.log', BASE_ENV)
     logged(['git', '-C', str(kova), 'checkout', '--detach', KOVA], root / 'toolchain.log', BASE_ENV)

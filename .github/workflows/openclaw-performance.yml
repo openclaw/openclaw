@@ -59,7 +59,7 @@ jobs:
           test "$(git -C seed/openclaw rev-parse HEAD)" = e2db37f28cc774d75a54d963817d0f153387a229
           git -C seed/openclaw cat-file -e b764253ddf0edf89887ecc0dcc2a8615ad791bc2^{commit}
           test "$(git -C seed/kova rev-parse HEAD)" = 4b8b1681446b868a44193ed6e97253a6c8bcbbbf
-          echo '5cbe5234eddf77b89369df9e4ce1721e9184242d2b1919e652f49fb7ad1fac75  control/scripts/diagnostics/release37-causal.py' | sha256sum --check
+          echo '4d06a1be6ccf11bd6fd3fe1e3114a5e87b266053682b6069bd933bad52448746  control/scripts/diagnostics/release37-causal.py' | sha256sum --check
           sudo install -d -m 0700 /srv/causal-inputs
           sudo cp -a seed/openclaw seed/kova /srv/causal-inputs/
           sudo install -m 0700 control/scripts/diagnostics/release37-causal.py /srv/causal-inputs/causal-diagnostic.py
