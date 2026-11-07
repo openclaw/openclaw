@@ -8,6 +8,7 @@ import {
   resolveOperatorRolePolicyForAssignment,
 } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { GatewayRequestCancelledError } from "./request-cancelled-error.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -25,14 +26,26 @@ export async function prepareAuthenticatedProfile(
   const role = client?.connect.role;
   const scopes = [...(client?.connect.scopes ?? [])];
   const assertConnection = () => {
-    lifetime.assertLifetimeCurrent();
+    // A closed transport is an expected cancellation, not evidence that request authority moved.
+    if (client?.connectionSignal?.aborted) {
+      throw new GatewayRequestCancelledError();
+    }
+    try {
+      lifetime.assertLifetimeCurrent();
+    } catch (error) {
+      // The request lifetime ends with its transport or its owner; report a closed transport as
+      // cancellation even though the lifetime guard ran first.
+      if (client?.connectionSignal?.aborted) {
+        throw new GatewayRequestCancelledError();
+      }
+      throw error;
+    }
     lifetime.expectedProfileBinding?.assertCurrent();
     if (
       options.client !== client ||
       client?.connId !== connectionId ||
       client?.connect.role !== role ||
       scopes.some((scope) => !client?.connect.scopes?.includes(scope)) ||
-      client?.connectionSignal?.aborted ||
       client?.authenticatedUserProfile?.profileId !== profileReference ||
       client?.authenticatedUserId !== email ||
       client?.authenticatedGitHubIdentitySync !== sync ||

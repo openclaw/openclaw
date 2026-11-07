@@ -79,6 +79,10 @@ import {
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
 import { preparePersonalProfileAction } from "./personal-profile-authorization.js";
+import {
+  GatewayRequestCancelledError,
+  isGatewayRequestCancelledError,
+} from "./request-cancelled-error.js";
 import { respondError } from "./response.js";
 import type {
   GatewayRequestHandlerOptions,
@@ -117,6 +121,9 @@ function refreshConnectedProfile(
 }
 
 function profileError(error: unknown) {
+  if (error instanceof GatewayRequestCancelledError) {
+    return error.error;
+  }
   if (
     error instanceof UserProfileNotFoundError ||
     error instanceof UserProfileOwnerError ||
@@ -432,6 +439,10 @@ export const usersHandlers: GatewayRequestHandlers = {
       }
       respond(true, { profile: profile.listItem });
     } catch (error) {
+      // A closed transport is not a profile failure; the dispatcher owns its cancellation outcome.
+      if (isGatewayRequestCancelledError(error)) {
+        throw error;
+      }
       respond(false, undefined, profileError(error));
     }
   },

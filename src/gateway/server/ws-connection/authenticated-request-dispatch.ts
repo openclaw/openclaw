@@ -39,6 +39,7 @@ import {
   hasCurrentGatewayOperatorAccess,
 } from "../../operator-access-policy.js";
 import { onOperatorRolePolicyChanged } from "../../operator-role-policy.js";
+import { isGatewayRequestCancelledError } from "../../server-methods/request-cancelled-error.js";
 import { bindWebSocketRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
 import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
@@ -561,30 +562,37 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             ),
           );
         } catch (err) {
-          const startTimedOut = err instanceof GatewayRequestStartTimeoutError;
-          dispatchOutcome = startTimedOut ? "returned" : "threw";
-          // Failure diagnostics and responses belong to the same request trace as the handler.
-          if (!startTimedOut) {
-            logGateway.error(`request handler failed: ${formatForLog(err)}`);
+          if (isGatewayRequestCancelledError(err)) {
+            // The client disconnected first; this is an expected cancellation, not a handler fault.
+            // No response is written: the socket is gone and the finally block still releases.
+            logWs("out", "cancelled", { connId, id: req.id, method: req.method });
+            dispatchOutcome = "returned";
+          } else {
+            const startTimedOut = err instanceof GatewayRequestStartTimeoutError;
+            dispatchOutcome = startTimedOut ? "returned" : "threw";
+            // Failure diagnostics and responses belong to the same request trace as the handler.
+            if (!startTimedOut) {
+              logGateway.error(`request handler failed: ${formatForLog(err)}`);
+            }
+            const staleInstall = classifyGatewayStaleInstall(err);
+            respondWithAuthority(
+              false,
+              undefined,
+              staleInstall?.error ??
+                errorShapeFromError(ErrorCodes.UNAVAILABLE, err, {
+                  message: formatForLog(err),
+                  ...(err instanceof GatewayClientRequestError
+                    ? {
+                        retryable: err.retryable,
+                        retryAfterMs: err.retryAfterMs,
+                        details: err.details,
+                      }
+                    : startTimedOut
+                      ? { retryable: true, details: { reason: "request-start-timeout" } }
+                      : undefined),
+                }),
+            );
           }
-          const staleInstall = classifyGatewayStaleInstall(err);
-          respondWithAuthority(
-            false,
-            undefined,
-            staleInstall?.error ??
-              errorShapeFromError(ErrorCodes.UNAVAILABLE, err, {
-                message: formatForLog(err),
-                ...(err instanceof GatewayClientRequestError
-                  ? {
-                      retryable: err.retryable,
-                      retryAfterMs: err.retryAfterMs,
-                      details: err.details,
-                    }
-                  : startTimedOut
-                    ? { retryable: true, details: { reason: "request-start-timeout" } }
-                    : undefined),
-              }),
-          );
         } finally {
           settled.resolve();
           policyResponse?.finish();
