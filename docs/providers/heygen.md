@@ -92,8 +92,8 @@ Output format is chosen automatically by target surface (see [Output](#output)) 
 
 | Model                       | Use                                                                                       |
 | --------------------------- | ----------------------------------------------------------------------------------------- |
-| `heygen-voice-1`            | Full model.                                                                               |
-| `heygen-voice-1-turbo`      | Default. Low-latency model.                                                               |
+| `heygen-voice-1`            | Full model. Required for professional voice clones.                                       |
+| `heygen-voice-1-turbo`      | Default. Low-latency model for instant voices.                                            |
 | `heygen-voice-1-turbo-free` | Free tier of Turbo. HeyGen may refuse a request while free capacity is full; retry later. |
 
 ## Voices
@@ -146,8 +146,24 @@ The response carries the new id at `data.voice_id`. Set it as `speakerVoiceId`.
 
 Streamed playback, such as Discord voice, requests MP3 and plays it as it arrives.
 
-- `http` (default) serves every voice, including professional voice clones.
-- `websocket` uses HeyGen's input streaming socket. It serves public voices and instant clones. HeyGen refuses professional voice clones on the socket, so keep `http` for those.
+- `http` (default) serves every voice.
+- `websocket` uses HeyGen's input streaming socket. It serves instant voices. HeyGen refuses professional voice clones on the socket.
+
+A professional voice clone needs `model: "heygen-voice-1"` and the default `http` transport:
+
+```json5
+{
+  tts: {
+    provider: "heygen",
+    providers: {
+      heygen: {
+        model: "heygen-voice-1",
+        speakerVoiceId: "<professional-voice-id>",
+      },
+    },
+  },
+}
+```
 
 A refusal that arrives before any audio moves on to the next configured TTS provider. A failure after audio has started ends that reply; the next reply opens a new connection.
 
