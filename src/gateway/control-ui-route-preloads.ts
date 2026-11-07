@@ -15,11 +15,9 @@ export function selectControlUiRoutePreloads(html: string, route: "chat" | "new"
 /** Reuse build-emitted hints; optional interactions must not compete with first paint. */
 export function controlUiPreloadLinks(html: string): string[] {
   const links: string[] = [];
-  // HTTP hints arrive before import maps. Fetch bytes now; the document's
-  // modulepreloads resolve the graph after its map is installed (Firefox).
-  const scriptRelation = /<script\b[^>]*\btype="importmap"/.test(html)
-    ? "preload; as=script"
-    : "modulepreload";
+  // HTTP modulepreloads run before import maps, while classic-script preloads
+  // disable streaming module compilation. Let the document preload after its map.
+  const hasImportMap = /<script\b[^>]*\btype="importmap"/.test(html);
   for (const match of html.matchAll(/<(?:link|script)\b[^>]*>/g)) {
     const tag = match[0];
     if (/\bfetchpriority="low"/.test(tag)) {
@@ -30,7 +28,7 @@ export function controlUiPreloadLinks(html: string): string[] {
       continue;
     }
     if (/\brel="modulepreload"|\btype="module"/.test(tag)) {
-      links.push(`<${href}>; rel=${scriptRelation}; crossorigin`);
+      if (!hasImportMap) links.push(`<${href}>; rel=modulepreload; crossorigin`);
     } else if (/\brel="stylesheet"|\bas="style"/.test(tag)) {
       links.push(`<${href}>; rel=preload; as=style; crossorigin`);
     }
