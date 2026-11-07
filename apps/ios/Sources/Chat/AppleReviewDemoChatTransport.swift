@@ -168,6 +168,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             sessionSettingsAvailable: true,
             modelMutationAvailable: ScreenshotFixtureMode.modelSignInScenario != "read-only",
             effortMutationAvailable: true,
+            verboseMutationAvailable: true,
             webSearchBaseEnabled: true,
             webSearchAvailable: true,
             skills: [
