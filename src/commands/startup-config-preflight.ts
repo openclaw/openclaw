@@ -201,11 +201,20 @@ async function prepareStartupConfig(
         { withStateDatabaseColdAdmission },
         { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
         { resolveOpenClawStateSqlitePath },
+        {
+          backfillMissingAgentDeletionJournalForNodeStartup,
+          needsAgentDeletionJournalBackfillForNodeStartup,
+        },
+        { withExistingOpenClawStateDatabaseReadOnly },
+        { runOpenClawStateWriteTransaction },
       ] = await Promise.all([
         import("../infra/state-migrations.daemon-runtime-pins.js"),
         import("../infra/gateway-state-owner.js"),
         import("../state/openclaw-state-db-contract.js"),
         import("../state/openclaw-state-db.paths.js"),
+        import("../state/agent-deletion-journal-recovery.js"),
+        import("../state/openclaw-state-db-readonly.js"),
+        import("../state/openclaw-state-db.js"),
       ]);
       // A concurrent CLI (e.g. `gateway status` loading the device identity) can hold a
       // transient schema lease here. Both steps are idempotent, so wait for it within the
@@ -218,6 +227,21 @@ async function prepareStartupConfig(
         () => {
           initializeNativeOpenClawStateDatabase({ env });
           initializeFreshDaemonRuntimePinMigration(env);
+          // Native bootstrap databases migrated before the journal backfill never
+          // received the table, so node approvals saves fail until startup
+          // completes it. Probe read-only first, so an unrecognized database
+          // is never opened for write.
+          if (
+            withExistingOpenClawStateDatabaseReadOnly(
+              ({ db }) => needsAgentDeletionJournalBackfillForNodeStartup(db),
+              { env },
+            )
+          ) {
+            runOpenClawStateWriteTransaction(
+              (database) => backfillMissingAgentDeletionJournalForNodeStartup(database),
+              { env },
+            );
+          }
         },
       );
     }
