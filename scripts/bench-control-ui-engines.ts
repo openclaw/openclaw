@@ -14,6 +14,7 @@ import {
   firefox as firefoxEngine,
   webkit as webkitEngine,
   type Browser,
+  type JSHandle,
 } from "playwright";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
@@ -45,6 +46,7 @@ import {
   type ColdLoadCpuProfile,
 } from "./lib/control-ui-cold-load-trace.ts";
 import { createControlUiCpuCensus } from "./lib/control-ui-cpu-census.ts";
+import { createEngineAccessibilityObservation } from "./lib/control-ui-engine-accessibility.ts";
 import { createEngineActionScenarios } from "./lib/control-ui-engine-action-scenarios.ts";
 import {
   createEngineActionTiming,
@@ -59,7 +61,10 @@ import {
   installEngineConfigurationObserver,
   readEngineConfigurationObservation,
 } from "./lib/control-ui-engine-configuration-observer.ts";
-import { resolveEngineConfigurations } from "./lib/control-ui-engine-configurations.ts";
+import {
+  resolveEngineConfigurations,
+  type EngineConfiguration,
+} from "./lib/control-ui-engine-configurations.ts";
 import {
   createEngineIdleControls,
   createEngineIdleScenarios,
@@ -80,6 +85,9 @@ import {
   createEnginePageScenarios,
   enginePageCoverage,
   enginePageFixtureCounts,
+  createEngineRouteTransitionScenarios,
+  engineRouteTransitionCoverage,
+  type EngineRouteTransition,
 } from "./lib/control-ui-engine-page-scenarios.ts";
 import { createEnginePluginMemoryScenarios } from "./lib/control-ui-engine-plugin-memory-scenarios.ts";
 import { createEngineStreamingScenarios } from "./lib/control-ui-engine-streaming-scenarios.ts";
@@ -98,6 +106,10 @@ import {
   type ControlUiLayerAudit,
 } from "./lib/control-ui-layer-audit.ts";
 import {
+  createControlUiLiveRegionAudit,
+  type ControlUiLiveRegionAudit,
+} from "./lib/control-ui-live-region-audit.ts";
+import {
   compareControlUiScreenshots,
   createControlUiMutationAudit,
   type ControlUiMutationAudit,
@@ -111,6 +123,11 @@ import {
   resetControlUiPageObserver,
   type ControlUiPageObservation,
 } from "./lib/control-ui-page-observer.ts";
+import {
+  createControlUiRemountAudit,
+  type ControlUiRemountAudit,
+} from "./lib/control-ui-remount-audit.ts";
+import { createEngineRemountScenarios } from "./lib/control-ui-remount-scenarios.ts";
 import { installControlUiResourceCounts } from "./lib/control-ui-resource-counts.ts";
 import { launchTalkObservationBrowser } from "./lib/control-ui-talk-fixture.ts";
 import {
@@ -143,6 +160,10 @@ const { values } = parseArgs({
     "native-audit": { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     "mutation-audit": { type: "boolean", default: false },
+    "live-region-audit": { type: "boolean", default: false },
+    "remount-audit": { type: "boolean", default: false },
+    "route-transitions": { type: "boolean", default: false },
+    "transition-targets": { type: "string" },
     "cpu-throttle": { type: "string", default: "1" },
     "idle-warmup-ms": { type: "string" },
     "idle-duration-ms": { type: "string", default: "30000" },
@@ -236,10 +257,12 @@ if (values.trace && values["cpu-only"]) {
   throw new Error("Choose --trace or --cpu-only; use separate untraced timing runs");
 }
 if (
-  values["mutation-audit"] &&
+  (values["mutation-audit"] || values["remount-audit"]) &&
   (values.trace || values["cpu-only"] || values["cpu-profile"] || values["native-audit"])
 ) {
-  throw new Error("--mutation-audit is diagnostic; collect profiles and timings in separate runs");
+  throw new Error(
+    "Mutation/remount audits are diagnostic; collect profiles and timings separately",
+  );
 }
 if (values["cpu-profile"] && (values.trace || values["cpu-only"] || engines.includes("webkit"))) {
   throw new Error("--cpu-profile requires Chromium and a separate run from --trace/--cpu-only");
@@ -277,12 +300,20 @@ const sourceRoots = [
   ...(values["control-source-root"] ?? []),
 ];
 const needsWorkboard =
+  values["route-transitions"] ||
   values.pages ||
   values.steps
     ?.split(",")
     .some(
       (id) =>
         id.startsWith("workboard-") ||
+        (id.startsWith("remount-from-") &&
+          (id === "remount-from-plugin" ||
+            id === "remount-from-workboard" ||
+            !values["transition-targets"] ||
+            values["transition-targets"]
+              .split(",")
+              .some((target) => /^\/(?:plugin|workboard)(?:[/?]|$)/u.test(target)))) ||
         id.startsWith("noop-workboard-") ||
         /^page-(?:workboard|plugin)-(?:visit|revisit|action|leave)$/u.test(id),
     );
@@ -296,14 +327,27 @@ const servers: Array<{
   workboardSource?: Awaited<ReturnType<typeof prepareWorkboardResourceSource>>;
   server: Awaited<ReturnType<typeof startControlUiBenchGatewayServer>>;
 }> = [];
-const browsers = new Map<ControlUiEngine, Browser>();
-const launchEngine = (engine: ControlUiEngine) =>
+const browsers = new Map<string, Browser>();
+const browserKey = (
+  engine: ControlUiEngine,
+  accessibility: EngineConfiguration["accessibility"],
+) => (accessibility === "default" ? engine : `${engine}:${accessibility}`);
+const launchEngine = (
+  engine: ControlUiEngine,
+  accessibility: EngineConfiguration["accessibility"],
+) =>
   engine === "webkit"
     ? webkitEngine.launch({ headless: true })
     : engine === "firefox"
       ? firefoxEngine.launch({ headless: true })
       : chromiumEngine.launch({
           headless: true,
+          args:
+            accessibility === "on"
+              ? ["--force-renderer-accessibility"]
+              : accessibility === "off"
+                ? ["--disable-renderer-accessibility"]
+                : [],
           executablePath: resolvePlaywrightChromiumExecutablePath(chromiumEngine.executablePath()),
         });
 
@@ -346,6 +390,14 @@ function processMemory(browser: Browser) {
 let planned = 0;
 type Observation = {
   configuration: string;
+  accessibility?: {
+    before?: Awaited<
+      ReturnType<Awaited<ReturnType<typeof createEngineAccessibilityObservation>>["snapshot"]>
+    >;
+    after?: Awaited<
+      ReturnType<Awaited<ReturnType<typeof createEngineAccessibilityObservation>>["finish"]>
+    >;
+  };
   configurationEvidence?: Awaited<ReturnType<typeof readEngineConfigurationObservation>>;
   engine: ControlUiEngine;
   networkProfile: NetworkProfile["name"];
@@ -371,6 +423,17 @@ type Observation = {
     unmappedFrames: number;
   };
   mutations?: ControlUiMutationAudit;
+  liveRegions?: ControlUiLiveRegionAudit;
+  remounts?: ControlUiRemountAudit;
+  transitions?: Array<
+    EngineRouteTransition & {
+      metrics?: EngineMetrics;
+      remounts?: ControlUiRemountAudit;
+      wallMs: number;
+      applicationMs?: number;
+      error?: string;
+    }
+  >;
   pixels?: Awaited<ReturnType<typeof compareControlUiScreenshots>>;
   computedTheme?: Record<string, string>;
   layers?: ControlUiLayerAudit;
@@ -436,7 +499,14 @@ try {
     });
   }
   for (const engine of engines) {
-    browsers.set(engine, await launchEngine(engine));
+    for (const accessibility of new Set(
+      configurations.map((configuration) => configuration.accessibility),
+    )) {
+      if (engine !== "chromium" && accessibility !== "default") {
+        continue;
+      }
+      browsers.set(browserKey(engine, accessibility), await launchEngine(engine, accessibility));
+    }
   }
   const requestedIds = values.steps?.split(",");
   const catalog: EngineScenario[] = [
@@ -455,6 +525,10 @@ try {
     ...createEnginePluginMemoryScenarios(),
     ...createEngineStreamingScenarios(),
     ...createEnginePageScenarios(0, pageOrigin, servers[0]!.server.baseUrl),
+    ...createEngineRemountScenarios(),
+    ...createEngineRouteTransitionScenarios(async (_page, _transition, run) => {
+      await run();
+    }, values["transition-targets"]?.split(",")),
     ...interactionScenarios.filter(
       (scenario) =>
         requestedIds?.includes(scenario.id) ||
@@ -465,18 +539,27 @@ try {
     ),
   ];
   const ids = requestedIds?.flatMap((id) =>
-    id === "chat-actions"
+    id === "remount-interactions"
       ? catalog
-          .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+          .filter(
+            (scenario) =>
+              scenario.id.startsWith("remount-") && !scenario.id.startsWith("remount-from-"),
+          )
           .map((scenario) => scenario.id)
-      : [id],
+      : id === "chat-actions"
+        ? catalog
+            .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+            .map((scenario) => scenario.id)
+        : [id],
   );
   const scenarios = catalog.filter(({ id, explicitOnly, memory }) =>
     ids
       ? ids.some((selected) => selected === id || (selected === "memory" && memory))
-      : values.pages
-        ? id.startsWith("page-") && pagePhases.some((phase) => id.endsWith(`-${phase}`))
-        : !explicitOnly,
+      : values["route-transitions"]
+        ? id.startsWith("remount-from-")
+        : values.pages
+          ? id.startsWith("page-") && pagePhases.some((phase) => id.endsWith(`-${phase}`))
+          : !explicitOnly,
   );
   if (
     !scenarios.length ||
@@ -486,6 +569,9 @@ try {
   }
   if (pageOrigin === "chat" && scenarios.some((scenario) => scenario.fixture?.workboardResources)) {
     throw new Error("Workboard/plugin resource fixtures require --page-origin new-session");
+  }
+  if (values["live-region-audit"] && scenarios.some((scenario) => scenario.navigation)) {
+    throw new Error("Live-region diagnostics require non-navigation scenarios");
   }
   if (engines.includes("firefox") && scenarios.some((scenario) => scenario.memory)) {
     throw new Error(
@@ -521,6 +607,7 @@ try {
           "./lib/control-ui-layer-audit.ts",
           "./lib/control-ui-native-trace.ts",
           "./lib/control-ui-mutation-audit.ts",
+          "./lib/control-ui-live-region-audit.ts",
           "./lib/control-ui-cold-load-trace.ts",
           "./lib/control-ui-cpu-census.ts",
           "./lib/control-ui-allocation-profile.ts",
@@ -553,6 +640,7 @@ try {
           "./lib/control-ui-bench-gateway-server.ts",
           "./lib/control-ui-bench-order.ts",
           "./lib/control-ui-engine-configurations.ts",
+          "./lib/control-ui-engine-accessibility.ts",
           "./lib/control-ui-engine-configuration-observer.ts",
         ].map(async (file) => [
           file,
@@ -565,6 +653,8 @@ try {
     browsers: Object.fromEntries(
       [...browsers].map(([engine, browser]) => [engine, browser.version()]),
     ),
+    accessibilityContract:
+      "Explicit on/off configurations use separate Chromium processes, with force/disable-renderer-accessibility respectively. On enables CDP Accessibility before navigation, requests the full tree before warm actions and after every interval, and counts requested-node update events. Full-tree reads are outside timing windows. Off never enables or queries AX. Default keeps ordinary launch flags. This proves browser accessibility data, not screen-reader speech. WebKit/Firefox explicit AX modes and native idle launchers are unsupported and skipped.",
     firefoxCapabilities: engines.includes("firefox")
       ? {
           applicationElapsed: true,
@@ -596,21 +686,32 @@ try {
     idleDurationMs,
     allocations: values.allocations,
     mutationAudit: values["mutation-audit"],
+    liveRegionAudit: values["live-region-audit"],
+    remountAudit: values["remount-audit"],
+    routeTransitions: values["route-transitions"],
+    transitionTargets: values["transition-targets"]?.split(","),
+    routeTransitionCoverage: values["route-transitions"]
+      ? engineRouteTransitionCoverage
+      : undefined,
     cpuThrottle,
     memorySoakRounds,
-    collection: values.allocations
-      ? "V8 sampled allocations including major/minor-GC collected objects; diagnostic overhead, not timing proof"
-      : values["mutation-audit"]
-        ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
-        : values["native-audit"]
-          ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
-          : values["cpu-profile"]
-            ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
-            : values.trace
-              ? "Playwright tracing and engine Inspector/Profiler; overhead included"
-              : values["cpu-only"]
-                ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
-                : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
+    collection: values["live-region-audit"]
+      ? "Live-region MutationObserver diagnostic; DOM update candidates, not screen-reader speech or timing proof"
+      : values.allocations
+        ? "V8 sampled allocations including major/minor-GC collected objects; diagnostic overhead, not timing proof"
+        : values["remount-audit"]
+          ? "DOM attachment census with synchronous removal snapshots; diagnostic overhead, not timing proof. DOM detach is not Solid disposal."
+          : values["mutation-audit"]
+            ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
+            : values["native-audit"]
+              ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
+              : values["cpu-profile"]
+                ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
+                : values.trace
+                  ? "Playwright tracing and engine Inspector/Profiler; overhead included"
+                  : values["cpu-only"]
+                    ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
+                    : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
     order:
       "Serial network profiles alternate each pair; engine/configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
@@ -656,7 +757,7 @@ try {
           );
           for (const [position, { configuration, bundle, slot }] of configuredSlots.entries()) {
             slot.server.setAssetLatencyMs(networkProfile.httpLatencyMs);
-            const scenario =
+            let scenario =
               createEngineBootScenarios(slot.server.baseUrl, networkProfile.gatewayLatencyMs).find(
                 ({ id }) => id === item.id,
               ) ??
@@ -688,6 +789,42 @@ try {
               hostLoadAverage: os.loadavg(),
               artifactPrefix,
             };
+            if (scenario.id.startsWith("remount-from-")) {
+              observation.transitions = [];
+              scenario = createEngineRouteTransitionScenarios(async (page, transition, run) => {
+                const row: NonNullable<Observation["transitions"]>[number] = {
+                  ...transition,
+                  wallMs: 0,
+                };
+                const started = performance.now();
+                if (values["remount-audit"]) {
+                  await page.evaluate(() => {
+                    window.openclawRemountAudit = window.openclawCreateRemountAudit!();
+                    window.openclawRemountAudit.start();
+                  });
+                }
+                const measurement = await startEngineMeasurement(page, engine, { trace: false });
+                try {
+                  row.applicationMs = await run();
+                } catch (error) {
+                  row.error = String(error);
+                  await page.screenshot({
+                    path: path.join(
+                      artifactDir,
+                      `${artifactPrefix}.transition-${observation.transitions!.length}-failed.png`,
+                    ),
+                  });
+                } finally {
+                  row.wallMs = performance.now() - started;
+                  row.metrics = (await measurement.stop()).metrics;
+                  if (values["remount-audit"]) {
+                    row.remounts = await page.evaluate(() => window.openclawRemountAudit!.finish());
+                  }
+                  observation.transitions!.push(row);
+                  await writeJson(`${artifactPrefix}.transitions.json`, observation.transitions);
+                }
+              }, values["transition-targets"]?.split(",")).find(({ id }) => id === scenario.id)!;
+            }
             if (scenario.viewports && !scenario.viewports.some((name) => name === viewport.name)) {
               observation.status = "skipped";
               observation.skipReason = "This control is unavailable at this viewport.";
@@ -702,9 +839,23 @@ try {
               await observationWriter.record(observation);
               continue;
             }
-            if (scenario.memory || !browsers.get(engine)!.isConnected()) {
-              await browsers.get(engine)!.close();
-              browsers.set(engine, await launchEngine(engine));
+            if (
+              configuration.accessibility !== "default" &&
+              (engine !== "chromium" ||
+                isEngineIdleScenario(scenario) ||
+                scenario.visibility === "hidden")
+            ) {
+              observation.status = "skipped";
+              observation.skipReason =
+                "Explicit accessibility modes require the Chromium Playwright launcher.";
+              observations.push(observation);
+              await observationWriter.record(observation);
+              continue;
+            }
+            const browserSlotKey = browserKey(engine, configuration.accessibility);
+            if (scenario.memory || !browsers.get(browserSlotKey)!.isConnected()) {
+              await browsers.get(browserSlotKey)!.close();
+              browsers.set(browserSlotKey, await launchEngine(engine, configuration.accessibility));
             }
             // Use the existing runner-owned full Chrome helper for both idle states.
             // Normal Playwright contexts force visibility even after minimization.
@@ -713,7 +864,7 @@ try {
               engine === "chromium"
                 ? await launchTalkObservationBrowser(artifactDir, false)
                 : undefined;
-            const observationBrowser = nativeBrowser?.browser ?? browsers.get(engine)!;
+            const observationBrowser = nativeBrowser?.browser ?? browsers.get(browserSlotKey)!;
             const context =
               nativeBrowser?.context ??
               (await observationBrowser.newContext({
@@ -745,9 +896,19 @@ try {
             let layerAudit: Awaited<ReturnType<typeof createControlUiLayerAudit>> | undefined;
             let memory: Awaited<ReturnType<typeof createEngineMemoryCollector>> | undefined;
             let throttle: Awaited<ReturnType<typeof context.newCDPSession>> | undefined;
+            let accessibility:
+              | Awaited<ReturnType<typeof createEngineAccessibilityObservation>>
+              | undefined;
+            let liveRegionAudit:
+              | JSHandle<ReturnType<typeof createControlUiLiveRegionAudit>>
+              | undefined;
             let minimizedWindow: number | undefined;
             let idleRequests: Array<{ method: string }> | undefined;
             try {
+              if (configuration.accessibility === "on") {
+                accessibility = await createEngineAccessibilityObservation(page);
+                observation.accessibility = {};
+              }
               if (nativeBrowser) {
                 await page.setViewportSize(viewport);
                 await page.emulateMedia({
@@ -778,6 +939,11 @@ try {
                 await throttle.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
               }
               await page.addInitScript("globalThis.__name = (fn) => fn");
+              if (values["remount-audit"]) {
+                await page.addInitScript(
+                  `window.openclawCreateRemountAudit = ${createControlUiRemountAudit.toString()};${scenario.navigation ? "window.openclawRemountAudit = window.openclawCreateRemountAudit(); window.openclawRemountAudit.start();" : ""}`,
+                );
+              }
               if (values["mutation-audit"]) {
                 await page.addInitScript(
                   `window.openclawMutationAudit = (${createControlUiMutationAudit.toString()})();${scenario.navigation ? "window.openclawMutationAudit.start();" : ""}`,
@@ -848,7 +1014,7 @@ try {
                   },
                 );
               }
-              const fixture: ReturnType<typeof createScenarioFixture> = scenario.fixture
+              let fixture: ReturnType<typeof createScenarioFixture> = scenario.fixture
                 ?.workboardResources
                 ? createWorkboardResourceFixture(
                     slot.build.buildId,
@@ -856,6 +1022,38 @@ try {
                     slot.workboardSource!.root,
                   )
                 : createScenarioFixture(slot.build.buildId, slot.build.version, scenario);
+              if (scenario.fixture?.workboardResources && scenario.id.startsWith("remount-from-")) {
+                const broad = createScenarioFixture(
+                  slot.build.buildId,
+                  slot.build.version,
+                  scenario,
+                );
+                fixture = {
+                  ...broad,
+                  nativePlugins: fixture.nativePlugins,
+                  controlUiTabs: fixture.controlUiTabs,
+                  sessions: [
+                    ...new Map(
+                      [...broad.sessions, ...fixture.sessions].map((row) => [row.key, row]),
+                    ).values(),
+                  ],
+                  featureMethods: [
+                    ...new Set([
+                      ...(broad.featureMethods ?? []),
+                      ...(fixture.featureMethods ?? []),
+                    ]),
+                  ],
+                  methodResponses: {
+                    ...broad.methodResponses,
+                    ...fixture.methodResponses,
+                    "plugins.uiDescriptors": Object.assign(
+                      {},
+                      broad.methodResponses?.["plugins.uiDescriptors"],
+                      { controlUiTabs: fixture.controlUiTabs },
+                    ),
+                  },
+                };
+              }
               const configResponse = fixture.methodResponses?.["config.get"];
               if (isRecord(configResponse) && isRecord(configResponse.config)) {
                 const config = configResponse.config;
@@ -938,6 +1136,9 @@ try {
                 await page.evaluate(() => document.fonts.ready.then(() => undefined));
                 observation.prepareFrameIntervalMs = await frames(page);
               }
+              if (accessibility && scenario.navigation !== "measured") {
+                observation.accessibility!.before = await accessibility.snapshot();
+              }
               let before = (await gateway?.getRequests())?.length ?? 0;
               if (values.trace) {
                 // DOM snapshots execute injected script on each action and distort the profile.
@@ -973,6 +1174,16 @@ try {
                 : undefined;
               if (values["mutation-audit"] && !scenario.navigation) {
                 await page.evaluate(() => window.openclawMutationAudit!.start());
+              }
+              if (
+                values["remount-audit"] &&
+                !scenario.navigation &&
+                !scenario.id.startsWith("remount-from-")
+              ) {
+                await page.evaluate(() => {
+                  window.openclawRemountAudit = window.openclawCreateRemountAudit!();
+                  window.openclawRemountAudit.start();
+                });
               }
               if (values["native-audit"]) {
                 layerAudit = await createControlUiLayerAudit(page);
@@ -1032,6 +1243,11 @@ try {
                 nativeAudit: values["native-audit"],
                 allocations: values.allocations,
               });
+              if (values["live-region-audit"]) {
+                liveRegionAudit = await page.evaluateHandle(createControlUiLiveRegionAudit);
+                await liveRegionAudit.evaluate((audit) => audit.start());
+              }
+              accessibility?.reset();
               phase = "measurement";
               const start = performance.now();
               if (scenario.memory) {
@@ -1121,6 +1337,14 @@ try {
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (liveRegionAudit) {
+                observation.liveRegions = await liveRegionAudit.evaluate((audit) => audit.finish());
+                await liveRegionAudit.dispose();
+                liveRegionAudit = undefined;
+              }
+              if (accessibility) {
+                observation.accessibility!.after = await accessibility.finish();
+              }
               if (captured.allocations) {
                 const mapped = await mapControlUiAllocationProfile(captured.allocations, {
                   assetBaseUrl: `${slot.server.baseUrl}/assets/`,
@@ -1164,6 +1388,11 @@ try {
                   before: beforePixels!.toString("base64"),
                   after: afterPixels.toString("base64"),
                 });
+              }
+              if (values["remount-audit"] && !scenario.id.startsWith("remount-from-")) {
+                observation.remounts = await page.evaluate(() =>
+                  window.openclawRemountAudit!.finish(),
+                );
               }
               if (scenario.navigation) {
                 await page.waitForLoadState("networkidle");
@@ -1278,6 +1507,12 @@ try {
               if (errors.length) {
                 throw new Error(errors.map(({ message }) => message).join("\n"));
               }
+              const failedTransitions = observation.transitions?.filter((row) => row.error);
+              if (failedTransitions?.length) {
+                throw new Error(
+                  `${failedTransitions.length} transition(s) failed; see transitions.json`,
+                );
+              }
               if (
                 configuration.forcedColors === "active" &&
                 !observation.configurationEvidence.forcedColors
@@ -1334,6 +1569,7 @@ try {
                 observation.status = "failed";
               }
               try {
+                await accessibility?.dispose();
                 await throttle?.detach();
                 await context.close();
                 if (scenario.memory) {
@@ -1611,7 +1847,8 @@ await writeJson("summary.json", {
     .map((row) => {
       const baseline = summary.find(
         (candidate) =>
-          candidate.configuration === "default" &&
+          candidate.configuration ===
+            (row.configuration.startsWith("accessibility") ? "accessibility-off" : "default") &&
           candidate.engine === row.engine &&
           candidate.viewport === row.viewport &&
           candidate.step === row.step &&
@@ -1635,6 +1872,10 @@ await writeJson("summary.json", {
         bundle: row.bundle,
         networkProfile: row.networkProfile,
         metric,
+        taskCpuMedianRatio:
+          row.metrics.taskMs && baseline?.metrics.taskMs && baseline.metrics.taskMs.median > 0
+            ? row.metrics.taskMs.median / baseline.metrics.taskMs.median
+            : null,
         medianRatio:
           sample && control && control.median > 0 ? sample.median / control.median : null,
         p95Ratio: sample && control && control.p95 > 0 ? sample.p95 / control.p95 : null,
