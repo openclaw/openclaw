@@ -152,21 +152,14 @@ ${REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS}
 // Git base enables build-cache projection; filesystem metadata is not admission.
 const excludeBuildCaches = Boolean(requestedBaseCommit);
 const retainedBuildCacheInputs = new Set();
-const retainedResultPaths = new Set();
-let ignoredOutputPaths = new Set();
-function retainWorkspaceInput(relative) {
+function retainBuildCacheInput(relative) {
   for (const entry of buildCacheInputPaths([relative])) retainedBuildCacheInputs.add(entry);
-  // Keep ancestors traversable when Git collapses an ignored output directory.
-  for (let parent = relative; parent; parent = parent.slice(0, Math.max(0, parent.lastIndexOf("/")))) {
-    retainedResultPaths.add(parent);
-  }
 }
 function isRetainedWorkspaceInput(relative) {
   return isStagedInput(relative) || retainedBuildCacheInputs.has(relative);
 }
 function isExcludedWorkspacePath(relative) {
-  return isDerivedWorkspacePath(relative, isRetainedWorkspaceInput(relative), excludeBuildCaches) ||
-    (!retainedResultPaths.has(relative) && isIgnoredWorkspaceBuildOutput(relative, ignoredOutputPaths));
+  return isDerivedWorkspacePath(relative, isRetainedWorkspaceInput(relative), excludeBuildCaches);
 }
 function recordEntry(relative, entry) {
   assertManifestCurrent();
@@ -326,7 +319,7 @@ async function readIgnoredWorkspacePaths() {
 async function initializeBuildCacheInputs() {
   if (!excludeBuildCaches) return undefined;
   for (const relative of await nulPaths(["--full-name", "--cached"])) {
-    retainWorkspaceInput(relative);
+    retainBuildCacheInput(relative);
   }
   const manifestRoot = path.join(process.env.HOME, ".openclaw-worker", "manifests");
   for (const digest of priorManifestDigests) {
@@ -334,11 +327,11 @@ async function initializeBuildCacheInputs() {
       if (!entry || typeof entry.path !== "string") fail("invalid prior workspace manifest entry");
       // Older receipts cannot distinguish generated caches from original inputs.
       // Preserve their exact paths while excluding newly generated descendants.
-      retainWorkspaceInput(entry.path);
+      retainBuildCacheInput(entry.path);
     }
   }
   const ignoredPaths = await readIgnoredWorkspacePaths();
-  for (const relative of ignoredPaths.included) retainWorkspaceInput(relative);
+  for (const relative of ignoredPaths.included) retainBuildCacheInput(relative);
   return ignoredPaths;
 }
 async function eligiblePaths(ignoredPaths) {
@@ -358,7 +351,7 @@ async function eligiblePaths(ignoredPaths) {
     // before guest work. Preserve that selection, including host-staged inputs
     // absent from the worker index. Later captures have a prior receipt instead.
     if (excludeBuildCaches && priorManifestDigests.length === 0) {
-      retainWorkspaceInput(relative);
+      retainBuildCacheInput(relative);
     }
   }
   for (const relative of await nulPaths(["--full-name", "--cached", "--others", "--exclude-standard"])) {
@@ -545,15 +538,18 @@ async function main() {
   }
   const ignoredPaths = await initializeBuildCacheInputs();
   assertManifestCurrent();
-  // Prior receipts retain paths in both preparation and results; only the caller selects scope.
-  if (eligibleOnly) {
+  // Git owns input eligibility, including authenticated staged inputs. Results
+  // additionally retain authored artifacts without enrolling unrelated ignored files.
+  if (eligibleOnly || requestedBaseCommit) {
     for (const relative of await eligiblePaths(ignoredPaths)) addWithParents(relative);
-  } else {
-    if (requestedBaseCommit) {
-      ignoredOutputPaths = new Set(await nulPaths([
-        "--full-name", "--others", "--ignored", "--exclude-standard", "--directory",
-      ]));
+    if (!eligibleOnly) {
+      const absolute = path.join(root, ".artifacts");
+      const stats = fs.lstatSync(absolute, { throwIfNoEntry: false });
+      if (stats && (!stats.isDirectory() || walk(".artifacts"))) {
+        recordNode(".artifacts", absolute, stats);
+      }
     }
+  } else {
     walk("");
   }
   const entries = [...entriesByPath.values()];

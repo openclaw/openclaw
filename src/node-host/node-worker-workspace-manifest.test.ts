@@ -143,9 +143,11 @@ describe("resident node manifest capture", () => {
     const { capture, workspaceDir, runStandalone } = await fixture();
     const homeDir = path.dirname(workspaceDir);
     const baseCommit = "a".repeat(40);
-    await fs.writeFile(path.join(workspaceDir, ".gitignore"), "*.ignored\ndist/\n");
+    await fs.writeFile(path.join(workspaceDir, ".gitignore"), "*.ignored\ndist/\n.artifacts/\n");
     await fs.writeFile(path.join(workspaceDir, "keep.ignored"), "retained");
-    await fs.writeFile(path.join(workspaceDir, "new.ignored"), "authored");
+    await fs.writeFile(path.join(workspaceDir, "new.ignored"), "private");
+    await fs.mkdir(path.join(workspaceDir, ".artifacts"));
+    await fs.writeFile(path.join(workspaceDir, ".artifacts", "proof.txt"), "authored");
     await fs.writeFile(path.join(workspaceDir, "new.txt"), "new");
     expect(
       (await exec.runCommandWithTimeout(["git", "init", "-q", workspaceDir], { timeoutMs: 10_000 }))
@@ -179,9 +181,9 @@ describe("resident node manifest capture", () => {
     expect(native.stdout).toBe(child.stdout);
     const { manifest } = await readWorkspaceManifest(homeDir, native.stdout.trim());
     expect(manifest.entries.map((entry) => entry.path)).toEqual([
+      ".artifacts/proof.txt",
       ".gitignore",
       "keep.ignored",
-      "new.ignored",
       "new.txt",
     ]);
   });

@@ -180,18 +180,19 @@ differences; it does not restore the missing baseline. Keep both directories and
 ask a Gateway administrator to recover the saved baseline inventory before retrying.
 Recreating a sandbox does not repair missing baseline records.
 
-For Git-backed native-node and SSH workspaces, worker-side captures also exclude
-new generated files under those two build-cache roots and new Git-ignored output
-under checkout-root `dist/` and `.cache/openclaw-bun/`. Result captures retain
-other ignored authored files; initial source admission still uses Git eligibility.
-Tracked files, ignored
-files explicitly selected by `.worktreeinclude`, and exact inputs recorded in a
-prior capture remain part of the workspace. Ordinary `.artifacts/` reports still
-synchronize, and unreadable authored files still fail capture. Plain workspaces
-keep their existing capture policy even when staging creates Git metadata.
-Older remote manifests can contain cache files whose origin is unknown; those
-exact paths remain preserved. This does not change the initial Gateway-source
-snapshot policy or remove previously retained cache files.
+For Git-backed native-node and SSH workspaces, captures use Git eligibility:
+tracked and non-ignored files, marker-authenticated staged inputs, ignored files
+explicitly selected by `.worktreeinclude`, and exact paths recorded in prior
+captures. Unselected ignored project files stay private, including directories
+that resemble staged inputs but lack a valid ownership marker. Result captures
+also retain ordinary `.artifacts/` reports and screenshots, even when ignored;
+initial source admission and prepared-project verification keep Git eligibility.
+The declared disposable runtime and build-cache roots remain excluded, while
+tracked or previously admitted build-cache inputs remain protected. Unreadable
+eligible files fail capture. Plain workspaces keep their filesystem capture policy
+even when staging creates Git metadata. Older remote manifests can contain cache
+files whose origin is unknown; those exact paths remain preserved. This does not
+change the initial Gateway-source snapshot policy.
 
 If you are a guest, you can ask the agent:
 

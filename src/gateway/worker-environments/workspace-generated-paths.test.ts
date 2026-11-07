@@ -354,7 +354,7 @@ it("retains plain-workspace inputs when staging has created Git metadata", async
   expect(manifest.entries.map((entry) => entry.path)).toContain(input);
 });
 
-it("omits ignored build outputs but retains authored artifacts in results", async () => {
+it("retains ignored result artifacts without enrolling other ignored project files", async () => {
   const fixture = await makeWorkspace({ "source.txt": "base\n", "dist/tracked.txt": "base\n" });
   const base = await initializeScriptGitWorkspace(fixture.workspace, ".");
   await writeWorkspaceFiles(fixture.workspace, {
@@ -379,11 +379,9 @@ it("omits ignored build outputs but retains authored artifacts in results", asyn
     manifest.entries.filter((entry) => entry.type === "file").map((entry) => entry.path),
   ).toEqual([
     ".artifacts/proof/screenshot.png",
-    ".cache/user-data.json",
     ".gitignore",
     "dist/tracked.txt",
     "new.txt",
-    "notes/report.txt",
     "source.txt",
   ]);
 });
