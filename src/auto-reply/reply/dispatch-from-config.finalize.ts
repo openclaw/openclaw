@@ -24,6 +24,10 @@ import {
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import type { executeDispatch } from "./dispatch-from-config.execute.js";
 import {
+  resolveMediaFinalTtsText,
+  withInheritedSupplementMetadata,
+} from "./dispatch-from-config.media-tts-supplement.js";
+import {
   COLLABORATIVE_STEERING_DISABLED_TEXT,
   createFinalDispatchPayloadDedupeKey,
   QUEUE_CAP_REJECTION_TEXT,
@@ -121,6 +125,16 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const finalDeliveries: Array<Awaited<ReturnType<typeof state.sendFinalPayload>>> = [];
   const sentFinalPayloadDedupeKeys = new Set<string>();
   let deferredTtsTextPending = explicitSilence ? "" : state.progressState.accumulatedBlockTtsText;
+  // Finals that carry non-audio media are delivered without speech: one payload owns
+  // one media set, so synthesis would overwrite the picture. Their text is spoken as a
+  // separate supplement once the visible message is out. The source payload travels
+  // along so the supplement inherits its speech metadata and stays subject to the same
+  // core guards (command replies, explicit speech requests).
+  const pendingMediaFinalTts: Array<{
+    text: string;
+    source: ReplyPayload;
+    delivery: Awaited<ReturnType<typeof state.sendFinalPayload>>;
+  }> = [];
   let continuationSettlementAttempted = false;
   let continuationSettlementRegistered = false;
   const settleContinuation = async (statusDelivered: boolean) => {
@@ -212,6 +226,29 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         }
       }
       finalDeliveries.push(finalReply);
+      // The supplement follows a message the recipient can actually see. A final that
+      // was deduped against its block only counts once that block was delivered:
+      // a channel-transform veto or an unresolved delivery leaves nothing to speak to.
+      // A final that was deduped against its block counts once that block was delivered;
+      // otherwise the visible message itself must have been accepted for delivery —
+      // queued or routed. A routing failure leaves nothing for the voice to follow.
+      const visibleAnswerDelivered = finalReply.blockDeliveryOutcome
+        ? finalReply.blockDeliveryOutcome === "delivered"
+        : finalReply.queuedFinal || finalReply.routedFinalCount > 0;
+      const mediaFinalTtsText = visibleAnswerDelivered
+        ? resolveMediaFinalTtsText(
+            reply,
+            shouldAttachDeferredText ? deferredTtsTextPending : undefined,
+            finalReply.preparedSpeechText,
+          )
+        : "";
+      if (mediaFinalTtsText) {
+        pendingMediaFinalTts.push({
+          text: mediaFinalTtsText,
+          source: reply,
+          delivery: finalReply,
+        });
+      }
       if (shouldAttachDeferredText) {
         deferredTtsTextPending = "";
       }
@@ -407,6 +444,98 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         if (deferFinalTtsText && deferredVisibleText.trim()) {
           await sendTtsFinal({ text: deferredVisibleText });
         }
+      }
+    }
+  }
+  // The picture keeps its own message; its answer follows as a voice supplement so
+  // neither the media nor the speech overwrites the other.
+  if (
+    pendingMediaFinalTts.length > 0 &&
+    resolveTtsSettingsSnapshot({
+      cfg,
+      preparedTtsPreferences: state.preparedTtsPreferences,
+      sessionAuto: state.sessionTtsAuto,
+      agentId: sessionAgentId,
+      channelId: deliveryChannel,
+      accountId: replyRoute.accountId,
+    }).config.mode === "final"
+  ) {
+    // Admission is not visibility. Speaking requires a confirmed visible answer to
+    // speak to, so this gate fails closed: settlement must complete and the answer
+    // must have been delivered visibly. The no-visible-reply gate below treats
+    // admission as the strongest fact for the opposite reason — there, uncertainty
+    // must not produce a duplicate message; here, uncertainty must not produce a
+    // voice note that arrives alone.
+    const supplementSettleResult = await turnLedger.settleQueued(getDispatchAbortSignal());
+    // The settle wait is the only bounded one. A hung transport leaves its outcome
+    // promise unresolved forever, so a failed settlement must skip the supplements
+    // outright — awaiting the outcome after a timeout would hand back the very
+    // deadlock the bound exists to prevent.
+    const supplementsSettled = supplementSettleResult === "settled";
+    if (!supplementsSettled) {
+      logVerbose(
+        `dispatch-from-config: media final TTS supplements skipped (settle=${supplementSettleResult})`,
+      );
+    }
+    for (const { text: mediaFinalTtsText, source, delivery } of supplementsSettled
+      ? pendingMediaFinalTts
+      : []) {
+      const outcome =
+        (await delivery.dispatcherOutcome) ??
+        delivery.blockDeliveryOutcome ??
+        delivery.routedOutcome;
+      if (outcome !== "delivered") {
+        logVerbose(
+          `dispatch-from-config: media final TTS supplement skipped (visible answer=${outcome ?? "unresolved"})`,
+        );
+        continue;
+      }
+      try {
+        throwIfDispatchOperationAborted();
+        const ttsSyntheticReply = await state.maybeApplyTtsWithFinalizationLease(
+          withInheritedSupplementMetadata({ text: mediaFinalTtsText }, source),
+          "final",
+        );
+        throwIfDispatchOperationAborted();
+        if (!ttsSyntheticReply.mediaUrl) {
+          continue;
+        }
+        const spokenText = ttsSyntheticReply.spokenText ?? mediaFinalTtsText;
+        // The metadata lives by object identity, so it has to be attached to the
+        // payload that is actually delivered — the synthesis input is a different
+        // object and its authority would never reach the send path.
+        const ttsOnlyPayload = withInheritedSupplementMetadata(
+          markReplyPayloadAsTtsSupplement(
+            {
+              mediaUrl: ttsSyntheticReply.mediaUrl,
+              audioAsVoice: ttsSyntheticReply.audioAsVoice,
+              spokenText,
+              trustedLocalMedia: true,
+            },
+            spokenText,
+            // Live-only: this audio repeats an answer that already arrived, and its
+            // writer fence is the in-memory authority inherited below. Durable
+            // recovery cannot rebuild that fence — it owns no pending-final
+            // completion — so a replay after a restart could send past a replaced
+            // writer. Delivery honors the flag at the queue boundary; the cost is
+            // losing the audio on restart, never the answer.
+            { visibleTextAlreadyDelivered: true, liveOnly: true },
+          ),
+          source,
+        );
+        const finalReply = await state.sendFinalPayload(ttsOnlyPayload, {
+          abortSignal: getDispatchAbortSignal(),
+          skipTts: true,
+        });
+        queuedFinal = finalReply.queuedFinal || queuedFinal;
+        routedFinalCount += finalReply.routedFinalCount;
+      } catch (err) {
+        if (isDispatchReplyOperationAbortedError(err)) {
+          throw err;
+        }
+        logVerbose(
+          `dispatch-from-config: media final TTS supplement failed: ${formatErrorMessage(err)}`,
+        );
       }
     }
   }
@@ -614,7 +743,9 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     counts,
     ...(collaborativeSteeringRefused ? { collaborativeSteeringRefused: true as const } : {}),
     ...(state.routeState.sessionMetadataChangesForResult
-      ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
+      ? {
+          sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult,
+        }
       : {}),
     ...(getObservedReplyDelivery() ? { observedReplyDelivery: true } : {}),
     ...(replyAdmission?.status === "accepted" ? { deferredToActiveRun: replyAdmission.mode } : {}),
