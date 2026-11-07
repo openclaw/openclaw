@@ -313,6 +313,7 @@ export function runSqliteReadOnlyWorker(
     mode: "sync" | "async" | "file-generation";
     stagingRoot?: string;
     signal?: AbortSignal;
+    expectedSourceIdentity?: DatabaseFileIdentity;
   },
 ): Promise<string>;
 export function runSqliteReadOnlyWorker(

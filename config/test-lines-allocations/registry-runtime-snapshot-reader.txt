@@ -1,0 +1,3 @@
+# Preserve both existing connection-admission fixtures after importing the canonical snapshot reader.
+# Eight mock lines; no new test cases or credit for inherited test-line debt.
+8

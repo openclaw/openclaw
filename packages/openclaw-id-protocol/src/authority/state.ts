@@ -13,6 +13,7 @@ import type {
   UnixSeconds,
 } from "../statements/types.js";
 import type { OwnerDeviceLookup, TrustAnchor, VerifyErrorCode } from "../statements/verify.js";
+import { SUPPORTED_DESCRIPTOR_VERSIONS, SUPPORTED_STATEMENT_VERSIONS } from "../version.js";
 
 /**
  * How a write reached the Gateway.
@@ -81,7 +82,7 @@ export type InviteRecord = {
 /** The Gateway's membership state for one claw. */
 export type AuthorityState = {
   claw_id: string;
-  /** The root R pinned at linking. It never changes for a claw (owner reset is OCF-319). */
+  /** The root R pinned at linking. Only an owner reset on the machine replaces it (enrollment.md). */
   anchor: TrustAnchor;
   /** Monotonic membership seq; a MembershipChange must carry seq + 1. */
   seq: number;
@@ -267,6 +268,10 @@ export function snapshotBody(
         peer_keys: member.peer_keys,
       }))
       .toSorted((a, b) => a.account_id.localeCompare(b.account_id)),
+    protocols: {
+      statement: [...SUPPORTED_STATEMENT_VERSIONS],
+      descriptor: [...SUPPORTED_DESCRIPTOR_VERSIONS],
+    },
     issued_at: now,
   };
 }

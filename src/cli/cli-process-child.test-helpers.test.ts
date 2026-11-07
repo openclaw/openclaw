@@ -388,6 +388,7 @@ it("reports missing markers and captured stderr when the child exits", async () 
 it("matches split markers, removes its listeners, and retains trailing stderr", async () => {
   const result = await runScript({
     script: [
+      "if (process.execArgv.includes('--js-base-64')) throw new Error('CLI fixtures must retain production byte API defaults');",
       "process.stderr.write('phase ');",
       "process.stdin.once('data', () => {",
       "  process.stderr.write('entered');",

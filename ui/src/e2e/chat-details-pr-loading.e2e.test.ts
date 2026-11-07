@@ -129,6 +129,8 @@ suite.define(() => {
         } else {
           expect(shimmer.seconds).toBeGreaterThanOrEqual(3);
         }
+        // Sample content handoff after the surface's independent entrance motion.
+        await expect.poll(() => details.evaluate((panel) => panel.getAnimations().length)).toBe(0);
         const before = (await details.boundingBox())!;
         const firstContentFrame = await details.evaluateHandle((panel) => ({
           frame: new Promise<number>((resolve) => {

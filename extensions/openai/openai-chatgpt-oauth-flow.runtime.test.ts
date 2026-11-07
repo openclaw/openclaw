@@ -659,6 +659,110 @@ describe("OpenAI Codex OAuth flow", () => {
     }
   });
 
+  it("keeps the browser sign-in live after offering the paste prompt", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 302 })),
+    );
+    mockTokenResponse(tokenPayload("late-browser-account"));
+    const ready = createDeferred<void>();
+    const promptOpen = createDeferred<void>();
+    let authUrl = "";
+    let promptAborted = false;
+    const stop = vi.fn();
+    const log = vi.fn();
+    const agent = new Agent();
+    const prompter = createTestWizardPrompter({
+      progress: () => ({ update: vi.fn(), stop }),
+    });
+    const manualPromptSignal: { current?: AbortSignal } = {};
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const login = loginOpenAICodexOAuth({
+      prompter,
+      runtime: { log, error: vi.fn(), exit: vi.fn() },
+      oauth: {
+        createVpsAwareHandlers: (params) => {
+          manualPromptSignal.current = params.manualPromptSignal;
+          return {
+            onAuth: async ({ url }) => {
+              authUrl = url;
+              ready.resolve();
+            },
+            onPrompt: () =>
+              new Promise<string>((_resolve, reject) => {
+                promptOpen.resolve();
+                manualPromptSignal.current?.addEventListener(
+                  "abort",
+                  () => {
+                    promptAborted = true;
+                    reject(new Error("prompt closed"));
+                  },
+                  { once: true },
+                );
+              }),
+          };
+        },
+      },
+      isRemote: false,
+      openUrl: vi.fn(async () => undefined),
+    });
+    try {
+      await ready.promise;
+      await vi.advanceTimersByTimeAsync(16_000);
+      await promptOpen.promise;
+      expect(stop).toHaveBeenCalledExactlyOnceWith(
+        "Still waiting for the browser. Finish signing in there, or paste the redirect URL below.",
+      );
+      await requestCallback(buildCallbackUrl(authUrl), agent);
+      await expect(login).resolves.toMatchObject({ accountId: "late-browser-account" });
+      expect(promptAborted).toBe(true);
+      expect(log.mock.calls.flat().join("\n")).not.toContain("switching to manual");
+      expect(log).toHaveBeenCalledWith("OpenAI OAuth complete");
+    } finally {
+      vi.useRealTimers();
+      agent.destroy();
+    }
+  });
+
+  it("asks for the redirect URL at once when the callback port is busy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 302 })),
+    );
+    mockTokenResponse(tokenPayload("busy-port-account"));
+    const portHolder = createServer();
+    await new Promise<void>((resolve, reject) => {
+      portHolder.once("error", reject);
+      portHolder.listen(1455, resolveOpenAICallbackHost(), resolve);
+    });
+    const stop = vi.fn();
+    const onPrompt = vi.fn(async () => "manual-code");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const controller = new AbortController();
+    const login = loginOpenAICodexOAuth({
+      prompter: createTestWizardPrompter({ progress: () => ({ update: vi.fn(), stop }) }),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      oauth: { createVpsAwareHandlers: () => ({ onAuth: async () => {}, onPrompt }) },
+      isRemote: false,
+      openUrl: vi.fn(async () => undefined),
+      signal: controller.signal,
+    });
+    try {
+      // No fake time passes: nothing can arrive on the port, so nothing should wait for it.
+      await vi.waitFor(() => expect(onPrompt).toHaveBeenCalledOnce());
+      await expect(login).resolves.toMatchObject({ accountId: "busy-port-account" });
+      expect(stop).toHaveBeenCalledWith(
+        "OpenClaw could not use localhost:1455, so the browser cannot finish sign-in here. Sign in there, then paste the redirect URL from its address bar below.",
+      );
+      expect(stop.mock.calls.flat().join("\n")).not.toContain("Still waiting");
+    } finally {
+      controller.abort();
+      vi.useRealTimers();
+      await login.catch(() => undefined);
+      await closeServer(portHolder);
+    }
+  });
+
   it.each([
     ["/opt/homebrew/Cellar/node/26.12.1/bin/node", " /ignored-prefix ", "/opt/homebrew"],
     ["/usr/local/bin/node", " /custom-prefix ", "/custom-prefix"],

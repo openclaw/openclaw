@@ -630,7 +630,7 @@ describe("owned message controls", () => {
       />
     ));
     const disclosure = view.container.querySelector<HTMLDetailsElement>(
-      ".chat-context-attachment",
+      "details.chat-context-attachment",
     )!;
     expect(disclosure).not.toBeNull();
     disclosure.open = true;
