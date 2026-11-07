@@ -203,6 +203,10 @@ export async function prepareWorktreeTemplate(params: {
   refresh?: (record: WorktreeTemplateRecord, options: WorktreeAllocationGuard) => Promise<boolean>;
   prepare: (record: WorktreeTemplateRecord, options: WorktreeAllocationGuard) => Promise<void>;
 }): Promise<PreparedWorktreeTemplate | undefined> {
+  setWorktreePreparationTemplate(undefined, {
+    refreshAttempted: false,
+    refreshRejectReason: undefined,
+  });
   let retained: PreparedWorktreeTemplate | undefined;
   let preparationKey: string | undefined;
   let finishPreparation: (() => void) | undefined;
@@ -291,16 +295,34 @@ export async function prepareWorktreeTemplate(params: {
           if (!retained) {
             return undefined;
           }
-          if (
-            hasReaders ||
-            ((await worktreePathExists(existing.path)) &&
-              (await timeWorktreePreparationPhase("templateValidate", () =>
-                params.validate(existing, options),
-              )) &&
-              (existing.contentKey === params.contentKey ||
-                (await params.refresh?.(existing, options))))
-          ) {
-            setWorktreePreparationTemplate("warm", { reason: "ready" });
+          let reusable = hasReaders;
+          if (!hasReaders) {
+            setWorktreePreparationTemplate(undefined, { refreshRejectReason: "template-missing" });
+            if (await worktreePathExists(existing.path)) {
+              setWorktreePreparationTemplate(undefined, {
+                refreshRejectReason: "validation-failed",
+              });
+              if (
+                await timeWorktreePreparationPhase("templateValidate", () =>
+                  params.validate(existing, options),
+                )
+              ) {
+                reusable = existing.contentKey === params.contentKey;
+                if (!reusable) {
+                  setWorktreePreparationTemplate(undefined, {
+                    refreshAttempted: true,
+                    refreshRejectReason: "refresh-declined",
+                  });
+                  reusable = (await params.refresh?.(existing, options)) ?? false;
+                }
+              }
+            }
+          }
+          if (reusable) {
+            setWorktreePreparationTemplate("warm", {
+              reason: "ready",
+              refreshRejectReason: undefined,
+            });
             if (!hasReaders) {
               await markTemplateReadyAsync(params.env, existing.id, params.now(), assertCurrent, {
                 sourceCommit: params.sourceCommit,
@@ -316,6 +338,20 @@ export async function prepareWorktreeTemplate(params: {
           }
           await retained.release();
           retained = undefined;
+        } else {
+          setWorktreePreparationTemplate(undefined, {
+            refreshRejectReason: !existing
+              ? "no-generation"
+              : existing.status !== "ready"
+                ? "not-ready"
+                : existing.backend !== params.backend
+                  ? "backend-mismatch"
+                  : params.reuseOnly
+                    ? "reuse-only"
+                    : hasReaders
+                      ? "template-in-use"
+                      : "refresh-unavailable",
+          });
         }
         if (params.reuseOnly || hasReaders) {
           setWorktreePreparationTemplate("unavailable", {

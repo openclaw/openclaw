@@ -207,9 +207,16 @@ async function prepareTemplate(options: CheckoutOptions) {
             ],
             gitOptions(templateOptions),
           );
+          if (attributes.code !== 0 || attributes.termination !== "exit") {
+            setWorktreePreparationTemplate(undefined, {
+              refreshRejectReason:
+                attributes.termination === "exit" && attributes.code === 1
+                  ? "attributes-changed"
+                  : "attributes-probe-failed",
+            });
+            return false;
+          }
           if (
-            attributes.code !== 0 ||
-            attributes.termination !== "exit" ||
             (await resolveWorktreeCheckoutKey({
               ...options,
               destination: existing.path,
@@ -218,24 +225,34 @@ async function prepareTemplate(options: CheckoutOptions) {
               gitOptions: gitOptions(templateOptions),
             })) !== contentKey
           ) {
+            setWorktreePreparationTemplate(undefined, {
+              refreshRejectReason: "content-key-mismatch",
+            });
             return false;
           }
-          const materialized = await materializeManagedWorktree(
-            {
-              destination: existing.path,
-              commit,
-              preparedGit: git,
-              executionTimeoutMs: options.checkoutBudget?.timeoutMs,
-            },
-            checkoutGitOptions({ ...options, ...templateOptions }),
-          );
-          requireGitCommandOutput("git read-tree", materialized);
-          await git.require(
-            existing.path,
-            ["update-ref", "--no-deref", "HEAD", commit, existing.sourceCommit],
-            gitOptions(templateOptions),
-          );
-          return true;
+          try {
+            const materialized = await materializeManagedWorktree(
+              {
+                destination: existing.path,
+                commit,
+                preparedGit: git,
+                executionTimeoutMs: options.checkoutBudget?.timeoutMs,
+              },
+              checkoutGitOptions({ ...options, ...templateOptions }),
+            );
+            requireGitCommandOutput("git read-tree", materialized);
+            await git.require(
+              existing.path,
+              ["update-ref", "--no-deref", "HEAD", commit, existing.sourceCommit],
+              gitOptions(templateOptions),
+            );
+            return true;
+          } catch (error) {
+            setWorktreePreparationTemplate(undefined, {
+              refreshRejectReason: "git-advance-failed",
+            });
+            throw error;
+          }
         },
         prepare: async (preparing, templateOptions) => {
           await options.requireSpace();

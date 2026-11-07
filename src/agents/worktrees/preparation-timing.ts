@@ -66,6 +66,21 @@ type TemplateDetails = {
     | "invalid";
   priorSourceCommit?: string;
   requestedSourceCommit?: string;
+  refreshAttempted?: boolean;
+  refreshRejectReason?:
+    | "no-generation"
+    | "not-ready"
+    | "backend-mismatch"
+    | "reuse-only"
+    | "template-in-use"
+    | "refresh-unavailable"
+    | "template-missing"
+    | "validation-failed"
+    | "refresh-declined"
+    | "attributes-changed"
+    | "attributes-probe-failed"
+    | "content-key-mismatch"
+    | "git-advance-failed";
   backend?: string;
   cloneBytes?: number;
   errorCode?: string;
