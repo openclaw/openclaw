@@ -492,7 +492,11 @@ async function captureReload(
       await cdp.send("Profiler.enable");
       await cdp.send("Profiler.start");
       await cdp.send("Tracing.start", {
-        categories: "toplevel,loading,blink.user_timing,devtools.timeline,v8",
+        categories: [
+          "toplevel,loading,blink.user_timing,devtools.timeline,v8",
+          "disabled-by-default-devtools.timeline.invalidationTracking",
+          "disabled-by-default-devtools.timeline.stack",
+        ].join(","),
         transferMode: "ReportEvents",
       });
     }

@@ -132,6 +132,8 @@ initial cold capture remains separate from these independently reset visits.
 
 For separate attribution, add `--cpu-profile --reloads 1` to save a Chrome timeline
 and V8 CPU profile for each warm capture. Profiled timings are not comparison results.
+The timeline includes style/layout invalidation records and source stacks so mutations
+can be distinguished from the geometry reads that pay for their pending work.
 
 The default `--admission signed-in` installs a random HttpOnly session cookie in
 Chromium for the owned loopback proxy. The proxy checks that cookie for HTTP and
