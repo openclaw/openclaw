@@ -149,7 +149,7 @@ it("rejects bot challenge pages", async () => {
 });
 
 it.each([0, 1])("honors current TTL (%s minutes)", async (cacheTtlMinutes) => {
-  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+  const clock = vi.spyOn(performance, "now").mockReturnValue(performance.now());
   let requests = 0;
   fetch.mockImplementation(async () => {
     requests += 1;
@@ -163,7 +163,7 @@ it.each([0, 1])("honors current TTL (%s minutes)", async (cacheTtlMinutes) => {
   expect(await cachedSearch(15)).toEqual({ ...original, cached: true });
   expect(fetch).toHaveBeenCalledTimes(1);
   if (cacheTtlMinutes > 0) {
-    clock.mockReturnValue(Date.now() + 60_000);
+    clock.mockReturnValue(performance.now() + 60_000);
   }
   const fresh = await cachedSearch(cacheTtlMinutes);
   expect(fresh.cached).toBeUndefined();

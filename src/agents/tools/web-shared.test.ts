@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  type CacheEntry,
   normalizeCacheKey,
+  readCache,
   readResponseText,
   resolvePositiveTimeoutSeconds,
   resolveTimeoutSeconds,
+  writeCache,
 } from "./web-shared.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -50,6 +53,20 @@ function expectRead(response: Response, maxBytes: number | undefined, text: stri
 }
 
 describe("web shared helpers", () => {
+  it.each([-3_600_000, 3_600_000])(
+    "expires cached results by elapsed time after a wall step of %i",
+    (step) => {
+      const wall = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+      const elapsed = vi.spyOn(performance, "now").mockReturnValue(100);
+      const cache = new Map<string, CacheEntry<string>>();
+      writeCache(cache, "request", "original", 1000);
+      wall.mockReturnValue(1_000_000 + step);
+      elapsed.mockReturnValue(1099);
+      expect(readCache(cache, "request")).toEqual({ value: "original", cached: true });
+      elapsed.mockReturnValue(1100);
+      expect(readCache(cache, "request")).toBeNull();
+    },
+  );
   it("trims cache-key framing without changing case-sensitive request components", () => {
     const key = "fetch:https://example.com/get?marker=OpenClawCase";
     expect(normalizeCacheKey(` ${key} `)).toBe(key);

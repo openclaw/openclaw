@@ -79,7 +79,7 @@ export function defineSearchContracts(
   });
 
   it(`applies a shortened ${name} cache TTL to an existing result`, async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000_000);
     const fetch = install().mockResolvedValueOnce(answer("Original answer"));
     const query = `${name} shortened TTL cache policy`;
     await search(query, { ttl: 15 });

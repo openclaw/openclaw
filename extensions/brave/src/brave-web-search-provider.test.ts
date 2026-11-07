@@ -147,8 +147,8 @@ it.each([
   { mode: "web", cacheTtlMinutes: 0 },
   { mode: "llm-context", cacheTtlMinutes: 1 },
 ])("honors current $mode cache TTL $cacheTtlMinutes", async ({ mode, cacheTtlMinutes }) => {
-  const now = Date.now();
-  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const now = performance.now();
+  const clock = vi.spyOn(performance, "now").mockReturnValue(now);
   let requestCount = 0;
   mockFetch.mockImplementation(async () => {
     const result = { url: `https://example.com/result-${++requestCount}` };

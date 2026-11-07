@@ -40,7 +40,7 @@ function createTool(cacheTtlMinutes = 15, defaults: SearchDefaults = {}) {
 }
 
 it.each([0, 1])("applies the current %s-minute provider TTL to cached results", async (ttl) => {
-  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+  const clock = vi.spyOn(performance, "now").mockReturnValue(performance.now());
   const search = async (minutes: number, count: number, cachedId?: number) => {
     const result = await createTool(minutes).execute({ query: `current TTL ${ttl}` });
     expect(requests).toBe(count);
@@ -52,7 +52,7 @@ it.each([0, 1])("applies the current %s-minute provider TTL to cached results", 
   await search(15, 1);
   await search(15, 1, 1);
   if (ttl > 0) {
-    clock.mockReturnValue(Date.now() + 60_000);
+    clock.mockReturnValue(performance.now() + 60_000);
   }
   await search(ttl, 2);
   if (ttl === 0) {

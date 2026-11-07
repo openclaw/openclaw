@@ -61,8 +61,8 @@ it.each(["web_search", "tavily_search", "tavily_extract"] as const)(
 );
 
 it("keeps extraction on its default TTL when search caching is disabled", async () => {
-  let now = Date.now();
-  vi.spyOn(Date, "now").mockImplementation(() => now);
+  let now = performance.now();
+  vi.spyOn(performance, "now").mockImplementation(() => now);
   const url = "https://example.com/extract-ttl";
   const fetch = vi
     .spyOn(globalThis, "fetch")
@@ -83,7 +83,7 @@ it.each([
 ] as const)(
   "%s applies the current %i-minute TTL to cached results",
   async (kind, cacheTtlMinutes) => {
-    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    const clock = vi.spyOn(performance, "now").mockReturnValue(performance.now());
     let requests = 0;
     const fetch = vi
       .spyOn(globalThis, "fetch")
@@ -98,7 +98,7 @@ it.each([
     expect(fetch).toHaveBeenCalledTimes(1);
 
     if (cacheTtlMinutes > 0) {
-      clock.mockReturnValue(Date.now() + 60_000);
+      clock.mockReturnValue(performance.now() + 60_000);
     }
     const fresh = await search(cacheTtlMinutes);
     expect(fresh.cached).toBeUndefined();

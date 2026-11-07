@@ -214,8 +214,8 @@ it.each([
 });
 
 it.each([0, 1])("honors the current cache TTL %s", async (cacheTtlMinutes) => {
-  const now = Date.now();
-  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const now = performance.now();
+  const clock = vi.spyOn(performance, "now").mockReturnValue(now);
   let requestCount = 0;
   fetchMock.mockImplementation(async () =>
     Response.json({ results: [{ url: `https://example.com/${++requestCount}` }] }),
