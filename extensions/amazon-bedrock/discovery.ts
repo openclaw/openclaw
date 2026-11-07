@@ -102,7 +102,7 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
 };
 
 function resolveKnownContextWindow(modelId: string): number | undefined {
-  const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
+  const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|in|global)\./, "");
   const candidates = [modelId, stripped];
   for (const candidate of candidates) {
     if (isClaude5BedrockModel({ id: candidate })) {
@@ -324,7 +324,9 @@ export async function discoverBedrockModels(params: {
         const baseModelId =
           /foundation-model\/(.+)$/.exec(profile.models?.[0]?.modelArn ?? "")?.[1] ??
           (profile.type === "SYSTEM_DEFINED"
-            ? /^(?:us|eu|ap|apac|au|jp|global)\.(.+)$/i.exec(profile.inferenceProfileId ?? "")?.[1]
+            ? /^(?:us|eu|ap|apac|au|jp|in|global)\.(.+)$/i.exec(
+                profile.inferenceProfileId ?? "",
+              )?.[1]
             : undefined);
         if (isKnownClaudeMythosPreviewModelId(baseModelId ?? profile.inferenceProfileId)) {
           continue;

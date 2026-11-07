@@ -394,22 +394,25 @@ it("uses the plugin default when both region env overrides are blank", async () 
 });
 
 // Ported from #65449 by @alickgithub2 — extended to also cover apac. prefix
-it("resolves au. and apac. prefixes for regional inference profiles", async () => {
+it("resolves au., apac., and in. prefixes for regional inference profiles", async () => {
   const models = await discoverFixture(
     [sonnetSummary()],
     [
       // Empty model ARNs intentionally force the regional prefix fallback.
       sonnetProfile("au", []),
       sonnetProfile("apac", []),
+      sonnetProfile("in", []),
     ],
     { region: "ap-southeast-2" },
   );
-  expect(models).toHaveLength(3);
-  for (const prefix of ["au", "apac"]) {
+  expect(models).toHaveLength(4);
+  for (const prefix of ["au", "apac", "in"]) {
     const id = `${prefix}.${sonnetId}`;
     expectModel(models, id, {
       name: `${prefix.toUpperCase()} Anthropic Claude Sonnet 4.6`,
       input: ["text", "image"],
     });
   }
+  // The in. India geo prefix must resolve the base model's known window too.
+  expectModel(models, `in.${sonnetId}`, { contextWindow: 1_000_000 });
 });
