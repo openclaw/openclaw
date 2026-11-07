@@ -30,6 +30,7 @@ import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type { MigratedUpdateFinalizationResult } from "./update-command-migrated-types.js";
 import {
   recordMutableUpdateInterruption,
+  runMutableUpdateRecovery,
   withMutableUpdateTerminalSettlement,
 } from "./update-command-mutable-signals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -97,7 +98,7 @@ export function deferUpdateCommandTerminalPreparation(
   let expectedFailure: unknown;
   registerUpdateCommandTerminalPreparation(fence, run.runId, async (failure) => {
     expectedFailure = failure;
-    prepared = await prepare(failure);
+    prepared = await runMutableUpdateRecovery(() => prepare(failure));
   });
   // A release/identity failure cannot fall back to reading newer mutable state.
   const pending = (cause: unknown) =>

@@ -726,7 +726,7 @@
 
 .chat-tool-card__action-btn:hover,
 .chat-tool-card__action-btn:focus-visible,
-.chat-tool-card__actions :where(.chat-copy-btn:hover, .chat-copy-btn:focus-visible) {
+.chat-tool-card__actions :where(.chat-copy-btn:is(:hover, :focus-visible)) {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
 }

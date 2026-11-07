@@ -694,7 +694,7 @@ suite.define(() => {
     const threads = page.locator('[data-session-section="ungrouped"]');
     await expect.poll(() => threads.locator(".sidebar-recent-session").count()).toBe(2);
 
-    const newThread = page.locator(".sidebar-rail").getByRole("link", { name: "New conversation" });
+    const newThread = page.locator(".sidebar-rail").getByRole("link", { name: "New session" });
     await newThread.focus();
     await page.keyboard.press("Enter");
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
@@ -970,10 +970,14 @@ suite.define(() => {
       const composer = page.locator(".new-session-page__composer");
       const attachmentMenu = composer.getByRole("button", { name: "Add attachment" });
       await attachmentMenu.click();
-      const draftToggle = composer.getByRole("menuitemcheckbox", { name: "Draft", exact: true });
-      await draftToggle.click();
+      await expectBrowser(composer.getByRole("menuitem").first()).toBeVisible();
+      await expectBrowser(
+        composer.getByRole("menuitemcheckbox", { name: "Draft", exact: true }),
+      ).toHaveCount(0);
       await attachmentMenu.click();
       await expectBrowser(attachmentMenu).toHaveAttribute("aria-expanded", "false");
+      const draftToggle = page.getByRole("switch", { name: /^Draft:/ });
+      await draftToggle.click();
       const message = page.locator(".new-session-page__message");
       await message.fill("Keep this private plan");
       await composer.locator("input.agent-chat__file-input").setInputFiles({
@@ -1006,19 +1010,13 @@ suite.define(() => {
       if (!refused) {
         await expectBrowser(notice).toBeVisible();
       }
-      await expectBrowser(page.locator(".new-session-page__draft-toggle")).toHaveAttribute(
-        "aria-checked",
-        "true",
-      );
+      await expectBrowser(draftToggle).toHaveAttribute("aria-checked", "true");
       await expectBrowser(message).toHaveValue("Keep this private plan");
       await expectBrowser(composer.locator(".chat-attachment-file__name")).toHaveText("plan.txt");
       await message.press("Enter");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(refused ? 1 : 0);
-      await attachmentMenu.click();
       await expectBrowser(draftToggle).toHaveAttribute("aria-checked", "true");
       await draftToggle.click();
-      await attachmentMenu.click();
-      await expectBrowser(attachmentMenu).toHaveAttribute("aria-expanded", "false");
       await expectBrowser(notice).toHaveCount(0);
       await composer.getByRole("button", { name: "Start session", exact: true }).click();
       const create = await gateway.waitForRequest("sessions.create", { after: refused ? 1 : 0 });

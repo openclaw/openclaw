@@ -373,207 +373,176 @@ describe("resolveMediaList", () => {
     },
   );
 
-  it("classifies audio attachments by filename when content type is missing", async () => {
-    const attachment = attachmentFixture("att-audio-fallback", "voice.ogg", {
-      content_type: undefined,
-    });
-    const result = await resolveBlockedAttachmentMedia(attachment);
-
-    expect(result).toEqual([
+  it.each([
+    [
+      "classifies audio attachments by filename when content type is missing",
+      attachmentFixture("att-audio-fallback", "voice.ogg", {
+        content_type: undefined,
+      }),
       {
         contentType: undefined,
         kind: "audio",
       },
-    ]);
-  });
-
-  it("classifies Discord voice attachments by waveform metadata", async () => {
-    const attachment = attachmentFixture("att-voice-metadata", "voice", {
-      content_type: undefined,
-      duration_secs: 1.5,
-      waveform: "AAAA",
-    });
-    const result = await resolveBlockedAttachmentMedia(attachment);
-
-    expect(result).toEqual([
+    ],
+    [
+      "classifies Discord voice attachments by waveform metadata",
+      attachmentFixture("att-voice-metadata", "voice", {
+        content_type: undefined,
+        duration_secs: 1.5,
+        waveform: "AAAA",
+      }),
       {
         contentType: undefined,
         kind: "audio",
       },
-    ]);
-  });
-
-  it("lets native Discord voice metadata override a conflicting definitive MIME", async () => {
-    const attachment = attachmentFixture("att-voice-conflicting-mime", "voice", {
-      content_type: "video/ogg",
-      duration_secs: 1.5,
-      waveform: "AAAA",
-    });
-    const result = await resolveBlockedAttachmentMedia(attachment);
-
-    expect(result).toEqual([{ contentType: undefined, kind: "audio" }]);
-  });
-
-  it.each(["application/octet-stream", "application/ogg"])(
-    "prefers the structured audio kind over non-audio MIME %s",
-    async (contentType) => {
-      const attachment = attachmentFixture("att-audio-conflicting-mime", "voice.ogg", {
-        content_type: contentType,
-      });
-      mockDownload("/tmp/voice.ogg", { buffer: "audio", contentType });
-
-      const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
-
-      expect(result).toEqual([
-        {
-          path: "/tmp/voice.ogg",
-          contentType: undefined,
-          fileName: "voice.ogg",
-          kind: "audio",
-        },
-      ]);
-    },
-  );
-
-  it("normalizes MIME case before classifying audio", async () => {
-    const attachment = attachmentFixture("att-audio-mime-case", "voice.bin", {
-      content_type: "Audio/OGG",
-    });
-    const result = await resolveBlockedAttachmentMedia(attachment);
-
-    expect(result).toEqual([
+    ],
+    [
+      "lets native Discord voice metadata override a conflicting definitive MIME",
+      attachmentFixture("att-voice-conflicting-mime", "voice", {
+        content_type: "video/ogg",
+        duration_secs: 1.5,
+        waveform: "AAAA",
+      }),
+      { contentType: undefined, kind: "audio" },
+    ],
+    [
+      "normalizes MIME case before classifying audio",
+      attachmentFixture("att-audio-mime-case", "voice.bin", {
+        content_type: "Audio/OGG",
+      }),
       {
         contentType: "Audio/OGG",
         kind: "audio",
       },
-    ]);
-  });
-
-  it("does not let an audio-looking filename override video MIME", async () => {
-    const attachment = attachmentFixture("att-video-audio-extension", "clip.ogg", {
-      content_type: "video/ogg",
-    });
-    const result = await resolveBlockedAttachmentMedia(attachment);
-
-    expect(result).toEqual([
+    ],
+    [
+      "does not let an audio-looking filename override video MIME",
+      attachmentFixture("att-video-audio-extension", "clip.ogg", {
+        content_type: "video/ogg",
+      }),
       {
         contentType: "video/ogg",
       },
-    ]);
+    ],
+    [
+      "does not infer audio from an .ogg filename with definitive MIME application/pdf",
+      attachmentFixture("att-definitive-application/pdf", "document.ogg", {
+        content_type: "application/pdf",
+      }),
+      { contentType: "application/pdf" },
+    ],
+    [
+      "does not infer audio from an .ogg filename with definitive MIME text/plain",
+      attachmentFixture("att-definitive-text/plain", "document.ogg", {
+        content_type: "text/plain",
+      }),
+      { contentType: "text/plain" },
+    ],
+    [
+      "does not classify a duration-bearing video attachment as audio",
+      attachmentFixture("att-video-duration", "PXL_2024.mp4", {
+        content_type: "video/mp4",
+        duration_secs: 11.262232780456543,
+      }),
+      {
+        contentType: "video/mp4",
+      },
+    ],
+    [
+      "keeps an image with a duration field as an image, not audio",
+      attachmentFixture("att-image-duration", "photo.png", {
+        content_type: "image/png",
+        duration_secs: 0.5,
+      }),
+      {
+        contentType: "image/png",
+      },
+    ],
+  ] as const)("%s", async (_name, attachment, expected) => {
+    const result = await resolveBlockedAttachmentMedia(attachment);
+
+    expect(result).toEqual([expected]);
   });
 
-  it("does not let an audio-looking filename override fetched image MIME", async () => {
-    const attachment = attachmentFixture("att-image-audio-extension", "image.ogg", {
-      content_type: undefined,
-    });
-    mockDownload("/tmp/image.png");
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
-
-    expect(result).toEqual([
+  it.each([
+    [
+      "prefers the structured audio kind over non-audio MIME application/octet-stream",
+      attachmentFixture("att-audio-conflicting-mime", "voice.ogg", {
+        content_type: "application/octet-stream",
+      }),
+      "/tmp/voice.ogg",
+      { buffer: "audio", contentType: "application/octet-stream" },
+      { path: "/tmp/voice.ogg", contentType: undefined, fileName: "voice.ogg", kind: "audio" },
+    ],
+    [
+      "prefers the structured audio kind over non-audio MIME application/ogg",
+      attachmentFixture("att-audio-conflicting-mime", "voice.ogg", {
+        content_type: "application/ogg",
+      }),
+      "/tmp/voice.ogg",
+      { buffer: "audio", contentType: "application/ogg" },
+      { path: "/tmp/voice.ogg", contentType: undefined, fileName: "voice.ogg", kind: "audio" },
+    ],
+    [
+      "does not let an audio-looking filename override fetched image MIME",
+      attachmentFixture("att-image-audio-extension", "image.ogg", {
+        content_type: undefined,
+      }),
+      "/tmp/image.png",
+      {},
       {
         path: "/tmp/image.png",
         contentType: "image/png",
         fileName: "image.ogg",
       },
-    ]);
-  });
-
-  it("keeps declared audio when the fetched MIME is generic", async () => {
-    const attachment = attachmentFixture("att-declared-audio-fetched-generic", "voice", {
-      content_type: "audio/ogg",
-    });
-    mockDownload("/tmp/voice", { buffer: "audio", contentType: "application/octet-stream" });
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
-
-    expect(result).toEqual([
+    ],
+    [
+      "keeps declared audio when the fetched MIME is generic",
+      attachmentFixture("att-declared-audio-fetched-generic", "voice", {
+        content_type: "audio/ogg",
+      }),
+      "/tmp/voice",
+      { buffer: "audio", contentType: "application/octet-stream" },
       {
         path: "/tmp/voice",
         contentType: "audio/ogg",
         fileName: "voice",
         kind: "audio",
       },
-    ]);
-  });
-
-  it.each(["application/pdf", "text/plain"])(
-    "does not infer audio from an .ogg filename with definitive MIME %s",
-    async (contentType) => {
-      const attachment = attachmentFixture(`att-definitive-${contentType}`, "document.ogg", {
-        content_type: contentType,
-      });
-      const result = await resolveBlockedAttachmentMedia(attachment);
-
-      expect(result).toEqual([
-        {
-          contentType,
-        },
-      ]);
-    },
-  );
-
-  it("uses fetched image MIME over declared audio", async () => {
-    const attachment = attachmentFixture("att-declared-audio-fetched-image", "voice.ogg", {
-      content_type: "audio/ogg",
-    });
-    mockDownload("/tmp/image.png");
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
-
-    expect(result).toEqual([
+    ],
+    [
+      "uses fetched image MIME over declared audio",
+      attachmentFixture("att-declared-audio-fetched-image", "voice.ogg", {
+        content_type: "audio/ogg",
+      }),
+      "/tmp/image.png",
+      {},
       {
         path: "/tmp/image.png",
         contentType: "image/png",
         fileName: "voice.ogg",
       },
-    ]);
-  });
-
-  it("does not classify a duration-bearing video attachment as audio", async () => {
-    const attachment = attachmentFixture("att-video-duration", "PXL_2024.mp4", {
-      content_type: "video/mp4",
-      duration_secs: 11.262232780456543,
-    });
-    const result = await resolveBlockedAttachmentMedia(attachment);
-
-    expect(result).toEqual([
-      {
-        contentType: "video/mp4",
-      },
-    ]);
-  });
-
-  it("keeps a fetched video MIME over a declared duration-only attachment", async () => {
-    const attachment = attachmentFixture("att-video-duration-fetched", "PXL_2024.mov", {
-      content_type: "video/quicktime",
-      duration_secs: 5.5,
-    });
-    mockDownload("/tmp/PXL_2024.mov", { buffer: "video", contentType: "video/quicktime" });
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
-
-    expect(result).toEqual([
+    ],
+    [
+      "keeps a fetched video MIME over a declared duration-only attachment",
+      attachmentFixture("att-video-duration-fetched", "PXL_2024.mov", {
+        content_type: "video/quicktime",
+        duration_secs: 5.5,
+      }),
+      "/tmp/PXL_2024.mov",
+      { buffer: "video", contentType: "video/quicktime" },
       {
         path: "/tmp/PXL_2024.mov",
         contentType: "video/quicktime",
         fileName: "PXL_2024.mov",
       },
-    ]);
-  });
+    ],
+  ] as const)("%s", async (_name, attachment, downloadPath, downloadOptions, expected) => {
+    mockDownload(downloadPath, downloadOptions);
 
-  it("keeps an image with a duration field as an image, not audio", async () => {
-    const attachment = attachmentFixture("att-image-duration", "photo.png", {
-      content_type: "image/png",
-      duration_secs: 0.5,
-    });
-    const result = await resolveBlockedAttachmentMedia(attachment);
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
 
-    expect(result).toEqual([
-      {
-        contentType: "image/png",
-      },
-    ]);
+    expect(result).toEqual([expected]);
   });
 
   it("keeps a type-only fact when saveMediaBuffer fails", async () => {

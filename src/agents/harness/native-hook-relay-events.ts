@@ -14,7 +14,7 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
-import { payloadTextResult } from "../tools/common.js";
+import { payloadTextResult } from "../tools/tool-results.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "./lifecycle-hook-helpers.js";
 import {
@@ -25,18 +25,20 @@ import {
   readNativeHookRelayApprovalMode,
   resolveCodexUpdatedToolInput,
 } from "./native-hook-relay-codec.js";
+import type {
+  ActiveNativeHookRelayRegistration,
+  NativeHookRelayExecutionAdmission,
+  NativeHookRelayRegistration,
+} from "./native-hook-relay-contexts.js";
 import {
   runNativeHookRelayPermissionRequest,
   setNativeHookRelayPreToolUseApproval,
 } from "./native-hook-relay-permissions.js";
 import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
 import type {
-  ActiveNativeHookRelayRegistration,
   NativeHookRelayEvent,
-  NativeHookRelayExecutionAdmission,
   NativeHookRelayInvocation,
   NativeHookRelayProcessResponse,
-  NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
 

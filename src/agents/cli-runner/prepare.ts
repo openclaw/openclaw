@@ -50,7 +50,6 @@ import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
-import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-refresh-failure.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { isSetupCredentialAccessible } from "../auth-profiles/setup-access.js";
@@ -114,7 +113,11 @@ import {
   DEFAULT_BOOTSTRAP_FILENAME,
   isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
 } from "../workspace.js";
-import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
+import {
+  CliAuthProfilePreparationError,
+  createCliCredentialUseCheck,
+  createCliProfileResolutionError,
+} from "./auth-profile-preparation-error.js";
 import { canTransportSystemPrompt, resolveCliBootstrapPromptHash } from "./bootstrap-transport.js";
 import {
   applyClaudeManagedMcpTimeout,
@@ -122,7 +125,7 @@ import {
 } from "./bundle-mcp-claude.js";
 import { prepareCliBundleMcpConfig, resolveCliNativeWebSearchEnabled } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
-import { runCliCleanup, sequenceCliCleanups } from "./cleanup.js";
+import { runCliCleanup, sequenceCliCleanups, throwCliPreparationFailure } from "./cleanup.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
 import { resolveCliSessionId } from "./cli-run-recovery.js";
@@ -412,6 +415,8 @@ async function prepareCliRunContextWithinReadFence(
   let authCredential = effectiveAuthProfileId
     ? authStore?.profiles[effectiveAuthProfileId]
     : undefined;
+  // A later removal must not exempt the credential already copied for this turn.
+  const savedAuthProfileIds = new Set(authStore?.runtimePersistedProfileIds);
   if (
     effectiveAuthProfileId &&
     authCredential &&
@@ -447,22 +452,13 @@ async function prepareCliRunContextWithinReadFence(
       : backendAuthPolicy.strictSelectedProfile)
   ) {
     const authProfileId = effectiveAuthProfileId;
-    const profileResolutionError = (provider: string, resolvedProfileId?: string) => {
-      const loginCommand = buildOAuthRefreshFailureLoginCommand(provider, {
-        profileId: authProfileId,
-      });
-      const reason =
-        resolvedProfileId !== undefined
-          ? `selected auth profile "${authProfileId}" resolved as "${resolvedProfileId}"`
-          : `could not materialize selected auth profile "${authProfileId}"`;
-      return new CliAuthProfilePreparationError({
-        message: `CLI backend "${backendResolved.id}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
-        profileId: authProfileId,
-        provider,
-        agentDir,
-      });
-    };
+    const profileResolutionError = createCliProfileResolutionError(
+      backendResolved.id,
+      authProfileId,
+      agentDir,
+    );
     const selectedAuthStore = await loadScopedAuthStore({ profileId: authProfileId });
+    selectedAuthStore.runtimePersistedProfileIds?.forEach((id) => savedAuthProfileIds.add(id));
     const resolvedAuth = await resolveApiKeyForProfile({
       cfg: params.config,
       store: selectedAuthStore,
@@ -1277,6 +1273,11 @@ async function prepareCliRunContextWithinReadFence(
     const { liveSession: _liveSession, ...processPerTurnBackend } = preparedBackend.backend;
     const preparedBackendFinal = {
       ...preparedBackend,
+      ...(backendAuthPolicy &&
+      effectiveAuthProfileId &&
+      savedAuthProfileIds.has(effectiveAuthProfileId)
+        ? { prepareCredentialUse: createCliCredentialUseCheck(effectiveAuthProfileId, agentDir) }
+        : {}),
       backend: isSideQuestion
         ? { ...processPerTurnBackend, sessionMode: "none" as const }
         : params.disableCliLiveSession
@@ -1767,14 +1768,8 @@ async function prepareCliRunContextWithinReadFence(
       ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
     });
   } catch (err) {
-    try {
-      await runCliCleanup(params, "cli-prepare-failure", async () => {
-        await cleanupPreparedResources?.();
-      });
-    } catch (cleanupErr) {
-      cliBackendLog.warn(`cli backend cleanup after prepare failure failed: ${String(cleanupErr)}`);
-    }
-    throw err;
+    // Keep caller authority alive until the composed preparation cleanup settles.
+    return await throwCliPreparationFailure(params, err, cleanupPreparedResources);
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

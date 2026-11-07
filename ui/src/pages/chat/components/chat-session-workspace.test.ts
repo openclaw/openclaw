@@ -1,9 +1,11 @@
 import { createComponent, createSignal, flush } from "solid-js";
-import { assert, describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../../api/types.ts";
+import { i18n } from "../../../i18n/index.ts";
+import { formatDateTimeMs } from "../../../lib/format.ts";
 import { useFakeClock } from "../../../test-helpers/fake-clock.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -904,7 +906,10 @@ describe("openSessionWorkspaceFile", () => {
         title: "result.png",
       });
     } else {
-      await expectUnavailable(state, `Failed to load ${file.path}`);
+      await expectUnavailable(
+        state,
+        `Couldn’t load ${file.path}. Check that the file still exists.`,
+      );
       if (kind === "unencoded text") {
         const diff = resolveSessionDiffSidebarContent(state);
         expect(diff?.kind).toBe("session-diff");
@@ -916,7 +921,7 @@ describe("openSessionWorkspaceFile", () => {
   });
 
   it("keeps an outside-session refusal open with its reason", async () => {
-    const message = "This file is outside Main Session's workspace, and you can't open it.";
+    const message = "This file is outside Main session’s workspace, so you can’t open it.";
     const error = new GatewayRequestError({
       code: "INVALID_REQUEST",
       message: "session file not found",
@@ -930,7 +935,14 @@ describe("openSessionWorkspaceFile", () => {
     await expectUnavailable(state, message);
   });
 
-  it("renders unsupported binary metadata", async () => {
+  it("renders unsupported binary metadata through the active locale catalog", async () => {
+    const previousLocale = i18n.getLocale();
+    onTestFinished(async () => {
+      await i18n.setLocale(previousLocale);
+      vi.restoreAllMocks();
+    });
+    await i18n.setLocale("de");
+    const translate = vi.spyOn(i18n, "t");
     const preview = await readPreview(
       workspaceFile("build/cache.db", {
         mimeType: "application/x-sqlite3",
@@ -940,10 +952,31 @@ describe("openSessionWorkspaceFile", () => {
       }),
     );
     assert(preview.kind === "markdown");
-    expect(preview.content).toContain("This file is not previewable inline.");
+    expect(translate).toHaveBeenCalledWith("chat.detailPanel.filePreviewUnavailable", undefined);
+    expect(preview.content).toContain(i18n.t("chat.detailPanel.filePreviewUnavailable"));
     expect(preview.content).toContain("application/x-sqlite3");
-    expect(preview.content).toContain("8,192 bytes");
-    expect(preview.content).toContain("2023-11-14T22:13:20.000Z");
+    expect(translate).toHaveBeenCalledWith("chat.detailPanel.filePreviewSize", {
+      size: new Intl.NumberFormat(i18n.getLocale(), {
+        style: "unit",
+        unit: "byte",
+        unitDisplay: "long",
+        maximumFractionDigits: 0,
+      }).format(8192),
+    });
+    expect(preview.content).toContain(
+      i18n.t("chat.detailPanel.filePreviewSize", {
+        size: new Intl.NumberFormat(i18n.getLocale(), {
+          style: "unit",
+          unit: "byte",
+          unitDisplay: "long",
+          maximumFractionDigits: 0,
+        }).format(8192),
+      }),
+    );
+    expect(preview.content).toContain(
+      i18n.t("chat.detailPanel.filePreviewUpdated", { date: formatDateTimeMs(1_700_000_000_000) }),
+    );
+    translate.mockRestore();
   });
 
   it("renders unsupported hostile filenames literally without invalid dates", async () => {

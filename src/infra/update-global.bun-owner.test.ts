@@ -22,7 +22,7 @@ import type { CommandRunner } from "./update-global-command-runner.js";
 import { detectGlobalInstallManagerForRoot, cleanupGlobalRenameDirs } from "./update-global.js";
 import { commandResult, resolveTarget } from "./update-global.test-support.js";
 import { resolveUpdateInstallSurface } from "./update-runner-install-surface.js";
-import { createGatewayUpdateCheck } from "./update-startup.js";
+import { createGatewayUpdateCheck } from "./update-startup-scheduler.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 

@@ -81,7 +81,7 @@ describe("session progress hovercard ownership", () => {
     ],
     [
       "unavailable",
-      "GitHub status could not be refreshed. Showing the last known state; check GitHub for the latest.",
+      "Couldn’t refresh GitHub status. Check GitHub for the latest; this is the last known status.",
     ],
   ] as const)(
     "updates a held hovercard when only PR lookup status becomes %s",

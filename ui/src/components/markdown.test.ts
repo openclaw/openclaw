@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import { htmlFragment, withControlUiBasePath } from "./markdown.test-support.ts";
-import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import {
+  prewarmSanitizedMarkdown,
+  toSanitizedMarkdownContent,
+  toSanitizedMarkdownHtml,
+} from "./markdown.ts";
 
 function render(source: string, options?: MarkdownRenderOptions) {
   return htmlFragment(toSanitizedMarkdownHtml(source, options));
@@ -21,6 +25,15 @@ function texts(root: ParentNode, selector: string) {
 }
 
 describe("toSanitizedMarkdownHtml", () => {
+  it("retains ordinary Markdown as data and consumes speculative DOM once", () => {
+    const source = "**Bounded preparation** for an ordinary row";
+    expect(typeof toSanitizedMarkdownContent(source)).toBe("string");
+    expect(prewarmSanitizedMarkdown(source, {}, "fragment")).toBe(true);
+    const prepared = toSanitizedMarkdownContent(source);
+    expect(typeof prepared).toBe("object");
+    expect(toSanitizedMarkdownContent(source)).toBe(toSanitizedMarkdownHtml(source));
+  });
+
   it("normalizes Unicode and CR line breaks before rendering", () => {
     const fragment = render("## Unicode\u2028\u2028- alpha\u2029- beta\r- gamma\r\n- delta");
     expectText(fragment, "h2").toBe("Unicode");

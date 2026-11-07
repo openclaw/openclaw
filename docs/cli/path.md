@@ -45,7 +45,7 @@ grep, regex, or parser per file kind. The same `oc://` path can be validated,
 resolved, searched, dry-run, and written from the terminal, which keeps narrow
 automation reviewable and replayable. It preserves the rest of the file, so
 writing one leaf does not disturb its comments, line endings, or nearby
-formatting.
+formatting. YAML edits also retain an existing UTF-8 byte order mark (BOM).
 
 Use it when the thing you want has a logical address, but the file shape
 varies:
@@ -210,9 +210,15 @@ the `OC_JSONC_INPUT_TOO_LARGE` diagnostic; other file kinds use
 | JSONL         | `.jsonl`, `.ndjson`         | Top-level line addresses (`L1`, `L2`, `$first`, `$last`), then JSONC-style descent inside the line. |
 | YAML/.lobster | `.yaml`, `.yml`, `.lobster` | Map keys and sequence indexes; comments and flow style are handled by the YAML document API.        |
 
-Markdown bullet fields are terminal: `name.absent` cannot match a `name` field.
+Markdown bullet fields and frontmatter keys are terminal: `name.absent` cannot
+match a `name` field or key.
+For concrete frontmatter writes, `name/absent` is likewise unresolved.
+Insert keys directly into `[frontmatter]` with `+key`; insertion below a key,
+such as `name/+added`, is not writable. Rejected writes leave the file unchanged.
 Recursive wildcards may consume zero segments, so `name.**` and `**.name` can
 still match it. A quoted `"**"` addresses a literal field key.
+Union alternatives keep their selector semantics: `{missing,*}` and
+`{missing,[name=value]}` can select a matching bullet field.
 For JSONL, `**` can span both the physical line and nested value keys:
 `oc://session.jsonl/**/event` finds nested `event` values inside each line.
 
@@ -225,6 +231,8 @@ Markdown frontmatter string reads decode YAML quoting and inline comments:
 `key: value # note` resolves to `value`. A quoted `#` or adjacent hash such as
 `a#b` remains part of the string, and non-string scalar spelling such as
 `00123` is preserved. Reads leave the source bytes unchanged.
+Block-style lists and maps resolve to YAML text, and multi-line string scalars
+retain YAML folding and chomping. Cross-key aliases remain alias text.
 
 ## Mutation contract
 
@@ -501,6 +509,7 @@ openclaw path resolve 'oc://gateway.jsonc/server/port' --json
 Enumerate every match for a wildcard / predicate / union pattern. Exits `0`
 on at least one match, `1` on zero. File-slot wildcards are rejected with
 `OC_PATH_FILE_WILDCARD_UNSUPPORTED` and exit `2` — pass a concrete file path.
+Quote a literal `?` in a filename, for example `oc://"report?.jsonc"/items/*`.
 
 ```bash
 openclaw path find 'oc://AGENTS.md/tools/**/risk'

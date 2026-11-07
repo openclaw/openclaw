@@ -203,6 +203,12 @@ describe("operator model discovery at registered reads", () => {
         refreshFailed: true,
       };
       const f = createFixture(diagnostics);
+      expectDefined(f.cfg.models?.providers, "configured providers")["hidden-family"] = {
+        baseUrl: "https://hidden.example.invalid",
+        models: [],
+        name: "Private model-less provider",
+        icon: { source: "builtin", name: "server" },
+      };
       await state.writeConfig(f.cfg);
       setRuntimeConfigSnapshot(f.cfg);
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -223,6 +229,7 @@ describe("operator model discovery at registered reads", () => {
         expect(result.pendingProviders).toEqual(["example"]);
         expect(result.providerOutcomes).toEqual([{ provider: "example", status: "ready" }]);
         expect(result.refreshFailed).toBe(false);
+        expect(result.providerPresentations?.["hidden-family"]).toBeUndefined();
       }
       expect((await read("chat.metadata")).models.map(({ id }) => id).toSorted()).toEqual([
         "fallback",
@@ -266,6 +273,7 @@ describe("operator model discovery at registered reads", () => {
       const accountResult = {
         ...custom,
         ...diagnostics,
+        utilityModel: { modelRef: "example/fallback@example:private", source: "config" as const },
         accountSelection: {
           kind: "personal" as const,
           label: "Selected account",
@@ -274,6 +282,7 @@ describe("operator model discovery at registered reads", () => {
       };
       expect(presentation.catalog(accountResult)).toMatchObject({
         providerOutcomes: diagnostics.providerOutcomes.slice(0, 2),
+        utilityModel: { modelRef: "example/fallback@example:private", source: "config" },
         refreshFailed: true,
       });
       expect(
@@ -283,6 +292,7 @@ describe("operator model discovery at registered reads", () => {
         }),
       ).toMatchObject({
         providerOutcomes: [{ provider: "example", status: "ready" }],
+        utilityModel: { modelRef: "example/fallback", source: "config" },
         refreshFailed: false,
       });
 
@@ -310,11 +320,17 @@ describe("operator model discovery at registered reads", () => {
   });
 
   it.each([
-    { utilityModel: "example/fallback", routeVisible: true },
-    { utilityModel: "example/restricted-model", routeVisible: false },
+    { utilityModel: "example/fallback", routeVisible: true, visibleModel: "example/fallback" },
+    { utilityModel: "example/restricted-model", routeVisible: false, visibleModel: undefined },
+    {
+      utilityModel: "example/fallback@work",
+      routeVisible: false,
+      visibleModel: "example/fallback",
+    },
+    { utilityModel: "example/restricted-model@work", routeVisible: false, visibleModel: undefined },
   ])(
-    "discloses the utility route only when $utilityModel is visible to the role",
-    async ({ utilityModel, routeVisible }) => {
+    "discloses only permitted utility metadata for $utilityModel at the response publisher",
+    async ({ utilityModel, routeVisible, visibleModel }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const f = createFixture();
         expectDefined(f.cfg.agents?.defaults, "agent defaults").utilityModel = utilityModel;
@@ -322,12 +338,21 @@ describe("operator model discovery at registered reads", () => {
           "synthetic-key";
         await state.writeConfig(f.cfg);
         setRuntimeConfigSnapshot(f.cfg);
-        const respond = await f.request("models.list", { agentId: "main", view: "configured" });
+        const respond = await f.request("models.list", {
+          agentId: "main",
+          view: "configured",
+          includeDefaultModels: true,
+        });
         expect(respond.mock.calls[0]?.[0]).toBe(true);
-        const { defaultModels } = expectDefined(
+        const result = expectDefined(
           respond.mock.calls[0]?.[1] as ModelsListResult | undefined,
           "models.list result",
         );
+        expect(result.utilityModel).toEqual(
+          visibleModel ? { modelRef: visibleModel, source: "config" } : undefined,
+        );
+        expect(f.cfg.agents?.defaults?.utilityModel).toBe(utilityModel);
+        const { defaultModels } = result;
         if (routeVisible) {
           expect(defaultModels?.utilityRuntime).toEqual({
             id: "openclaw",
@@ -341,6 +366,46 @@ describe("operator model discovery at registered reads", () => {
       });
     },
   );
+
+  it("filters held utility metadata against committed policy at the models.list publisher", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const f = createFixture();
+      expectDefined(f.cfg.agents?.defaults, "agent defaults").utilityModel =
+        "example/fallback@work";
+      await state.writeConfig(f.cfg);
+      setRuntimeConfigSnapshot(f.cfg);
+      let committedConfig = f.cfg;
+      f.context.getCommittedRuntimeConfig = () => committedConfig;
+      const entered = createDeferred();
+      const release = createDeferred();
+      f.context.readPreparedModelsList = async () => {
+        entered.resolve();
+        await release.promise;
+        return undefined;
+      };
+      const pending = f.request("models.list", {
+        agentId: "main",
+        view: "all",
+        includeDefaultModels: true,
+      });
+      const settled = Promise.allSettled([pending]);
+      try {
+        await Promise.race([entered.promise, pending]);
+        committedConfig = structuredClone(f.cfg);
+        expectDefined(
+          committedConfig.gateway?.roles?.definitions.visitor,
+          "committed role",
+        ).modelPolicy = { allow: ["example/primary"] };
+      } finally {
+        release.resolve();
+        await settled;
+      }
+      const payload = response(await pending);
+      expect(payload.models).toEqual([expect.objectContaining({ id: "primary" })]);
+      expect(payload).not.toHaveProperty("utilityModel");
+      expect(f.cfg.agents?.defaults?.utilityModel).toBe("example/fallback@work");
+    });
+  });
 
   it("does not publish held metadata after a role policy change", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

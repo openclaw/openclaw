@@ -53,8 +53,11 @@ export const gatewayBootOperations = {
           boots.orderBy("started_at_ms", "desc").limit(1),
         );
         let window: GatewayRestartResumeWindow | undefined;
-        // Recorded completion owns its shutdown disposition, including failed cleanup.
-        if (predecessor?.outcome === null) {
+        // Forced exit can interrupt marker persistence just like a process crash.
+        if (
+          predecessor &&
+          (predecessor.outcome === null || predecessor.outcome === "forced_stop")
+        ) {
           let previous: NonNullable<typeof predecessor> = predecessor;
           // A safe-mode recovery splits one incarnation; a real restart can reuse its PID.
           while (previous.startup_reason === GATEWAY_CRASH_LOOP_RECOVERED_REASON) {

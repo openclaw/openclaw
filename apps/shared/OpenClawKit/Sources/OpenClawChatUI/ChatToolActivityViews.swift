@@ -564,11 +564,16 @@ struct ChatToolActivityList: View {
             }
             let quiet = self.items.indices.filter { !self.items[$0].isVisible }
             if !quiet.isEmpty {
-                DisclosureGroup("Tool details") {
+                DisclosureGroup {
                     ForEach(quiet, id: \.self) { index in
                         ChatToolActivityRow(item: self.items[index]).equatable()
                     }
+                } label: {
+                    Text("Tool details")
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(.secondary)
                 }
+                .tint(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

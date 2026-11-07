@@ -95,13 +95,15 @@ export type GatewaySessionCommitResult =
       resolved: { modelProvider: string; model: string };
       resetExisting: boolean;
     }
-  | { ok: false; error: ErrorShape };
+  | { ok: false; error: ErrorShape; initializationNotCommitted?: true };
 
 export type CreateGatewaySessionResult =
   | (Extract<GatewaySessionCommitResult, { ok: true }> & {
       postCommit: { status: "completed" } | { status: "failed"; error: unknown };
     })
-  | Extract<GatewaySessionCommitResult, { ok: false }>;
+  | (Extract<GatewaySessionCommitResult, { ok: false }> & {
+      initializationRolledBack?: true;
+    });
 
 export type CreateGatewaySessionParams = {
   creationOperation?: SessionCreationOperation;
@@ -198,6 +200,8 @@ export type CreateGatewaySessionParams = {
   waitForModelCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Trusted in-process initializer; never populated from public Gateway params. */
   initialEntry?: TrustedInitialSessionEntry;
+  /** Host-verified catalog handoff origin for a new ordinary conversation; never a wire input. */
+  initialCatalogContinuation?: { id: string; catalogId: string; hostId: string; threadId: string };
   /** Trusted prepared assistant reply committed with a new ordinary session, never a wire input. */
   initialAssistantMessage?: { message: SessionTranscriptAssistantMessage; idempotencyKey?: string };
   /** Keep a new ordinary session unusable until afterCreate succeeds, or roll it back. */

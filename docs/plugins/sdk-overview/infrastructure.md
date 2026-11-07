@@ -51,6 +51,10 @@ subcommand, and `handle` returns `{ text }` for a reply or `{ prompt }` to
 replace the turn's message. A subcommand runs only while its contribution can
 learn, unless it is `direct`: a direct subcommand changes state without a model
 turn, so only owners can run it and gateway clients need `operator.admin`.
+Optional `unavailableText` is the reply when the contribution's subcommand was
+asked for but cannot run, or when `/learn` cannot learn and every registered
+contribution is in one medium with the same reply; otherwise OpenClaw replies
+with a generic remedy.
 
 Gateway handlers can return a payload synchronously or asynchronously, for example
 `api.registerGatewayMethod("example.status", async () => ({ status: "ready" }))`.
@@ -250,7 +254,8 @@ Bundled and official plugins with a bidirectional CLI protocol can use
 from `openclaw/plugin-sdk/process-runtime`. The `OwnedStdioProcessOptions` and
 `OwnedStdioProcess` types describe the launch and its process-tree owner.
 Creation resolves after startup and private-input delivery. A failed launch
-also reports a cleanup failure if resource closure cannot be confirmed.
+rejects with `OwnedStdioCleanupError` if resource closure cannot be confirmed;
+any other launch rejection means no child remains.
 
 Pass the command and arguments together as `argv`, with optional `argv0`, `cwd`,
 `env`, and `abortSignal`. For an already prepared CLI invocation, `exactEnv: true`
@@ -758,3 +763,52 @@ remain unchanged. Any changed row or database generation refuses the whole batch
 Plugins keep format interpretation in their Doctor contract and leave credential
 binding and runtime lifecycle decisions with their existing owners. Older hosts
 may omit this optional repair capability.
+
+## Durable session work in services
+
+Register `apiVersion: 3` for a required `context.sessionWork` capability alongside
+`context.scheduler`. Version 1 and 2 service contracts remain source-compatible.
+The host capability is version 1; the feature still owns job state, wake deadlines,
+startup scanning, cancellation intent, and publication idempotency.
+
+Call `sessionWork.admit({ id, agentId, sessionKey, toolName, delegatedTools })`
+inside the original live tool invocation, before accepting external work. The
+host checks the registered tool owner and the original executable policy, then
+records the exact session incarnation and authenticated source in host-owned
+storage. Requested delegated tools are restrictions, not grants. An admission
+without a restart-recoverable source returns `recoverable: false`.
+Reusing an ID requires the same captured source, target, and requested tools.
+A changed operator, grant, or captured policy cannot adopt an orphaned admission;
+use a new operation ID instead. Existing admitted work is still reauthorized
+against current policy on every wake.
+
+For access from an already-live tool invocation, use
+`sessionWork.withCurrent({ agentId, sessionKey, toolName }, async (current) => { ... })`.
+This reuses admission's source, owner and current-session checks without writing
+an accepted-work record or restoring a saved source. Compare all fields of the
+host-issued `current.target`, including `lifecycleRevision`, when accessing retained
+feature state. Recheck `current.assertCurrent()` after awaits; the borrow closes
+when the callback settles. Selectors and saved revisions cannot supply authority.
+
+A scheduled callback can call `sessionWork.run(id, async (current) => { ... })`.
+An unavailable result carries `retryAfterMs` only for temporary preparation failure;
+the feature must bound retries. A borrow interrupted by refresh remains closed,
+even after projection facts become ready. A retry acquires a new borrow.
+The host rereads its accepted claim and revalidates current source policy before
+issuing only `current.target`, `current.signal`, and `current.assertCurrent`. The
+callback context and its target are immutable; host-private state is not exposed.
+Normal Gateway/session/tool and model dispatch remains authoritative; the callback does
+not receive a reconstructed agent caller or arbitrary RPC privilege. The shared
+in-process dispatcher applies the same admitted-tool boundary to sibling runtime
+APIs, including nodes and subagent preparation; an unclassified method is refused.
+Recheck the
+assertion after awaits and before effects and publication. Do not retain the
+borrow after the callback settles.
+
+Unavailable admission returns `{ status: "unavailable", reason }` without running
+the callback. Temporary refresh during execution closes that borrow and returns
+a retryable unavailable result. Other execution failures can throw, including
+retirement during an await.
+Persist a safe deferred or indeterminate result; never interpret a timeout or lost
+submission receipt as permission to repeat paid work. IDs, plugin state, profile
+attribution, and saved session targets cannot replace current authority.

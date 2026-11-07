@@ -229,6 +229,7 @@ describe("registered ClawRouter image generation over HTTP", () => {
     const granted = catalog(snapshot);
     inventory = granted;
     const result = await generate({
+      timeoutMs: 10_000,
       modelOverride: "clawrouter/" + snapshot,
       size: "1024x1024",
       quality: "medium",

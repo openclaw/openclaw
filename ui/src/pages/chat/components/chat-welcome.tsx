@@ -76,13 +76,13 @@ export function ChatWelcome(
           <span
             class="agent-chat__welcome-avatar"
             role="img"
-            aria-label={props.assistantName || "Assistant"}
+            aria-label={props.assistantName || t("chat.messages.agentName")}
           >
             <AgentIdentityAvatar agent={resolveAssistantDisplayAvatar(props)} />
           </span>
           <div class="agent-chat__welcome-identity-copy">
             <h2 class={props.assistantNameControl ? "sr-only" : undefined}>
-              {props.assistantName || "Assistant"}
+              {props.assistantName || t("chat.messages.agentName")}
             </h2>
             <Show when={props.assistantNameControl}>
               <div class="agent-chat__welcome-name">{props.assistantNameControl}</div>

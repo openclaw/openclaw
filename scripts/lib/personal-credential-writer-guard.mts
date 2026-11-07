@@ -95,10 +95,13 @@ const publicationWriters = new Map<string, readonly string[]>([
     key(sharedPublication, "writeGitHubPublicationExecutionInDatabase"),
     [key(sharedPublication, "createGitHubPublicationExecutionStoreInDatabase")],
   ],
+  [
+    key(personalPublication, "requirePersonalGitHubPublicationConfirmationInDatabase"),
+    [key(personalPublication, "githubPublications.personalRestart")],
+  ],
   ...[
     "claimPersonalGitHubPublicationInDatabase",
     "writePersonalGitHubPublicationInDatabase",
-    "requirePersonalGitHubPublicationConfirmationInDatabase",
     "markPersonalGitHubPublicationReportedInDatabase",
   ].map((name): [string, string[]] => [
     key(personalPublication, name),
@@ -1414,14 +1417,22 @@ export function inspectPersonalCredentialWriters(
         }
       }
     }
-    const symbols = references.length ? checker.getSymbolAtLocation(references) : [];
-    for (const [index, node] of references.entries()) {
+    // Access and shorthand references have their own resolution paths below.
+    const directReferences = references.filter(
+      (node) =>
+        !ts.isShorthandPropertyAssignment(node.parent) &&
+        !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
+        !(ts.isElementAccessExpression(node.parent) && node.parent.argumentExpression === node),
+    );
+    const symbols = directReferences.length ? checker.getSymbolAtLocation(directReferences) : [];
+    let symbolIndex = 0;
+    for (const node of references) {
       const symbol = ts.isShorthandPropertyAssignment(node.parent)
         ? checker.getShorthandAssignmentValueSymbol(node.parent)
         : (ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) ||
             (ts.isElementAccessExpression(node.parent) && node.parent.argumentExpression === node)
           ? accessSymbol(node.parent)
-          : symbols[index];
+          : symbols[symbolIndex++];
       if (
         ts.isStringLiteral(node) &&
         ts.isCallExpression(node.parent) &&

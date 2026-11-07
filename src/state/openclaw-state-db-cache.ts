@@ -3,11 +3,11 @@ import {
   assertStateDatabaseReadAllowed,
 } from "../infra/gateway-state-owner.js";
 import { registerNodeSqliteKyselyQueryErrorHandler } from "../infra/kysely-sync-cache-state.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
-import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { readGlobalSingleton, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
@@ -165,7 +165,7 @@ export function registerOpenClawStatePathCacheInvalidation<Key, Value extends { 
 
 function retainStateDatabaseClose(database: StateDatabaseHandle): void {
   retainedDatabaseHandles.set(database.db, database);
-  stateDatabaseLifecycle.unregisterRetainedExitClose ??= registerSqliteCacheExitClose(
+  stateDatabaseLifecycle.unregisterRetainedExitClose ??= registerProcessExitCleanup(
     closeOpenClawStateDatabase,
   );
 }

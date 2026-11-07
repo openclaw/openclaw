@@ -42,6 +42,12 @@ Successful repair removes the resolved finding from the final summary. A repair
 that was skipped or failed keeps its next step visible. Recommended improvements
 do not require stopping a healthy Gateway simply to clear the summary.
 
+## Gmail watcher dependency
+
+For configured Gmail hooks, `core/doctor/gmail-gog` checks whether the selected Gog executable supports child-only token environment sources. It distinguishes an older build, an inconclusive check, and a missing executable. Older or unverifiable Gog keeps working with a watcher warning, but legacy token arguments remain exposed to other local users with process access.
+
+Diagnostic checks leave packages unchanged. Explicit `openclaw doctor --repair` can upgrade a supported Homebrew Gog formula only when the selected executable belongs to it and it is unpinned. Custom wrappers and other installations require manual upgrades. Doctor rechecks actual support after the package operation. Doctor invoked internally by `openclaw update` reports the finding without upgrading Gog. Restart the watcher or Gateway after upgrading; see [Gog compatibility and upgrades](/cli/webhooks#webhooks-gmail-run).
+
 ## Config writes and backups
 
 Update-history inspection and reconciliation are best-effort maintenance. A failure
@@ -58,7 +64,7 @@ directory; check executable permissions and directory access for the service use
 Disk-space or `XDG_CACHE_HOME` guidance applies to snapshot storage failures, not
 runtime launch permissions.
 
-After its checks finish, `doctor --fix` settles its own inspection workers while retaining maintenance ownership, then checks whether abandoned updater runtimes can be removed. OpenClaw processes that reference a runtime, or that may be the update that created it, still prevent removal, as do Worker threads and shared-broker work. A running Gateway and its spawn broker never run updates, so without a reference to the runtime they do not; the next `openclaw update` therefore also removes earlier runtimes while the Gateway keeps running. Doctor reports the holder PIDs and asks you to let their work finish before rerunning `openclaw doctor --fix`.
+After its checks finish, `doctor --fix` settles its own inspection workers while retaining maintenance ownership, then checks whether abandoned updater runtimes can be removed. OpenClaw processes that reference a runtime, or that may be the update that created it, still prevent removal, as do Worker threads and shared-broker work. A running Gateway, its spawn broker, and the Windows job anchor that supervises its child never run updates, so without a reference to the runtime they do not; the next `openclaw update` therefore also removes earlier runtimes while the Gateway keeps running. Doctor reports the holder PIDs and asks you to let their work finish before rerunning `openclaw doctor --fix`.
 
 - On npm global installs, Doctor reports retained `.openclaw.package-backup-*.databases` directories (and `.openclaw-package-backup-*.databases`, the name a failed cleanup retires them under) beside the installed package, with their total regular-file size in bytes and human-readable units and a quoted removal command for each directory. The scan is bounded; incomplete sizes are lower bounds. If inspection is incomplete before any snapshot is found, Doctor warns and asks you to list the npm global root manually, including hidden entries. A missing global root produces no warning. This is warning-only, including with `--fix`: confirm no update is in progress and no recovery needs the snapshots before removing them manually. Updater-driven Doctor passes defer this check so they do not report the active update's snapshots; run standalone Doctor after the update settles.
 - Any config write (including a `--fix` repair) rotates a backup to `~/.openclaw/openclaw.json.bak` (with a numbered `.bak.1`..`.bak.4` ring). `--fix` also drops unknown config keys reported by schema validation, listing each removal; it skips this while an update is in progress so partially written upgrade state is not stripped before its migration finishes.
@@ -129,6 +135,7 @@ Doctor prepares valid runtime config before inspecting context-engine plugins, s
 
 ## Sandbox
 
+- Missing sandbox images are retained in update warnings. For the default Docker image, run `openclaw doctor --fix`; the npm package includes its builder and Dockerfile. Updates do not build images automatically or substitute an older default.
 - If sandbox mode is enabled but Docker is unavailable, doctor reports a high-signal warning with remediation (`install Docker` or `openclaw config set agents.defaults.sandbox.mode off`).
 - Doctor identifies per-agent `agents.entries.<id>.sandbox` Docker, browser, and prune overrides ignored under shared scope. It also warns when an agent's explicit primary model omits fallbacks and therefore disables the defaults' fallback chain; both diagnostics use current agent paths after legacy roster normalization.
 - If retired sandbox registry files or shard directories are present (`~/.openclaw/sandbox/containers.json`, `~/.openclaw/sandbox/browsers.json`, `~/.openclaw/sandbox/containers/`, or `~/.openclaw/sandbox/browsers/`), Doctor reports them and `--fix` refuses without changing their contents. Upgrade through `2026.9.7` and run `openclaw doctor --fix` on the original host first; see [legacy state migration](/cli/doctor/state-migrations).

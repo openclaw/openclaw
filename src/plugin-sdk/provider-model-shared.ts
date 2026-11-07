@@ -22,6 +22,13 @@ import type { ProviderPlugin } from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type { ProviderReplayPolicyContext, ProviderRuntimeModel } from "./plugin-entry.js";
 
+/** Native xAI tool wire policy, shared with explicitly selected proxy routes. */
+export const XAI_TOOL_MODEL_COMPAT = {
+  toolSchemaProfile: "xai",
+  unsupportedToolSchemaKeywords: ["minContains", "maxContains"],
+  toolCallArgumentsEncoding: "html-entities" as const,
+};
+
 export { matchesExactOrPrefix } from "../plugins/provider-model-id-match.js";
 
 // Shared by native Mistral and gateways serving its Chat Completions protocol.
@@ -202,7 +209,11 @@ export type {
   UnifiedModelCatalogProviderPlugin,
 } from "../plugins/types.js";
 
-export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+export {
+  DEFAULT_CONTEXT_TOKENS,
+  DEFAULT_MODEL_MAX_TOKENS,
+  resolveDefaultModelMaxTokens,
+} from "../agents/defaults.js";
 export {
   GPT5_BEHAVIOR_CONTRACT,
   GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY,
