@@ -63,7 +63,8 @@ export function createEmbeddedMessageInvocationPolicy(params: {
   const filter = (
     currentProfile = params.capabilityProfile,
     onFilter?: (event: ToolPolicyFilterEvent) => void,
-    // Listing retains the requester's own ceiling; completion replay only gates calls.
+    // Listing retains the requester's own ceiling; completion replay and the sender's
+    // tools.toolsBySender entry only gate calls.
     scope: "turn" | "session" = "turn",
   ): AnyAgentTool[] => {
     const currentPolicies =
@@ -79,7 +80,7 @@ export function createEmbeddedMessageInvocationPolicy(params: {
           ...currentPolicies,
           // Resource and inherited ceilings belong to the assembled turn.
           groupPolicy: policies.groupPolicy,
-          senderPolicy: policies.senderPolicy,
+          senderPolicy: scope === "session" ? undefined : policies.senderPolicy,
           sandboxPolicy: policies.sandboxPolicy,
           subagentPolicy: policies.subagentPolicy,
           runtimeToolPolicy: policies.runtimeToolPolicy,
