@@ -1,0 +1,90 @@
+name: Apple node native transport
+
+on:
+  push:
+    branches: [main]
+    paths: &apple_node_native_paths
+      - ".github/workflows/apple-node-native.yml"
+      - "crates/openclaw-iroh-ffi/**"
+      - "apps/shared/OpenClawKit/**"
+      - "apps/shared/mermaid/**"
+      - "packages/gateway-protocol/**"
+      - "packages/mermaid-renderer/**"
+      - "scripts/prepare-native-protocol.mjs"
+      - "scripts/prepare-apple-mermaid.mjs"
+      - "pnpm-lock.yaml"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths: *apple_node_native_paths
+  workflow_dispatch:
+
+concurrency:
+  group: apple-node-native-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  RUSTUP_TOOLCHAIN: "1.99.0"
+
+jobs:
+  swift:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node for Swift build inputs
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "26.12.1"
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Prepare Swift build inputs
+        run: |
+          pnpm install --frozen-lockfile --filter '@openclaw/mermaid-renderer...' --filter '@openclaw/gateway-protocol...'
+          node scripts/prepare-apple-mermaid.mjs
+
+      - name: Test default build without native artifact
+        env:
+          OPENCLAW_IROH_NATIVE: "0"
+        run: |
+          test ! -e crates/openclaw-iroh-ffi/dist/apple/OpenClawIrohFFI.xcframework
+          swift test --package-path apps/shared/OpenClawKit --filter OpenClawIDNode
+
+      - name: Install pinned Rust and macOS targets on CI only
+        run: |
+          set -euo pipefail
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          fi
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build same-revision bindings and macOS XCFramework
+        working-directory: crates/openclaw-iroh-ffi
+        env:
+          # iOS native slices remain blocked by the upstream netdev/libc mismatch.
+          OPENCLAW_IROH_APPLE_PLATFORMS: macos
+        run: |
+          scripts/generate-bindings.sh
+          git diff --exit-code -- generated
+          test -z "$(git ls-files --others --exclude-standard generated)"
+          scripts/build-apple.sh
+
+      - name: Test native Swift package and opted-in adapter
+        env:
+          OPENCLAW_IROH_NATIVE: "1"
+        run: |
+          swift test --package-path crates/openclaw-iroh-ffi
+          swift test --package-path apps/shared/OpenClawKit --filter OpenClawIDNode
