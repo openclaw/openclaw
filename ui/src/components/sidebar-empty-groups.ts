@@ -15,7 +15,7 @@ type PreferenceContext = {
 
 /** Personal presentation only: filter transitions never persist an effective value. */
 export class SidebarEmptyGroupsPreference {
-  mode: SidebarEmptyGroupsMode = "filtering";
+  mode: SidebarEmptyGroupsMode = "never";
   private storageKey: string | null = null;
   private connectionKey: string | null = null;
 
@@ -47,7 +47,7 @@ export class SidebarEmptyGroupsPreference {
     if (connectionKey !== this.connectionKey) {
       changed = this.storageKey !== null;
       this.storageKey = null;
-      this.mode = "filtering";
+      this.mode = "never";
       this.connectionKey = connectionKey;
     }
     // Transport retries clear selfUser but keep the same connection revision.
@@ -62,7 +62,7 @@ export class SidebarEmptyGroupsPreference {
       return changed;
     }
     this.storageKey = key;
-    this.mode = "filtering";
+    this.mode = "never";
     try {
       const storage = getSafeLocalStorage();
       const stored = storage?.getItem(key);
