@@ -29,7 +29,7 @@ Devcontainer files accept JSONC comments and trailing commas. A declared file wi
 
 A verified checkout at the same commit skips preparation commands. On a commit refresh, only `updateContentCommand` reruns; the fallback script and detected installer rerun for their own refreshes. Post-binding commands run before the first turn on both cold machines and snapshot forks. Waking an idle-reclaimed session provisions another worker and runs them again. There is no hook for arbitrary external reboots.
 
-Each command accepts a shell string, an executable-and-arguments array, or an object whose named commands run in parallel. All commands in a phase must succeed. Make declared commands idempotent because an interrupted first binding can retry them.
+Each command accepts a shell string, an executable-and-arguments array, or an object whose named commands run in parallel. All commands in a phase must succeed. Make declared commands safe to repeat because an interrupted first binding can retry them.
 
 `containerEnv` and `remoteEnv` supply literal, non-secret strings to lifecycle commands. `remoteEnv` overrides matching `containerEnv` keys; a `null` remote value removes the variable. These values extend the minimal setup environment and do not propagate to session processes. Variable substitution is unsupported.
 
