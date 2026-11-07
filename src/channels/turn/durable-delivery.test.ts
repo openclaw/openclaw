@@ -144,6 +144,18 @@ describe("durable inbound reply delivery", () => {
     });
   });
 
+  it("reports the confirmed post-hook text on a visible final", async () => {
+    mocks.send.mockImplementationOnce(async (params) => {
+      params.onMessageSentEvent({ success: true, content: "Hook-rewritten final" }, 0);
+      return { status: "sent", receipt };
+    });
+    const result = await deliver();
+    expect(result).toMatchObject({
+      status: "handled_visible",
+      delivery: { content: "Hook-rewritten final", visibleReplySent: true },
+    });
+  });
+
   it("carries accepted text and routing into the partial-delivery error", async () => {
     const error = new Error("later chunk failed");
     mocks.send.mockResolvedValueOnce({
