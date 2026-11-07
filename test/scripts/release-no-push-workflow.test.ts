@@ -506,8 +506,6 @@ describe("release validation no-push transport", () => {
       const targets = [
         [FULL_RELEASE, "resolve_target"],
         [FULL_RELEASE, "evidence_reuse"],
-        [".github/workflows/full-release-candidate.yml", "discover"],
-        [".github/workflows/full-release-candidate.yml", "resolve_candidate"],
         [LIVE_E2E, "validate_selected_ref"],
         [LIVE_E2E, "bind_full_release_candidate_evidence"],
       ];

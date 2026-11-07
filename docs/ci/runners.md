@@ -114,6 +114,13 @@ admission, SKU restrictions, and a hard spending stop require provider controls.
 
 ### CI runner routing
 
+Full Release Validation artifact producers use GitHub-hosted runners, including
+npm preparation, candidate acquisition, and native Docker preparation. Explicit
+`use_github_hosted_runners` selection also bypasses release runner groups in the
+shared npm, live, and repository E2E workflows. FRV plugin checks use the same
+hosted route; other callers retain their configured backend and reservation.
+Hosted live-image preparation uses the pinned Docker actions without publishing.
+
 Current extension package boundary checks use the 16-class. Frozen targets keep
 their historical 32-class runner and compiler policy.
 

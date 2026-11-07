@@ -57,9 +57,8 @@ env:
 jobs:
   admit:
     name: Validate artifact producer request
-    runs-on: &linux_runner_ubuntu >-
-      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    # Artifact-owned work must not inherit a self-hosted release reservation.
+    runs-on: &linux_runner_ubuntu ubuntu-24.04
     timeout-minutes: 5
     outputs:
       request_sha256: ${{ steps.request.outputs.request_sha256 }}
@@ -97,6 +96,7 @@ jobs:
       tag: ${{ inputs.source_sha }}
       release_tag: ${{ inputs.release_tag }}
       preflight_only: true
+      use_github_hosted_runners: true
       preflight_phase: ${{ inputs.preflight_phase }}
       npm_dist_tag: ${{ inputs.npm_dist_tag }}
       release_candidate_branch: ${{ inputs.release_candidate_branch }}
@@ -120,6 +120,7 @@ jobs:
     with:
       tag: ${{ inputs.release_tag }}
       release_sha: ${{ inputs.source_sha }}
+      use_github_hosted_runners: true
 
   receipt:
     name: Seal artifact producer receipt

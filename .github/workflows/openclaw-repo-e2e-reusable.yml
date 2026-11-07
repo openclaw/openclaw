@@ -63,7 +63,7 @@ jobs:
   build:
     name: Build repo E2E (${{ inputs.build_profile }})
     runs-on: &linux_runner_xlarge >-
-      ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      ${{ !inputs.use_github_hosted_runners && inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
       toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
       'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
       'blacksmith-32vcpu-ubuntu-2404') }}
