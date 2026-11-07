@@ -177,6 +177,13 @@ async function projectNormalizedModelRuntimeOwner<T>(
   const existing = resolvePublishedOwner(context.owners, input, {
     allowConfiguredWorkspaceFallback,
   });
+  if (existing?.pending) {
+    assertPreparedModelRuntimeAdmissionCanWait(existing);
+    await existing.pending;
+    assertLifetime();
+  }
+  // A publication that is still running may publish the requested config: read it before
+  // refusing the request.
   if (
     input.readOnly &&
     existing &&
@@ -186,13 +193,18 @@ async function projectNormalizedModelRuntimeOwner<T>(
       `prepared read-only model runtime owner was not published for the requested config (${input.agentDir})`,
     );
   }
-  if (existing?.pending) {
-    assertPreparedModelRuntimeAdmissionCanWait(existing);
-    await existing.pending;
-    assertLifetime();
-  }
   // An overlapping reload may fail this read; the next request selects its replacement.
   if (existing?.needsRefresh) {
+    // A recovery publication that is still running republishes this owner; wait for it
+    // instead of refusing the read.
+    const recovery = existing.catalogRecovery;
+    if (recovery?.pending) {
+      await recovery.pending;
+      assertLifetime();
+      if (!existing.needsRefresh && existing.snapshot) {
+        return project(existing, existing.snapshot);
+      }
+    }
     throw existing.refreshError ?? new Error("prepared model runtime refresh is pending");
   }
   if (existing?.snapshot) {
