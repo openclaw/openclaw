@@ -36,6 +36,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/mcp-oauth-refresh-boundary.test.ts",
   "src/agents/mcp-auth-profile-authorization.test.ts",
   "src/agents/auth-profiles/authorization-observation.test.ts",
+  "src/agents/auth-profiles/recovered-inheritance.test.ts",
   "src/agents/auth-profiles/store.effect-read.test.ts",
   "src/cli/plugin-invocation-resources.owner.test.ts",
   "src/cli/node-worker-bootstrap.test.ts",

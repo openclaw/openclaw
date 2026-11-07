@@ -1,10 +1,14 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { reportCommittedInlineAuthFailure } from "./constants.js";
 import { observeCachedCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import { assertAuthProfileMigrationStateAtDatabasePath } from "./legacy-source-diagnostic.js";
-import { resolveRuntimeStoreKey } from "./mutation-lineage.js";
+import {
+  getRuntimeAuthProfileStoreCredentialMutationToken,
+  resolveRuntimeStoreKey,
+} from "./mutation-lineage.js";
 import { getPreparedSharedAuthStoreOwnership } from "./path-resolve.js";
 import { buildPersistedAuthProfileSecretsStore, mergeAuthProfileStores } from "./persisted.js";
 import {
@@ -20,7 +24,12 @@ import {
   type RuntimeAuthSharedOwner,
 } from "./runtime-snapshot-owner.js";
 import type { FreshSharedAuthStoreHandoff } from "./shared-store-bootstrap.js";
-import type { AuthProfileStore, AuthProfileStoreOwner, RuntimeAuthProfileStore } from "./types.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  AuthProfileStoreOwner,
+  RuntimeAuthProfileStore,
+} from "./types.js";
 
 export type OwnedRuntimeSnapshot = {
   store: RuntimeAuthProfileStore;
@@ -101,6 +110,56 @@ export function createRuntimeAuthProfileSnapshotSelection(
   snapshots: ReadonlyMap<string, OwnedRuntimeSnapshot>,
   invalidate: (databasePath: string, agentDir?: string) => unknown,
 ) {
+  /** Published inheritance proves local absence; the shared physical owner still grants use. */
+  function retainPublishedInheritedCredential(params: {
+    agentDir: string;
+    sharedPath: string;
+    profileId: string;
+    provider?: string;
+    config?: OpenClawConfig;
+  }): ((credential: AuthProfileCredential | undefined) => void) | undefined {
+    const localPath = resolveRuntimeStoreKey(params.agentDir);
+    const captured = snapshots.get(localPath);
+    const inherits = (entry: OwnedRuntimeSnapshot | undefined) =>
+      entry?.owner.kind === "resolved" &&
+      entry.owner.sharedDatabasePath === params.sharedPath &&
+      entry.store.runtimeLocalProfileIds !== undefined &&
+      !entry.store.runtimeLocalProfileIds.includes(params.profileId) &&
+      entry.store.runtimePersistedProfileIds?.includes(params.profileId) &&
+      !entry.store.runtimeExternalProfileIds?.includes(params.profileId);
+    if (!captured || localPath === params.sharedPath || !inherits(captured)) {
+      return undefined;
+    }
+    const token = getRuntimeAuthProfileStoreCredentialMutationToken(
+      params.agentDir,
+      params.profileId,
+    );
+    if (!token.known) {
+      return undefined;
+    }
+    return (credential) => {
+      const current = snapshots.get(localPath);
+      const mutation = getRuntimeAuthProfileStoreCredentialMutationToken(
+        params.agentDir,
+        params.profileId,
+      );
+      assertAuthProfileMigrationStateAtDatabasePath(localPath, params.provider, params.config);
+      if (
+        !current ||
+        runtimeAuthSharedOwnerRebound(captured.owner, current.owner) ||
+        !inherits(current) ||
+        !mutation.known ||
+        mutation.revision !== token.revision ||
+        !isDeepStrictEqual(
+          buildPersistedAuthProfileSecretsStore(current.store).profiles[params.profileId],
+          credential,
+        )
+      ) {
+        throw new Error("Published inherited auth profile was removed or replaced");
+      }
+    };
+  }
+
   /** Select producer-owned identities before copying any credential bodies. */
   function listRuntimeAuthProfileStoreSnapshotTargetsForSharedOwner(
     owner: AuthProfileStoreOwner,
@@ -296,6 +355,7 @@ export function createRuntimeAuthProfileSnapshotSelection(
       }
     },
     createPreparedRuntimeAuthProfileUsageReader,
+    retainPublishedInheritedCredential,
     getRuntimeAuthProfileStoreSnapshotCore,
     getRuntimeAuthProfileStoreSnapshotAtDatabasePath,
     getPreparedRuntimeAuthProfileStoreSnapshotCore,

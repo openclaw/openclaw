@@ -580,6 +580,20 @@ export function createAuthProfileStoreRuntimeReader({
                     return inCapturedScope(operation);
                   },
                   readStore,
+                  retainPublishedLocalAbsence: () => {
+                    const reader = selectedAgentPath && agentReads.get(selectedAgentPath);
+                    const authority =
+                      selectedAgentPath && credentialAuthorities.get(selectedAgentPath);
+                    if (!reader || !authority || !authority.ok || !authority.value) {
+                      throw new Error("Published inheritance requires its captured local source");
+                    }
+                    rowReaders.set(selectedAgentPath!, reader);
+                    const assertAbsent = authority.value.retainPublishedLocalAbsence();
+                    return () => {
+                      reader.assertCurrent();
+                      assertAbsent();
+                    };
+                  },
                   assertCurrent,
                   materializePersonalProfile,
                   readFreshStore: () => loadPrepared(true),
