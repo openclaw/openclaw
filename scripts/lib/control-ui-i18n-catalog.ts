@@ -23,6 +23,7 @@ import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-c
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
 import { registerChatFailedMessageEditEnglish } from "../../ui/src/i18n/locales/en-chat-failed-message-edit.ts";
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
+import { registerChatInputDeliveryEnglish } from "../../ui/src/i18n/locales/en-chat-input-delivery.ts";
 import { registerChatMediaEnglish } from "../../ui/src/i18n/locales/en-chat-media.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
 import { registerChatOutputsEnglish } from "../../ui/src/i18n/locales/en-chat-outputs.ts";
@@ -148,6 +149,7 @@ const sourceFiles = [
   "en-chat-composer.ts",
   "en-chat-details.ts",
   "en-chat-goals.ts",
+  "en-chat-input-delivery.ts",
   "en-chat-message-metadata.ts",
   "en-chat-failed-message-edit.ts",
   "en-chat-media.ts",
@@ -571,7 +573,10 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         commandResults,
         commands: registerCommandPaletteEnglish.catalog.chat.commands,
         welcome: registerCommandPaletteEnglish.catalog.chat.welcome,
-        messages: registerChatMessageMetadataEnglish.catalog.chat.messages,
+        messages: {
+          ...registerChatMessageMetadataEnglish.catalog.chat.messages,
+          ...registerChatInputDeliveryEnglish.catalog.chat.messages,
+        },
         toolCards,
         systemNotice: registerChatMessageMetadataEnglish.catalog.chat.systemNotice,
         questions: registerChatQuestionsEnglish.catalog.chat.questions,

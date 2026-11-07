@@ -134,6 +134,16 @@
 /* Footer at bottom of every group (role + time). The row keeps the same size
    whether its content is visible, hidden or absent, so revealing it never moves
    the next turn and every group ends the same distance above the turn gap. */
+/* Disclosure defaults precede persistent-identity and open-detail overrides. */
+.chat-group-footer,
+.chat-group-footer:has(> .chat-message-reactions) > .chat-group-footer__meta,
+.chat-group-footer:has(> .chat-message-reactions) > .chat-group-footer-actions,
+.chat-input-delivery {
+  opacity: var(--chat-footer-disclosure-opacity, 0);
+  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
+  transition: opacity 120ms ease-out;
+}
+
 .chat-group-footer {
   --chat-action-gap: var(--chat-footer-offset);
   position: relative;
@@ -146,9 +156,6 @@
   min-width: 0;
   min-height: var(--chat-footer-row);
   margin-block-start: var(--chat-footer-offset);
-  opacity: var(--chat-footer-disclosure-opacity, 0);
-  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
-  transition: opacity 120ms ease-out;
 }
 
 .chat-group-footer:has(.msg-meta[open]) {
@@ -274,13 +281,6 @@
   pointer-events: auto;
 }
 
-.chat-group-footer:has(> .chat-message-reactions) > .chat-group-footer__meta,
-.chat-group-footer:has(> .chat-message-reactions) > .chat-group-footer-actions {
-  opacity: var(--chat-footer-disclosure-opacity, 0);
-  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
-  transition: opacity 120ms ease-out;
-}
-
 .chat-group-footer--persistent-identity:has(> .chat-message-reactions) > .chat-group-footer__meta {
   opacity: var(--chat-persistent-footer-opacity, 1);
 }
@@ -293,6 +293,21 @@
   :is(.chat-group-footer, .chat-message-actions-row)
   > .chat-message-reactions {
   order: 1;
+}
+
+/* Keep added delivery metadata on the existing row; long labels may truncate, not wrap controls. */
+.chat-group-footer:has(> .chat-group-footer__meta > .chat-input-delivery) {
+  flex-wrap: nowrap;
+}
+
+.chat-input-delivery {
+  min-width: 4ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .chat-reaction-chip {
@@ -1328,6 +1343,7 @@ button.chat-reply-attribution__target:disabled {
 
   .chat-group.user.chat-group--peer .chat-group-footer {
     flex-wrap: nowrap;
+    column-gap: 4px;
     align-items: flex-end;
     width: fit-content;
     max-width: 100%;
@@ -1335,13 +1351,7 @@ button.chat-reply-attribution__target:disabled {
 
   .chat-group.user.chat-group--peer .chat-group-footer__meta {
     flex: 0 1 auto;
-    flex-wrap: wrap;
-    gap: 0 8px;
-  }
-
-  /* Wrapped peer names keep their own line; time shares the actions' visual row. */
-  .chat-group.user.chat-group--peer .chat-group-timestamp {
-    line-height: var(--chat-footer-row);
+    gap: 0 4px;
   }
 
   .chat-group.user.chat-group--peer .chat-group-footer-actions {

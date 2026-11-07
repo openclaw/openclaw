@@ -216,6 +216,20 @@ describe("ordinary steering isolated-gateway proof", () => {
     const realNow = performance.now.bind(performance);
     const now = vi.spyOn(performance, "now").mockImplementation(() => realNow() + clock);
     const runIds = ["ordered-steer-first", "ordered-steer-second"];
+    const inputDeliveries: unknown[] = [];
+    const deliveryEvents = runIds.map((runId) =>
+      onceMessage<{ type: string; event?: string; payload?: ChatWirePayload }>(
+        ws,
+        (frame) =>
+          frame.type === "event" &&
+          frame.event === "chat" &&
+          frame.payload?.state === "input" &&
+          frame.payload.runId === runId,
+      ).then((frame) => {
+        inputDeliveries.push(frame.payload);
+        return frame.payload;
+      }),
+    );
     const messages = ["First synthetic steering input.", "Second synthetic steering input."];
     queueMessage.mockImplementation(async (_text, options, assertCurrent) => {
       assertCurrent();
@@ -254,10 +268,22 @@ describe("ordinary steering isolated-gateway proof", () => {
       });
       retireSessionControllerInput(older);
       await withinTest(injected.promise, signal);
+      expect(inputDeliveries).toEqual([]);
       expect(queueMessage.mock.calls.map(([text]) => text)).toEqual(messages);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       clock = 120_001;
       commit.resolve();
+      expect(await withinTest(Promise.all(deliveryEvents), signal)).toEqual(
+        runIds.map((runId) =>
+          expect.objectContaining({
+            runId,
+            sessionKey: SESSION_KEY,
+            state: "input",
+            delivery: "read",
+            targetRunId: "live-run-steer",
+          }),
+        ),
+      );
       const report = await withinTest(reported.promise, signal);
       expect(report).toMatchObject({
         name: "chat.send.runAdmission",

@@ -302,7 +302,9 @@ suite.define(() => {
             await expectRevealed(action, key);
           }
           if (touch) {
-            await last.locator(".chat-text").tap();
+            // Chromium can snap a tablet center tap to the nearby 44px reply target.
+            // Dismiss from an unambiguous text point while retaining real touch input.
+            await last.locator(".chat-text").tap({ position: { x: 4, y: 4 } });
           } else {
             await page.mouse.move(0, 0);
           }

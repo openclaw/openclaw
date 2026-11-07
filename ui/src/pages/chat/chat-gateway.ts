@@ -22,6 +22,7 @@ import type { ChatState } from "./chat-state-contract.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   getChatSessionProjection,
+  recordChatInputDelivery,
   publishChatSessionProjectionMessages,
   readChatSessionProjectionScope,
   setChatRunOwner,
@@ -97,6 +98,25 @@ function resolveGatewayErrorText(
 export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPayload) {
   if (!incoming) {
     return null;
+  }
+  // Input outcomes name the source message, not the active run. They never settle or adopt a run.
+  if (incoming.state === "input") {
+    if (
+      !visibleSessionMatches(state, incoming.sessionKey, incoming.agentId) ||
+      !incoming.runId ||
+      typeof incoming.seq !== "number" ||
+      !incoming.delivery
+    ) {
+      return null;
+    }
+    recordChatInputDelivery(state, {
+      ...incoming,
+      state: "input",
+      runId: incoming.runId,
+      seq: incoming.seq,
+      delivery: incoming.delivery,
+    });
+    return "input";
   }
   const wireMessage = asRecord(incoming.message);
   const displayMessage =

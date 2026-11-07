@@ -160,6 +160,36 @@ suite.define(() => {
       }),
     );
     const userBubble = page.locator(".chat-group.user", { hasText: steerText });
+    await expectCount(userBubble.locator(".chat-input-delivery"), 0);
+    await page.mouse.move(0, 0);
+    const beforeReceipt = await userBubble.boundingBox();
+    const historyRequestsBeforeRead = (await gateway.getRequests("chat.history")).length;
+    await gateway.emitGatewayEvent("chat", {
+      runId: steerRunId,
+      sessionKey,
+      seq: 1,
+      state: "input",
+      delivery: "read",
+      targetRunId: runId,
+    });
+    const receipt = userBubble.locator(".chat-input-delivery");
+    await receipt.waitFor({ state: "attached", timeout: 10_000 });
+    await expect
+      .poll(() => receipt.evaluate((element) => getComputedStyle(element).opacity))
+      .toBe("0");
+    expect(await userBubble.boundingBox()).toEqual(beforeReceipt);
+    await userBubble.locator(".chat-bubble", { hasText: steerText }).hover();
+    await expect
+      .poll(() => receipt.evaluate((element) => getComputedStyle(element).opacity))
+      .toBe("1");
+    expect(await userBubble.boundingBox()).toEqual(beforeReceipt);
+    const receiptBox = await receipt.boundingBox();
+    const timestampBox = await receipt.locator("..").locator(".chat-group-timestamp").boundingBox();
+    if (!receiptBox || !timestampBox) {
+      throw new Error("Hovered steering metadata must be measurable");
+    }
+    expect(receiptBox.x).toBeGreaterThanOrEqual(timestampBox.x + timestampBox.width);
+    expect((await gateway.getRequests("chat.history")).length).toBe(historyRequestsBeforeRead);
     const replyBubble = chatTranscript(page).getByText(reply, { exact: true });
     await expectCount(userBubble, 1);
     await replyBubble.waitFor();

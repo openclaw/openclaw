@@ -529,6 +529,14 @@ export const ChatStatusEventSchema = closedObject({
   ),
 });
 
+/** Active-run injection outcome, not admission or transcript-custody confirmation. */
+export const ChatInputDeliveryEventSchema = closedObject({
+  ...ChatEventBaseSchema,
+  state: Type.Literal("input"),
+  delivery: stringLiteralUnion(["read", "unconfirmed", "not-steered"]),
+  targetRunId: Type.Optional(NonEmptyString),
+});
+
 /** Incremental assistant output event; `replace` marks full-content refresh deltas. */
 export const ChatDeltaEventSchema = closedObject({
   ...ChatEventBaseSchema,
@@ -625,6 +633,7 @@ export const ChatErrorEventSchema = closedObject({
 /** Public chat stream event union consumed by gateway protocol validators. */
 export const ChatEventSchema = Type.Union([
   ChatStatusEventSchema,
+  ChatInputDeliveryEventSchema,
   ChatDeltaEventSchema,
   ChatFinalEventSchema,
   ChatAbortedEventSchema,
@@ -646,4 +655,5 @@ export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
 export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
 export type ChatRunStartupPhase = Static<typeof ChatRunStartupPhaseSchema>;
 export type ChatStatusEvent = Static<typeof ChatStatusEventSchema>;
+export type ChatInputDeliveryEvent = Static<typeof ChatInputDeliveryEventSchema>;
 export type ChatEvent = Static<typeof ChatEventSchema>;

@@ -119,6 +119,21 @@ type ChatDirectiveSendContext = GatewayRequestContext & {
   broadcast: ReturnType<typeof vi.fn<GatewayRequestContext["broadcast"]>>;
 };
 
+function isTerminalChatState(state: unknown): boolean {
+  return state === "final" || state === "aborted" || state === "error";
+}
+
+export function createChatDirectiveTerminalObserver(context: ChatDirectiveSendContext) {
+  const terminal = createDeferred<Record<string, unknown>>();
+  context.broadcast.mockImplementation((event, payload) => {
+    const message = asOptionalRecord(payload);
+    if (event === "chat" && message && isTerminalChatState(message.state)) {
+      terminal.resolve(message);
+    }
+  });
+  return terminal;
+}
+
 /** The suite binds handlers after installing its module mocks. */
 export function createChatDirectiveSender(handlers: {
   internal: (options: GatewayRequestHandlerOptions) => Promise<void>;
@@ -168,9 +183,11 @@ export function createChatDirectiveSender(handlers: {
     if (waitFor === "dedupe") {
       return undefined;
     }
-    const terminalCalls = params.context.broadcast.mock.calls.filter(
-      ([event, payload]) => event === "chat" && asOptionalRecord(payload)?.state !== "delta",
-    );
+    const terminalCalls = params.context.broadcast.mock.calls.filter(([event, payload]) => {
+      const state = asOptionalRecord(payload)?.state;
+      // Steering delivery is nonterminal, just like streamed deltas.
+      return event === "chat" && isTerminalChatState(state);
+    });
     expect(terminalCalls).toHaveLength(1);
     return asOptionalRecord(terminalCalls[0]?.[1]);
   };

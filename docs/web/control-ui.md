@@ -403,6 +403,17 @@ does not move the message to the end of that run. Unsaved assistant text remains
 one live tail until saved rows replace it; the UI does not split or rewrite
 stored assistant messages.
 
+Steering messages can show a live delivery receipt alongside the existing message
+metadata. Receipts stay hidden until you hover over the message or reveal its
+metadata with keyboard focus or touch; they do not add a separate row. **Read** means the runtime confirmed that the message entered the active agent context;
+it does not mean the agent agreed with or followed the instruction. **Delivery
+unconfirmed** means the runtime could not confirm that handoff. **Not read by
+active run** means steering did not reach that run; the normal next-turn or error
+handling still applies. Server acceptance, transcript persistence, and an
+assistant response alone do not produce a Read receipt. These receipts are live
+feedback, not durable read history: a fresh page load does not reconstruct Read
+from a saved message.
+
 Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers
 keep their place and separate logs; live response text and the working indicator

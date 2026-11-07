@@ -33,7 +33,12 @@ function userMessage(
   sender: ReturnType<typeof profile>,
   content: string | Array<{ type: string; text: string }>,
   timestamp: number,
-  identity?: { id?: string; seq?: number; senderProfileAvatarUrl?: string },
+  identity?: {
+    id?: string;
+    idempotencyKey?: string;
+    seq?: number;
+    senderProfileAvatarUrl?: string;
+  },
 ) {
   return {
     role: "user",
@@ -64,10 +69,11 @@ function expectStableFooter(
   current: Awaited<ReturnType<typeof readFooterGeometry>>,
   resting: Awaited<ReturnType<typeof readFooterGeometry>>,
   rtl = false,
+  gap = 8,
 ) {
   expectStableNamePosition(current.name, resting.name);
   const { identity, actions } = current;
-  expect(rtl ? identity.left - actions.right : actions.left - identity.right).toBeCloseTo(8, 0);
+  expect(rtl ? identity.left - actions.right : actions.left - identity.right).toBeCloseTo(gap, 0);
 }
 
 function readRunId(params: unknown, nonempty = false) {
@@ -416,7 +422,7 @@ suite.define(() => {
       await page.route("**/api/users/*/avatar*", (route) =>
         route.fulfill({ status: 404, body: "No avatar" }),
       );
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "sessions.rewind"],
         presenceUsers: [
           { ...riley, self: true, email: "riley@example.test" },
@@ -427,7 +433,11 @@ suite.define(() => {
           assistant(intro, now - 180_000),
           userMessage(riley, ownPrompt, now - 120_000, { id: "riley-message", seq: 2 }),
           assistant(answer, now - 90_000),
-          userMessage(colin, peerPrompt, now - 30_000, { id: "colin-message", seq: 4 }),
+          userMessage(colin, peerPrompt, now - 30_000, {
+            id: "colin-message",
+            idempotencyKey: "colin-input:user",
+            seq: 4,
+          }),
           assistant("Long participant names keep the same stable layout.", now - 20_000),
           userMessage(alexandria, longPrompt, now - 10_000, { id: "alexandria-message", seq: 6 }),
         ],
@@ -455,18 +465,33 @@ suite.define(() => {
       ).toHaveText(["Riley", "Colin", "Alexandria Montgomery-Winter"]);
       await expect(page.locator(".chat-group-footer .chat-author-avatar")).toHaveCount(0);
       const peerGroup = userGroups.nth(1);
+      await gateway.emitGatewayEvent("chat", {
+        sessionKey: mainSession,
+        runId: "colin-input",
+        targetRunId: "active-run",
+        seq: 1,
+        state: "input",
+        delivery: "read",
+      });
+      const peerReceipt = peerGroup.locator(".chat-input-delivery");
+      await expect(peerReceipt).toHaveText("Read");
+      await expect(peerReceipt).toHaveCSS("opacity", "0");
+      await expect(peerGroup.locator(".chat-group-footer__meta")).toHaveCSS("opacity", "1");
+      await expect(peerGroup.locator(".chat-sender-name")).toHaveText("Colin");
       const longNamePeerGroup = userGroups.last();
       const hoverDetails = peerGroup.locator(".chat-group-timestamp");
       await expect(hoverDetails).toHaveCSS("opacity", "0");
 
       const restingPeerGeometry = await readFooterGeometry(peerGroup);
-      await peerGroup.hover();
+      await peerGroup.locator(".chat-bubble").hover();
       await expect(hoverDetails).toHaveCSS("opacity", "1");
+      await expect(peerReceipt).toHaveCSS("opacity", "1");
       await expect(page.locator(".chat-group-footer .chat-author-avatar")).toHaveCount(0);
       const hoveredPeerGeometry = await readFooterGeometry(peerGroup);
       expectStableFooter(hoveredPeerGeometry, restingPeerGeometry);
 
       await page.mouse.move(0, 0);
+      await expect(peerReceipt).toHaveCSS("opacity", "0");
       const restingLongNameGeometry = await readFooterGeometry(longNamePeerGroup);
       await longNamePeerGroup.hover();
       const hoveredLongNameGeometry = await readFooterGeometry(longNamePeerGroup);
@@ -476,6 +501,7 @@ suite.define(() => {
       const peerReply = peerGroup.getByRole("button", { name: "Reply to message" });
       await peerReply.focus();
       await expect(hoverDetails).toHaveCSS("opacity", "1");
+      await expect(peerReceipt).toHaveCSS("opacity", "1");
       const focusedPeerGeometry = await readFooterGeometry(peerGroup);
       expectStableFooter(focusedPeerGeometry, restingPeerGeometry);
       await expect(peerReply).toHaveCSS("opacity", "0.6");
@@ -508,8 +534,8 @@ suite.define(() => {
         await tapBubble(longNamePeerGroup);
         await expect(longNamePeerGroup).toHaveClass(/\bchat-group--meta-revealed\b/u);
         const revealed = await readFooterGeometry(longNamePeerGroup);
-        expectStableFooter(revealed, restingTouchGeometry);
-        // Wrapped metadata and 44px touch controls still share one row.
+        expectStableFooter(revealed, restingTouchGeometry, false, 4);
+        // Compact metadata and 44px touch controls still share one row.
         const { actions, identity, footer } = revealed;
         expect(actions.top).toBeLessThan(identity.bottom);
         expect(actions.bottom).toBeGreaterThan(identity.top);

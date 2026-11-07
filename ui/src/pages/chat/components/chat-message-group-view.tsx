@@ -9,13 +9,16 @@ import { createMediaQuerySource } from "../../../lib/reactive/platform.ts";
 import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
 import { readHandoffDisplay } from "../chat-sessions-yield.ts";
 import { listResumedHandoffSessions } from "../chat-subagent-wait.ts";
-import { persistedMessageEntryId } from "../chat-thread-items.ts";
+import { persistedMessageEntryId, readChatInputDelivery } from "../chat-thread-items.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
+import { persistedSteerTargetRunId } from "../stream-causal-boundary.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import { ChatHandoffResume } from "./chat-handoff-sessions.tsx";
+import { ChatInputDeliveryStatus } from "./chat-input-delivery-status-view.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { MessageActionsRow } from "./chat-message-actions-row-view.tsx";
 import { ActivityGroupContent } from "./chat-message-activity-view.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
@@ -35,7 +38,6 @@ import {
   MessageActions,
   ReplyButton,
 } from "./chat-message-markdown-view.tsx";
-import type { MessageActionDetails } from "./chat-message-markdown.types.ts";
 import { GroupMessageReactions } from "./chat-message-reaction-chips-view.tsx";
 import { messageReactionOptions } from "./chat-message-reaction-model.ts";
 import { ChatSendStatus, ChatSteerNow } from "./chat-message-send-status-view.tsx";
@@ -54,44 +56,6 @@ import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { TurnRecapRow } from "./chat-turn-recap-view.tsx";
 
 export type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
-
-function MessageActionsRow(props: {
-  messageKey?: string;
-  details: MessageActionDetails | null | undefined;
-  options: NativeMessageGroupOptions;
-  class?: string;
-  reactionGroup?: MessageGroupData;
-  timestamp?: number;
-}) {
-  let owner: HTMLDivElement | undefined;
-  return (
-    <div
-      ref={(element) => (owner = element)}
-      class={props.class ?? "chat-group-footer-actions"}
-      data-message-actions-for={props.messageKey}
-    >
-      <Show when={props.reactionGroup}>
-        {(group) => (
-          <GroupMessageReactions
-            group={group()}
-            actionDetails={props.details}
-            isStreaming={false}
-            options={props.options}
-          />
-        )}
-      </Show>
-      <MessageActions
-        details={props.details}
-        options={props.options}
-        actionOwner={() => owner}
-        messageKey={props.messageKey}
-      />
-      <Show when={props.timestamp !== undefined}>
-        <MessageMeta timestamp={props.timestamp!} meta={null} />
-      </Show>
-    </div>
-  );
-}
 
 function PreparedMessage(props: {
   group: MessageGroupData;
@@ -386,14 +350,17 @@ function FramedMessage(props: { frame: MessageGroupFrame; item: GroupMessage; in
         ? avatar
         : undefined,
   }));
+  const inputDelivery = () => readChatInputDelivery(props.item.message);
   const showActions = () =>
     prepared().ownsActions &&
     (hasMessageActionButtons(prepared().actions, frame().options) ||
-      Boolean(prepared().actions?.reactionMessageId && frame().options.onReact)) &&
+      Boolean(prepared().actions?.reactionMessageId && frame().options.onReact) ||
+      Boolean(persistedSteerTargetRunId(props.item.message) || inputDelivery())) &&
     props.index < frame().lastMessageIndex &&
     !frame().isTurnBlock;
-  // The final message has the group footer; earlier actionable messages already
-  // reserve their own row. Inline-only activity keeps its original chip location.
+  // The final message has the group footer. Earlier steering inputs reserve a
+  // metadata row before delivery is known, even without copy/reply actions.
+  // Inline-only activity keeps its original chip location.
   const inlineReactions = () =>
     frame().isTurnBlock || (props.index < frame().lastMessageIndex && !showActions());
   return (
@@ -454,6 +421,7 @@ function FramedMessage(props: { frame: MessageGroupFrame; item: GroupMessage; in
                   details={prepared().actions}
                   options={frame().options}
                   class="chat-message-actions-row"
+                  inputDelivery={inputDelivery()}
                   reactionGroup={frame().group}
                   timestamp={
                     frame().normalizedRole === "user"
@@ -476,6 +444,7 @@ function FramedMessage(props: { frame: MessageGroupFrame; item: GroupMessage; in
                     timestamp={prepared().source.normalizedMessage.timestamp}
                     meta={null}
                   />
+                  <ChatInputDeliveryStatus delivery={inputDelivery()} />
                 </div>
                 <MessageActionsRow
                   messageKey={props.item.key}
@@ -614,6 +583,9 @@ function FramedMessageGroup(props: {
                 >
                   <ChatSendStatus status={frame().sendStatus} actions={options()} />
                 </Show>
+                <ChatInputDeliveryStatus
+                  delivery={readChatInputDelivery(props.group.messages.at(-1)?.message)}
+                />
               </div>
               <Show
                 when={frame().isPeerGroup}

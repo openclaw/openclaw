@@ -99,7 +99,8 @@ vi.mock("../../logging/diagnostic.js", () => ({
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => undefined),
 }));
-vi.mock("./chat-broadcast.js", () => ({
+vi.mock(import("./chat-broadcast.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   broadcastChatFinal: vi.fn(),
   broadcastChatError: vi.fn(),
 }));
@@ -131,13 +132,16 @@ const actualToolAuthority = await vi.importActual<
 function makeParams() {
   const context = {
     logGateway: { warn: vi.fn() },
+    agentRunSeq: new Map(),
+    broadcast: vi.fn(),
+    nodeSendToSession: vi.fn(),
     chatRunState: { hasAbortMarker: () => true },
     dedupe: new Map(),
   } as unknown as GatewayRequestContext;
   return {
     context,
     ctx: { Provider: "dashboard", From: "user", To: "user", Body: "steer" },
-    attempt: {},
+    attempt: { targetRunId: "active-target" },
     persistUserTurnTranscriptBestEffort: vi.fn(async () => undefined),
     session: {
       agentId: "main",
@@ -222,6 +226,90 @@ beforeEach(() => {
 });
 
 describe("finalizeAcceptedChatSendMessageInjection", () => {
+  it("does not report read while finalization waits, then preserves rejected fallback", async () => {
+    const outcome =
+      createDeferred<Awaited<ReturnType<typeof finalizeReplyMessageInjectionAttempt>>>();
+    vi.mocked(finalizeReplyMessageInjectionAttempt).mockReturnValueOnce(outcome.promise);
+    const params = makeParams();
+    params.context.agentRunSeq.set("run-1", 7);
+    const completing = finalizeAcceptedChatSendMessageInjection(params);
+    expect(params.context.broadcast).not.toHaveBeenCalled();
+    outcome.resolve({
+      status: "rejected",
+      outcome: { status: "rejected", reason: "runtime_rejected" },
+      targetRunId: "active-target",
+    });
+    await expect(completing).resolves.toBe(false);
+    expect(params.context.broadcast).toHaveBeenCalledExactlyOnceWith(
+      "chat",
+      expect.objectContaining({ runId: "run-1", seq: 8, state: "input", delivery: "not-steered" }),
+      expect.anything(),
+    );
+    expect(broadcastChatFinal).not.toHaveBeenCalled();
+    expect(params.persistUserTurnTranscriptBestEffort).not.toHaveBeenCalled();
+  });
+
+  it("does not label a failed finalization read or swallow its failure", async () => {
+    const failure = new Error("runner failed");
+    vi.mocked(finalizeReplyMessageInjectionAttempt).mockRejectedValueOnce(failure);
+    const params = makeParams();
+    await expect(finalizeAcceptedChatSendMessageInjection(params)).rejects.toBe(failure);
+    expect(params.context.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("publishes read before slower transcript bookkeeping completes", async () => {
+    vi.mocked(finalizeReplyMessageInjectionAttempt).mockResolvedValueOnce({
+      status: "accepted",
+      outcome: { status: "accepted" },
+      targetRunId: "active-target",
+      aborted: false,
+    });
+    const params = makeParams();
+    const entered = createDeferred();
+    const persisted = createDeferred<undefined>();
+    vi.mocked(params.persistUserTurnTranscriptBestEffort).mockImplementationOnce(() => {
+      entered.resolve();
+      return persisted.promise;
+    });
+    const completing = finalizeAcceptedChatSendMessageInjection(params);
+    try {
+      await entered.promise;
+      expect(params.context.broadcast).toHaveBeenCalledExactlyOnceWith(
+        "chat",
+        expect.objectContaining({ state: "input", delivery: "read", runId: "run-1" }),
+        expect.anything(),
+      );
+    } finally {
+      persisted.resolve(undefined);
+      await completing;
+    }
+  });
+
+  it.each(["accepted", "rejected"] as const)(
+    "does not change %s custody when a receipt listener fails",
+    async (status) => {
+      vi.mocked(finalizeReplyMessageInjectionAttempt).mockResolvedValueOnce(
+        status === "accepted"
+          ? { status, outcome: { status }, targetRunId: "active-target", aborted: false }
+          : {
+              status,
+              outcome: { status, reason: "runtime_rejected" },
+              targetRunId: "active-target",
+            },
+      );
+      const params = makeParams();
+      vi.mocked(params.context.broadcast).mockImplementationOnce(() => {
+        throw new Error("listener failed");
+      });
+      await expect(finalizeAcceptedChatSendMessageInjection(params)).resolves.toBe(
+        status === "accepted",
+      );
+      expect(params.context.logGateway.warn).toHaveBeenCalledExactlyOnceWith(
+        "failed to broadcast steering input delivery outcome: listener failed",
+      );
+    },
+  );
+
   it("audits a confirmed steer as completed active_run_injected", async () => {
     vi.mocked(finalizeReplyMessageInjectionAttempt).mockResolvedValueOnce({
       status: "accepted",
@@ -234,6 +322,25 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
     params.session.entry = entry;
     prepareSessionParticipantInput(params.ctx, { type: "profile", id: "profile-steerer" }, 42);
     await finalizeAcceptedChatSendMessageInjection(params);
+    expect(params.context.broadcast).toHaveBeenCalledExactlyOnceWith(
+      "chat",
+      {
+        runId: "run-1",
+        sessionKey: "agent:main:dashboard:s",
+        agentId: "main",
+        seq: 1,
+        state: "input",
+        delivery: "read",
+        targetRunId: "active-target",
+      },
+      { sessionKeys: ["agent:main:dashboard:s"] },
+    );
+    expect(params.context.nodeSendToSession).toHaveBeenCalledWith(
+      "agent:main:dashboard:s",
+      "chat",
+      expect.objectContaining({ state: "input", delivery: "read", runId: "run-1" }),
+      { sessionKeys: ["agent:main:dashboard:s"] },
+    );
     expect(recordSessionParticipant).toHaveBeenCalledOnce();
     expect(recordSessionParticipant).toHaveBeenCalledWith(expect.anything(), {
       identity: { type: "profile", id: "profile-steerer" },
@@ -265,6 +372,11 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
     const params = makeParams();
     params.context.chatRunState.hasAbortMarker = () => false;
     await expect(finalizeAcceptedChatSendMessageInjection(params)).resolves.toBe(true);
+    expect(params.context.broadcast).toHaveBeenCalledExactlyOnceWith(
+      "chat",
+      expect.objectContaining({ state: "input", delivery: "unconfirmed", runId: "run-1" }),
+      expect.anything(),
+    );
     expect(broadcastChatError).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "run-1", errorMessage }),
     );

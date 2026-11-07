@@ -128,7 +128,7 @@ export function resolveMessageActionDetails(
   };
 }
 
-type MessageActionOptions = MessageReactionOptions & {
+export type MessageActionOptions = MessageReactionOptions & {
   onReply?: (target: MessageReplyTarget) => void;
 };
 
