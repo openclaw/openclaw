@@ -31,6 +31,7 @@ const hoistedMocks = vi.hoisted(() => ({
   resolveProfileUnusableUntilForDisplay: vi.fn(),
 }));
 
+// mock-isolation: Sequencing fixtures supply activation outcomes; the setup regression exercises the real loader separately.
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnableAsync: hoistedMocks.applyPluginAutoEnableAsync,
   materializePluginAutoEnableCandidates: hoistedMocks.materializePluginAutoEnableCandidates,

@@ -11,8 +11,7 @@ import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { writeArtifacts } from "./public-surface.test-support.js";
 
 const installRepair = vi.hoisted(() => vi.fn());
-// mock-isolation: The installer supplies the completed repair result; plugin discovery,
-// Doctor preparation, setup loading, auto-enable, and the repair sequence remain real.
+// mock-isolation: Supply the completed install result while keeping discovery, setup, and Doctor repair real.
 vi.mock("../commands/doctor/shared/missing-configured-plugin-install.js", () => ({
   repairMissingConfiguredPluginInstalls: installRepair,
 }));
