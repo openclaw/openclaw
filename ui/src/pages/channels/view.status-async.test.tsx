@@ -96,21 +96,25 @@ it.each([false, true])(
     }
     const failed = f.channels.refresh(cached);
     await waitForSolid(() => {
-      expect(f.container.querySelector(".channels-item__detail")).not.toBeNull();
       expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
       if (cached) {
+        expect(f.container.querySelector(".channels-item__detail")).not.toBeNull();
         expect(
           f.container.querySelector(".settings-control__sr-label[role='status']"),
         ).not.toBeNull();
         expect(document.activeElement).toBe(card);
+      } else {
+        expect(f.container.querySelector(".lazy-view-state--loading")).not.toBeNull();
+        expect(f.container.querySelector(".channels-item__detail")).toBeNull();
       }
     });
-    const recommended = f.container.querySelector(".channels-item__detail");
     failure.reject(new Error("Status unavailable"));
     await failed;
     await waitForSolid(() =>
       expect(f.container.querySelector(".callout.danger")?.textContent).toBe("Status unavailable"),
     );
+    const recommended = f.container.querySelector(".channels-item__detail");
+    expect(recommended).not.toBeNull();
     if (card) {
       expect(document.activeElement).toBe(card);
       card.click();
