@@ -9,6 +9,7 @@ import {
   MessageInjectionPolicyMismatchError,
   MessageInjectionTargetUnavailableError,
 } from "../auto-reply/reply/message-injection-authority.js";
+import { copyTransferredRequesterProfile } from "../auto-reply/requester-profile.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type {
@@ -55,7 +56,7 @@ export function createReplyTurnParticipants(
       retentionFailed = true;
     }
     // The map owns this record; resolve() publishes a copy.
-    participants.set(authority.profileId, {
+    const participant: ReplyTurnParticipant = {
       profileId: authority.profileId,
       senderId,
       name,
@@ -77,7 +78,9 @@ export function createReplyTurnParticipants(
           throw new Error(`${name}'s access changed; ask them again`);
         }
       },
-    });
+    };
+    copyTransferredRequesterProfile(input, participant);
+    participants.set(authority.profileId, participant);
   };
   if (owner) {
     add(owner);

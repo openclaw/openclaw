@@ -58,6 +58,8 @@ type GatewayToolCallerIdentity = {
   personalToolSelection?: GatewayToolOperatorSelection;
   agentId: string;
   sessionKey: string;
+  /** Exact session incarnation captured by the prepared tool-attempt owner. */
+  sessionId?: string;
   requesterOrigin?: RequesterOrigin;
   /** Restrict-only executable surface captured for internal follow-ups. */
   sessionEventToolsAllow?: readonly string[];
@@ -599,6 +601,7 @@ export async function withGatewayToolCallerIdentity<T>(
     {
       agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
       sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
+      sessionId: inheritedValue("sessionId"),
       watchdogAttempt: identity.watchdogAttempt ?? inheritedOwner?.watchdogAttempt,
       requesterOrigin: inheritedOwner?.requesterOrigin ?? identity.requesterOrigin,
       sessionEventDelivery:
