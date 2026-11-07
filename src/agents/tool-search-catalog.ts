@@ -4,7 +4,10 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { generateSecureHex } from "../infra/secure-random.js";
 import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
-import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
+import {
+  finalizeAgentToolAvailability,
+  resolveAgentToolPresentationSchema,
+} from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
@@ -199,7 +202,7 @@ function toCatalogEntry(
     name: tool.name,
     label: tool.label,
     description: tool.description ?? "",
-    parameters: tool.parameters,
+    parameters: resolveAgentToolPresentationSchema(tool, tool.parameters),
     ...(source === "openclaw" && (tool as AnyAgentTool).outputSchema
       ? { outputSchema: (tool as AnyAgentTool).outputSchema }
       : {}),
@@ -293,14 +296,15 @@ function finalizeCatalogAvailability(
   // The array is a fresh copy, but its descriptors may belong to retained snapshots.
   orderedEntries.forEach((entry, index) => {
     const requiresExactId = directNames.has(entry.name);
+    const parameters = resolveAgentToolPresentationSchema(entry.tool, entry.tool.parameters);
     if (
-      entry.parameters !== entry.tool.parameters ||
+      entry.parameters !== parameters ||
       entry.description !== entry.tool.description ||
       (entry.requiresExactId === true) !== requiresExactId
     ) {
       orderedEntries[index] = {
         ...entry,
-        parameters: entry.tool.parameters,
+        parameters,
         description: entry.tool.description ?? "",
         requiresExactId,
       };

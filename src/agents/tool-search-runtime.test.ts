@@ -1,6 +1,7 @@
 import { Agent, type AgentEvent, type AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
@@ -17,7 +18,13 @@ import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.j
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
-import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
+import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
+import { createLazyExecTool } from "./lazy-exec-tool.js";
+import { createReadTool } from "./sessions/tools/read.js";
+import {
+  bindCollectorSpawnTool,
+  markCollectorReaderTool,
+} from "./subagents/swarm/swarm-collector-capability.js";
 import { assertCompleteToolResult, resolveToolResultBudget } from "./tool-result-limits.js";
 import {
   addClientToolsToToolCatalog,
@@ -47,6 +54,8 @@ import {
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createWebSearchTool } from "./tools/web-search.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   resetSecretRedactionRegistryForTest();
@@ -245,10 +254,20 @@ describe("Tool Search terminal results", () => {
 });
 
 describe("Tool Search input schemas", () => {
-  it("keeps canonical Gemini read arguments through deferred publication and wrappers", async () => {
-    const readTool = fakeTool("read", readToolInputSchema);
+  it("advertises canonical Gemini inputs while keeping execution-only exec arguments hidden", async () => {
+    const readTool = createReadTool(tempDirs.make("gemini-read"));
+    const collectorFields = {
+      collect: Type.Optional(Type.Boolean()),
+      outputSchema: Type.Optional(Type.Object({})),
+      groupId: Type.Optional(Type.String()),
+    };
+    const spawn = bindCollectorSpawnTool(
+      fakeTool("sessions_spawn", Type.Object({ task: Type.String(), ...collectorFields })),
+      collectorFields,
+    );
+    const wait = markCollectorReaderTool(fakeTool("agents_wait"));
     const finalized = finalizeAgentTools({
-      tools: [readTool],
+      tools: [readTool, createLazyExecTool({ host: "gateway" }), spawn, wait],
       hookContext: { sessionId: "gemini-read" },
       modelProvider: "google",
       modelId: "gemini-4-argon",
@@ -257,12 +276,40 @@ describe("Tool Search input schemas", () => {
     });
     const wrapped = finalized.map((tool) => copyAgentToolMetadata(tool, { ...tool }));
     const { catalogRef, runtime } = createRuntime(wrapped);
-    const advertised = catalogRef.current?.entries[0]?.parameters;
-    expect(advertised).toHaveProperty("properties.optional.enum", ["true"]);
+    const readEntry = catalogRef.current!.entries.find((entry) => entry.name === "read")!;
+    const execEntry = catalogRef.current!.entries.find((entry) => entry.name === "exec")!;
+    expect(wrapped[0]?.parameters).toHaveProperty("properties.optional.enum", ["true"]);
+    expect(readEntry.parameters).toHaveProperty("properties.optional.const", true);
+    expect(compactToolSearchCatalogEntry(readEntry).input).toContain("optional?: true");
+    expect((await createCodeModeToolApiFile("read", readEntry)).content).toContain(
+      "optional?: true",
+    );
+    expect(execEntry.parameters).not.toHaveProperty("properties.background");
+    expect(execEntry.parameters).not.toHaveProperty("properties.yieldMs");
+    expect(execEntry.parameters).not.toHaveProperty("properties.durable");
+    expect(execEntry.parameters).toHaveProperty("properties.host.enum", ["auto", "gateway"]);
+
+    const withoutWait = wrapped.filter((tool) => tool.name !== "agents_wait");
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: withoutWait });
+    const hidden = catalogRef.current!.entries.find((entry) => entry.name === "sessions_spawn")!;
+    expect(hidden.parameters).not.toHaveProperty("properties.collect");
+    const copied = withoutWait.map((tool) => copyAgentToolMetadata(tool, { ...tool }));
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: copied });
+    expect(
+      catalogRef.current!.entries.find((entry) => entry.name === "sessions_spawn")?.parameters,
+    ).not.toHaveProperty("properties.collect");
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [...copied, wait] });
+    expect(
+      catalogRef.current!.entries.find((entry) => entry.name === "sessions_spawn")?.parameters,
+    ).toHaveProperty("properties.collect");
 
     const input = { path: "nonexistent.txt", optional: true };
-    await expect(runtime.call("read", input)).resolves.toBeDefined();
-    expect(readTool.execute).toHaveBeenCalledOnce();
+    await expect(runtime.call("read", input)).resolves.toMatchObject({
+      result: { details: { kind: "not_found", path: "nonexistent.txt", optional: true } },
+    });
+    await expect(runtime.call("read", { ...input, optional: "true" })).rejects.toThrow(
+      "expected boolean",
+    );
   });
 
   it.each([

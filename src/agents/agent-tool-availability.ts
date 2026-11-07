@@ -53,7 +53,14 @@ export function copyAgentToolAvailability<T extends object>(source: object, targ
   }
   const executionSchema = executionSchemas.get(source);
   if (executionSchema !== undefined) {
-    executionSchemas.set(target, executionSchema);
+    const sourceParameters = (source as { parameters?: unknown }).parameters;
+    executionSchemas.set(target, {
+      canonical:
+        sourceParameters === executionSchema.projected
+          ? executionSchema.canonical
+          : sourceParameters,
+      projected: (target as { parameters?: unknown }).parameters,
+    });
   }
   return target;
 }
@@ -123,7 +130,7 @@ export function finalizeAgentToolAvailability<T extends ToolDefinition>(
 }
 
 /** Provider-neutral input contract behind a projected model-facing schema. */
-const executionSchemas = new WeakMap<object, unknown>();
+const executionSchemas = new WeakMap<object, { canonical: unknown; projected: unknown }>();
 
 /**
  * Bind the canonical input contract for a tool whose advertised schema is a
@@ -131,11 +138,20 @@ const executionSchemas = new WeakMap<object, unknown>();
  * availability binding; this covers projections the framework applies itself.
  */
 export function bindAgentToolExecutionSchema<T extends object>(tool: T, schema: unknown): T {
-  executionSchemas.set(tool, schema);
+  executionSchemas.set(tool, {
+    canonical: schema,
+    projected: (tool as { parameters?: unknown }).parameters,
+  });
   return tool;
 }
 
 export function resolveAgentToolExecutionSchema(tool: object, schema: unknown): unknown {
   const declared = availabilityBindings.get(tool)?.binding.executionSchema?.(schema);
-  return declared !== undefined ? declared : (executionSchemas.get(tool) ?? schema);
+  return declared !== undefined ? declared : (executionSchemas.get(tool)?.canonical ?? schema);
+}
+
+/** Recover provider-neutral input guidance without exposing execution-only overrides. */
+export function resolveAgentToolPresentationSchema(tool: object, schema: unknown): unknown {
+  const bound = executionSchemas.get(tool);
+  return bound && schema === bound.projected ? bound.canonical : schema;
 }
