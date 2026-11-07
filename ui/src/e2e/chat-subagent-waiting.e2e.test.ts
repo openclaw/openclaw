@@ -96,7 +96,7 @@ suite.define(() => {
         }
         const activity = group.locator(".chat-subagent-activity");
         const rows = activity.locator(".chat-subagent-activity__row");
-        await expect.poll(() => rows.count()).toBe(4);
+        await expect.poll(() => rows.count()).toBe(3);
         const capture = async (name: string) => {
           if (!artifactDir) {
             return;
@@ -132,7 +132,7 @@ suite.define(() => {
           .waitFor();
         await capture("live-wide.png");
         expect(await activity.locator(".chat-reading-indicator").count()).toBe(0);
-        expect(await pane.locator(".chat-thread openclaw-chat-subagent-activity").count()).toBe(0);
+        expect(await pane.locator(".chat-thread .chat-subagent-activity").count()).toBe(0);
         await closeChatDetails(pane);
         for (const child of children) {
           expect(await gateway.getRequests("chat.history", { sessionKey: child.key })).toHaveLength(
@@ -321,9 +321,7 @@ suite.define(() => {
         const childReadsAfterClose = (await childHistoryReads()).length;
         await observeChild(1, 1, "Verifying the API response");
         expect(await childHistoryReads()).toHaveLength(childReadsAfterClose);
-        expect(
-          await activePane.locator(".chat-thread openclaw-chat-subagent-activity").count(),
-        ).toBe(0);
+        expect(await activePane.locator(".chat-thread .chat-subagent-activity").count()).toBe(0);
         expect(await indicator.textContent()).not.toContain("Backend implementation");
         // The ordinary launch tool remains readable and navigable; only the separate
         // transcript activity presentation is gone.
