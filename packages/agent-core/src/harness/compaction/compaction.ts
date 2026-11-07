@@ -24,7 +24,7 @@ import {
   clearCompactionPendingAskSection,
   computeFileLists,
   createFileOps,
-  extractFileOpsFromMessages,
+  extractFileOpsFromMessage,
   findLatestCompactionUserMessage,
   type FileOperations,
   formatCompactionUserLabel,
@@ -111,15 +111,16 @@ export function capCompactionSummary(
 export function fitCompactionSummary<T extends { summary: string }>(
   tokenBudget: number | undefined,
   render: (maxChars: number) => T | undefined,
+  maxSummaryChars = MAX_COMPACTION_SUMMARY_CHARS,
 ): Result<T, CompactionError> {
   const fits = (candidate: T) =>
     tokenBudget === undefined || estimateStringTokenPressure(candidate.summary) <= tokenBudget;
-  const full = render(MAX_COMPACTION_SUMMARY_CHARS);
+  const full = render(maxSummaryChars);
   if (full && fits(full)) {
     return ok(full);
   }
   let low = 1;
-  let high = MAX_COMPACTION_SUMMARY_CHARS - 1;
+  let high = maxSummaryChars - 1;
   let fitted: T | undefined;
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
@@ -150,6 +151,8 @@ export interface CompactionSettings {
   reserveTokens: number;
   /** Approximate recent-context tokens to keep after compaction. */
   keepRecentTokens: number;
+  /** Persisted-summary character cap; defaults to MAX_COMPACTION_SUMMARY_CHARS. */
+  maxSummaryChars?: number;
 }
 
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
@@ -556,10 +559,14 @@ export function prepareCompaction(
   if (previousSummaryDetails) {
     mergeSummaryFileOperations(fileOps, previousSummaryDetails);
   }
-  extractFileOpsFromMessages(
-    [...messagesToSummarize, ...(cutPoint.isSplitTurn ? turnPrefixMessages : [])],
-    fileOps,
-  );
+  for (const msg of messagesToSummarize) {
+    extractFileOpsFromMessage(msg, fileOps);
+  }
+  if (cutPoint.isSplitTurn) {
+    for (const msg of turnPrefixMessages) {
+      extractFileOpsFromMessage(msg, fileOps);
+    }
+  }
 
   return ok({
     firstKeptEntryId,
@@ -739,37 +746,42 @@ function finalizeCompaction(
       ? `## Latest unresolved user request\n${JSON.stringify(preparation.latestUnresolvedUserRequest)}\n\n`
       : ""
   }`;
-  const fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) => {
-    const requiredChars = fileOperations.length + requiredPrefix.length;
-    if (maxChars <= requiredChars + SUMMARY_TRUNCATED_MARKER.length) {
-      return undefined;
-    }
-    const preservedHistoryChars = Math.min(
-      historySummary.length,
-      Math.floor(
-        (preparation.summaryTokenBudget === undefined ? maxChars : maxChars - requiredChars) / 2,
-      ),
-    );
-    const latestContextBudget =
-      maxChars - requiredChars - SUMMARY_TRUNCATED_MARKER.length - preservedHistoryChars;
-    // Fitting must keep generated split-turn context beside required metadata,
-    // including its heading and loss marker when that context is shortened.
-    if (
-      preparation.summaryTokenBudget !== undefined &&
-      latestContext &&
-      latestContextBudget < TURN_CONTEXT_PREFIX.length + SUMMARY_TRUNCATED_MARKER.length + 1
-    ) {
-      return undefined;
-    }
-    const suffix = `${latestContextBudget > 0 ? capCompactionSummary(latestContext, latestContextBudget) : ""}${fileOperations}`;
-    return {
-      summary: `${requiredPrefix}${capCompactionSummary(
-        `${historySummary}${suffix}`,
-        maxChars - requiredPrefix.length,
-        suffix,
-      )}`,
-    };
-  });
+  const maxSummaryChars = preparation.settings.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS;
+  const fitted = fitCompactionSummary(
+    preparation.summaryTokenBudget,
+    (maxChars) => {
+      const requiredChars = fileOperations.length + requiredPrefix.length;
+      if (maxChars <= requiredChars + SUMMARY_TRUNCATED_MARKER.length) {
+        return undefined;
+      }
+      const preservedHistoryChars = Math.min(
+        historySummary.length,
+        Math.floor(
+          (preparation.summaryTokenBudget === undefined ? maxChars : maxChars - requiredChars) / 2,
+        ),
+      );
+      const latestContextBudget =
+        maxChars - requiredChars - SUMMARY_TRUNCATED_MARKER.length - preservedHistoryChars;
+      // Fitting must keep generated split-turn context beside required metadata,
+      // including its heading and loss marker when that context is shortened.
+      if (
+        preparation.summaryTokenBudget !== undefined &&
+        latestContext &&
+        latestContextBudget < TURN_CONTEXT_PREFIX.length + SUMMARY_TRUNCATED_MARKER.length + 1
+      ) {
+        return undefined;
+      }
+      const suffix = `${latestContextBudget > 0 ? capCompactionSummary(latestContext, latestContextBudget) : ""}${fileOperations}`;
+      return {
+        summary: `${requiredPrefix}${capCompactionSummary(
+          `${historySummary}${suffix}`,
+          maxChars - requiredPrefix.length,
+          suffix,
+        )}`,
+      };
+    },
+    maxSummaryChars,
+  );
   if (!fitted.ok) {
     return fitted;
   }

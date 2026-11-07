@@ -18,6 +18,17 @@ describe("SettingsManager runtime overrides", () => {
     });
   });
 
+  it("exposes a configured compaction maxSummaryChars override", () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
+    });
+    expect(settingsManager.getCompactionSummaryChars()).toBeUndefined();
+    expect(settingsManager.getCompactionSettings().maxSummaryChars).toBeUndefined();
+    settingsManager.applyOverrides({ compaction: { maxSummaryChars: 24_000 } });
+    expect(settingsManager.getCompactionSummaryChars()).toBe(24_000);
+    expect(settingsManager.getCompactionSettings()).toMatchObject({ maxSummaryChars: 24_000 });
+  });
+
   it("keeps mutable defaults separate from a shared frozen input", () => {
     const input = Object.freeze({
       defaultThinkingLevel: "low" as const,

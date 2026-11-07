@@ -288,9 +288,22 @@ it("preserves a bounded tail below the user-turn target", () => {
     expect.objectContaining({ role: "user", content: "single user prompt" }),
   );
   expect(split.preservedMessages).toHaveLength(6);
-  const text = requireRecord(buildPreservedTurnsSection(split.preservedMessages)).text;
+  const text = requireRecord(
+    buildPreservedTurnsSection(split.preservedMessages, Math.floor(SUMMARY_LIMIT / 2)),
+  ).text;
   expect(text).toContain("assistant-8");
   expect(text).not.toContain("assistant-2");
+});
+it("bounds preserved-turn sections by a configured summary budget", () => {
+  const smallBudget = 120;
+  const text = requireRecord(
+    buildPreservedTurnsSection(
+      [userMessage("recent ask", 1), textReply(`assistant reply ${"z".repeat(200)}`, 2)],
+      smallBudget,
+    ),
+  );
+  expect(text.text.length).toBeLessThanOrEqual(smallBudget);
+  expect(text.truncatedLoss).toBe("preserved-turn-head");
 });
 it("extracts case-normalized identifiers", () => {
   const identifiers = extractOpaqueIdentifiers(

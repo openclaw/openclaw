@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { StreamFn } from "../../llm.js";
+import { fitCompactionSummary } from "./compaction.js";
 import {
   createCompactionModel,
   createContextUsage as createUsage,
@@ -18,6 +19,15 @@ const TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 const TURN_CONTEXT_HEADING = "\n\n---\n\n**Turn Context (split turn):**\n\n";
 
 describe("split-turn compaction summary cap", () => {
+  it("honors a configured maxSummaryChars bound in the summary fitter", () => {
+    const render = (maxChars: number) => ({ summary: "x".repeat(maxChars) });
+    const fitted = fitCompactionSummary(undefined, render, 4_000);
+    expect(fitted.ok).toBe(true);
+    if (fitted.ok) {
+      expect(fitted.value.summary.length).toBe(4_000);
+    }
+  });
+
   it("preserves the previous summary and latest split-turn context", async () => {
     const model = createCompactionModel();
     let prefixSummary = "prefix summary";

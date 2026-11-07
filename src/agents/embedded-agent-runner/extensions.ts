@@ -37,6 +37,7 @@ export function buildEmbeddedExtensionFactories(params: {
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
       model: params.model,
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
+      maxSummaryChars: compactionCfg?.maxSummaryChars,
       workspaceDir: params.workspaceDir,
       postCompactionSections: compactionCfg?.postCompactionSections,
       provider: compactionCfg?.provider,

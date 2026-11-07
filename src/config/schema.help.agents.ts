@@ -156,6 +156,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Number of most recent user/assistant turns kept verbatim outside safeguard summarization (default: 3). Raise this to preserve exact recent dialogue context, or lower it to maximize compaction savings.",
   "agents.defaults.compaction.qualityGuard":
     "Quality-audit retry settings for safeguard compaction summaries. Safeguard mode enables this by default; set enabled: false to skip summary audits and regeneration.",
+  "agents.defaults.compaction.maxSummaryChars":
+    "Maximum characters for a persisted compaction summary, including preserved turns and split-turn context (default: 16000). Raise it for long-context models whose summaries are being truncated.",
   "agents.defaults.compaction.qualityGuard.enabled":
     "Enables summary quality audits and regeneration retries for safeguard compaction. Default: true in safeguard mode.",
   "agents.defaults.compaction.qualityGuard.maxRetries":

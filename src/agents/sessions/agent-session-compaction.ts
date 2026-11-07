@@ -330,7 +330,11 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     const contextMessages = requestBudget ? buildSessionContext(pathEntries).messages : [];
     assertCompactionRequestCanFit(contextMessages, requestBudget, true);
     const retention = requestBudget
-      ? resolveCompactionRetentionBudget(requestBudget, contextMessages)
+      ? resolveCompactionRetentionBudget(
+          requestBudget,
+          contextMessages,
+          this.settingsManager.getCompactionSummaryChars(),
+        )
       : undefined;
     const requestTokenLimit =
       requestBudget && retention
@@ -494,7 +498,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
     const completedCompaction = {
       ...compactionResult,
-      summary: capCompactionSummary(compactionResult.summary),
+      summary: capCompactionSummary(
+        compactionResult.summary,
+        this.settingsManager.getCompactionSummaryChars(),
+      ),
     };
 
     // Custom hooks may choose a different retained boundary. Validate their
