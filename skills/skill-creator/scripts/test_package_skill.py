@@ -6,6 +6,7 @@ Regression tests for skill packaging security behavior.
 import os
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from unittest import TestCase, main
@@ -65,7 +66,7 @@ class TestPackageSkillSecurity(TestCase):
         original = resource.read_bytes()
         for timestamp, expected in (
             (0, (1980, 1, 1, 0, 0, 0)),
-            (1704067200, (2024, 1, 1, 0, 0, 0)),
+            (1704067200, time.localtime(1704067200)[:6]),
             (4354905600, (2107, 12, 31, 23, 59, 58)),  # January 2108, beyond ZIP's range.
         ):
             with self.subTest(timestamp=timestamp):
