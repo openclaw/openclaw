@@ -7,6 +7,10 @@ import OpenClawKit
 protocol MacNodeRuntimeMainActorServices: Sendable {
     func missingPermissions(_ capabilities: [Capability], disabled: [Capability]) async -> OpenClawNodeError?
 
+    /// True while the Canvas panel for this session shows a load-failure card.
+    func canvasIsShowingLoadFailure(sessionKey: String) async -> Bool
+    func showCanvas(sessionKey: String, path: String?, placement: CanvasPlacement?) async throws
+
     func snapshotScreen(
         screenIndex: Int?,
         maxWidth: Int?,
@@ -46,6 +50,14 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
 
     func missingPermissions(_ capabilities: [Capability], disabled: [Capability]) async -> OpenClawNodeError? {
         await PermissionManager.missingPermissions(capabilities, disabled: disabled)
+    }
+
+    func canvasIsShowingLoadFailure(sessionKey: String) async -> Bool {
+        CanvasManager.shared.isShowingLoadFailure(sessionKey: sessionKey)
+    }
+
+    func showCanvas(sessionKey: String, path: String?, placement: CanvasPlacement?) async throws {
+        _ = try CanvasManager.shared.show(sessionKey: sessionKey, path: path, placement: placement)
     }
 
     func snapshotScreen(
