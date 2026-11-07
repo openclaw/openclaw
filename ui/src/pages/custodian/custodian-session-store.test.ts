@@ -114,7 +114,7 @@ async function flakyGateway() {
       rejoinFailure = null;
       return Promise.reject(failure);
     }
-    const held = params.message === undefined ? heldRejoins.shift() : deferred<void>();
+    const held = params.message === undefined ? heldRejoins.shift() : deferred();
     if (!held) {
       return Promise.resolve(chatReply(params.sessionId, "Welcome."));
     }
@@ -144,7 +144,7 @@ async function flakyGateway() {
       rejoinFailure = error;
     },
     holdNextRejoin: () => {
-      const rejoin = deferred<void>();
+      const rejoin = deferred();
       heldRejoins.push(rejoin);
       return rejoin;
     },
