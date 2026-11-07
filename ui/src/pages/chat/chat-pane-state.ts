@@ -208,6 +208,7 @@ export function chatSubmitState(
     onDraftChange: (...args: Parameters<ChatPageHost["handleChatDraftChange"]>) => {
       state.handleChatDraftChange(...args);
     },
+    guestQuickStartAuth: state.hello?.auth ?? null,
   };
 }
 

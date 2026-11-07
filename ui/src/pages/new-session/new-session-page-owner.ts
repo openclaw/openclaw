@@ -482,6 +482,7 @@ export class NewSessionPageOwner {
       },
       operatorAuth: gateway?.hello?.auth ?? null,
       onDraftChange: (next) => this.setMessageFromUser(next),
+      onFocusComposer: () => this.focusComposer(),
       onSend: () => void this.submit(),
       onOpenSession: (sessionKey) => {
         const { context, submission } = this;

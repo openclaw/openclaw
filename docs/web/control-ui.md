@@ -40,6 +40,14 @@ When more than one item is available, use the visible previous/next buttons,
 Left/Right arrow keys, or touch swipes to browse; the counter shows your position.
 Older messages that have not been loaded are not fetched just to fill the viewer.
 
+Restricted guests have optional quick-start actions on **New session** and on an
+initial Welcome session identified by the server. **Help me get started**,
+**Explore OpenClaw**, and **Start a task** prepare an editable message and focus
+the composer; they never send automatically. Review the message, then choose
+**Send** when ready. The Welcome guide requires permission to send in that
+session and disappears after the first user message. It does not change access
+or require a setup tour.
+
 Optional surfaces follow the permissions granted to the current connection.
 Session-only roles do not load the plugin UI catalog, Side Chat history, observer
 visibility, or remote session-link titles. Side Chat is hidden, and session links

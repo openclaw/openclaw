@@ -4,9 +4,10 @@ import type { ApplicationGateway } from "./gateway.ts";
 /** Visitor Access plugin method; its presence in hello is the only feature gate. */
 export const GUEST_WELCOME_ENSURE_METHOD = "visitor-access.welcome.ensure";
 
-/** Hidden covers idle, the first in-flight call, ready, and not applicable. */
+/** Ready retains only the server-selected welcome identity for contextual help. */
 export type GuestWelcomePresentation =
   | { kind: "hidden" }
+  | { kind: "ready"; sessionKey: string }
   | { kind: "pending" }
   | { kind: "failed"; message: string | null };
 

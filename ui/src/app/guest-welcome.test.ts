@@ -91,7 +91,7 @@ describe("GuestWelcome", () => {
     const first = await ready(true);
     expect(first.client.request).toHaveBeenCalledExactlyOnceWith(GUEST_WELCOME_ENSURE_METHOD, {});
     expect(first.openSession).toHaveBeenCalledWith(READY.sessionKey, READY.agentId);
-    expect(first.owner.presentation).toEqual({ kind: "hidden" });
+    expect(first.owner.presentation).toEqual({ kind: "ready", sessionKey: READY.sessionKey });
     first.stop();
 
     // A reload, another tab, or a later sign-in on this browser keeps Home reachable.
@@ -174,7 +174,7 @@ describe("GuestWelcome", () => {
     expect(client.request).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
     expect(client.request).toHaveBeenCalledTimes(3);
-    expect(owner.presentation).toEqual({ kind: "hidden" });
+    expect(owner.presentation).toEqual({ kind: "ready", sessionKey: READY.sessionKey });
     expect(openSession).toHaveBeenCalledOnce();
   });
 
@@ -197,7 +197,7 @@ describe("GuestWelcome", () => {
     expect(owner.presentation).toEqual({ kind: "pending" });
     await vi.runAllTimersAsync();
     expect(client.request).toHaveBeenCalledTimes(calls + 1);
-    expect(owner.presentation).toEqual({ kind: "hidden" });
+    expect(owner.presentation).toEqual({ kind: "ready", sessionKey: READY.sessionKey });
   });
 
   it("shows failures and transport errors, and tries again on request", async () => {
@@ -217,7 +217,7 @@ describe("GuestWelcome", () => {
     owner.retry();
     await vi.runAllTimersAsync();
     expect(client.request).toHaveBeenCalledTimes(3);
-    expect(owner.presentation).toEqual({ kind: "hidden" });
+    expect(owner.presentation).toEqual({ kind: "ready", sessionKey: READY.sessionKey });
     expect(openSession).toHaveBeenCalledOnce();
   });
 

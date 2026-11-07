@@ -1,18 +1,44 @@
 import { Show } from "solid-js";
 import type { GuestWelcomeHandle } from "../../../app/guest-welcome-handle.ts";
+import { isRestrictedSessionGuest } from "../../../app/operator-access.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
+import type { ChatComposerNoticesProps } from "../chat-view-notices.tsx";
+import { GuestQuickStart } from "./guest-quick-start.tsx";
 
 /** Non-blocking welcome-session setup progress in the composer status lane. */
-export function renderGuestWelcomeStatus(owner: GuestWelcomeHandle) {
+export function renderGuestWelcomeStatus(
+  owner: GuestWelcomeHandle,
+  props?: ChatComposerNoticesProps,
+) {
   const state = projectOwner(owner, (current) => current.presentation);
+  const welcomeSessionKey = () => {
+    const current = state.read();
+    return current.kind === "ready" ? current.sessionKey : null;
+  };
   const failed = () => {
     const current = state.read();
     return current.kind === "failed" ? current : undefined;
   };
   return (
     <>
+      <Show
+        when={
+          welcomeSessionKey() !== null &&
+          welcomeSessionKey() === props?.sessionKey &&
+          isRestrictedSessionGuest(props?.guestQuickStartAuth ?? null) &&
+          props?.canSend === true &&
+          props?.onDraftChange &&
+          !props.messages.some((message) => normalizeMessage(message).role === "user")
+        }
+      >
+        <GuestQuickStart
+          onDraftChange={(next) => props?.onDraftChange?.(next)}
+          onFocusComposer={props?.onGuestQuickStartFocus}
+        />
+      </Show>
       <Show when={state.read().kind === "pending"}>
         <div class="agent-chat__composer-status chat-guest-welcome-status" data-tone="info">
           <div

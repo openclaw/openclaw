@@ -8,6 +8,7 @@ import type { ApplicationPlacementStartupStatus } from "../../app/session-placem
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { renderGuestWelcomeStatus } from "./components/chat-guest-welcome-status.tsx";
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
+import type { WelcomeSuggestionAuth } from "./components/chat-welcome.ts";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
@@ -32,6 +33,7 @@ export type ChatPlacementStartupNoticeProps = {
   onDiscardSessionPlacementStartup?: () => void;
   /** App-wide guest welcome setup, shown beside the composer of the route's chat. */
   guestWelcome?: GuestWelcomeHandle;
+  guestQuickStartAuth?: WelcomeSuggestionAuth;
 };
 
 export type ChatViewNoticesProps = {
@@ -43,6 +45,9 @@ export type ChatViewNoticesProps = {
 };
 
 export type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
+  onGuestQuickStartFocus?: () => void;
+  canSend?: boolean;
+  onDraftChange?: (next: string) => void;
   sessionKey?: string;
   presented?: boolean;
   connected?: boolean;
@@ -102,7 +107,7 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
         </ChatLazyBoundary>
       </Show>
       <Show when={props.guestWelcome} keyed>
-        {(owner) => renderGuestWelcomeStatus(owner)}
+        {(owner) => renderGuestWelcomeStatus(owner, props)}
       </Show>
     </>
   );
