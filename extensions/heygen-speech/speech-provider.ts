@@ -31,8 +31,7 @@ const DEFAULT_MODEL: HeyGenModel = "heygen-voice-1-turbo";
 const DEFAULT_VOICE_ID = "83548de556df48ba8c09c42a57c51d85";
 const DEFAULT_TIMEOUT_MS = 120_000;
 
-const HEYGEN_STREAM_TRANSPORTS = ["http", "websocket"] as const;
-type HeyGenStreamTransport = (typeof HEYGEN_STREAM_TRANSPORTS)[number];
+const MP3_RESULT = { outputFormat: "mp3", fileExtension: ".mp3", voiceCompatible: false };
 
 function normalizeModel(value: unknown): HeyGenModel {
   const model = trimToUndefined(value);
@@ -46,14 +45,10 @@ function normalizeModel(value: unknown): HeyGenModel {
   throw new Error(`invalid HeyGen model "${model}"`);
 }
 
-function normalizeStreamTransport(value: unknown): HeyGenStreamTransport {
-  const transport = trimToUndefined(value)?.toLowerCase();
-  if (!transport) {
-    return "http";
-  }
-  const supported = HEYGEN_STREAM_TRANSPORTS.find((candidate) => candidate === transport);
-  if (supported) {
-    return supported;
+function normalizeStreamTransport(value: unknown) {
+  const transport = trimToUndefined(value) ?? "http";
+  if (transport === "http" || transport === "websocket") {
+    return transport;
   }
   throw new Error(`invalid HeyGen streamTransport "${transport}"`);
 }
