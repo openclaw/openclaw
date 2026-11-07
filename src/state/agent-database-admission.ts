@@ -36,7 +36,10 @@ export type AgentDatabaseAdmissionRefusal = {
 } & (
   | { code: "agent-database-ownership-mismatch"; embeddedOwnerId: string }
   | {
-      code: "agent-database-inspection-pending" | "agent-database-inspection-failed";
+      code:
+        | "agent-database-inspection-pending"
+        | "agent-database-inspection-failed"
+        | "agent-deletion";
       embeddedOwnerId?: undefined;
     }
 );
@@ -185,6 +188,19 @@ function sameKnownState(left: string, right: string): boolean {
   return Boolean(leftIdentity && rightIdentity && leftIdentity.key === rightIdentity.key);
 }
 
+export function createAgentDatabaseDeletionRefusal(
+  refusal: AgentDatabaseAdmissionRefusal,
+): AgentDatabaseAdmissionRefusal {
+  return {
+    agentId: refusal.agentId,
+    paths: refusal.paths,
+    code: "agent-deletion",
+    reason: `Agent ${refusal.agentId} was deleted during startup inspection`,
+    repairHint:
+      "Deletion has closed this agent's admission. If cleanup remains pending, resolve its reported failure and retry agents.delete. Database repair is not required.",
+  };
+}
+
 /** Capture existing pending decisions; a later commit must never revoke their successors. */
 export function captureAgentDatabasePreparationDeletionForIdentity(
   agentId: string,
@@ -215,13 +231,7 @@ export function captureAgentDatabasePreparationDeletionForIdentity(
         continue;
       }
       const refusals = new Map(owner.refusals);
-      refusals.set(
-        id,
-        createAgentDatabaseInspectionRefusal({
-          ...refusal,
-          reason: `Agent ${id} was deleted during startup inspection`,
-        }),
-      );
+      refusals.set(id, createAgentDatabaseDeletionRefusal(refusal));
       owner.refusals = refusals;
     }
   };
@@ -250,7 +260,7 @@ export function captureAgentDatabasePreparationJournal(
   return (present) => {
     assertCurrent();
     if (present !== false) {
-      throw new Error(`Agent ${scope.refusal.agentId} was deleted during startup inspection`);
+      throw new AgentDatabaseAdmissionError(createAgentDatabaseDeletionRefusal(scope.refusal));
     }
   };
 }

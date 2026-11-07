@@ -82,6 +82,9 @@ stable item IDs and hashes against the previous manifest. A read-only Discrawl
 adapter is included. Complete snapshots can support deletion observations
 within their range; partial snapshots cannot.
 
+The bundled chat-transcript exporter includes UTF-8 file headers in its
+`--max-bytes` limit. A single indivisible message can still exceed that limit.
+
 ## Batch publication
 
 `knowledge_publish_batch` publishes 1–25 items (at most 1 MiB) as one journaled

@@ -272,6 +272,7 @@ export async function restoreFailedUpdateDatabases(params: {
   if (params.backup.migration && params.backup.migration.backup !== params.backup.directory) {
     return await refuse("Migration receipt belongs to a different database backup");
   }
+  let liveMutationStarted = false;
   try {
     // Every restore path, including a settled Doctor failure before finalization,
     // must retain this run's matching recovery pair in the restored database.
@@ -285,6 +286,9 @@ export async function restoreFailedUpdateDatabases(params: {
         ? { runId: pair.cohort.runId, transactionId: pair.cohort.transactionId }
         : undefined,
       expectedGenerations: params.backup.migration?.to ?? params.backup.sourceGenerations,
+      onLiveMutation: () => {
+        liveMutationStarted = true;
+      },
     });
     if (migratedPaths === null) {
       return await refuse(
@@ -310,15 +314,19 @@ export async function restoreFailedUpdateDatabases(params: {
     assertCurrent();
     return true;
   } catch (cause) {
+    // Lock contention or a changed snapshot left the live databases as they were.
+    const untouched = !liveMutationStarted && !hasCommandProcessCleanupError(cause);
     // A partly restored shared ledger must never be reopened by candidate
     // finalization: that would migrate the recovery image again.
     params.result.recovery = {
       serviceRestartSafe: false,
       reason: "state-migration-started",
-      dataAtRisk: "rollback-state-unverified",
+      dataAtRisk: untouched ? "state-migrated-no-rollback" : "rollback-state-unverified",
     };
     throw new UpdateCommandRecoveryPendingError(
-      `Database rollback could not finish (data at risk: rollback-state-unverified); keep the Gateway stopped. Preserve ${params.backup.directory} and <database>.migrated-${params.runId}. Run the compatible candidate's Doctor to inspect recovery before restarting.`,
+      untouched
+        ? `Database rollback could not start and left the current databases unchanged: ${formatErrorMessage(cause)}. Keep the Gateway stopped and preserve ${params.backup.directory}. Run the compatible candidate's Doctor to inspect recovery before restarting.`
+        : `Database rollback could not finish (data at risk: rollback-state-unverified); keep the Gateway stopped. Preserve ${params.backup.directory} and <database>.migrated-${params.runId}. Run the compatible candidate's Doctor to inspect recovery before restarting.`,
       { cause },
     );
   }

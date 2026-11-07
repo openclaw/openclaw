@@ -9,7 +9,7 @@
   "type": "module",
   "dependencies": {
     "@solidjs/web": "2.0.0-rc.18",
-    "nostr-tools": "2.25.2",
+    "nostr-tools": "2.25.4",
     "solid-js": "2.0.0-rc.18",
     "zod": "4.6.7"
   },
