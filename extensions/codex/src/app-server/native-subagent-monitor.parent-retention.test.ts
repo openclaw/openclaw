@@ -147,11 +147,12 @@ it("permits parent cold resume once every child is terminal, while preserving un
   // A still-running sibling requires the native parent subscription to remain alive.
   await expect(releaseForResume()).rejects.toThrow("claimed by active work; stop it first");
   expect(client.request.mock.calls.some(([method]) => method === "thread/unsubscribe")).toBe(false);
+  expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
 
   await client.notify(
     nativeCompletionNotification({ agentPath: "child-b", result: "second result" }),
   );
-  expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(2);
+  expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce();
   await expect(releaseForResume()).resolves.toBe(true);
   expect(client.request).toHaveBeenCalledWith(
     "thread/unsubscribe",
@@ -172,5 +173,5 @@ it("permits parent cold resume once every child is terminal, while preserving un
   await settled.unregister();
   expect(
     runtime.deliverAgentHarnessCompletion.mock.calls.map(([request]) => request.result),
-  ).toEqual(["first result", "second result", "first result", "second result"]);
+  ).toEqual(["second result", "first result", "second result"]);
 });
