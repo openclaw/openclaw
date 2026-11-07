@@ -134,6 +134,114 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     setPlugin({ targetResolver }, directory);
   });
 
+  it.each(["richchat", "Chatty", "rc"])(
+    "rejects inferred namespace %s without normalizing it into a recipient",
+    async (input) => {
+      const normalizeTarget = vi.fn((raw: string) => `@${raw}`);
+      const base = createChannelTestPluginBase({ id: "richchat" });
+      const plugin: ChannelPlugin = {
+        ...base,
+        meta: { ...base.meta, aliases: ["chatty"] },
+        messaging: {
+          targetPrefixes: ["rc"],
+          normalizeTarget,
+          targetResolver: { looksLikeId: () => true, resolveTarget: mocks.resolveTarget },
+        },
+        directory,
+      };
+      mocks.listPeers.mockResolvedValue([]);
+      mocks.listGroups.mockResolvedValue([]);
+      mocks.listPeersLive.mockResolvedValue([]);
+      mocks.listGroupsLive.mockResolvedValue([]);
+
+      const result = await resolve(input, {
+        plugin,
+        allowNativeChannelNamespace: false,
+        unknownTargetMode: "normalized",
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { reasonCode: "message_target_missing" },
+      });
+      expect(normalizeTarget).not.toHaveBeenCalled();
+      expect(mocks.resolveTarget).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts exact namespace peers rather than partial group-name matches", async () => {
+    mocks.listGroups.mockResolvedValue([{ kind: "group", id: "room-1", name: "richchat-news" }]);
+    mocks.listPeers.mockResolvedValue([{ kind: "user", id: "peer-1", name: "richchat" }]);
+
+    const result = await resolve("richchat", { allowNativeChannelNamespace: false });
+
+    expect(result).toMatchObject({
+      ok: true,
+      target: { to: "peer-1", kind: "user", resolutionSource: "directory" },
+    });
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit native IDs ahead of same-name directory destinations", async () => {
+    setPlugin(
+      { targetResolver: { looksLikeId: () => true, resolveTarget: mocks.resolveTarget } },
+      directory,
+    );
+    mocks.resolveTarget.mockResolvedValue({ to: "native-1", kind: "user" });
+    mocks.listGroups.mockResolvedValue([{ kind: "group", id: "room-1", name: "richchat" }]);
+
+    expect(await resolve("richchat")).toMatchObject({
+      ok: true,
+      target: { to: "native-1", resolutionSource: "plugin" },
+    });
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "group" as const])(
+    "honors a namespace kind constraint (%s)",
+    async (preferredKind) => {
+      mocks.listGroups.mockResolvedValue([{ kind: "group", id: "room-1", name: "richchat" }]);
+      mocks.listPeers.mockResolvedValue([{ kind: "user", id: "peer-1", name: "richchat" }]);
+
+      const result = await resolve("richchat", {
+        preferredKind,
+        allowNativeChannelNamespace: false,
+      });
+
+      expect(result).toMatchObject(
+        preferredKind
+          ? { ok: true, target: { to: "room-1", kind: "group" } }
+          : { ok: false, error: { reasonCode: "message_target_ambiguous" } },
+      );
+    },
+  );
+
+  it.each([true, false])(
+    "tries exact directories after a native namespace miss (found=%s)",
+    async (found) => {
+      setPlugin(
+        { targetResolver: { looksLikeId: () => true, resolveTarget: mocks.resolveTarget } },
+        directory,
+      );
+      mocks.resolveTarget.mockResolvedValue(undefined);
+      mocks.listGroups.mockResolvedValue(
+        found ? [{ kind: "group", id: "room-1", name: "richchat" }] : [],
+      );
+      mocks.listGroupsLive.mockResolvedValue([]);
+      mocks.listPeers.mockResolvedValue([]);
+      mocks.listPeersLive.mockResolvedValue([]);
+
+      const result = await resolve("richchat");
+
+      expect(result).toMatchObject(
+        found
+          ? { ok: true, target: { to: "room-1", kind: "group" } }
+          : { ok: false, error: { reasonCode: "message_target_missing" } },
+      );
+      expect(mocks.resolveTarget).toHaveBeenCalledOnce();
+    },
+  );
+
   it("does not reuse query-filtered directory misses for later target queries", async () => {
     directPlugin();
     const listMatchingPeers = vi.fn(({ query }: { query?: string }) =>

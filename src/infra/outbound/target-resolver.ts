@@ -4,15 +4,18 @@ import type {
   ChannelDirectoryEntry,
   ChannelDirectoryEntryKind,
   ChannelId,
+  ChannelOutboundTargetMode,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { resolveBareTargetChannelNamespace } from "./channel-target-prefix.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
 // Message CLI actions use scoped registries without activating the process-root registry.
 import { getRuntimeVisibleChannelPlugin } from "./runtime-visible-channels.js";
 import {
   ambiguousTargetError,
+  missingChannelDestinationError,
   missingTargetError,
   reservedTargetLiteralError,
   unknownTargetError,
@@ -221,6 +224,9 @@ export async function resolveChannelTarget(params: {
   preferredKind?: ChannelDirectoryEntryKind;
   runtime?: RuntimeEnv;
   unknownTargetMode?: "error" | "normalized";
+  allowNativeChannelNamespace?: boolean;
+  nativeTargetMode?: ChannelOutboundTargetMode;
+  allowFrom?: string[];
   plugin?: ChannelPlugin;
 }): Promise<ResolveMessagingTargetResult> {
   const raw = params.input.trim();
@@ -233,22 +239,32 @@ export async function resolveChannelTarget(params: {
       error: missingTargetError(providerLabel, hint),
     };
   }
+  const channelNamespace = resolveBareTargetChannelNamespace({ raw, plugin });
+  const allowNativeTarget = !channelNamespace || params.allowNativeChannelNamespace !== false;
   const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);
-  const normalizedInput = resolveNormalizedTargetInput(params.channel, raw, plugin);
+  // An inferred channel name must not become a plausible recipient through normalization.
+  const normalizedInput = allowNativeTarget
+    ? resolveNormalizedTargetInput(params.channel, raw, plugin)
+    : undefined;
   const normalized = normalizedInput?.normalized ?? raw;
   const reservedLiteral = resolveReservedTargetLiteral({ raw, plugin });
   const normalizedResult = (): ResolveMessagingTargetResult => ({
     ok: true,
     target: {
       to: normalized,
-      kind,
+      kind: channelNamespace
+        ? detectTargetKind(params.channel, normalized, params.preferredKind, plugin)
+        : kind,
       display: stripTargetPrefixes(normalized),
       source: "normalized",
       resolutionSource: "normalized",
     },
   });
-  const resolvePluginTarget = (requireIdLike?: boolean) =>
-    maybeResolvePluginMessagingTarget({ ...params, input: raw, plugin, requireIdLike });
+  let nativeResolverAttempted = false;
+  const resolvePluginTarget = (requireIdLike?: boolean) => {
+    nativeResolverAttempted = true;
+    return maybeResolvePluginMessagingTarget({ ...params, input: raw, plugin, requireIdLike });
+  };
   if (
     normalizedInput &&
     !reservedLiteral &&
@@ -260,19 +276,35 @@ export async function resolveChannelTarget(params: {
     })
   ) {
     const target = await resolvePluginTarget(true);
-    return target ? { ok: true, target } : normalizedResult();
+    if (target) {
+      return { ok: true, target };
+    }
+    if (!channelNamespace || !plugin?.messaging?.targetResolver?.resolveTarget) {
+      return normalizedResult();
+    }
   }
   const query = stripTargetPrefixes(raw, params.channel, plugin);
-  const entries = await getDirectoryEntries({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    kind: kind === "user" ? "user" : "group",
-    query,
-    runtime: params.runtime,
-    preferLiveOnMiss: true,
-    plugin,
-  });
+  const primaryKind = kind === "user" ? "user" : "group";
+  const directoryKinds: ChannelDirectoryEntryKind[] =
+    channelNamespace && !params.preferredKind
+      ? [primaryKind, primaryKind === "user" ? "group" : "user"]
+      : [primaryKind];
+  const entries = (
+    await Promise.all(
+      directoryKinds.map((directoryKind) =>
+        getDirectoryEntries({
+          cfg: params.cfg,
+          channel: params.channel,
+          accountId: params.accountId,
+          kind: directoryKind,
+          query,
+          runtime: params.runtime,
+          preferLiveOnMiss: true,
+          plugin,
+        }),
+      ),
+    )
+  ).flat();
   const normalizedQuery = query.toLowerCase();
   const matches = normalizedQuery
     ? entries.filter((entry) => {
@@ -284,7 +316,9 @@ export async function resolveChannelTarget(params: {
           value ? stripTargetPrefixes(value, params.channel, plugin).toLowerCase() : "",
         );
         return candidates.some((value) =>
-          reservedLiteral ? value === normalizedQuery : value.includes(normalizedQuery),
+          reservedLiteral || channelNamespace
+            ? value === normalizedQuery
+            : value.includes(normalizedQuery),
         );
       })
     : [];
@@ -294,7 +328,7 @@ export async function resolveChannelTarget(params: {
       ok: true,
       target: {
         to: normalizeDirectoryEntryId(params.channel, entry, plugin),
-        kind,
+        kind: channelNamespace ? entry.kind : kind,
         display:
           entry.name ?? entry.handle ?? stripTargetPrefixes(entry.id, params.channel, plugin),
         source: "directory",
@@ -313,11 +347,49 @@ export async function resolveChannelTarget(params: {
   if (reservedLiteral) {
     return { ok: false, error: reservedTargetLiteralError(providerLabel, reservedLiteral, hint) };
   }
-  const resolvedFallbackTarget = await resolvePluginTarget();
+  const resolvedFallbackTarget =
+    allowNativeTarget && !nativeResolverAttempted ? await resolvePluginTarget() : undefined;
   if (resolvedFallbackTarget) {
     return {
       ok: true,
       target: resolvedFallbackTarget,
+    };
+  }
+
+  if (channelNamespace) {
+    // Some plugins validate native recipients only through their outbound adapter.
+    if (allowNativeTarget && !plugin?.messaging?.targetResolver?.resolveTarget) {
+      const native = plugin?.outbound?.resolveTarget?.({
+        cfg: params.cfg,
+        to: raw,
+        accountId: params.accountId,
+        allowFrom: params.allowFrom,
+        mode: params.nativeTargetMode ?? "explicit",
+      });
+      if (native && !native.ok) {
+        return native;
+      }
+      if (native?.to.trim()) {
+        return {
+          ok: true,
+          target: {
+            to: native.to,
+            kind: detectTargetKind(params.channel, native.to, params.preferredKind, plugin),
+            display: stripTargetPrefixes(native.to),
+            source: "normalized",
+            resolutionSource: "normalized",
+          },
+        };
+      }
+    }
+    return {
+      ok: false,
+      error: missingChannelDestinationError(
+        providerLabel,
+        channelNamespace.namespace,
+        channelNamespace.destinationPrefix,
+        hint,
+      ),
     };
   }
 

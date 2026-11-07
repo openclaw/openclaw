@@ -10,6 +10,7 @@ import {
 } from "../../channels/plugins/message-action-dispatch.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { MessageActionInput } from "../../infra/outbound/message-action-contracts.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
@@ -49,6 +50,30 @@ export function resolveAgentRuntimeMessageActionConfig(
   return resolveAgentRuntimeMessageActionAuthorization(client)?.scheduled
     ? readMessageActionInvocationConfig(token)
     : undefined;
+}
+
+/** Translate the captured RPC route without changing its delivery or authorization owners. */
+export function createGatewayMessageActionInput(
+  context: MessageActionInput & { channel: string; accountId?: string },
+  request: MessageActionParams,
+  runtimeAgentId?: string,
+): MessageActionInput {
+  return {
+    ...context,
+    gatewayOwnedDelivery: true,
+    allowNativeChannelNamespace: request.channelInferred === true ? false : undefined,
+    // The delegating client records the confirmed send in its destination.
+    callerRecordsDestinationHistory: true,
+    ...(request.action === "send"
+      ? { actionOrigin: runtimeAgentId ? ("message-tool" as const) : undefined }
+      : {}),
+    params: {
+      ...request.params,
+      channel: context.channel,
+      ...(context.accountId ? { accountId: context.accountId } : {}),
+      idempotencyKey: request.idempotencyKey,
+    },
+  };
 }
 
 /** Retain the live caller and scheduled source through this action's requests. */

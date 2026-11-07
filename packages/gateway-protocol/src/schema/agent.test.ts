@@ -36,6 +36,15 @@ describe("MessageActionParamsSchema", () => {
     rejects(S.MessageActionParamsSchema, { ...baseParams, conversationReadOrigin: "delegated" });
   });
 
+  it.each([true, false, "true", "explicit"])(
+    "accepts only restrictive channel-selection provenance (%s)",
+    (channelInferred) => {
+      expect(Value.Check(S.MessageActionParamsSchema, { ...baseParams, channelInferred })).toBe(
+        channelInferred === true,
+      );
+    },
+  );
+
   it("rejects caller-supplied current chat classification", () => {
     rejects(S.MessageActionParamsSchema, {
       ...baseParams,

@@ -341,6 +341,7 @@ async function resolveDeliveryTargetWithPolicy(
     to: resolvedTarget.to,
     cfg,
     accountId: effectiveAccountId,
+    allowNativeChannelNamespace: target !== "last",
   };
   const resolved = await resolveOutboundTargetWithPlugin({
     plugin,
@@ -352,6 +353,10 @@ async function resolveDeliveryTargetWithPolicy(
   });
   if (!resolved?.ok) {
     return rejectDelivery(ownerMode ? "no-route" : "no-target");
+  }
+  const namespaceTarget = resolved.namespaceTarget;
+  if (namespaceTarget?.kind === "user" && policy?.directPolicy === "block") {
+    return rejectDelivery("dm-blocked");
   }
 
   // Chat type belongs to the stored channel/account/destination.
@@ -369,9 +374,28 @@ async function resolveDeliveryTargetWithPolicy(
       ? normalizeChatType(entry?.chatType)
       : undefined;
   const deliveryChatType =
-    sessionChatTypeHint ??
-    inferChatTypeFromTarget({ channel: resolvedTarget.channel, to: resolved.to, plugin });
-  if (deliveryChatType === "direct" && policy?.directPolicy === "block") {
+    (namespaceTarget ? undefined : sessionChatTypeHint) ??
+    inferChatTypeFromTarget({
+      channel: resolvedTarget.channel,
+      to:
+        namespaceTarget && plugin
+          ? stripTargetProviderPrefix(
+              resolved.to,
+              plugin.id,
+              ...(plugin.messaging?.targetPrefixes ?? []),
+            )
+          : resolved.to,
+      plugin,
+      resolvedKind:
+        namespaceTarget?.to === resolved.to && namespaceTarget.resolutionSource !== "normalized"
+          ? namespaceTarget.kind
+          : undefined,
+    });
+  // Directory kinds describe their exact recipient, not an opaque policy rewrite.
+  if (
+    policy?.directPolicy === "block" &&
+    (deliveryChatType === "direct" || (namespaceTarget && !deliveryChatType))
+  ) {
     return rejectDelivery("dm-blocked");
   }
   if (
@@ -476,6 +500,7 @@ async function resolveDeliveryTargetWithPolicyAndSessionRoute(
     input: deliveryTo,
     accountId: delivery.accountId,
     unknownTargetMode: "normalized",
+    allowNativeChannelNamespace: policy?.target !== "last",
     plugin,
   }).catch(() => null);
   if (targetResolution?.ok) {
@@ -527,6 +552,7 @@ function inferChatTypeFromTarget(params: {
   channel: string;
   to: string;
   plugin?: ChannelPlugin;
+  resolvedKind?: ResolvedMessagingTarget["kind"];
 }): ChatType | undefined {
   const to = params.to.trim();
   if (!to) {
@@ -541,6 +567,9 @@ function inferChatTypeFromTarget(params: {
   }
   if (/^group:/i.test(to)) {
     return "group";
+  }
+  if (params.resolvedKind) {
+    return params.resolvedKind === "user" ? "direct" : params.resolvedKind;
   }
   const plugin =
     params.plugin ??
