@@ -642,7 +642,7 @@ export function listChannelIngressRowsInDatabase(
       input.status === "failed" ? ordered.limit(normalizeLimit(input.limit)) : ordered,
     ).rows;
   }
-  const order = <T extends typeof select>(rows: T) =>
+  const order = (rows: typeof select) =>
     input.orderBy === "id"
       ? rows.orderBy("event_id", "asc")
       : rows.orderBy("received_at", "asc").orderBy("event_id", "asc");

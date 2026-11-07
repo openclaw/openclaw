@@ -627,10 +627,10 @@ describe("channel ingress drain", () => {
       const head = expectDefined(await queue.claim("delayed-0"), "delayed head");
       await queue.release(head, { lastError: "retry", releasedAt: 1_000 });
       await queue.enqueue("other", { text: "other" }, { laneKey: "other", receivedAt: 20_000 });
-      const listUnsettled = expectDefined(queue.listUnsettled, "listUnsettled").bind(queue);
+      const inner = { ...queue };
       let pendingRead = 0;
       queue.listUnsettled = async (options) => {
-        const unsettled = await listUnsettled(options);
+        const unsettled = expectDefined(await inner.listUnsettled?.(options), "unsettled rows");
         pendingRead += unsettled.pending.length;
         return unsettled;
       };
@@ -660,8 +660,8 @@ describe("channel ingress drain", () => {
   it("ends a pass when the queue ignores the page bounds", async () => {
     await withTempState(async (stateDir) => {
       const inner = createTestIngressQueue(stateDir, { now: () => 1_000 });
-      const listUnsettled = expectDefined(inner.listUnsettled, "listUnsettled").bind(inner);
-      const queue = { ...inner, listUnsettled: () => listUnsettled() };
+      const listUnsettled = async () => expectDefined(await inner.listUnsettled?.(), "rows");
+      const queue = { ...inner, listUnsettled };
       seedPendingBacklog(stateDir, 100, { laneKey: "busy", receivedAt: 0 });
       const head = expectDefined(await queue.claim("busy-0"), "busy head");
       await queue.release(head, { lastError: "retry", releasedAt: 1_000 });
