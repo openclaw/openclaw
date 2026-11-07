@@ -13,6 +13,7 @@ import {
   formatControlUiPerformanceReport as formatReport,
 } from "../../scripts/check-control-ui-performance.mts";
 import { prepareControlUiSettings } from "../../scripts/lib/prepare-control-ui-settings.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { extractControlUiStartupAssetPaths as extractStartupAssets } from "../../ui/config/control-ui-startup-assets.ts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -907,12 +908,12 @@ export default {
 
   async function createComparisonRepo(
     command: CommandFixture,
-    { baseOnlyDependency = false, brokenSource = false } = {},
+    { baseOnlyDependency = false, brokenSource = false, specialCharacterRoot = true } = {},
   ) {
     const diagnostics = command.enableDiagnostics("control-ui-performance-base");
     diagnostics.stage("fixture");
     const temporaryRoot = fs.realpathSync(command.createTempDir("ui-budget-proof-"));
-    const root = path.join(temporaryRoot, "repo");
+    const root = path.join(temporaryRoot, specialCharacterRoot ? "repo # space" : "repo");
     const at = (...parts: string[]) => path.join(root, ...parts);
     const scratch = path.join(temporaryRoot, "scratch");
     const identityCapture = path.join(temporaryRoot, "build-identities.jsonl");
@@ -1063,11 +1064,17 @@ fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presente
       fs.copyFileSync(at("scripts", `${name}.js`), at("scripts", `${name}.mts`));
     }
 
+    const nodeExecutable = resolveTestNodeExecPath();
+    const nodeVersionResult = await run(nodeExecutable, ["--version"]);
+    expect(nodeVersionResult.error, nodeVersionResult.stderr).toBeUndefined();
+    expect(nodeVersionResult.status, nodeVersionResult.stderr).toBe(0);
+    const nodeVersion = nodeVersionResult.stdout.trim();
+
     const runComparison = async (baseRef: string, status: number) => {
       diagnostics.stage("compare");
       fs.rmSync(identityCapture, { force: true });
       const result = await run(
-        process.execPath,
+        nodeExecutable,
         ["--import", tsxImport, at("scripts/check-control-ui-performance-base.mts"), baseRef],
         {
           ...env,
@@ -1110,6 +1117,8 @@ fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presente
       commit,
       runComparison,
       readIdentities,
+      nodeExecutable,
+      nodeVersion,
       prependScript,
     };
   }
@@ -1135,7 +1144,7 @@ fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presente
       ["vite", "pako"].map((name) => fs.readlinkSync(repo.at("ui/node_modules", name)));
     const links = dependencyLinks();
     const { output } = await repo.runComparison(repo.base, 1);
-    expect(output).toContain(`head ${head}; base ${repo.base}; Node ${process.version}; Vite `);
+    expect(output).toContain(`head ${head}; base ${repo.base}; Node ${repo.nodeVersion}; Vite `);
     expect(output).toContain("Pako ");
     expect(output).toMatch(
       /startup JS gzip vs base: \d+ B -> \d+ B \([+-]\d+ B\); requests \d+ -> \d+/u,
@@ -1236,7 +1245,7 @@ if (process.argv.includes("--report-only")) process.kill(process.pid, "SIGTERM")
     expect(output).toContain("candidate attribution failed:");
     expect(output).not.toContain("Control UI baseline failure attribution:");
     expect(fs.readFileSync(marker, "utf8").trim().split("\n")).toHaveLength(2);
-    expect(output).toContain(`${path.basename(process.execPath)} failed (1)`);
+    expect(output).toContain(`${path.basename(repo.nodeExecutable)} failed (1)`);
     expect(output).toContain("[control-ui-performance-base] FAILED (exit 1)");
   });
 
@@ -1260,7 +1269,7 @@ export default { plugins: [{ name: "signal", buildStart() { process.kill(process
     expect(repo.readIdentities()).toHaveLength(1);
     const { output: signaledBaseOutput } = await repo.runComparison(signaledBase, 1);
     expect(fs.readFileSync(signalMarker, "utf8")).toBe("loaded");
-    expect(signaledBaseOutput).toContain(`${path.basename(process.execPath)} failed (SIGTERM)`);
+    expect(signaledBaseOutput).toContain(`${path.basename(repo.nodeExecutable)} failed (SIGTERM)`);
     expect(signaledBaseOutput).not.toContain(
       "Base Control UI source does not build with the candidate toolchain",
     );
@@ -1269,7 +1278,8 @@ export default { plugins: [{ name: "signal", buildStart() { process.kill(process
 
   test(
     "reuses identical inputs but rebuilds source-specific Settings changes",
-    {},
+    // Settings preparation uses the test runtime; the other cases cover the preload path.
+    { specialCharacterRoot: false },
     async (repo) => {
       repo.write("ui/src/unused.test.ts", "export const fixture = 1;\n");
       const base = await repo.commit("matching production inputs");
