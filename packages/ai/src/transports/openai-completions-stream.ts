@@ -11,6 +11,7 @@ import {
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import type { ChatCompletion, ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
@@ -79,7 +80,11 @@ function extractToolCallThoughtSignature(toolCall: unknown): string | undefined 
     readNonEmptyStringPreservingWhitespace(
       (tc.function as { thought_signature?: unknown } | undefined)?.thought_signature,
     ) ??
-    readNonEmptyStringPreservingWhitespace(tc.thought_signature)
+    readNonEmptyStringPreservingWhitespace(tc.thought_signature) ??
+    // LiteLLM proxies return Gemini signatures here.
+    readNonEmptyStringPreservingWhitespace(
+      asOptionalRecord(tc.provider_specific_fields)?.thought_signature,
+    )
   );
 }
 
