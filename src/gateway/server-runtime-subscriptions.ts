@@ -140,9 +140,10 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     broadcastToConnIds: params.broadcastToConnIds,
   });
   const unsubscribeObserverEvents = onAgentRuntimeEvent((evt) => {
-    void sessionObserver
-      .handleEventAsync(evt)
-      .catch((error: unknown) => params.log.warn("Session observer event failed", { error }));
+    // Observer work owns its queue and context, like handleEvent/background already do.
+    void runInDetachedAsyncContext(() => sessionObserver.handleEventAsync(evt)).catch(
+      (error: unknown) => params.log.warn("Session observer event failed", { error }),
+    );
   });
   const sessionCompanion = createSessionCompanion({
     scheduler: params.scheduler,
