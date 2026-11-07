@@ -74,7 +74,7 @@ function parseIgnorePatterns(
 ): { patterns: string[]; chars: number } | typeof COMPLEX_IGNORE_FILE {
   const patterns: string[] = [];
   let patternChars = 0;
-  let lineStart = 0;
+  let lineStart = content.startsWith("\uFEFF") ? 1 : 0;
 
   while (lineStart <= content.length) {
     const newline = content.indexOf("\n", lineStart);
@@ -160,8 +160,7 @@ function readIgnoreFileContent(ignorePath: string): string | typeof OVERSIZED_IG
 }
 
 function prefixIgnorePattern(line: string, prefix: string): string {
-  const trimmed = line.trim();
-  if (!trimmed || (trimmed.startsWith("#") && !trimmed.startsWith("\\#"))) {
+  if (!line.trim() || line.startsWith("#")) {
     return "";
   }
 
