@@ -195,6 +195,19 @@ describe("ordinary steering isolated-gateway proof", () => {
     expect(older.mailbox.owner.active).toBe(liveOperation);
     const commit = createDeferred();
     const injected = createDeferred();
+    const settlementStarted = createDeferred();
+    const injection = await import("./chat-send-message-injection.js");
+    const settle = injection.settleChatSendMessageInjection;
+    let settling = 0;
+    const settlementSpy = vi
+      .spyOn(injection, "settleChatSendMessageInjection")
+      .mockImplementation((attempt) => {
+        const result = settle(attempt);
+        if (attempt && ++settling === 2) {
+          settlementStarted.resolve();
+        }
+        return result;
+      });
     type PhaseEvent = Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>;
     const reported = createDeferred<PhaseEvent>();
     const phases: PhaseEvent[] = [];
@@ -256,6 +269,9 @@ describe("ordinary steering isolated-gateway proof", () => {
       await withinTest(injected.promise, signal);
       expect(queueMessage.mock.calls.map(([text]) => text)).toEqual(messages);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      // Backend admission precedes the handler's settlement phase. Start the
+      // synthetic delay only after both real settlement waits have begun.
+      await withinTest(settlementStarted.promise, signal);
       clock = 120_001;
       commit.resolve();
       const report = await withinTest(reported.promise, signal);
@@ -274,6 +290,7 @@ describe("ordinary steering isolated-gateway proof", () => {
     } finally {
       retireSessionControllerInput(older);
       commit.resolve();
+      settlementSpy.mockRestore();
       now.mockRestore();
       stop();
       setDiagnosticsEnabledForProcess(previousDiagnostics);
