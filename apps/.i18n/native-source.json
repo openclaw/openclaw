@@ -4327,6 +4327,7 @@
     {"path":"apps/ios/Sources/Design/CommandCenterTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.233197f0a1829388","source":"Opens Usage"},
     {"path":"apps/ios/Sources/Design/CommandCenterTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.2fb645c2a76adf8b","source":"Pending approvals"},
     {"path":"apps/ios/Sources/Design/CommandCenterTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.51d510724545ce1c","source":"Recent sessions"},
+    {"path":"apps/ios/Sources/Design/CommandCenterTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.49cddeb3a7c08ae5","source":"Refresh"},
     {"path":"apps/ios/Sources/Design/CommandCenterTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.ff1ad065651c3aa8","source":"Rename Group"},
     {"path":"apps/ios/Sources/Design/CommandCenterTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.71b86d9584a37a82","source":"Save"},
     {"path":"apps/ios/Sources/Design/CommandCenterTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.222a42ea8b6f19e5","source":"Sessions"},
