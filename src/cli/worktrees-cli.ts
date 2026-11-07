@@ -17,6 +17,7 @@ import type {
   RemoveManagedWorktreeResult,
 } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { ExpectedCliError, throwExpectedCliError } from "./expected-cli-error.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
@@ -68,6 +69,19 @@ async function readExactStateRequest(filename: string | undefined) {
     throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message, cause });
   }
   return exactStateRetirementSchema.parse(JSON.parse(buffer.toString("utf8")));
+}
+
+function resolveSourceCheckout(repoRoot: string): string {
+  try {
+    return realpathSync.native(repoRoot);
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+      throwExpectedCliError(
+        `Source checkout not found: ${repoRoot}. Pass the path to an existing git checkout.`,
+      );
+    }
+    throw error;
+  }
 }
 
 function printRecord(record: ManagedWorktreeRecord, json: boolean): void {
@@ -178,7 +192,7 @@ export function registerWorktreesCli(program: Command): void {
         opts: JsonOption & { name?: string; baseRef?: string; sourceProfile?: string[] },
       ) => {
         // Match the service's physical symlink/.. resolution before yielding to admission.
-        const target = realpathSync.native(repoRoot);
+        const target = resolveSourceCheckout(repoRoot);
         const identity = statSync(target, { bigint: true });
         const input = {
           repoRoot: target,
