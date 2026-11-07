@@ -92,6 +92,14 @@ limit. `contextRingFrames` retains changed composer/ring display samples, and
 in the first visible composer DOM sample. Inspect the correlated compositor frame
 and its predecessor before claiming first-paint presence.
 
+For ordinary-child Details parity, also add `--details-subagent-activity`.
+It seeds three settled ordinary children on the active chat target;
+`--details-child-count 4` covers overflow beyond the saved three-row preview.
+Before warm captures, the tool requires the complete live child answer, checks
+the owner-written receipt in IndexedDB, and records its rows and settled height.
+The baseline may display every live row while a candidate uses a bounded preview;
+the recorded height preserves that difference instead of assuming parity.
+
 Add `--composer-controls` for the bundled Anthropic model's nondefault 200K window
 and High effort. It uses synthetic credentials and the static catalog without
 model requests. Preparation opens the real picker and requires its final values

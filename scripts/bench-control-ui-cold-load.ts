@@ -946,7 +946,7 @@ const fixture = createControlUiTeamScaleFixture({
   archivedSession: values["archived-session"],
   paneChromeFacts: values["pane-chrome-facts"],
   detailsSessionFacts: values["details-session-facts"],
-  detailsSubagentActivity: values["details-subagent-activity"] ? 1 : undefined,
+  detailsSubagentActivity: values["details-subagent-activity"] ? 3 : undefined,
   transcriptMessages,
   richTranscript: values["long-session"],
   longSessionScenario: values["long-session"] ? longSessionScenario : undefined,

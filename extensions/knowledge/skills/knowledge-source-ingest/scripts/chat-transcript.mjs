@@ -114,45 +114,79 @@ async function run(argv) {
     return [...(main ? [main] : []), ...groups.values()];
   }
 
-  // Packs sections into parts under the byte budget. A section that would overflow the current part
-  // starts a new one; a section larger than the budget splits between messages.
+  function partHeader(rows, labels, day, index, count) {
+    const authors = [...new Set(rows.map((row) => row.payload.author_id))];
+    return [
+      "Channel: " + channel + (sourceKey ? " (" + sourceKey + ")" : ""),
+      "Day: " + day + " (times UTC)" + (count > 1 ? " · part " + (index + 1) + " of " + count : ""),
+      "Authors: " + authors.map((id) => labels.get(id) + " = " + id).join("; "),
+    ];
+  }
+
+  // Keep sections together when they fit, and split larger sections only between messages.
   function pack(dayRows, byId, labels, day) {
-    const parts = [];
-    let current = null;
-    const open = () => {
-      current = { lines: [], rows: [], size: 0 };
-      parts.push(current);
-    };
-    const push = (lines, row) => {
-      current.lines.push(...lines);
-      if (row) {
-        current.rows.push(row);
-      }
-      current.size += bytes(lines.join("\n") + "\n");
-    };
-    open();
-    for (const section of sections(dayRows)) {
-      const blocks = section.rows.map((row) => ({
-        row,
-        lines: messageLines(row, byId, labels, day),
-      }));
-      const sectionSize = blocks.reduce(
-        (sum, block) => sum + bytes(block.lines.join("\n") + "\n"),
-        0,
-      );
-      if (current.rows.length && current.size + sectionSize > maxBytes && sectionSize <= maxBytes) {
-        open();
-      }
-      push(["", "## " + section.title]);
-      for (const block of blocks) {
-        if (current.rows.length && current.size + bytes(block.lines.join("\n") + "\n") > maxBytes) {
+    const groups = sections(dayRows).map((section) => ({
+      title: section.title,
+      rows: section.rows,
+      blocks: section.rows.map((row) => {
+        const lines = messageLines(row, byId, labels, day);
+        return { row, lines, size: bytes(lines.join("\n") + "\n") };
+      }),
+    }));
+    let partCount = 1;
+    for (;;) {
+      const parts = [];
+      let current;
+      const open = () => {
+        current = { lines: [], rows: [], size: 0 };
+        parts.push(current);
+      };
+      const fits = (rows, size, index) =>
+        size + bytes(partHeader(rows, labels, day, index, partCount).join("\n") + "\n") <= maxBytes;
+      open();
+      for (const section of groups) {
+        const heading = ["", "## " + section.title];
+        const sectionSize =
+          bytes(heading.join("\n") + "\n") +
+          section.blocks.reduce((sum, block) => sum + block.size, 0);
+        if (
+          current.rows.length &&
+          !fits([...current.rows, ...section.rows], current.size + sectionSize, parts.length - 1) &&
+          fits(section.rows, sectionSize, parts.length)
+        ) {
           open();
-          push(["", "## " + section.title + " (continued)"]);
         }
-        push(block.lines, block.row);
+        for (const [index, block] of section.blocks.entries()) {
+          let prefix = index === 0 ? heading : [];
+          let prefixSize = prefix.length ? bytes(prefix.join("\n") + "\n") : 0;
+          if (
+            current.rows.length &&
+            !fits(
+              [...current.rows, block.row],
+              current.size + prefixSize + block.size,
+              parts.length - 1,
+            )
+          ) {
+            open();
+            prefix = index === 0 ? heading : ["", "## " + section.title + " (continued)"];
+            prefixSize = bytes(prefix.join("\n") + "\n");
+          }
+          // An indivisible message may exceed the limit, but never shares that part with another.
+          current.lines.push(...prefix, ...block.lines);
+          current.rows.push(block.row);
+          current.size += prefixSize + block.size;
+        }
       }
+      // Multipart headers and a wider final count can change the available body budget.
+      if (
+        (partCount === 1 && parts.length > 1) ||
+        String(parts.length).length > String(partCount).length
+      ) {
+        partCount = parts.length;
+        continue;
+      }
+      return parts;
     }
-    return parts;
   }
 
   // Writes the day's transcript parts and raw rows, returning their chunk descriptions. Labels cover the whole export.
@@ -164,14 +198,7 @@ async function run(argv) {
     for (const [index, part] of parts.entries()) {
       const file = day + (parts.length > 1 ? "-part" + (index + 1) : "") + ".txt";
       const authors = [...new Set(part.rows.map((row) => row.payload.author_id))];
-      const header = [
-        "Channel: " + channel + (sourceKey ? " (" + sourceKey + ")" : ""),
-        "Day: " +
-          day +
-          " (times UTC)" +
-          (parts.length > 1 ? " · part " + (index + 1) + " of " + parts.length : ""),
-        "Authors: " + authors.map((id) => labels.get(id) + " = " + id).join("; "),
-      ];
+      const header = partHeader(part.rows, labels, day, index, parts.length);
       const text = [...header, ...part.lines].join("\n") + "\n";
       await writeFile(path.join(outputDir, file), text);
       chunks.push({
