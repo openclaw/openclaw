@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { projectChatDisplayMessages } from "../../../src/gateway/chat-display-projection.ts";
 import { encodePngRgb } from "../../../src/media/png-encode.js";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
@@ -43,6 +44,86 @@ export type TeamScaleFixtureAsset = {
   delayMs?: number;
   headers?: Record<string, string>;
 };
+
+/** A saved reply and unfinished tool group, followed by work completed while away. */
+export function createActiveTranscriptReloadFixture(prefix: unknown[] = [], appendedPairs = 1) {
+  const message = (role: string, content: unknown, id: string, offset: number, runId?: string) => ({
+    role,
+    content,
+    timestamp: Date.UTC(2026, 9, 9, 12, 0, offset),
+    __openclaw: { id, seq: prefix.length + offset + 1, ...(runId ? { runId } : {}) },
+  });
+  const fullReply = message(
+    "assistant",
+    Array.from(
+      { length: 24 },
+      (_, index) => `- **Verification ${index + 1}** ${"Synthetic evidence. ".repeat(30)}`,
+    ).join("\n\n"),
+    "active-reload-long-reply",
+    1,
+  );
+  const rawSaved = [
+    ...prefix,
+    message("user", "Retain the complete synthetic evidence.", "active-reload-long-prompt", 0),
+    fullReply,
+    message(
+      "user",
+      "Inspect the synthetic workspace.",
+      "active-reload-tool-prompt",
+      2,
+      "active-reload-run",
+    ),
+    message(
+      "assistant",
+      [
+        {
+          type: "toolCall",
+          id: "active-reload-tool",
+          name: "read",
+          arguments: { path: "fixture.md" },
+        },
+      ],
+      "active-reload-tool-call",
+      3,
+      "active-reload-run",
+    ),
+  ];
+  const saved = projectChatDisplayMessages(rawSaved);
+  const fresh = Array.from({ length: appendedPairs * 2 }, (_, index) => {
+    const part = index % 2 ? "result" : "prompt";
+    const turn = Math.floor(index / 2);
+    return message(
+      part === "result" ? "assistant" : "user",
+      `A fresh synthetic ${part}`,
+      `active-reload-fresh-${part}${turn ? `-${turn}` : ""}`,
+      6 + index,
+    );
+  });
+  const intermediate = projectChatDisplayMessages([...rawSaved, ...fresh]);
+  const live = projectChatDisplayMessages([
+    ...rawSaved,
+    {
+      ...message(
+        "toolResult",
+        "Synthetic workspace checked.",
+        "active-reload-tool-result",
+        4,
+        "active-reload-run",
+      ),
+      toolCallId: "active-reload-tool",
+      toolName: "read",
+    },
+    message(
+      "assistant",
+      "The synthetic inspection is complete.",
+      "active-reload-tool-answer",
+      5,
+      "active-reload-run",
+    ),
+    ...fresh,
+  ]);
+  return { saved, intermediate, live, fullReply };
+}
 
 function createTranscriptThumbnail(seed: number): Buffer {
   // Repeated 2×4 texture cells keep real decode work below the 96 KiB rendition ceiling.
