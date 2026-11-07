@@ -664,7 +664,7 @@ function controlUiPrecompressedAssetsPlugin(): Plugin {
   };
 }
 
-export function compactControlUiDocument(html: string): string {
+function compactControlUiDocument(html: string): string {
   // Keep recovery self-contained when every external request fails. Compact only
   // inline scripts: Vite already minifies CSS; DOM and fallback copy stay intact.
   return html.replace(

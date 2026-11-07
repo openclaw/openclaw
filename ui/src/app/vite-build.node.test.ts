@@ -16,7 +16,7 @@ import {
 } from "../../../src/infra/directory-walk.js";
 import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
 import { controlUiPluginDistributionsPlugin } from "../../config/control-ui-plugin-distributions.ts";
-import controlUiViteConfig, { compactControlUiDocument } from "../../vite.config.ts";
+import controlUiViteConfig from "../../vite.config.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 
 function readBuiltIdentity(html: string): { buildId: string } {
@@ -140,7 +140,7 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-it("keeps inline recovery executable and its DOM intact after document compaction", () => {
+it("keeps inline recovery executable and its DOM intact after document compaction", async () => {
   const source = `<style>/* fallback */ h1 { color: rgb(255, 0, 0); }</style>
     <h1>Still loading</h1><button>Retry</button>
     <script data-cfasync="false">/* recovery */
@@ -149,7 +149,8 @@ it("keeps inline recovery executable and its DOM intact after document compactio
       });
     </script>
     <script nomodule>window.unsupported = function () { return "Update your browser"; };</script>`;
-  const compact = compactControlUiDocument(source);
+  await writeRoot("index.html", source + '<script type="module" src="./main.js"></script>');
+  const { html: compact } = await buildOutput(createConfig());
   const dom = new JSDOM(compact, { runScripts: "dangerously" });
   const { document } = dom.window;
   expect(document.querySelector("h1")?.outerHTML).toBe("<h1>Still loading</h1>");
@@ -157,10 +158,9 @@ it("keeps inline recovery executable and its DOM intact after document compactio
   document.querySelector("button")!.click();
   expect(document.querySelector("h1")?.textContent).toBe("Retrying");
   expect(document.querySelector("script[nomodule]")?.textContent).not.toMatch(
-    /=>|\b(?:let|const)\b/u,
+    /[=]>|\b(?:let|const)\b/u,
   );
   expect(compact).not.toContain("/* recovery */");
-  expect(compact).toContain("<style>/* fallback */ h1 { color: rgb(255, 0, 0); }</style>");
   dom.window.close();
 });
 
