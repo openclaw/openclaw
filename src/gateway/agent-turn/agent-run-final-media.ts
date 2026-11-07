@@ -33,16 +33,23 @@ import {
   prepareSessionPlacementRead,
 } from "../worker-environments/placement-turn-authority.js";
 
-/** Materialize one visible agent final before its Gateway run releases custody. */
+/**
+ * Materialize one visible agent final before its Gateway run releases custody.
+ * Resolves true when the final carries a managed attachment, false when it has none
+ * or every item was refused (the transcript then shows only the failure notice).
+ */
 export async function finalizeAgentRunMedia(
   params: Parameters<typeof createAssistantCommentaryMediaCustody>[0] & {
-    options: AgentCommandGatewayIngressOpts;
+    options: Pick<
+      AgentCommandGatewayIngressOpts,
+      "sourceReplyDeliveryMode" | "internalDeliverySuppressErrors"
+    >;
   },
   reply: NonNullable<
     Parameters<NonNullable<AgentCommandGatewayIngressOpts["beforeTerminalDelivery"]>>[0]
   >,
   candidates: OutboundPayloadPlan[],
-): Promise<void> {
+): Promise<boolean> {
   const { options, session } = params;
   const visible = new Set(
     selectSourceDeliverablePayloads(
@@ -52,7 +59,7 @@ export async function finalizeAgentRunMedia(
   );
   const plan = candidates.filter((entry) => visible.has(entry.payload));
   if (!plan.some(({ parts }) => parts.mediaUrls.length > 0)) {
-    return;
+    return false;
   }
   const runId = params.getRunId();
   const assertCurrent = () => {
@@ -66,7 +73,7 @@ export async function finalizeAgentRunMedia(
   let predicate: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
   let releaseSource: (() => void) | undefined;
   let releasePlacement: (() => void) | undefined;
-  let work: Promise<void> | undefined;
+  let work: Promise<boolean> | undefined;
   const release = () => {
     active = false;
     predicate?.release();
@@ -172,7 +179,8 @@ export async function finalizeAgentRunMedia(
       prepared.assertCurrent();
       const uncommitted = plan.filter((_, index) => !committedSourceContent[index]);
       if (!uncommitted.some(({ parts }) => parts.mediaUrls.length > 0)) {
-        return;
+        // The source reply already committed this media to the transcript.
+        return true;
       }
       const { persistedAssistantContent: content, mediaBySource } =
         await prepareWebchatReplyMediaForDisplay({
@@ -207,14 +215,15 @@ export async function finalizeAgentRunMedia(
         }
         // Committed transcript references own their artifacts even if this run is then revoked.
         retained = true;
+        const attached = content.some(
+          (block) =>
+            block.type === "image" ||
+            block.type === "audio" ||
+            block.type === "video" ||
+            block.type === "attachment",
+        );
         if (
-          content.some(
-            (block) =>
-              block.type === "image" ||
-              block.type === "audio" ||
-              block.type === "video" ||
-              block.type === "attachment",
-          ) &&
+          attached &&
           !(await attachManagedOutgoingMediaToMessage({
             messageId: rewritten.messageId,
             blocks: content,
@@ -227,6 +236,7 @@ export async function finalizeAgentRunMedia(
           readSource: prepared.readSource,
           rewritten: [rewritten],
         });
+        return attached;
       } catch (error) {
         retained ||= hasSqliteWorkerOutcomeUnknown(error);
         throw error;
@@ -236,7 +246,7 @@ export async function finalizeAgentRunMedia(
         }
       }
     })();
-    await work;
+    return await work;
   } finally {
     release();
   }

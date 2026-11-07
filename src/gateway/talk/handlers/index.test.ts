@@ -228,7 +228,7 @@ vi.mock("../../../talk/agent-consult-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../talk/agent-consult-runtime.js")>();
   return {
     ...actual,
-    consultRealtimeVoiceAgent: mocks.consultRealtimeVoiceAgent,
+    consultRealtimeVoiceAgentWithAnswerMedia: mocks.consultRealtimeVoiceAgent,
   };
 });
 

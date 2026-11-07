@@ -10,7 +10,7 @@ import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
-import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { resolveLoadedSessionThreadInfo } from "../channels/plugins/session-thread-info-loaded.js";
 import { buildSpawnAuthorityReceipt } from "../config/sessions/session-entry-lineage.js";
 import {
@@ -43,6 +43,8 @@ export type RealtimeVoiceAgentConsultResult = { text: string; yielded?: true };
 const REALTIME_VOICE_YIELD_ACK_MAX_CHARS = 500;
 const REALTIME_VOICE_YIELD_ACK_FALLBACK =
   "I started that work and will share the result when it is ready.";
+const REALTIME_VOICE_MEDIA_ONLY_ACK = "I've put that in the chat.";
+const REALTIME_VOICE_MEDIA_REFUSED_ACK = "I couldn't put that in the chat.";
 
 /**
  * Sender-auth contract revision for official realtime voice plugins.
@@ -261,6 +263,27 @@ export async function consultRealtimeVoiceAgent(params: {
     | void
     | Promise<RealtimeVoiceAgentConsultRunRegistration | void>;
 }): Promise<RealtimeVoiceAgentConsultResult> {
+  return await consultRealtimeVoiceAgentWithAnswerMedia(params);
+}
+
+/**
+ * Gateway Talk entry point: the plugin SDK re-exports only consultRealtimeVoiceAgent,
+ * so chat media delivery stays an internal Gateway contract.
+ */
+export async function consultRealtimeVoiceAgentWithAnswerMedia(
+  params: Parameters<typeof consultRealtimeVoiceAgent>[0] & {
+    /**
+     * Chat surfaces deliver the current answer's media while the run is still registered.
+     * "attached" and "refused" let a media-only answer say what the chat now shows.
+     */
+    deliverAnswerMedia?: (reply: {
+      runId: string;
+      sessionId: string;
+      payloads: ReplyPayload[];
+      abortSignal: AbortSignal;
+    }) => Promise<"attached" | "refused" | "none">;
+  },
+): Promise<RealtimeVoiceAgentConsultResult> {
   params.abortSignal?.throwIfAborted();
   const [{ beginSessionEffect }, { resolveSessionWorkStartError }] = await Promise.all([
     import("../sessions/session-controller.lifecycle.js"),
@@ -583,13 +606,39 @@ export async function consultRealtimeVoiceAgent(params: {
         }
         throw error;
       }
+      let currentInputPayloads: ReplyPayload[] = [];
+      let mediaDelivery: "attached" | "refused" | "none" = "none";
       const result = await runPromise
         .catch((error: unknown) => {
           assertRealtimeVoiceConsultNotInterrupted(abortSignal);
           throw error;
         })
+        .then(async (completed) => {
+          assertRealtimeVoiceConsultNotInterrupted(abortSignal, completed.meta);
+          // Earlier input answers remain in history; this completion speaks for the current input.
+          currentInputPayloads = (completed.payloads ?? []).filter(
+            (payload) => getReplyPayloadMetadata(payload)?.precedingInputAnswer !== true,
+          );
+          if (params.deliverAnswerMedia && completed.meta?.yielded !== true) {
+            try {
+              mediaDelivery = await params.deliverAnswerMedia({
+                runId,
+                sessionId,
+                payloads: currentInputPayloads,
+                abortSignal,
+              });
+            } catch {
+              // Delivery errors can name local media paths; keep them out of logs.
+              if (!abortSignal.aborted) {
+                params.logger.warn("[talk] agent consult media could not be delivered to chat");
+              }
+            }
+            // Cancellation during delivery stays a cancellation, not an unanswered consult.
+            assertRealtimeVoiceConsultNotInterrupted(abortSignal);
+          }
+          return completed;
+        })
         .finally(() => runRegistration?.cleanup?.());
-      assertRealtimeVoiceConsultNotInterrupted(abortSignal, result.meta);
 
       if (result.meta?.yielded === true) {
         const acknowledgment =
@@ -604,11 +653,15 @@ export async function consultRealtimeVoiceAgent(params: {
           yielded: true,
         };
       }
-      // Earlier input answers remain in history; this completion speaks for the current input.
-      const currentInputPayloads = (result.payloads ?? []).filter(
-        (payload) => getReplyPayloadMetadata(payload)?.precedingInputAnswer !== true,
-      );
       const text = collectRealtimeVoiceAgentConsultVisibleText(currentInputPayloads);
+      if (!text && mediaDelivery !== "none") {
+        return {
+          text:
+            mediaDelivery === "attached"
+              ? REALTIME_VOICE_MEDIA_ONLY_ACK
+              : REALTIME_VOICE_MEDIA_REFUSED_ACK,
+        };
+      }
       if (!text) {
         params.logger.warn(
           "[talk] agent consult produced no answer: agent returned no speakable text",
