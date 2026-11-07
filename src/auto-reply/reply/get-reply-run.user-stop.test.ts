@@ -6,7 +6,12 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import { baseParams, nonReasoningModelState } from "./get-reply-run.test-support.js";
+import {
+  baseParams,
+  createInboundBody,
+  createSessionBody,
+  nonReasoningModelState,
+} from "./get-reply-run.test-support.js";
 import { writeSessionStore } from "./test/session.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -128,6 +133,21 @@ it("keeps a recorded Stop for the next turn when one is refused before any model
   expect(prompt).toContain(STOPPED);
   expect(prompt).not.toContain("continue the unfinished work");
   expect(loadSessionEntry(scope)?.userStoppedAt).toBeUndefined();
+});
+
+it("reads the think hint ahead of a recorded Stop's note", async () => {
+  // The note joins the body only at admission, after the hint was read and removed.
+  await runPreparedReply(
+    baseParams({
+      ctx: createInboundBody("low Run this"),
+      sessionCtx: createSessionBody("low Run this"),
+      resolvedThinkLevel: undefined,
+      sessionEntry: { updatedAt: 1, ...stopOf("stopped", 5) },
+    }),
+  );
+  const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+  expect(call?.followupRun.run.thinkLevel).toBe("low");
+  expect(call?.commandBody).toMatch(new RegExp(`^Note: ${STOPPED}\\..*\\n\\nRun this$`, "su"));
 });
 
 it("claims a global session's Stop from the store its agent recorded it in", async () => {
