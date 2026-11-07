@@ -127,7 +127,8 @@ async function run(argv) {
   // Keep sections together when they fit, and split larger sections only between messages.
   function pack(dayRows, byId, labels, day) {
     const groups = sections(dayRows).map((section) => ({
-      ...section,
+      title: section.title,
+      rows: section.rows,
       blocks: section.rows.map((row) => {
         const lines = messageLines(row, byId, labels, day);
         return { row, lines, size: bytes(lines.join("\n") + "\n") };
