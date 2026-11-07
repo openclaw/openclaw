@@ -12,7 +12,35 @@ import {
   jsonRemovePaths,
   jsonSetPath,
   jsonValid,
+  jsonValue,
 } from "./json-values.js";
+
+it.each([
+  ["true", true],
+  ["false", false],
+  ['{"nested":[1,"two"]}', { nested: [1, "two"] }],
+  ["[1,false]", [1, false]],
+  ['"false"', "false"],
+  ["null", null],
+  [null, null],
+] as const)("embeds serialized JSON %j without changing its value type", (encoded, expected) => {
+  const { DatabaseSync } = requireNodeSqlite();
+  using db = new DatabaseSync(":memory:");
+  const query = getNodeSqliteKysely<Record<string, never>>(db);
+  const result = executeSqliteQuerySync(
+    db,
+    query.selectNoFrom(
+      jsonSetPath(
+        db,
+        sql.val('{"keep":1}'),
+        sql.lit("$.parsed"),
+        jsonValue(db, sql.val(encoded)),
+        true,
+      ).as("event"),
+    ),
+  ).rows[0]!;
+  expect(JSON.parse(result.event)).toEqual({ keep: 1, parsed: expected });
+});
 
 it("preserves ordered row objects, JSON text fields, and empty projection results", () => {
   const { DatabaseSync } = requireNodeSqlite();
