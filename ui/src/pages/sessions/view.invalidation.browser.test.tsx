@@ -138,30 +138,12 @@ it.each([1280, 390])(
     const draft = view.container.querySelector<HTMLInputElement>(".session-overrides-grid input")!;
     scroller.style.height = "200px";
     draft.value = "Retained draft";
-    const scrollBeforeFocus = scroller.scrollTop;
-    const scrollWrites = vi.spyOn(scroller, "scrollTo");
     draft.focus();
-    const scrollAfterFocus = scroller.scrollTop;
     await vi.waitFor(() => {
       const field = draft.getBoundingClientRect();
       const viewport = scroller.getBoundingClientRect();
-      const style = getComputedStyle(draft);
-      const geometry = JSON.stringify({
-        scrollBeforeFocus,
-        scrollAfterFocus,
-        scrollTop: scroller.scrollTop,
-        scrollWrites: scrollWrites.mock.calls,
-        field,
-        viewport,
-        row: draft.closest("tbody")?.getBoundingClientRect(),
-        details: draft.closest(".session-details-row")?.getBoundingClientRect(),
-        padding: style.padding,
-        lineHeight: style.lineHeight,
-        fontSize: style.fontSize,
-        activeIsDraft: document.activeElement === draft,
-      });
-      expect(field.top, geometry).toBeGreaterThanOrEqual(viewport.top);
-      expect(field.bottom, geometry).toBeLessThanOrEqual(viewport.bottom);
+      expect(field.top).toBeGreaterThanOrEqual(viewport.top);
+      expect(field.bottom).toBeLessThanOrEqual(viewport.bottom);
     });
     scroller.scrollTop = scroller.scrollHeight / 2;
     await expect

@@ -178,29 +178,7 @@ it.each([
   }
   expect(attachmentBox.height).toBeGreaterThan(0);
   expect(attachmentBox.bottom).toBeLessThanOrEqual(rect("textarea").top);
-  const overflow =
-    composer.scrollWidth > composer.clientWidth + 1
-      ? JSON.stringify({
-          composer: composer.getBoundingClientRect(),
-          clientWidth: composer.clientWidth,
-          children: [
-            ...composer.querySelectorAll<HTMLElement>(
-              ".composer-context-strip, .composer-context-strip__dismiss, .agent-chat__composer-input-row",
-            ),
-          ].map((element) => {
-            const style = getComputedStyle(element);
-            const before = getComputedStyle(element, "::before");
-            return {
-              class: element.className,
-              rect: element.getBoundingClientRect(),
-              margin: style.margin,
-              padding: style.padding,
-              before: { inset: before.inset, width: before.width, height: before.height },
-            };
-          }),
-        })
-      : undefined;
-  expect(composer.scrollWidth, overflow).toBeLessThanOrEqual(composer.clientWidth + 1);
+  expect(composer.scrollWidth).toBeLessThanOrEqual(composer.clientWidth + 1);
   const reply = query(".chat-reply-preview:not([role])");
   const text = query(".chat-reply-preview__text", reply);
   expectInside(rect("button", reply), reply.getBoundingClientRect());
