@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
+import {
+  readDiscordAutoArchiveDurationParam,
+  readDiscordChannelEditParams,
+} from "./runtime.shared.js";
+
+it.each([
+  { params: { appliedTags: ["tag-1"] }, expected: ["tag-1"] },
+  { params: { appliedTags: [] }, expected: [] },
+  { params: { applied_tags: [] }, expected: [] },
+  { params: { applied_tags: ["tag-1"] }, expected: ["tag-1"] },
+])("preserves applied channel tags %#", ({ params, expected }) => {
+  expect(readDiscordChannelEditParams({ channelId: "C1", ...params }).appliedTags).toEqual(
+    expected,
+  );
+});
 
 describe("readDiscordAutoArchiveDurationParam", () => {
   it("accepts Discord REST auto-archive durations", () => {
