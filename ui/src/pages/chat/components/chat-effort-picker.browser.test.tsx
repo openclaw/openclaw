@@ -176,6 +176,9 @@ describe("effort selection", () => {
     await expect.poll(() => details.open).toBe(false);
     await userEvent.keyboard("{Enter}");
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
+    await expect
+      .poll(() => host!.querySelector<HTMLInputElement>("input[type=range]")?.checkVisibility())
+      .toBe(true);
     // macOS WebKit uses Option-Tab to traverse controls inside the open picker.
     await userEvent.keyboard(
       navigator.platform.includes("Mac") &&
