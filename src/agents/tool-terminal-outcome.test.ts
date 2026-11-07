@@ -5,10 +5,9 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { Message, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
-  buildAdjustedParamsKey,
   peekAdjustedParamsForToolCall,
-  preExecutionBlockedToolCallIds,
   recordAdjustedParamsForToolCall,
+  recordPreExecutionBlockedToolCall,
   recordToolExecutionStarted,
   recordToolExecutionTracked,
   resetAdjustedParamsByToolCallIdForTests,
@@ -309,7 +308,7 @@ describe("tool terminal outcome observer", () => {
       const toolCallId = "call-host-evidence";
       const adjusted = { action: "send", to: "channel:adjusted" };
       if (mode === "settled blocked") {
-        preExecutionBlockedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
+        recordPreExecutionBlockedToolCall(toolCallId, runId);
       } else {
         (mode === "started" ? recordToolExecutionStarted : recordToolExecutionTracked)(
           toolCallId,

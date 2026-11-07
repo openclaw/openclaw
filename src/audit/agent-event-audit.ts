@@ -21,6 +21,7 @@ import type {
   AgentRunFinishedAuditEventInput,
   AgentRunFinishedAuditTerminal,
   AgentRunStartedAuditEventInput,
+  SkillSelectionAuditEventInput,
   ToolActionAuditEventInput,
 } from "./audit-event-types.js";
 import type { AuditEventWriter } from "./audit-event-writer.js";
@@ -64,6 +65,27 @@ function legacyAuditSourceId(params: {
   return `${params.runId}:${params.sourceSequence}:${params.occurredAt}:${params.action}`;
 }
 
+// Accepts the runtime encoder output (see sanitizeSkillName in
+// skills/runtime-skill-selection.ts): `-` doubles to `--`, bytes outside
+// `[A-Za-z0-9._-]` become `-hh-` hex escapes, and a leading `-` is prefixed
+// to `x-…`. Leading `_`/`.` stay literal so `_helper` and `helper` remain
+// distinct; only a leading `-` is rejected (CLI-flag injection). Bounded
+// to 128 chars; the encoder never emits a trailing partial escape.
+function auditSkillSelectionName(value: unknown): string | undefined {
+  const name = nonEmptyString(value)?.trim();
+  return name && /^[A-Za-z0-9._][A-Za-z0-9._-]{0,127}$/u.test(name) ? name : undefined;
+}
+
+function auditSkillSelectionSource(value: unknown): "observed_runtime" | "none" {
+  const label = normalizeOptionalLowercaseString(value)?.replace(/[^a-z0-9_-]/gu, "");
+  return label === "observed_runtime" ? label : "none";
+}
+
+function auditSkillSelectionConfidence(value: unknown): "observed" | "none" {
+  const label = normalizeOptionalLowercaseString(value)?.replace(/[^a-z0-9_-]/gu, "");
+  return label === "observed" ? label : "none";
+}
+
 // Audit is projection-only: session/run correlation cannot establish identity.
 // Producers must carry authoritative attribution on every event that needs it.
 function projectExplicitAttribution(event: {
@@ -103,6 +125,7 @@ function classifyRunTerminal(
 
 type AgentAuditProjection =
   | { input: AgentRunStartedAuditEventInput; terminal?: never }
+  | { input: SkillSelectionAuditEventInput; terminal?: never }
   | {
       input: AgentRunFinishedAuditEventInput;
       terminal: { outcome: AgentRunTerminalOutcome; phase: "end" | "error" };
@@ -110,11 +133,57 @@ type AgentAuditProjection =
 
 function projectAgentEvent(event: AgentEventPayload): AgentAuditProjection | undefined {
   const runId = nonEmptyString(event.runId);
-  const phase = nonEmptyString(event.data.phase);
-  if (!runId || !phase) {
+  if (!runId) {
     return undefined;
   }
   const provenance = projectExplicitAttribution(event);
+  if (event.stream === "skill_selection" && event.data?.kind === "skill_selection") {
+    // Hidden non-lifecycle public events drop top-level sessionKey. Private skill
+    // audit still carries explicit attribution on the marker payload.
+    const skillProvenance = projectExplicitAttribution({
+      agentId: event.agentId ?? event.data.agentId,
+      sessionKey: event.sessionKey ?? event.data.sessionKey,
+      sessionId: event.sessionId ?? event.data.sessionId,
+    });
+    const selectedSkill = auditSkillSelectionName(event.data.selectedSkill);
+    const selectionSource = selectedSkill
+      ? auditSkillSelectionSource(event.data.selectionSource)
+      : "none";
+    const selectionConfidence = auditSkillSelectionConfidence(event.data.selectionConfidence);
+    if (
+      !selectedSkill ||
+      selectionSource !== "observed_runtime" ||
+      selectionConfidence !== "observed"
+    ) {
+      return undefined;
+    }
+    const action: SkillSelectionAuditEventInput["action"] = "skill.selection.observed";
+    const input: SkillSelectionAuditEventInput = {
+      sourceId: legacyAuditSourceId({
+        runId,
+        sourceSequence: event.seq,
+        occurredAt: event.ts,
+        action,
+      }),
+      sourceSequence: event.seq,
+      occurredAt: event.ts,
+      kind: "skill_selection",
+      action,
+      status: "observed",
+      actorType: skillProvenance.actorType,
+      actorId: skillProvenance.agentId,
+      agentId: skillProvenance.agentId,
+      ...(skillProvenance.sessionKey ? { sessionKey: skillProvenance.sessionKey } : {}),
+      ...(skillProvenance.sessionId ? { sessionId: skillProvenance.sessionId } : {}),
+      runId,
+      toolName: selectedSkill,
+    };
+    return { input };
+  }
+  const phase = nonEmptyString(event.data.phase);
+  if (!phase) {
+    return undefined;
+  }
   if (event.stream === "lifecycle" && phase === "start") {
     const occurredAt = asDateTimestampMs(event.data.startedAt) ?? event.ts;
     const action = "agent.run.started" as const;
@@ -367,6 +436,15 @@ export function createAgentEventAuditRecorder(options: {
       }
       const projection = projectAgentEvent(event);
       if (!projection) {
+        return;
+      }
+      if (projection.input.kind === "skill_selection") {
+        const start = bufferedStarts.get(runInstance);
+        if (start) {
+          bufferedStarts.delete(runInstance);
+          writer.record(start);
+        }
+        writer.record(projection.input);
         return;
       }
       if (!projection.terminal) {

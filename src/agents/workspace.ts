@@ -2,14 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { Minimatch } from "minimatch";
-import type { ChatType } from "../channels/chat-type.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { retainMutationAuthority } from "../infra/mutation-authority.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { exactWorkspaceEntryExists } from "../memory/root-memory-files.js";
-import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
-import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
@@ -26,7 +23,6 @@ import {
   hasGlobPattern,
   normalizeWorkspacePatternPath,
   resolveGlobWalkRoot,
-  resolveWorkspaceBootstrapPath,
   type WorkspaceBootstrapFile,
   type WorkspaceBootstrapFileName,
 } from "./workspace-bootstrap-policy.js";
@@ -86,6 +82,7 @@ export {
   DEFAULT_AGENT_WORKSPACE_DIR,
   resolveDefaultAgentWorkspaceDir,
 } from "./workspace-default.js";
+export { filterBootstrapFilesForSession } from "./workspace-bootstrap-privacy.js";
 const GENERATED_WORKSPACE_BOOTSTRAP_FILENAME_SET: ReadonlySet<string> = new Set(
   GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES,
 );
@@ -854,66 +851,6 @@ async function ensureAgentWorkspaceOwned(
     bootstrapPending: !state.setupCompletedAt && bootstrapExists,
     identityPathCreated,
   };
-}
-
-const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME]);
-
-const CRON_BOOTSTRAP_ALLOWLIST = new Set([
-  DEFAULT_AGENTS_FILENAME,
-  DEFAULT_SOUL_FILENAME,
-  DEFAULT_IDENTITY_FILENAME,
-  DEFAULT_USER_FILENAME,
-]);
-
-type BootstrapSessionContext = {
-  sessionKey?: string;
-  chatType?: ChatType;
-  workspaceDir?: string;
-};
-
-function filterRootMemoryBootstrapFiles(
-  files: WorkspaceBootstrapFile[],
-  workspaceRoot?: string,
-): WorkspaceBootstrapFile[] {
-  if (!workspaceRoot) {
-    return files.filter((file) => file.name !== DEFAULT_MEMORY_FILENAME);
-  }
-  const resolvedWorkspaceRoot = resolveUserPath(workspaceRoot);
-  const rootMemoryPath = path.join(resolvedWorkspaceRoot, DEFAULT_MEMORY_FILENAME);
-  return files.filter((file) => {
-    if (typeof file.path !== "string") {
-      return true;
-    }
-    const filePath = file.path.trim();
-    if (!filePath) {
-      return true;
-    }
-    const resolvedPath = resolveWorkspaceBootstrapPath(resolvedWorkspaceRoot, filePath);
-    return resolvedPath !== rootMemoryPath;
-  });
-}
-
-export function filterBootstrapFilesForSession(
-  files: WorkspaceBootstrapFile[],
-  session?: string | BootstrapSessionContext,
-): WorkspaceBootstrapFile[] {
-  const { sessionKey, chatType, workspaceDir }: BootstrapSessionContext =
-    typeof session === "string" ? { sessionKey: session } : (session ?? {});
-  const isSubagent = isSubagentSessionKey(sessionKey);
-  const isCron = isCronSessionKey(sessionKey);
-  const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
-  const isNonPrivate =
-    isSubagent || isCron || effectiveChatType === "group" || effectiveChatType === "channel";
-  const privacyFilteredFiles = isNonPrivate
-    ? filterRootMemoryBootstrapFiles(files, workspaceDir)
-    : files;
-  if (isSubagent) {
-    return privacyFilteredFiles.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
-  }
-  if (isCron) {
-    return privacyFilteredFiles.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
-  }
-  return privacyFilteredFiles;
 }
 
 async function* walkWorkspaceFiles(
