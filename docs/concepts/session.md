@@ -511,7 +511,9 @@ After a pass reclaims nothing, the next automatic check first inspects eligible
 data without reserving the foreground writer; protected-only pressure does not
 repeat archive pruning or checkpoints. Manual cleanup still runs immediately.
 The warning recommends raising `session.maintenance.maxDiskBytes` or exporting
-and deleting unneeded sessions. Checks resume on subsequent activity;
+and deleting unneeded sessions (`/export-session [path]` — owner-only, in-chat —
+exports the current session to a self-contained HTML transcript in the
+workspace). Checks resume on subsequent activity;
 `openclaw sessions cleanup --enforce` remains available immediately.
 
 Cleanup first tries to truncate the WAL without waiting for readers. If readers
