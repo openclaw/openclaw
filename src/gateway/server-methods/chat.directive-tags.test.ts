@@ -261,7 +261,6 @@ vi.mock("../../media-understanding/file-context.js", async () => {
     renderInboundDocumentContext: (
       params: Parameters<typeof actual.renderInboundDocumentContext>[0],
     ) => {
-      // #194399/#187438: steer document rendering must carry the run's abort signal.
       expect(params.signal).toBeInstanceOf(AbortSignal);
       if (mockState.steerDocumentRenderError) {
         return Promise.reject(mockState.steerDocumentRenderError);
