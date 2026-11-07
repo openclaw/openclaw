@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { focusChatComposerFromKeydown } from "../chat-pane-shared.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
@@ -78,6 +78,11 @@ function mountPicker(optionsReady = true) {
     await new Promise(requestAnimationFrame);
     if (picker.open) {
       await waitForModelMenu(picker);
+      if (params.modelOptions.length) {
+        await waitForSolid(() =>
+          expect(picker.querySelector("[data-chat-model-option]")).not.toBeNull(),
+        );
+      }
     }
   };
   const open = () => toggle(() => page.getByText("Alpha", { exact: true }).first().click());
@@ -130,8 +135,9 @@ it("opens during activation and preserves filter focus and query across catalog 
   expect(search.value).toBe("beta");
   expect(composer.value).toBe("Keep this draft");
   expect(option("example/alpha")).toBeNull();
+  // Windowed results publish after the sheet's layout measurement.
+  await waitForSolid(() => expect(option("example/beta")).toMatchObject({ hidden: false }));
   const beta = option("example/beta");
-  expect(beta).toMatchObject({ hidden: false });
   expect(beta.checkVisibility()).toBe(true);
   beta.focus();
   expect(document.activeElement).toBe(beta);
@@ -497,4 +503,26 @@ it("keeps the complete model panel above the composer", async () => {
   } finally {
     container.removeAttribute("style");
   }
+});
+
+it("places provider recovery below the disabled model rows", async () => {
+  const { params, update, open, picker } = mountPicker();
+  params.modelOptions = params.modelOptions.map((entry) => ({
+    ...entry,
+    disabled: true,
+    unavailableReason: "auth-failed",
+  }));
+  params.onModelSetup = vi.fn();
+  update();
+  await open();
+  await vi.waitFor(() => {
+    const state = picker.querySelector<HTMLElement>("[data-chat-model-auth-state]")!;
+    const rows = [...picker.querySelectorAll<HTMLElement>("[data-chat-model-option]")];
+    expect(state.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      Math.max(...rows.map((row) => row.getBoundingClientRect().bottom)),
+    );
+    expect(state.querySelector("button")!.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      picker.querySelector(".chat-picker-overlay")!.getBoundingClientRect().bottom - 8,
+    );
+  });
 });

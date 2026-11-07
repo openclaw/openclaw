@@ -141,9 +141,9 @@ it.each([
 // Missing-auth may mean disabled plugin or missing pin, not just signed out.
 it.each([
   ["anthropic", "claude-cli", "Claude Code isn't ready. If signed out, run claude auth login."],
-  ["openai", undefined, "No models available"],
+  ["openai", undefined, "Sign-in needed"],
 ] as const)(
-  "explains an empty picker of missing-auth %s rows (runtime %s)",
+  "explains a picker of missing-auth %s rows (runtime %s)",
   async (provider, agentRuntimeId, label) => {
     const { container } = mountModelPicker({
       modelCatalogState: { hasSnapshot: true, status: "ready" },
@@ -164,7 +164,7 @@ it.each([
     });
     await waitForModelMenu(container);
     expect(
-      container.querySelector(".chat-controls__model-catalog-state-label")?.textContent?.trim(),
+      container.querySelector("[data-chat-model-auth-state] > span")?.textContent?.trim(),
     ).toBe(label);
     expect(container.querySelector<HTMLElement>(modelControlSelector("setup"))).not.toBeNull();
   },

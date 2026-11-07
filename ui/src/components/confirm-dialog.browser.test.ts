@@ -42,11 +42,13 @@ describe("promise dialog native focus and dismissal", () => {
     });
     try {
       const result = showConfirmDialog({
+        compact: true,
         message: "Remove synthetic device?",
         canConfirm: live.connected,
         signal: controller.signal,
       });
       const { dialog } = await getRenderedModalDialog(document.body);
+      await expect.poll(() => dialog.getBoundingClientRect().width).toBe(320);
       const submit = button("Confirm");
       expect(submit.disabled).toBe(false);
       live.setConnected(false);

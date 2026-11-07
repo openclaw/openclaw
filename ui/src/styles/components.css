@@ -2425,6 +2425,50 @@ select.data-table-pagination__size {
   margin-top: 0;
 }
 
+.confirm-dialog--compact {
+  --openclaw-modal-width: 320px;
+  --openclaw-modal-backdrop-color: rgb(0 0 0 / 25%);
+  --openclaw-modal-backdrop-filter: none;
+  --overlay-modal-radius: 17px;
+  --overlay-modal-title-size: 14px;
+}
+
+.confirm-dialog--compact .oc-dialog__header {
+  gap: 8px;
+  padding: 16px 16px 0;
+}
+
+.confirm-dialog--compact .oc-dialog__title {
+  min-height: 0;
+}
+
+.confirm-dialog--compact .oc-dialog__description {
+  padding: 0;
+  font-size: 12px;
+}
+
+.confirm-dialog--compact .oc-dialog__body {
+  padding: 10px 16px 0;
+}
+
+.confirm-dialog--compact .exec-approval-skip {
+  font-size: 12px;
+}
+
+.confirm-dialog--compact .oc-modal-dialog .oc-dialog__footer {
+  gap: 6px;
+  padding: 14px 16px 16px;
+}
+
+.confirm-dialog--compact .oc-dialog__footer .btn {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 11px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 /* The confirm opt-out is a control, not a continuation of the message copy, so it
    takes the same 12px separation the details block uses and keeps the 16px action
    gap below it. Without the margin it reads as a third line of the paragraph. */

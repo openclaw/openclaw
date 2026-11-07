@@ -427,6 +427,7 @@ export async function switchChatModel(
             buildCatalogDisplayLookup(host.chatModelCatalog),
           );
         const confirmed = await showConfirmDialog({
+          compact: true,
           title: t("chat.modelControls.switchTitle", { new: nextLabel }),
           message: t("chat.modelControls.switchWarning", { new: nextLabel }),
           confirmLabel: t("chat.modelControls.switchConfirm"),

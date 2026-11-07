@@ -100,7 +100,6 @@ export type ChatModelPickerOptionProps = {
   selectedAgentRuntime?: string;
   sessionModelPinned: boolean;
   onSelect: (entry: ChatModelPickerOption, event: MouseEvent) => void;
-  onModelSetup?: () => void;
 };
 
 export type ChatModelPickerTargetOptionProps = {
