@@ -161,7 +161,7 @@ it.each([
         queueMicrotask(() => child.emit("spawn"));
         return child;
       }
-      if (command !== "taskkill") {
+      if (!command.endsWith("\\System32\\taskkill.exe")) {
         throw new Error(`Unexpected fixture command: ${command}`);
       }
       const helper = new ChildProcess();

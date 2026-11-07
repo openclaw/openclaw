@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { opendirSync, readFileSync } from "node:fs";
+import path from "node:path";
 
 const DEFAULT_GRACE_MS = 3000;
 const MAX_GRACE_MS = 60_000;
@@ -520,11 +521,19 @@ function runTaskkill(args: string[], onExit?: (code: number | null) => void): Pr
     const completionTimer = setTimeout(() => finish(null), TASKKILL_COMPLETION_TIMEOUT_MS);
     completionTimer.unref?.();
     try {
-      const child = spawn("taskkill", args, {
-        stdio: "ignore",
-        detached: true,
-        windowsHide: true,
-      });
+      // Agent-core is also embedded without the CLI: do not depend on its PATH.
+      const systemRoot = [process.env.SystemRoot, process.env.WINDIR]
+        .map((value) => value?.trim())
+        .find((value) => value !== undefined && /^[A-Za-z]:[\\/]/u.test(value));
+      const child = spawn(
+        path.win32.join(systemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
+        args,
+        {
+          stdio: "ignore",
+          detached: true,
+          windowsHide: true,
+        },
+      );
       // A failed spawn emits error before a close with a negative errno. Only
       // taskkill's first actual outcome may authorize immediate escalation.
       child.once("error", () => finish(null));
