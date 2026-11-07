@@ -9,49 +9,6 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { page } from "./route.ts";
 
-it("refreshes known configuration without holding inventory on the fresh read", async () => {
-  const policy = Promise.withResolvers<never>();
-  let configReads = 0;
-  const client = createTestGatewayClient(async (method) => {
-    if (method === "config.get") {
-      configReads += 1;
-      return configReads === 1 ? { hash: "initial", config: {} } : policy.promise;
-    }
-    if (method === "node.list") {
-      return { nodes: [{ nodeId: "available-node" }] };
-    }
-    if (method === "device.pair.list") {
-      return { pending: [], paired: [] };
-    }
-    if (method === "exec.approvals.get") {
-      return { hash: "fixture", file: { version: 1 } };
-    }
-    return policy.promise;
-  });
-  const harness = createApplicationGateway(
-    createApplicationGatewaySnapshot({ client, phase: "connected" }),
-  );
-  const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
-  onTestFinished(() => runtimeConfig.dispose());
-  await runtimeConfig.ensureLoaded();
-  const context = { gateway: harness.gateway, runtimeConfig } as ApplicationContext;
-  let inventory: unknown;
-  void Promise.resolve(
-    page.loader!(
-      context,
-      createRouteLoaderOptions({ pathname: "/settings/devices", search: "", hash: "" }),
-    ),
-  ).then((data) => {
-    inventory = data;
-  });
-  await vi.waitFor(() =>
-    expect(inventory).toMatchObject({
-      devices: { nodes: [{ nodeId: "available-node" }], devicesList: { paired: [] } },
-    }),
-  );
-  expect(configReads).toBe(2);
-});
-
 it("loads Devices from the connection current after the route module yield", async () => {
   const response = (nodeId: string) => async (method: string) => {
     if (method === "node.list") {

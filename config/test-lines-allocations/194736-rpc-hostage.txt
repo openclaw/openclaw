@@ -1,2 +1,2 @@
-174
-# Per-method delay/release/closed-connection, default roster navigation, and nonblocking fresh Devices configuration regressions.
+131
+# Per-method delay/release/closed-connection and default roster-navigation regressions.

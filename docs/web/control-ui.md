@@ -46,11 +46,6 @@ visibility, or remote session-link titles. Side Chat is hidden, and session link
 keep their locally available labels. MCP Apps discovery requires general write
 access. The Gateway continues to authorize every request.
 
-The Devices page shows its device inventory independently of configuration
-reads. If configuration is slow, device-binding controls keep their loading
-state while the inventory remains available. Configuration still refreshes
-each time you open the page.
-
 Connections without general read access also skip CLI session catalogs, plugin
 tool artwork, detailed usage reads, and the separate command catalog. Slash-command
 menus retain permitted chat metadata or built-in commands without requesting a

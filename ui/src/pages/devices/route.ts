@@ -26,10 +26,10 @@ export const page = defineSolidPage<"devices", ApplicationContext, DevicesRouteD
         loadNodes(devices),
         Promise.allSettled([
           canPair && loadDevices(devices),
+          context.runtimeConfig.refresh(),
           canAdmin && loadExecApprovals(devices),
         ]),
       ]);
-      void context.runtimeConfig.refresh({ background: true }).catch(() => undefined);
       return { gateway, gatewaySnapshot, devices };
     },
   },
