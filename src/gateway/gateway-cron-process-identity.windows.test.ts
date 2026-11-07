@@ -35,23 +35,32 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
           signal.throwIfAborted();
           await instance.startGateway();
           signal.throwIfAborted();
-          client = await connectGatewayClient({
-            url: instance.url,
-            token: instance.gatewayToken,
-            requestTimeoutMs: 30_000,
-            signal,
-            verifyCleanup,
-            onEvent: (event) => {
-              if (
-                event.event === "cron" &&
-                isRecord(event.payload) &&
-                event.payload.jobId === jobId &&
-                event.payload.action === "finished"
-              ) {
-                finished.resolve(event.payload);
-              }
-            },
-          });
+          try {
+            client = await connectGatewayClient({
+              url: instance.url,
+              token: instance.gatewayToken,
+              requestTimeoutMs: 30_000,
+              signal,
+              verifyCleanup,
+              onEvent: (event) => {
+                if (
+                  event.event === "cron" &&
+                  isRecord(event.payload) &&
+                  event.payload.jobId === jobId &&
+                  event.payload.action === "finished"
+                ) {
+                  finished.resolve(event.payload);
+                }
+              },
+            });
+          } catch (error) {
+            try {
+              console.error(instance.logs());
+            } catch {
+              // Diagnostic output must not replace the original connection failure.
+            }
+            throw error;
+          }
           signal.throwIfAborted();
           const job = await client.request<{ id: string }>(
             "cron.add",

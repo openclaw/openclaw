@@ -196,19 +196,35 @@ it.each([
         {},
       );
       try {
-        const invocation = registry.invoke({
-          nodeId: "legacy-node",
-          command: "system.run",
-          timeoutMs: 1,
-          params: { runId, sessionKey },
-          turnSource: source,
-        });
-        // A successful inline result already belongs to its waiting caller and suppresses
-        // duplicate notices. Exercise a late completion whose caller timed out instead.
-        await expect(invocation).resolves.toMatchObject({
-          ok: false,
-          error: { code: "TIMEOUT" },
-        });
+        // Keep the one-millisecond deadline, but expire it only after real dispatch.
+        // TIMEOUT alone also admits pre-dispatch expiry, which never authorizes an event.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        let invokeNow = 0;
+        const invokeClock = vi.spyOn(performance, "now").mockImplementation(() => invokeNow);
+        try {
+          const onDispatchReady = vi.fn();
+          const invocation = registry.invoke({
+            nodeId: "legacy-node",
+            command: "system.run",
+            timeoutMs: 1,
+            params: { runId, sessionKey },
+            turnSource: source,
+            onDispatchReady,
+          });
+          await vi.advanceTimersByTimeAsync(0);
+          expect(onDispatchReady).toHaveBeenCalledOnce();
+          // A successful inline result belongs to its waiting caller and suppresses
+          // duplicate notices. Exercise a late completion after a dispatched timeout.
+          invokeNow = 1;
+          await vi.advanceTimersByTimeAsync(1);
+          await expect(invocation).resolves.toMatchObject({
+            ok: false,
+            error: { code: "TIMEOUT" },
+          });
+        } finally {
+          invokeClock.mockRestore();
+          vi.useRealTimers();
+        }
         const unexpected = () => {
           throw new Error("Unexpected non-exec node event effect");
         };
