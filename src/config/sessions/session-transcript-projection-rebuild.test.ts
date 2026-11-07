@@ -230,6 +230,26 @@ it("bounds rebuild FTS batches by UTF-8 bytes without dropping oversized rows", 
       "SELECT event_seq FROM session_transcript_active_events WHERE session_id = 'target' ORDER BY active_position",
     ),
   ).toEqual(texts.map((_, event_seq) => ({ event_seq })));
+  expect(
+    rows(
+      db,
+      "SELECT seq, serialized_bytes, dependency_navigation_json FROM session_transcript_active_event_facts WHERE session_id = 'target' ORDER BY seq",
+    ),
+  ).toEqual(
+    texts.map((content, seq) => ({
+      seq,
+      serialized_bytes:
+        Buffer.byteLength(
+          JSON.stringify(
+            messageEvent(`target-${seq}`, seq ? `target-${seq - 1}` : null, {
+              role: "user",
+              content,
+            }),
+          ),
+        ) + 1,
+      dependency_navigation_json: "{}",
+    })),
+  );
 });
 
 it("binds interleaved session payloads in the reused single-row facts writer", () => {
@@ -314,7 +334,6 @@ it("leaves unprojectable legacy placement facts unknown on append and rebuild", 
     .selectFrom("transcript_events as event")
     .select(transcriptEventDependencyNavigationSql(db, sql.lit(1), "event").as("navigation"));
   expect(() => executeSqliteQuerySync(db, read)).toThrow(/malformed JSON/);
-
 });
 
 function hits(db: DatabaseSync) {

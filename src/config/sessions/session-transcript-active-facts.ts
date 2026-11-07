@@ -66,28 +66,6 @@ export function transcriptDependencyFactsProjectableSql(
       AND ${jsonType(database, identity, sql.lit("$.data"))} = 'text' THEN 0 ELSE 1 END`;
 }
 
-/** Inputs come from the payload writer; no payload-table lookup is needed. */
-export function prepareSessionTranscriptActiveFacts(
-  payload: TranscriptPayloadRecord,
-  contextEligible: number | null,
-  serializedBytes: number,
-): SessionTranscriptActiveFacts | undefined {
-  // Invalid or native-depth-exceeding input keeps its existing read-time behavior.
-  if (payload.navigation_valid === 0) {
-    return undefined;
-  }
-  const candidate =
-    payload.navigation_type === null ||
-    payload.navigation_type === "custom" ||
-    payload.navigation_type === "reset" ||
-    (payload.navigation_type === "message" &&
-      contextEligible === 0 &&
-      payload.message_role === "assistant");
-  return candidate
-    ? { serializedBytes, payload }
-    : { serializedBytes, dependencyNavigationJson: "{}" };
-}
-
 /** The PG caller can depend on its active-row RETURNING CTE before inserting children. */
 export function buildSessionTranscriptActiveFactsInsert(
   database: EngineConnection,

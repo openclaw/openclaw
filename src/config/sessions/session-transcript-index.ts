@@ -24,10 +24,7 @@ import {
   readSessionActorTransactionState,
   writableSessionActorMap,
 } from "./session-actor-transaction.js";
-import {
-  createSessionTranscriptActiveFactsInserter,
-  prepareSessionTranscriptActiveFacts,
-} from "./session-transcript-active-facts.js";
+import { createSessionTranscriptActiveFactsInserter } from "./session-transcript-active-facts.js";
 import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
@@ -391,13 +388,6 @@ export function createTranscriptIndexAppenderInTransaction(
       pendingFtsRows.push(append.ftsRow);
     }
     if (append.activeRow) {
-      if (params.preparedPayload && params.serializedBytes !== undefined) {
-        append.activeRow.facts = prepareSessionTranscriptActiveFacts(
-          params.preparedPayload.payload,
-          append.activeRow.contextEligible,
-          params.serializedBytes,
-        );
-      }
       pendingActiveRows.push(append.activeRow);
       if (actor) {
         actor.transcript.active = writableSessionActorMap(actor.transcript.active);

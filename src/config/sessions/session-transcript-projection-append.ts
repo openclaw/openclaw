@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionTranscriptActiveFacts } from "./session-transcript-active-facts.js";
-import type { PreparedTranscriptPayload } from "./transcript-payload.js";
+import type { PreparedTranscriptPayload, TranscriptPayloadRecord } from "./transcript-payload.js";
 import {
   isCanonicalSessionTranscriptEntry,
   isSessionTranscriptLeafControl,
@@ -124,6 +124,28 @@ export function shouldProjectActiveEvent(event: unknown): boolean {
   );
 }
 
+/** Inputs come from the payload writer; no payload-table lookup is needed. */
+function prepareSessionTranscriptActiveFacts(
+  payload: TranscriptPayloadRecord,
+  contextEligible: number | null,
+  serializedBytes: number,
+): SessionTranscriptActiveFacts | undefined {
+  // Invalid or native-depth-exceeding input keeps its existing read-time behavior.
+  if (payload.navigation_valid === 0) {
+    return undefined;
+  }
+  const candidate =
+    payload.navigation_type === null ||
+    payload.navigation_type === "custom" ||
+    payload.navigation_type === "reset" ||
+    (payload.navigation_type === "message" &&
+      contextEligible === 0 &&
+      payload.message_role === "assistant");
+  return candidate
+    ? { serializedBytes, payload }
+    : { serializedBytes, dependencyNavigationJson: "{}" };
+}
+
 /** Resolves one append against an already-complete projection without mutating storage. */
 export function prepareSessionTranscriptProjectionAppend(
   params: TranscriptIndexAppend & { cursor: SessionTranscriptProjectionCursor },
@@ -148,7 +170,7 @@ export function prepareSessionTranscriptProjectionAppend(
   const ftsRow = extractTranscriptIndexEntry(params.event, params.createdAt);
   const projectsActiveEvent = shouldProjectActiveEvent(params.event);
   const projectsMessage = projectsActiveEvent && hasTranscriptMessage(params.event);
-  const activeRow = projectsActiveEvent
+  const activeRow: PreparedSessionTranscriptProjectionAppend["activeRow"] = projectsActiveEvent
     ? {
         activePosition: cursor.activeEventCount,
         contextEligible: transcriptEventContextEligibility(params.event),
@@ -156,6 +178,13 @@ export function prepareSessionTranscriptProjectionAppend(
         messagePosition: projectsMessage ? cursor.activeMessageCount : null,
       }
     : undefined;
+  if (activeRow && params.preparedPayload && params.serializedBytes !== undefined) {
+    activeRow.facts = prepareSessionTranscriptActiveFacts(
+      params.preparedPayload.payload,
+      activeRow.contextEligible,
+      params.serializedBytes,
+    );
+  }
   return {
     ...(activeRow ? { activeRow } : {}),
     cursor: {
