@@ -1,6 +1,6 @@
 // OpenClaw-authored rich block subset plus size accounting and the plain-text
 // projection shared by the emitter, splitter, and fallback paths.
-import type { User } from "grammy/types";
+import type { RichTextDateTime, User } from "grammy/types";
 
 export type TelegramRichBlocksDegradationReason = "list-limit" | "table-ascii" | "nesting-limit";
 
@@ -34,6 +34,12 @@ export type RichText =
       type: "anchor_link";
       text: RichText;
       anchor_name: string;
+    }
+  | {
+      type: "date_time";
+      text: RichText;
+      unix_time: number;
+      date_time_format: RichTextDateTime["date_time_format"];
     }
   | {
       type: "mathematical_expression";

@@ -25,6 +25,7 @@ import {
   escapeTelegramHtmlAttr,
   findTelegramHtmlEntityEnd,
   prepareTelegramHtmlTextSplitter,
+  TELEGRAM_TIME_TAG_ATTRS_PATTERN,
   type TelegramHtmlTextSplitter,
 } from "./format-html.js";
 import { parseHtmlAttrs } from "./rich-blocks-html.js";
@@ -203,7 +204,7 @@ const TELEGRAM_ATTR_HTML_TAG_PATTERNS = new Map([
   ["a", /^\s+href="[^"]+"\s*$/],
   ["span", /^\s+class="tg-spoiler"\s*$/],
   ["tg-emoji", /^\s+emoji-id="[^"]+"\s*$/],
-  ["tg-time", /^\s+unix="[1-9]\d*"(?:\s+format="(?:r|w?[dD]?[tT]?)")?\s*$/],
+  ["tg-time", TELEGRAM_TIME_TAG_ATTRS_PATTERN],
   ["blockquote", /^(\s+expandable)?\s*$/],
 ]);
 const TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN = /^\s+class="language-[^"]+"\s*$/;
