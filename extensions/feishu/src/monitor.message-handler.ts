@@ -1,8 +1,11 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import { resolveFeishuAccount } from "./accounts.js";
 import { normalizeFeishuCommandProbeBody } from "./bot-content.js";
 import type { handleFeishuMessage } from "./bot.js";
+import { resolveConfiguredFeishuGroupSessionScope } from "./conversation-id.js";
 import {
   claimUnprocessedFeishuMessage,
   type FeishuMessageProcessingClaim,
@@ -16,10 +19,11 @@ import {
   type FeishuIngressLifecycle,
 } from "./feishu-ingress.js";
 import { isMentionForwardRequest } from "./mention.js";
+import { resolveFeishuGroupConfig } from "./policy.js";
 import { parsePostContent } from "./post.js";
 import type { getFeishuSequentialKey } from "./sequential-key.js";
 import { createSequentialQueue } from "./sequential-queue.js";
-import { normalizeFeishuEventChatType } from "./types.js";
+import { isFeishuGroupChatType, normalizeFeishuEventChatType } from "./types.js";
 
 type FeishuMessageReceiveHandlerContext = {
   cfg: ClawdbotConfig;
@@ -97,7 +101,18 @@ type FeishuMessageDebounceEntry = {
   processingClaim?: FeishuMessageProcessingClaim;
   turnAdoptionLifecycle?: FeishuIngressLifecycle;
   abandoned?: boolean;
+  flushing?: boolean;
+  topicOrder?: {
+    key: string;
+    ready?: Promise<void>;
+    release: () => void;
+    fallback: boolean;
+  };
 };
+
+function resolveFeishuDebounceSenderId(event: FeishuMessageEvent): string | undefined {
+  return event.sender.sender_id.open_id?.trim() || event.sender.sender_id.user_id?.trim();
+}
 
 function resolveFeishuDebounceMentions(params: {
   entries: FeishuMessageEvent[];
@@ -158,13 +173,16 @@ export function createFeishuMessageReceiveHandler({
       );
     },
   });
+  const pendingChatTasks = new Map<string, Set<Promise<void>>>();
+  const chatBarriers = new Map<string, Promise<void>>();
 
   const dispatchFeishuMessage = async (
-    { event, messageDedupeKey, processingClaim }: FeishuMessageDebounceEntry,
+    { event, messageDedupeKey, processingClaim, topicOrder }: FeishuMessageDebounceEntry,
     turnAdoptionLifecycle?: FeishuIngressLifecycle,
     preparedContent?: string,
   ) => {
     const sequentialKey = resolveSequentialKey({
+      cfg: readConfig(),
       accountId,
       event,
       preparedContent,
@@ -194,6 +212,9 @@ export function createFeishuMessageReceiveHandler({
       trackTask?.(handling);
       await handling;
     };
+    if (topicOrder?.ready) {
+      await topicOrder.ready;
+    }
     await enqueue(sequentialKey, task);
   };
 
@@ -227,7 +248,17 @@ export function createFeishuMessageReceiveHandler({
     channelRuntime.debounce.createInboundDebouncer<FeishuMessageDebounceEntry>({
       debounceMs: resolveDebounceMs(),
       resolveDebounceMs,
-      buildKey: ({ event }) => {
+      // Never merge across an unidentified-topic barrier: that batch would
+      // contain both a predecessor and a dependent of the same fallback turn.
+      canAppend: (entry, pending) => {
+        const first = pending[0];
+        return (
+          first !== undefined &&
+          entry.topicOrder?.ready === first.topicOrder?.ready &&
+          resolveFeishuDebounceSenderId(entry.event) === resolveFeishuDebounceSenderId(first.event)
+        );
+      },
+      buildKey: ({ event, topicOrder }) => {
         // A pending ordinary batch must not serialize controls before their own lanes.
         if (
           event.message.message_type === "text" &&
@@ -239,16 +270,21 @@ export function createFeishuMessageReceiveHandler({
           return null;
         }
         const chatId = event.message.chat_id?.trim();
-        const senderId =
-          event.sender.sender_id.open_id?.trim() || event.sender.sender_id.user_id?.trim();
+        const senderId = resolveFeishuDebounceSenderId(event);
         if (!chatId || !senderId) {
           return null;
+        }
+        if (topicOrder && !topicOrder.fallback) {
+          return topicOrder.key;
         }
         const threadId = event.message.root_id?.trim() || event.message.thread_id?.trim();
         const threadKey = threadId ? `thread:${threadId}` : "chat";
         return `feishu:${accountId}:${chatId}:${threadKey}:${senderId}`;
       },
-      shouldDebounce: ({ event }) => {
+      shouldDebounce: ({ event, topicOrder }) => {
+        if (topicOrder?.fallback) {
+          return false;
+        }
         if (event.message.message_type !== "text") {
           return false;
         }
@@ -272,57 +308,67 @@ export function createFeishuMessageReceiveHandler({
         return createFlush({
           lifecycle,
           dispatch: async (admissionLifecycle) => {
-            if (!last) {
-              return;
-            }
-            if (admissionLifecycle.abortSignal.aborted) {
-              await admissionLifecycle.onAbandoned();
-              return;
+            for (const entry of activeEntries) {
+              entry.flushing = true;
             }
             try {
-              if (activeEntries.length === 1) {
-                await dispatchFeishuMessage(last, admissionLifecycle);
-                await settle();
+              if (!last) {
                 return;
               }
-              // Admission already holds one exclusive claim for each logical message.
-              const dispatchEntry = last;
-              const dispatchDedupeKey = dispatchEntry.messageDedupeKey;
-              if (!lifecycle) {
-                await recordSuppressedMessageIds(activeEntries, dispatchDedupeKey);
+              if (admissionLifecycle.abortSignal.aborted) {
+                await admissionLifecycle.onAbandoned();
+                return;
               }
-              const combinedText = activeEntries
-                .map((entry) => resolveDebounceText(entry.event))
-                .filter(Boolean)
-                .join("\n");
-              const mergedMentions = resolveFeishuDebounceMentions({
-                entries: activeEntries.map((entry) => entry.event),
-                botOpenId: getBotOpenId(accountId),
-              });
-              await dispatchFeishuMessage(
-                {
-                  ...dispatchEntry,
-                  event: {
-                    ...dispatchEntry.event,
-                    message: {
-                      ...dispatchEntry.event.message,
-                      mentions: mergedMentions ?? dispatchEntry.event.message.mentions,
+              try {
+                if (activeEntries.length === 1) {
+                  await dispatchFeishuMessage(last, admissionLifecycle);
+                  await settle();
+                  return;
+                }
+                // Admission already holds one exclusive claim for each logical message.
+                const dispatchEntry = last;
+                const dispatchDedupeKey = dispatchEntry.messageDedupeKey;
+                if (!lifecycle) {
+                  await recordSuppressedMessageIds(activeEntries, dispatchDedupeKey);
+                }
+                const combinedText = activeEntries
+                  .map((entry) => resolveDebounceText(entry.event))
+                  .filter(Boolean)
+                  .join("\n");
+                const mergedMentions = resolveFeishuDebounceMentions({
+                  entries: activeEntries.map((entry) => entry.event),
+                  botOpenId: getBotOpenId(accountId),
+                });
+                await dispatchFeishuMessage(
+                  {
+                    ...dispatchEntry,
+                    event: {
+                      ...dispatchEntry.event,
+                      message: {
+                        ...dispatchEntry.event.message,
+                        mentions: mergedMentions ?? dispatchEntry.event.message.mentions,
+                      },
                     },
                   },
-                },
-                admissionLifecycle,
-                combinedText,
-              );
-              await settle();
-            } catch (err) {
-              await admissionLifecycle.onAbandoned();
-              throw err;
+                  admissionLifecycle,
+                  combinedText,
+                );
+                await settle();
+              } catch (err) {
+                await admissionLifecycle.onAbandoned();
+                throw err;
+              }
+            } finally {
+              for (const entry of entries) {
+                entry.topicOrder?.release();
+              }
             }
           },
         });
       },
       onError: (err, entries) => {
         for (const entry of entries) {
+          entry.topicOrder?.release();
           entry.processingClaim?.release({ error: err });
           try {
             void Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned()).catch(
@@ -418,11 +464,71 @@ export function createFeishuMessageReceiveHandler({
       ...(claim.kind === "claimed" ? { processingClaim: claim.handle } : {}),
       ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
     };
+    const config = readConfig();
+    const sequentialKey = resolveSequentialKey({
+      cfg: config,
+      accountId,
+      event,
+      botOpenId,
+      isControlCommandMessage: (text) =>
+        channelRuntime.commands.isControlCommandMessage(text, config),
+    });
+    const chatId = event.message.chat_id.trim();
+    const chatKey = `feishu:${accountId}:${chatId}`;
+    let isChatFallback = false;
+    if (sequentialKey === chatKey && isFeishuGroupChatType(event.message.chat_type)) {
+      const feishuCfg = resolveFeishuAccount({ cfg: config, accountId }).config;
+      const scope = resolveConfiguredFeishuGroupSessionScope({
+        feishuCfg,
+        groupConfig: resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: chatId }),
+      });
+      isChatFallback = scope === "group_topic" || scope === "group_topic_sender";
+    }
+    if (isChatFallback || sequentialKey.startsWith(`${chatKey}:topic:`)) {
+      // Reserve before buffering so quiet-period extensions cannot let later
+      // topics overtake a missing-thread event or its earlier predecessors.
+      const pending = pendingChatTasks.get(chatKey) ?? new Set<Promise<void>>();
+      pendingChatTasks.set(chatKey, pending);
+      const ready = isChatFallback
+        ? Promise.all(pending).then(() => {})
+        : chatBarriers.get(chatKey);
+      const settled = createDeferred<void>();
+      pending.add(settled.promise);
+      if (isChatFallback) {
+        chatBarriers.set(chatKey, settled.promise);
+      }
+      let released = false;
+      debounceEntry.topicOrder = {
+        key: sequentialKey,
+        ready,
+        fallback: isChatFallback,
+        release: () => {
+          if (released) {
+            return;
+          }
+          released = true;
+          // An abandoned barrier must still preserve its predecessors.
+          void Promise.resolve(ready).then(() => {
+            settled.resolve();
+            pending.delete(settled.promise);
+            if (pending.size === 0) {
+              pendingChatTasks.delete(chatKey);
+            }
+            if (chatBarriers.get(chatKey) === settled.promise) {
+              chatBarriers.delete(chatKey);
+            }
+          });
+        },
+      };
+    }
     if (claim.kind === "claimed" && turnAdoptionLifecycle) {
       // The durable drain can abandon before the debounce timer flushes. Tie
       // the logical claim and queued entry to that earlier lifecycle.
       turnAdoptionLifecycle.onBeforeAbandon = () => {
         debounceEntry.abandoned = true;
+        if (!debounceEntry.flushing) {
+          debounceEntry.topicOrder?.release();
+        }
         claim.handle.release({ error: new Error("feishu-ingress-abandoned-before-flush") });
       };
     }
@@ -431,6 +537,7 @@ export function createFeishuMessageReceiveHandler({
         await inboundDebouncer.enqueue(debounceEntry);
         return { kind: "deferred" };
       } catch (err) {
+        debounceEntry.topicOrder?.release();
         if (claim.kind === "claimed") {
           claim.handle.release({ error: err });
         }
@@ -438,6 +545,7 @@ export function createFeishuMessageReceiveHandler({
       }
     }
     const processing = inboundDebouncer.enqueue(debounceEntry).catch((err: unknown) => {
+      debounceEntry.topicOrder?.release();
       if (claim.kind === "claimed") {
         claim.handle.release({ error: err });
       }
