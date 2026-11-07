@@ -140,9 +140,11 @@ function installProbe() {
     });
   Reflect.set(window, "__tabReturnContentCorrect", correct);
   const sample = () => {
-    if (state.visibilityAt && !state.correctAt && correct()) {
+    const current = correct();
+    if (state.visibilityAt && !state.correctAt && current) {
       state.correctAt = performance.now();
     }
+    return current;
   };
   new MutationObserver((records) => {
     state.mutations += records.length;
@@ -159,8 +161,7 @@ function installProbe() {
       state.streamMutations++;
     }
     if (state.visibilityAt) {
-      sample();
-      if (correct()) {
+      if (sample()) {
         state.finalCommits++;
       }
     }
@@ -175,15 +176,16 @@ function installProbe() {
     sample();
     const frame = () => {
       state.firstFrameAt ||= performance.now();
+      const current = correct();
       const thread = document.querySelector<HTMLElement>(
         ".chat-pane-cache__pane--active .chat-thread",
       );
       state.returnFrames.push({
-        correct: correct(),
+        correct: current,
         bottomDistance: thread ? thread.scrollHeight - thread.scrollTop - thread.clientHeight : -1,
       });
       if (state.returnFrames.length === 1) {
-        state.frameTextCorrect = correct();
+        state.frameTextCorrect = current;
       }
       if (state.returnFrames.length < 3) {
         requestAnimationFrame(frame);
