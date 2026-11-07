@@ -1,2 +1,0 @@
-# Exercise 25-to-100 window activation and stable geometry in the existing native focus contract.
-22

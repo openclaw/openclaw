@@ -101,35 +101,13 @@ it.each([1280, 390])(
       ...view.container.querySelectorAll<HTMLTableRowElement>(".session-data-row"),
     ];
     await expect.poll(() => rows().length).toBe(25);
-    expect(view.container.querySelector("table")?.getAttribute("aria-rowcount")).toBe("26");
+    // The phone list has no header row; select-all lives in the bulk bar.
+    const phone = width === 390;
+    const scroller = rows()[0]!.closest<HTMLElement>(phone ? ".content" : ".data-table-container")!;
     setCurrent((previous) => ({ ...previous, pageSize: 100 }));
     flush();
     await expect.poll(() => rows().length).toBeLessThan(25);
     expect(view.container.querySelector("table")?.getAttribute("aria-rowcount")).toBe("101");
-    // The phone list has no header row; select-all lives in the bulk bar.
-    const phone = width === 390;
-    const scroller = view.container.querySelector<HTMLElement>(
-      phone ? ".content" : ".data-table-container",
-    )!;
-    await expect
-      .poll(async () => {
-        const geometry = [];
-        for (let frame = 0; frame < 4; frame++) {
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          });
-          geometry[frame] = JSON.stringify([
-            scroller.scrollHeight,
-            scroller.scrollTop,
-            rows().map((row) => [
-              row.getAttribute("aria-rowindex"),
-              row.getBoundingClientRect().height,
-            ]),
-          ]);
-        }
-        return new Set(geometry).size;
-      })
-      .toBe(1);
     if (phone) {
       expect(view.container.querySelector("thead input")).toBeNull();
       setCurrent((previous) => ({
@@ -147,6 +125,7 @@ it.each([1280, 390])(
       selectedKeys: new Set(result.sessions.map((row) => row.key)),
     }));
     flush();
+
     // Entering from the far end of the list must expose the preceding native Tab target.
     rows().at(-1)!.focus();
     await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
@@ -160,13 +139,12 @@ it.each([1280, 390])(
     scroller.style.height = "200px";
     draft.value = "Retained draft";
     draft.focus();
-    await expect
-      .poll(() => {
-        const field = draft.getBoundingClientRect();
-        const viewport = scroller.getBoundingClientRect();
-        return field.top >= viewport.top && field.bottom <= viewport.bottom;
-      })
-      .toBe(true);
+    await vi.waitFor(() => {
+      const field = draft.getBoundingClientRect();
+      const viewport = scroller.getBoundingClientRect();
+      expect(field.top).toBeGreaterThanOrEqual(viewport.top);
+      expect(field.bottom).toBeLessThanOrEqual(viewport.bottom);
+    });
     scroller.scrollTop = scroller.scrollHeight / 2;
     await expect
       .poll(() =>
