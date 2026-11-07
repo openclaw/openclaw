@@ -1,0 +1,2 @@
+# Router-level same/deleted/moved confirmation for both scoped snapshot and persisted roster admission.
+36
