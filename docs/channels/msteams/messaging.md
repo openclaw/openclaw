@@ -146,7 +146,7 @@ Bots use an application identity, while Microsoft Graph's `/me` resource [requir
 2. **Grant admin consent** for the tenant.
    Standard channels automatically resolve their team's SharePoint site when `sharePointSiteId` is omitted. Discovery uses `GET /groups/{groupId}/sites/root` with the existing `Sites.ReadWrite.All` grant. The channel check uses the existing `ChannelSettings.Read.Group` RSC grant from the [Teams app manifest](/channels/msteams/manifest-and-permissions#current-teams-rsc-permissions-manifest); no additional Graph permissions are required. Site IDs are cached per account, tenant, bot, and team, up to 500 entries, and refreshed on restart.
 
-Group chats and private/shared channels require an explicit site. An explicit `sharePointSiteId` always takes precedence; choose a site whose membership includes the intended recipients. To configure one:
+Private/shared channels have their own site scoped to channel members. The bot resolves it with `GET /teams/{groupId}/channels/{channelId}/filesFolder` and `GET /drives/{driveId}?$select=sharePointIds`, uploads there, and creates no organization-wide sharing link, so files stay readable only by channel members. Group chats require an explicit site. An explicit `sharePointSiteId` always takes precedence; choose a site whose membership includes the intended recipients. To configure one:
 
 3. **Get your SharePoint site ID:**
 
@@ -179,7 +179,8 @@ Group chats and private/shared channels require an explicit site. An explicit `s
 
 | Context and permission                                                  | Sharing behavior                                          |
 | ----------------------------------------------------------------------- | --------------------------------------------------------- |
-| Channel + `Sites.ReadWrite.All`                                         | Organization-wide sharing link (anyone in org can access) |
+| Standard channel or explicit `sharePointSiteId` + `Sites.ReadWrite.All` | Organization-wide sharing link (anyone in org can access) |
+| Private/shared channel, auto-discovered site + `Sites.ReadWrite.All`    | No sharing link; channel-site membership grants access    |
 | Group chat + `Sites.ReadWrite.All` + a supported chat-member read grant | Per-user sharing link (only chat members can access)      |
 | Group chat without a supported chat-member read grant                   | Send is blocked                                           |
 
@@ -187,14 +188,15 @@ Per-user sharing is more secure since only chat participants can access the file
 
 ### Fallback behavior
 
-| Scenario                                                         | Result                                            |
-| ---------------------------------------------------------------- | ------------------------------------------------- |
-| Group chat + file + SharePoint and member permissions configured | Upload to SharePoint, send a native file card     |
-| Group chat + file + missing SharePoint or member permissions     | Fail with an actionable configuration error       |
-| Standard channel + file + no `sharePointSiteId`                  | Resolve the team site and send a native file card |
-| Channel + file + `sharePointSiteId` configured                   | Upload to SharePoint, send a native file card     |
-| Personal chat + file                                             | FileConsentCard flow (works without SharePoint)   |
-| Any context + image                                              | Base64-encoded inline (works without SharePoint)  |
+| Scenario                                                         | Result                                               |
+| ---------------------------------------------------------------- | ---------------------------------------------------- |
+| Group chat + file + SharePoint and member permissions configured | Upload to SharePoint, send a native file card        |
+| Group chat + file + missing SharePoint or member permissions     | Fail with an actionable configuration error          |
+| Standard channel + file + no `sharePointSiteId`                  | Resolve the team site and send a native file card    |
+| Private/shared channel + file + no `sharePointSiteId`            | Resolve the channel site and send a native file card |
+| Channel + file + `sharePointSiteId` configured                   | Upload to SharePoint, send a native file card        |
+| Personal chat + file                                             | FileConsentCard flow (works without SharePoint)      |
+| Any context + image                                              | Base64-encoded inline (works without SharePoint)     |
 
 ### Files stored location
 

@@ -59,6 +59,18 @@ function fixture() {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     requests.push(url);
     expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer graph-token");
+    if (url.includes("/filesFolder")) {
+      return Response.json({ parentReference: { driveId: "b!channel-drive" } });
+    }
+    if (url.includes("/drives/")) {
+      return Response.json({
+        sharePointIds: {
+          siteId: "channel-site-collection",
+          siteUrl: "https://contoso.sharepoint.com/sites/team-private",
+          webId: "channel-web",
+        },
+      });
+    }
     if (url.includes("/channels/")) {
       return Response.json({ membershipType });
     }
@@ -190,16 +202,30 @@ describe.each(["proactive", "reply"])("%s channel file sends", (lane) => {
     expect(f.activities).toEqual([]);
   });
 
-  it("retains explicit sites and rejects private/shared discovery before uploading", async () => {
+  it("uploads private/shared channel files to the channel site without an organization link", async () => {
+    for (const membership of ["private", "shared"]) {
+      const f = fixture();
+      f.setMembership(membership);
+      await sendFile(lane, f);
+      expect(f.requests.some((url) => url.includes("/groups/"))).toBe(false);
+      expect(f.requests.some((url) => url.includes("createLink"))).toBe(false);
+      expect(
+        f.requests.some((url) =>
+          url.includes(
+            "/sites/contoso.sharepoint.com,channel-site-collection,channel-web/drive/root:",
+          ),
+        ),
+      ).toBe(true);
+      expect(f.activities).toHaveLength(1);
+      await sendFile(lane, f);
+      expect(f.requests.filter((url) => url.includes("/filesFolder"))).toHaveLength(1);
+    }
+  });
+
+  it("retains explicit sites", async () => {
     const f = fixture();
     await expect(sendFile(lane, f, { siteId: "  " })).rejects.toThrow("sharePointSiteId");
     expect(f.requests).toEqual([]);
-    for (const membership of ["private", "shared"]) {
-      f.setMembership(membership);
-      await expect(sendFile(lane, f)).rejects.toThrow("standard channels only");
-    }
-    expect(f.requests.every((url) => url.includes("/channels/"))).toBe(true);
-    f.requests.length = 0;
     await sendFile(lane, f, { siteId: " configured-site " });
     expect(f.requests.every((url) => url.includes("/sites/configured-site/"))).toBe(true);
     expect(f.activities).toHaveLength(1);
