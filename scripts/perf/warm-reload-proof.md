@@ -454,3 +454,20 @@ original frame sequence before judging a subtle transition. The visible-change
 census is a reported animation-collapse heuristic; unmasked pixels and explicit
 animation provenance remain available as controls. An A/A run qualifies noisy
 metrics before using this report to reject a small change.
+
+## Cached Details co-frame comparison
+
+For Team-scale cached Details, use `bench-control-ui-cold-load.ts` with
+`--gateway-http --warm-reload --warm-reload-perf-probe --pane-chrome-probe
+--details-session-facts --details-subagent-activity --viewport 1720x1180`,
+separately for active chat, archived chat (`--archived-session`), and dashboard.
+Keep the real-Gateway proof above as the native workload. Attribute module
+readiness and render work in separate profiled runs before comparing timings.
+
+Run both arms on one quiet c7a.4xlarge, using twelve interleaved pairs and an A/A
+control. Report first populated Details paint minus first painted rows for every
+pair, co-frame counts, stable section geometry, transcript backtracking, hello,
+first post-hello RPC, first/final rows, LoAF, and CLS. Report raw paired medians
+alongside the mean of AB-first and BA-first paired medians; the latter removes
+pair-order imbalance. Cached display facts must never confer live-query readiness
+or action authority, and rows must not be held to manufacture co-frame.
