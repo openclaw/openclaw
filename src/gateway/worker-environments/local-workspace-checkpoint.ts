@@ -58,14 +58,11 @@ export function createLocalWorkspaceCheckpointRejection(params: {
       try {
         await run();
       } catch (error) {
+        if (!(error instanceof Error) || !hasErrnoCode(error, "WORKSPACE_RESULT_LIMIT")) {
+          throw error;
+        }
         const selected = params.current();
-        if (
-          error instanceof Error &&
-          hasErrnoCode(error, "WORKSPACE_RESULT_LIMIT") &&
-          selected.pending_ref &&
-          selected.pending_target &&
-          !selected.journal_json
-        ) {
+        if (selected.pending_ref && selected.pending_target && !selected.journal_json) {
           const reason =
             error.message +
             " Pending workspace changes were preserved. Move disposable build outputs to checkout-root .openclaw/tmp/ or remove unneeded outputs, then checkpoint the corrected workspace.";

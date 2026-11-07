@@ -390,7 +390,7 @@ export async function prepareWorkspaceTreeInput(
 }
 
 /** Patch construction and its output observers belong to the existing Git worker. */
-export async function createWorkspacePatch(
+export async function prepareWorkspacePatch(
   input: WorkspaceManifestValueInputs["workspace.reconcile.patch"],
 ) {
   return computeValue("workspace.reconcile.patch", input);

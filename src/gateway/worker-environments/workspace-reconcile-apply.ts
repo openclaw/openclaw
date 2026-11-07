@@ -14,12 +14,12 @@ import {
   WorkspaceResultLimitError,
 } from "./workspace-inventory-limits.js";
 import type { WorkspaceReconciliationPreparation } from "./workspace-manifest-comparison.js";
-import { captureWorkspaceManifest, createWorkspacePatch } from "./workspace-manifest-worker.js";
-import {
-  type WorkerWorkspaceManifest,
-  type WorkerWorkspaceManifestEntry,
-  type WorkerWorkspaceReconciliationJournal,
-  type WorkerWorkspaceReconciliationJournalAdapter,
+import { captureWorkspaceManifest, prepareWorkspacePatch } from "./workspace-manifest-worker.js";
+import type {
+  WorkerWorkspaceManifest,
+  WorkerWorkspaceManifestEntry,
+  WorkerWorkspaceReconciliationJournal,
+  WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
 import {
   applyWorkspaceDirectoryChanges,
@@ -192,7 +192,7 @@ export async function applyStagedWorkerWorkspace(params: {
     const appliedDirectories = [...preflight.applyPaths]
       .filter((entryPath) => currentNodes.get(entryPath)?.type === "directory")
       .toSorted();
-    const snapshot = await createWorkspacePatch({
+    const snapshot = await prepareWorkspacePatch({
       root,
       stagingRoot: params.stagingRoot,
       baseEntries,

@@ -200,7 +200,7 @@ process.exit(result.status ?? 1);
       };
     } else if (values.workload === "patch") {
       // The baseline exported patch generation from recovery; the candidate owns it in the worker adapter.
-      const patch = await (worker.createWorkspacePatch ?? recovery.createWorkspacePatch)({
+      const patch = await (worker.prepareWorkspacePatch ?? recovery.createWorkspacePatch)({
         root,
         stagingRoot,
         baseEntries,
@@ -225,7 +225,9 @@ process.exit(result.status ?? 1);
         acceptance: { kind: "reconcile" },
       });
       assert.equal(result.manifest.entries.length, count);
-      if (values.workload === "conflict-apply") assert.equal(result.conflictPaths.length, count);
+      if (values.workload === "conflict-apply") {
+        assert.equal(result.conflictPaths.length, count);
+      }
       outcome = {
         manifestEntries: result.manifest.entries.length,
         conflictCount: result.conflictPaths.length,
@@ -244,13 +246,16 @@ process.exit(result.status ?? 1);
   let sampledBytes: number | undefined;
   if (values.measure === "cpu") {
     const result = await inspector?.post("Profiler.stop");
-    if (result && values.profile)
+    if (result && values.profile) {
       await fs.writeFile(values.profile, JSON.stringify(result.profile));
+    }
   } else if (values.measure === "allocation") {
     const result = await inspector?.post("HeapProfiler.stopSampling");
     if (result) {
       sampledBytes = sumSampledHeapBytes(result.profile.head);
-      if (values.profile) await fs.writeFile(values.profile, JSON.stringify(result.profile));
+      if (values.profile) {
+        await fs.writeFile(values.profile, JSON.stringify(result.profile));
+      }
     }
   }
   inspector?.disconnect();
