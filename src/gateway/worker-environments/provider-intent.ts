@@ -233,9 +233,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     const machineClass =
       typeof profileSnapshot.machineClass === "string" ? profileSnapshot.machineClass : undefined;
     const os = typeof profileSnapshot.os === "string" ? profileSnapshot.os : undefined;
-    let repositoryAdmission:
-      | Awaited<ReturnType<typeof prepareRepositoryWorkerProjectSource>>
-      | undefined;
+    let repositoryAdmission: WorkerProviderRepositorySource | undefined;
     const profile = validation.requireWorkerProfile(profileSnapshot.settings);
     let assertImageCurrent: (() => void) | undefined;
     if (
@@ -556,15 +554,9 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       createOptions.retainedPolicy,
       admittedIntent?.retainedPolicy,
     );
-    const inherited = createOptions.inherited
-      ? {
-          providerId: createOptions.inherited.providerId,
-          profileSnapshot: allocationSnapshot(
-            createOptions.inherited.profileSnapshot,
-            createOptions,
-          ),
-        }
-      : undefined;
+    const inherited = createOptions.inherited;
+    const inheritedSnapshot =
+      inherited && allocationSnapshot(inherited.profileSnapshot, createOptions);
     const normalizedProfileId = requireProfileId(profileId, signal);
     const beforeProvision = (intent?: WorkerProviderPreparedIntent) => () => {
       createOptions.beforeProvision?.();
@@ -656,13 +648,10 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           existing.profileId !== normalizedProfileId ||
           (inherited !== undefined &&
             (existing.providerId !== inherited.providerId ||
-              !isDeepStrictEqual(existing.profileSnapshot, {
-                ...inherited.profileSnapshot,
-                ...(existingProject ? { project: existing.profileSnapshot.project } : {}),
-                ...(existing.profileSnapshot.runtimePreparation
-                  ? { runtimePreparation: existing.profileSnapshot.runtimePreparation }
-                  : {}),
-              }))) ||
+              !isDeepStrictEqual(
+                allocationSnapshot(existing.profileSnapshot, {}),
+                inheritedSnapshot,
+              ))) ||
           (inherited === undefined &&
             (existing.profileSnapshot.machineClass !== machineClass ||
               existing.profileSnapshot.os !== os ||
@@ -721,5 +710,14 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       );
     });
   };
-  return { prepareIntent, prepareRetention, assertPreparedIntentCurrent, createWithProfile };
+  return {
+    prepareIntent,
+    prepareRetention,
+    assertPreparedIntentCurrent,
+    createWithProfile,
+    preparedRepositorySource(this: void, profileId: string, intent: WorkerProviderPreparedIntent) {
+      assertPreparedIntentCurrent(profileId, intent);
+      return preparedIntents.get(intent)?.repository;
+    },
+  };
 }

@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
@@ -12,6 +13,7 @@ import {
   type WorkerWorkspaceManifest,
 } from "../gateway/worker-environments/workspace-manifest.js";
 import * as workspaceReconcile from "../gateway/worker-environments/workspace-reconcile-core.js";
+import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../infra/node-commands.js";
 import * as processExec from "../process/exec.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -24,6 +26,7 @@ import type {
 } from "../worker/node-workspace-prepared-protocol.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
 import { NodeWorkerPreparedWorkspaceStore } from "./node-worker-prepared-workspace-store.js";
+import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
 import { waitForNodeWorkerTerminal } from "./node-worker-supervisor.fixture.test-support.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
@@ -261,10 +264,46 @@ describe("prepared node workspace ownership", () => {
     expect(bound.count).toBe(0);
   });
 
+  it("negotiates the completed snapshot base through the real workspace binding owner", async () => {
+    const f = await fixture(true);
+    const invoke = (input: unknown, negotiated: boolean) =>
+      invokeNodeWorkerSupervisorCommand({
+        command: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+        paramsJSON: JSON.stringify(input),
+        workspace: f.runtime,
+        serverCapabilities: new Set(
+          negotiated ? [GATEWAY_SERVER_CAPS.NODE_WORKER_PREPARED_WORKSPACE_BASE] : [],
+        ),
+      });
+    const registered = await invoke(f.registration, false);
+    expect(registered).toMatchObject({ handled: true, ok: true });
+    expect(registered).toHaveProperty(
+      "payload.sourceManifestRef",
+      f.registration.sourceManifestRef,
+    );
+    expect(registered).not.toHaveProperty("payload.baseCommit");
+    const legacy = await invoke(binding, false);
+    expect(legacy).toMatchObject({ handled: true, ok: true });
+    expect(legacy).not.toHaveProperty("payload.baseCommit");
+    const current = await invoke(binding, true);
+    expect(current).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        baseCommit: f.baseCommit,
+        sourceManifestRef: f.registration.sourceManifestRef,
+        preparedManifestRef: f.registration.preparedManifestRef,
+      },
+    });
+  });
+
   it("verifies completed setup at first bind and preserves later session edits on replay and restart", async () => {
     const f = await fixture(true);
     expect(f.registration.preparedManifestRef).not.toBe(f.registration.sourceManifestRef);
+    const capture = vi.spyOn(workspaceCommands, "captureManifest");
     await f.runtime.prepare(f.registration);
+    expect(capture).not.toHaveBeenCalled();
+    await expect(f.runtime.exec(f.command)).rejects.toThrow("does not own");
     await fsp.writeFile(path.join(f.workspaceDir, "source.txt"), "changed while ready\n");
     await expect(f.runtime.prepare(binding)).rejects.toThrow("does not match its manifest");
     expect(
@@ -273,7 +312,9 @@ describe("prepared node workspace ownership", () => {
     ).toBe("available");
     await fsp.writeFile(path.join(f.workspaceDir, "source.txt"), "setup changed source\n");
     const bound = await f.runtime.prepare(binding);
+    expect(capture).toHaveBeenCalledTimes(2); // One rejected claim, then the successful claim.
     expect(bound).toMatchObject({
+      baseCommit: f.baseCommit,
       sourceManifestRef: f.registration.sourceManifestRef,
       preparedManifestRef: f.registration.preparedManifestRef,
     });
@@ -418,13 +459,15 @@ describe("prepared node workspace ownership", () => {
     const controller = new AbortController();
     const captured = createDeferred();
     const released = createDeferred();
-    const capture = workspaceCommands.captureManifest;
-    vi.spyOn(workspaceCommands, "captureManifest").mockImplementationOnce(async (params) => {
-      const result = await capture(params);
-      captured.resolve();
-      await released.promise;
-      return result;
-    });
+    const read = workspaceCommands.readWorkspaceManifest;
+    vi.spyOn(workspaceCommands, "readWorkspaceManifest").mockImplementationOnce(
+      async (...params) => {
+        const result = await read(...params);
+        captured.resolve();
+        await released.promise;
+        return result;
+      },
+    );
     const registration = f.runtime.prepare(f.registration, controller.signal);
     const registrationResult = registration.then(
       () => "registered",

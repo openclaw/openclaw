@@ -169,6 +169,32 @@ describe("repository project admission", () => {
     clearRuntimeConfigSnapshot();
   });
 
+  it.each([
+    undefined,
+    "HEAD",
+    "main",
+    "refs/heads/main",
+    "topic",
+    "refs/tags/main",
+    "pinned",
+    "replay",
+  ])("reuses a snapshot base only for fresh default-branch requests: %s", async (ref) => {
+    const admitted = await prepareRepositoryWorkerProjectSource({
+      ...initial,
+      repository: {
+        ...initial.repository,
+        ...(ref === "pinned" ? { baseCommit: commit } : ref === "replay" ? {} : { ref }),
+      },
+    });
+    const result =
+      ref === "replay"
+        ? await prepareRepositoryWorkerProjectSource({ ...admission, expected: admitted.project })
+        : admitted;
+    expect(result.snapshotStart === true).toBe(
+      [undefined, "HEAD", "main", "refs/heads/main"].includes(ref),
+    );
+  });
+
   it("admits the declarative recipe before an executable fallback from immutable blobs", async () => {
     const blob = "e".repeat(40);
     rootEntries.push({ path: ".devcontainer.json", type: "blob", mode: "100644", sha: blob });

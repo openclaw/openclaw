@@ -128,6 +128,7 @@ export function createWorkerProjectPreparation(params: {
     recipe?: EnvironmentRecipe;
   };
   setupAuthorized?: boolean;
+  snapshotStart?: true;
   revalidateRepositorySource?: (signal: AbortSignal) => Promise<void>;
   prepareRepositoryGitPack?: (input: {
     temporaryRoot: string;
@@ -151,11 +152,11 @@ export function createWorkerProjectPreparation(params: {
   const abort = new AbortController();
   // Stop must reach active Git/transport work, not only the next owner check.
   const signal = params.signal ? AbortSignal.any([abort.signal, params.signal]) : abort.signal;
-  const seedKey = workerProjectSeedKey(params.project);
   const label =
     "source" in params.project
       ? normalizeCloudRepo(params.project.source.url)
       : params.project.label;
+  // One owner represents one fixed allocation; retries on another machine get a new owner.
   let active: Promise<PreparationResult> | undefined;
   let preparedWorkspace: PreparationResult["preparedWorkspace"];
   let mergedSetup: unknown;
@@ -188,7 +189,7 @@ export function createWorkerProjectPreparation(params: {
       throw error;
     }
   };
-  const readPreparedWorkspace = (prepared: unknown) => {
+  const readPreparedWorkspace = (prepared: unknown, baseCommit: string) => {
     if (!preparation) {
       throw new Error("Project preparation did not request a prepared workspace");
     }
@@ -210,6 +211,7 @@ export function createWorkerProjectPreparation(params: {
     }
     return Object.freeze({
       preparationKey: preparation.key,
+      baseCommit,
       cacheKey: preparation.cacheKey,
       workspaceDir: prepared.workspaceDir,
       homeDir: prepared.homeDir,
@@ -226,15 +228,16 @@ export function createWorkerProjectPreparation(params: {
   };
   const sourceInput = {
     namespace: params.namespace,
-    seedKey,
+    seedKey: workerProjectSeedKey(params.project),
     baseCommit: params.project.baseCommit,
   };
-  const scriptInput = {
-    ...sourceInput,
-    projectKey: params.project.key,
-    ...(preparationInput ? { preparation: preparationInput } : {}),
-  };
   const prepareSeed: ProjectPreparation["prepare"] = async (transport) => {
+    const { seedKey } = sourceInput;
+    const scriptInput = {
+      ...sourceInput,
+      projectKey: params.project.key,
+      ...(preparationInput ? { preparation: preparationInput } : {}),
+    };
     requireCurrent();
     const runSeed = async (
       input: Parameters<typeof createProjectSeedScript>[0],
@@ -279,13 +282,22 @@ export function createWorkerProjectPreparation(params: {
         ) {
           throw new Error("Project preparation returned an invalid retained Git base");
         }
-        const workspace = readPreparedWorkspace(retained);
+        const workspace = readPreparedWorkspace(retained, retained.baseCommit);
         verifiedRetained = {
           baseCommit: retained.baseCommit,
           sourceManifestRef: workspace.sourceManifestRef,
           preparedManifestRef: workspace.preparedManifestRef,
         };
       }
+    }
+    if (
+      params.snapshotStart &&
+      transport.snapshotBaseCommit &&
+      (!inspection.ready ||
+        !inspection.preparedWorkspace ||
+        verifiedRetained?.baseCommit !== sourceInput.baseCommit)
+    ) {
+      throw new Error("Selected snapshot has no matching completed repository workspace");
     }
     if (inspection.ready) {
       mergedSetup = inspection.preparedWorkspace;
@@ -373,6 +385,17 @@ export function createWorkerProjectPreparation(params: {
     if (preparationInput && !transport.runScriptWithBudget) {
       throw new Error("Prepared workspaces require a provider command budget");
     }
+    if (params.snapshotStart && preparationInput && transport.snapshotBaseCommit) {
+      if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(transport.snapshotBaseCommit)) {
+        throw new Error("Selected snapshot has an invalid repository base");
+      }
+      // Activation fetches refs without changing this checkout; publication owns integration.
+      sourceInput.baseCommit = transport.snapshotBaseCommit;
+      sourceInput.seedKey = workerProjectSeedKey({
+        ...params.project,
+        baseCommit: sourceInput.baseCommit,
+      });
+    }
     const result = await prepareSeed(transport);
     requireCurrent();
     if (!preparationInput) {
@@ -411,14 +434,15 @@ export function createWorkerProjectPreparation(params: {
         `${prepared.setupFailure}${recipePreparation.failure?.outputTail ? `: ${recipePreparation.failure.outputTail}` : ""}`,
       );
     }
-    preparedWorkspace = readPreparedWorkspace(prepared);
+    preparedWorkspace = readPreparedWorkspace(prepared, sourceInput.baseCommit);
     return {
       ...result,
+      baseCommit: sourceInput.baseCommit,
       preparedWorkspace,
       recipePreparation,
       ...(typeof prepared.captureSkipped === "string"
         ? { captureSkipped: prepared.captureSkipped }
-        : result.cacheHit && verifiedRetained?.baseCommit === params.project.baseCommit
+        : result.cacheHit && verifiedRetained?.baseCommit === sourceInput.baseCommit
           ? {}
           : { captureRequired: true as const }),
     };
@@ -440,6 +464,7 @@ export function createWorkerProjectPreparation(params: {
               demandAtMs: preparation.demandAtMs,
             },
             inspectPreparedWorkspace: async (transport: {
+              baseCommit?: string;
               runScript: (script: string, signal: AbortSignal) => Promise<string>;
               recordRecipePreparation?: (value: WorkerRecipePreparation) => Promise<void>;
             }) => {
@@ -451,10 +476,16 @@ export function createWorkerProjectPreparation(params: {
                 ),
               );
               requireCurrent();
-              if (!isRecord(inspected) || inspected.baseCommit !== params.project.baseCommit) {
+              if (
+                !isRecord(inspected) ||
+                inspected.baseCommit !== (transport.baseCommit ?? sourceInput.baseCommit)
+              ) {
                 throw new Error("Enrolled project has no matching completed workspace");
               }
-              preparedWorkspace = readPreparedWorkspace(inspected);
+              preparedWorkspace = readPreparedWorkspace(
+                inspected,
+                transport.baseCommit ?? sourceInput.baseCommit,
+              );
               await transport.recordRecipePreparation?.(
                 readRecipePreparation(inspected.recipePreparation),
               );

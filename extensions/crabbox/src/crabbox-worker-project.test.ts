@@ -435,6 +435,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
         const project: NonNullable<ProvisionOptions["project"]> = {
           ...options.project,
           preparation,
+          baseCommit: "e".repeat(40),
           inspectPreparedWorkspace: vi.fn(async () => {}),
           prepare: vi.fn<NonNullable<ProvisionOptions["project"]>["prepare"]>(async (transport) => {
             const result = await prepare(transport);
@@ -443,7 +444,11 @@ exec "$CRABBOX_TEST_NODE" "$@"
             if (interrupt && crash === "pending") {
               controller.abort();
             }
-            return { ...result, captureRequired };
+            return {
+              ...result,
+              captureRequired,
+              baseCommit: transport.snapshotBaseCommit ?? "e".repeat(40),
+            };
           }),
           assertCurrent: () => {
             if (
@@ -492,6 +497,10 @@ exec "$CRABBOX_TEST_NODE" "$@"
       expect(enrolled.project.prepare).not.toHaveBeenCalled();
       expect(enrolled.prepareNodeRuntime).not.toHaveBeenCalled();
       expect(enrolled.project.inspectPreparedWorkspace).toHaveBeenCalledOnce();
+      expect(enrolled.project.inspectPreparedWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({ baseCommit: BASE_COMMIT }),
+      );
+      expect((await warmImage())?.allocations[leaseId]?.baseCommit).toBe(BASE_COMMIT);
       expect(captures - before).toBe(replayCaptures);
     },
   );

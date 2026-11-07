@@ -18,10 +18,17 @@ const run = promisify(execFile);
 const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 
 describe.skipIf(process.platform === "win32")("offline runtime installation", () => {
-  async function fixture() {
+  async function fixture(withBuild = false) {
     const home = await fs.realpath(tempDirs.make("crabbox-offline-runtime-"));
     const packageRoot = path.join(home, "package");
     await fs.mkdir(packageRoot);
+    const worker = Buffer.from("retained worker archive bytes");
+    const build = {
+      bundleHash: "f".repeat(64),
+      openclawVersion: "2026.8.1",
+      protocolFeatures: ["fixture-protocol"],
+    };
+    const expansionInput = { build, archive: { sha256: digest(worker), bytes: worker.length } };
     const metadata = JSON.stringify({
       install: "bundle",
       buildId: "offline-build",
@@ -37,16 +44,30 @@ describe.skipIf(process.platform === "win32")("offline runtime installation", ()
       }),
       "node-runtime.json": metadata,
       "node-runtime.manifest.json": inventory,
-      "openclaw.mjs": `if (process.argv[2] !== "--version") throw new Error("Must not enroll or activate plugins");
+      "openclaw.mjs": `import assert from "node:assert/strict";
+import fs from "node:fs";
 if (["CRABBOX_WORKER_BOOTSTRAP_TOKEN", "CRABBOX_WORKER_SETUP_CODE", "CRABBOX_WORKER_CODEX_CONFIG"].some(key => process.env[key])) throw new Error("Forwarded credentials reached runtime probe");
-console.log("OpenClaw 2026.8.1");`,
+const args = process.argv.slice(2);
+if (args.length === 1 && args[0] === "--version") console.log("OpenClaw 2026.8.1");
+else {
+  assert(${withBuild}, "Must not enroll or activate plugins");
+  assert.deepEqual(args.slice(0, 3), ["node", "prepare-worker-bundle", "--input"]);
+  assert.deepEqual(JSON.parse(args[3]), ${JSON.stringify(expansionInput)});
+  const marker = new URL("./fixture-expanded-input.json", import.meta.url);
+  if (args[4] === "--verify-only") {
+    assert.equal(args.length, 5);
+    assert.deepEqual(JSON.parse(fs.readFileSync(marker, "utf8")), ${JSON.stringify(expansionInput)});
+  } else {
+    assert.equal(args.length, 4);
+    fs.writeFileSync(marker, args[3]);
+  }
+}`,
     })) {
       await fs.writeFile(path.join(packageRoot, name), bytes);
     }
     const localPath = path.join(home, "node.tgz");
     await tar.create({ cwd: home, file: localPath, gzip: true }, ["package"]);
     const bytes = await fs.readFile(localPath);
-    const worker = Buffer.from("retained worker archive bytes");
     const workerPath = path.join(home, "worker.tgz");
     await fs.writeFile(workerPath, worker);
     const nodeBootstrap = {
@@ -63,6 +84,7 @@ console.log("OpenClaw 2026.8.1");`,
       sha256: digest(worker),
       bytes: worker.length,
       packageRelativePath: `worker-artifacts/${digest(worker)}.tgz`,
+      ...(withBuild ? { build } : {}),
     };
     const installedRoot = path.join(home, ".openclaw-worker/node-runtimes", nodeBootstrap.sha256);
     const execute = (command: string) =>
@@ -79,7 +101,7 @@ console.log("OpenClaw 2026.8.1");`,
     const { localPath: _nodePath, ...nodeIdentity } = nodeBootstrap;
     const { localPath: _workerPath, ...workerIdentity } = workerBundle;
     const identity = { nodeBootstrap: nodeIdentity, workerBundle: workerIdentity };
-    return { home, nodeBootstrap, workerBundle, identity, installedRoot, execute };
+    return { home, nodeBootstrap, workerBundle, identity, installedRoot, execute, expansionInput };
   }
 
   it("installs local bytes without npm, enrollment, credentials or plugin activation", async () => {
@@ -110,6 +132,34 @@ console.log("OpenClaw 2026.8.1");`,
     expect(readCrabboxRuntimeInstallation(reused.stdout, current.identity).disposition).toBe(
       "existing-verified",
     );
+  });
+
+  it("forwards build identity to the native command and requires verify-only success before its receipt", async () => {
+    // Executable transport contract only: this fixture CLI checks arguments and
+    // simulates the native result. Bundle integrity belongs to the real installer tests.
+    const current = await fixture(true);
+    const setup = await createCrabboxOfflineRuntimeSetup(current);
+    const installed = await current.execute(setup.command);
+    expect(readCrabboxRuntimeInstallation(installed.stdout, current.identity).disposition).toBe(
+      "installed",
+    );
+    const marker = path.join(
+      current.installedRoot,
+      "node_modules/openclaw/fixture-expanded-input.json",
+    );
+    expect(JSON.parse(await fs.readFile(marker, "utf8"))).toEqual(current.expansionInput);
+    const verify = await createCrabboxRuntimeCacheVerification(current.identity);
+    const verified = await current.execute(verify.command);
+    expect(readCrabboxRuntimeInstallation(verified.stdout, current.identity).disposition).toBe(
+      "existing-verified",
+    );
+    await fs.unlink(marker);
+    await expect(current.execute(verify.command)).rejects.toMatchObject({
+      code: 1,
+      stdout: "",
+      stderr: expect.stringContaining("expanded bundle preparation failed"),
+    });
+    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it.each([

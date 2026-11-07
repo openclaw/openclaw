@@ -35,7 +35,13 @@ const Binding = Identity.extend({
   ownerEpoch: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 }).strict();
 const Input = z.discriminatedUnion("action", [Registration, Binding]);
-const Result = Identity.extend(Paths.shape).strict();
+const Result = Identity.extend({
+  ...Paths.shape,
+  baseCommit: z
+    .string()
+    .regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u)
+    .optional(),
+}).strict();
 
 export type NodeWorkerPreparedWorkspaceRegistration = z.infer<typeof Registration>;
 export type NodeWorkerPreparedWorkspaceBinding = z.infer<typeof Binding>;

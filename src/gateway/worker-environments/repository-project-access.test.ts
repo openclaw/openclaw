@@ -18,6 +18,7 @@ vi.mock("./repository-project-admission.js", () => ({
 const fixture = usePreparedPoolFixture();
 it.each([
   "reopened store",
+  "admitted dispatch",
   "source unavailable",
   "caller revoked",
   "identity replaced",
@@ -30,11 +31,12 @@ it.each([
   }
   let callerCurrent = true;
   let identityCurrent = true;
-  const revalidate = async () =>
+  const revalidate = vi.fn(async () =>
     assert(
       scenario !== "access lost after binding",
       new Error("Repository access is no longer available"),
-    );
+    ),
+  );
   admit.mockReset().mockImplementation(async (params) => {
     params.assertCurrent();
     assert(
@@ -42,14 +44,19 @@ it.each([
       new Error("Repository access is no longer available"),
     );
     callerCurrent = scenario !== "caller revoked";
-    return {
-      project,
-      setupRecipe: undefined,
-      recipe: { source: "none", inputs: {}, env: {} },
-      assertCurrent: () => assert(identityCurrent, new Error("Repository identity changed")),
-      revalidate,
-    };
+    return source;
   });
+  const source = {
+    project,
+    setupRecipe: undefined,
+    recipe: { source: "none" as const, inputs: {}, env: {} },
+    assertCurrent: () => assert(identityCurrent, new Error("Repository identity changed")),
+    revalidate,
+  };
+  const intent = {
+    providerId: fixture.provider.id,
+    profileSnapshot: { ...record.profileSnapshot, project },
+  };
   const bindingIdentity = {
     environmentId: record.environmentId,
     preparationKey: PREPARATION_KEY,
@@ -79,6 +86,10 @@ it.each([
     getConfig: () => fixture.config,
     projectNamespace: "gateway",
     bindPreparedWorkspace: bind,
+    preparedRepositorySource: (_profileId, received) => {
+      expect(received).toBe(intent);
+      return source;
+    },
     prepareCurrentBundle: async () => {
       throw new Error("No tunnel should start during source admission");
     },
@@ -93,6 +104,7 @@ it.each([
   });
   const result = access.bindPreparedWorkspace({
     ...bindingIdentity,
+    ...(scenario === "admitted dispatch" ? { admittedIntent: intent } : {}),
     ownerEpoch: record.ownerEpoch,
     sessionId: "session:repository",
     sessionKey: "agent:main:session:repository",
@@ -101,9 +113,10 @@ it.each([
     retainCredentialCleanup: () => {},
     assertCurrent: () => assert(callerCurrent, new Error("Dispatch caller retired")),
   });
-  if (scenario === "reopened store") {
+  if (scenario === "reopened store" || scenario === "admitted dispatch") {
     const binding = await result;
     expect(binding).toMatchObject(prepared);
+    expect(revalidate).toHaveBeenCalledOnce();
     binding.assertCurrent();
     identityCurrent = false;
     expect(() => binding.assertCurrent()).toThrow("Repository identity changed");
@@ -115,5 +128,6 @@ it.each([
   expect(bind).toHaveBeenCalledTimes(
     scenario === "source unavailable" || scenario === "caller revoked" ? 0 : 1,
   );
+  expect(admit).toHaveBeenCalledTimes(scenario === "admitted dispatch" ? 0 : 1);
   expect(fixture.store.get(record.environmentId)).toEqual(record);
 });

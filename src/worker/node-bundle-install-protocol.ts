@@ -31,6 +31,20 @@ const BundleInstallInputSchema = z.strictObject({
   }),
 });
 
+const BundlePreparationInputSchema = BundleInstallInputSchema.pick({ build: true }).extend({
+  archive: BundleInstallInputSchema.shape.archive.omit({ token: true }),
+});
+export type NodeWorkerBundlePreparationInput = z.infer<typeof BundlePreparationInputSchema>;
+
+export function parseNodeWorkerBundlePreparationInput(
+  raw: string,
+): NodeWorkerBundlePreparationInput {
+  if (!raw || Buffer.byteLength(raw, "utf8") > REQUEST_MAX_BYTES) {
+    throw new Error("INVALID_REQUEST: invalid worker bundle preparation input");
+  }
+  return BundlePreparationInputSchema.parse(JSON.parse(raw) as unknown);
+}
+
 export type NodeWorkerBundleInstallInput = z.infer<typeof BundleInstallInputSchema>;
 export type NodeWorkerBundleInstallResult = WorkerAdmissionHandshake;
 

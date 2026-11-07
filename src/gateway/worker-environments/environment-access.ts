@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { WorkerEnvironmentStartStatus } from "../../../packages/gateway-protocol/src/schema/environments.js";
 import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
@@ -15,8 +16,10 @@ import { workerEnvironmentServiceError as serviceError } from "./environment-err
 import { workerInferenceMetadata } from "./inference-placement.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
+import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
+import type { createWorkerProviderIntent } from "./provider-intent.js";
 import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
@@ -100,6 +103,9 @@ export function createWorkerEnvironmentTransportLifecycle(options: {
 }
 
 type WorkerEnvironmentAccessOptions = {
+  preparedRepositorySource?: ReturnType<
+    typeof createWorkerProviderIntent
+  >["preparedRepositorySource"];
   readStartStatus: (record: WorkerEnvironmentRecord) => WorkerEnvironmentStartStatus | undefined;
   store: WorkerEnvironmentStore;
   getCleanupError: (record: WorkerEnvironmentRecord) => string | undefined;
@@ -273,10 +279,11 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     request: Parameters<NonNullable<WorkerEnvironmentAccessOptions["bindPreparedWorkspace"]>>[0] & {
       readNativeCredential?: GitHubCredentialReader;
       retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
+      admittedIntent?: WorkerProviderPreparedIntent;
     },
   ) => {
     // Repository admission belongs to this host owner, not the node transport payload.
-    const { readNativeCredential, retainCredentialCleanup, ...binding } = request;
+    const { readNativeCredential, retainCredentialCleanup, admittedIntent, ...binding } = request;
     const bind = options.bindPreparedWorkspace;
     const assertCurrent = () => {
       request.signal?.throwIfAborted();
@@ -309,19 +316,28 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       }
       // A ready hit and resumed initial binding must prove current source access too;
       // a snapshot is reusable content, never a substitute for repository authority.
-      repository = await prepareRepositoryWorkerProjectSource({
-        expected: projectSnapshot,
-        readNativeCredential,
-        retainCredentialCleanup,
-        namespace: options.projectNamespace,
-        getConfig: options.getConfig,
-        assertCurrent,
-        signal: request.signal,
-        knownRecipe: () => ({
-          setupRecipe: preparation.setupRecipe,
-          recipe: preparation.recipe,
-        }),
-      });
+      // Reuse dispatch-owned admission, not the provider operation that has closed.
+      repository =
+        (admittedIntent && options.preparedRepositorySource?.(record.profileId, admittedIntent)) ||
+        (await prepareRepositoryWorkerProjectSource({
+          expected: projectSnapshot,
+          readNativeCredential,
+          retainCredentialCleanup,
+          namespace: options.projectNamespace,
+          getConfig: options.getConfig,
+          assertCurrent,
+          signal: request.signal,
+          knownRecipe: () => ({
+            setupRecipe: preparation.setupRecipe,
+            recipe: preparation.recipe,
+          }),
+        }));
+      if (
+        !isDeepStrictEqual(repository.project, projectSnapshot) ||
+        repository.setupRecipe !== preparation.setupRecipe
+      ) {
+        throw new Error("Prepared repository differs from its admitted source or recipe");
+      }
     }
     const assertBindingCurrent = () => {
       assertCurrent();

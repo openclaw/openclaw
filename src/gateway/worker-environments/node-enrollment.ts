@@ -29,7 +29,10 @@ import {
   workerBootstrapOperationTimeoutMs,
 } from "./bootstrap-timeouts.js";
 import type { DeviceWorkerAvailability } from "./device-provider.js";
-import type { NodeBootstrapArtifact } from "./node-bootstrap-artifact-contract.js";
+import type {
+  NodeBootstrapArtifact,
+  WorkerBundleArtifact,
+} from "./node-bootstrap-artifact-contract.js";
 import {
   DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
   BUNDLE_NODE_TOOLCHAIN_SETUP_SH,
@@ -229,7 +232,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
 
   const prepareRuntime = async (
     record: WorkerEnvironmentRecord,
-    bundle: TransferArtifact,
+    bundle: WorkerBundleArtifact,
     operationSignal?: AbortSignal,
   ): Promise<WorkerNodeRuntimePreparation> => {
     await options.store.ready();
@@ -250,6 +253,11 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         workerBundle: {
           ...grantArtifact(prepared, bundle, enrollmentSignal, isAuthorized, transferBytes),
           packageRelativePath: workerBundleArchiveRelativePath(bundle.tarballSha256),
+          build: {
+            bundleHash: bundle.bundleHash,
+            openclawVersion: bundle.openclawVersion,
+            protocolFeatures: bundle.protocolFeatures,
+          },
         },
       };
       enrollmentClosers.set(runtime, binding.close);

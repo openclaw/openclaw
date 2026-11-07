@@ -97,46 +97,38 @@ export class NodeWorkerPreparedWorkspaceRuntime {
     const ownerRoot = path.join(root, input.gatewayNamespace, input.cacheKey);
     return await serializeNodeWorkerWorkspace(ownerRoot, async () => {
       signal?.throwIfAborted();
-      const verifyPrepared = async (
-        workspace: {
-          workspaceDir: string;
-          homeDir: string;
-          sourceManifestRef: string;
-          preparedManifestRef: string;
-        },
-        hashMemo: WorkspaceHashMemo,
-      ) => {
+      const readPreparedBase = async (workspace: {
+        homeDir: string;
+        sourceManifestRef: string;
+        preparedManifestRef: string;
+      }) => {
         const { manifest: source } = await readWorkspaceManifest(
           workspace.homeDir,
           workspace.sourceManifestRef,
           signal,
         );
-        const { manifest: prepared } = await readWorkspaceManifest(
-          workspace.homeDir,
-          workspace.preparedManifestRef,
-          signal,
-        );
-        if (
-          !source.baseCommit ||
-          source.baseCommit !== prepared.baseCommit ||
-          (await captureManifest({
-            workspaceDir: workspace.workspaceDir,
-            manifestHome: workspace.homeDir,
-            baseCommit: source.baseCommit,
-            referenceManifestRef: workspace.preparedManifestRef,
-            baseManifestRef: workspace.sourceManifestRef,
-            hashMemo,
-            signal,
-          })) !== workspace.preparedManifestRef
-        ) {
+        const prepared =
+          workspace.sourceManifestRef === workspace.preparedManifestRef
+            ? source
+            : (
+                await readWorkspaceManifest(
+                  workspace.homeDir,
+                  workspace.preparedManifestRef,
+                  signal,
+                )
+              ).manifest;
+        if (!source.baseCommit || source.baseCommit !== prepared.baseCommit) {
           throw new Error("INVALID_REQUEST: prepared workspace source does not match its manifest");
         }
+        return source.baseCommit;
       };
+      let baseCommit: string | undefined;
       let row: NodeWorkerPreparedWorkspaceRow;
       if (input.action === "register") {
-        const hashMemo: WorkspaceHashMemo = new Map();
         assertNodePreparedWorkspacePaths(root, input);
-        await verifyPrepared(input, hashMemo);
+        // Registration cannot execute the workspace. Its first binding verifies content
+        // under this serializer, including changes made while capacity was idle.
+        baseCommit = await readPreparedBase(input);
         signal?.throwIfAborted();
         assertNodePreparedWorkspacePaths(root, input);
         row = await store.register(input, {
@@ -145,9 +137,6 @@ export class NodeWorkerPreparedWorkspaceRuntime {
             assertNodePreparedWorkspacePaths(root, input);
           },
         });
-        // Only successful registration publishes hashes; failed verification keeps
-        // its candidate memo private and cannot replace an accepted registration.
-        hashMemos.set(ownerRoot, hashMemo);
       } else {
         const existing = await store.find(input.environmentId);
         if (!existing) {
@@ -158,8 +147,22 @@ export class NodeWorkerPreparedWorkspaceRuntime {
         if (existing.state === "available") {
           // Ready capacity must still match completed setup at its first claim.
           // Exact bind replay belongs to the session and must preserve its later edits.
-          const hashMemo = hashMemos.get(ownerRoot) ?? new Map();
-          await verifyPrepared(registeredWorkspace, hashMemo);
+          const hashMemo: WorkspaceHashMemo = new Map();
+          baseCommit = await readPreparedBase(registeredWorkspace);
+          const captured = await captureManifest({
+            workspaceDir: registeredWorkspace.workspaceDir,
+            manifestHome: registeredWorkspace.homeDir,
+            baseCommit,
+            referenceManifestRef: registeredWorkspace.preparedManifestRef,
+            baseManifestRef: registeredWorkspace.sourceManifestRef,
+            hashMemo,
+            signal,
+          });
+          if (captured !== registeredWorkspace.preparedManifestRef) {
+            throw new Error(
+              "INVALID_REQUEST: prepared workspace source does not match its manifest",
+            );
+          }
           signal?.throwIfAborted();
           hashMemos.set(ownerRoot, hashMemo);
         }
@@ -177,7 +180,14 @@ export class NodeWorkerPreparedWorkspaceRuntime {
           hashMemos.delete(ownerRoot);
         }
       }
-      return projectPreparedWorkspace(row);
+      const workspace = projectPreparedWorkspace(row);
+      if (!baseCommit) {
+        // Bound replay reads the immutable source receipt, preserving private edits.
+        baseCommit =
+          (await readWorkspaceManifest(workspace.homeDir, workspace.sourceManifestRef, signal))
+            .manifest.baseCommit ?? undefined;
+      }
+      return { ...workspace, ...(baseCommit ? { baseCommit } : {}) };
     });
   }
 

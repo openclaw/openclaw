@@ -119,6 +119,14 @@ the local archives before installing them and returns no forwarded credentials.
 It does not allocate a machine, enroll a node, create a logical lease, or grant
 execution authority. Node and archive extraction tools must already be present.
 
+Include the worker archive's `build` metadata (`bundleHash`, `openclawVersion`,
+and `protocolFeatures`) to prepare expanded worker code for later leases.
+The Gateway supplies these facts on `WorkerNodeRuntimePreparation.workerBundle`.
+Offline producers obtain them from the exported worker artifact. Preparation
+verifies the full bundle before publishing it under the installed package's
+`worker-artifacts/expanded/<bundleHash>` directory. Cache verification checks
+that expanded code without repairing it when the same build metadata is supplied.
+
 For a retained cache, `createCrabboxRuntimeCacheVerification` takes the same
 artifact identity without local archive paths and returns a credential-free
 command. It rejects missing or corrupt caches without installing, pruning
