@@ -108,9 +108,7 @@ export function resolveAuthorizedGatewayStartupDreamingPluginIds(params: {
     pluginConfig: resolveMemoryDreamingPluginConfig(params.config),
     cfg: params.config,
   });
-  const dreamingSelectedPluginId = normalizeOptionalLowercaseString(
-    resolveMemoryDreamingPluginId(params.config),
-  );
+  const dreamingSelectedPluginId = resolveMemoryDreamingPluginId(params.config);
   const engineId = DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
   if (
     !dreamingConfig.enabled ||
