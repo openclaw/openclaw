@@ -12,7 +12,11 @@ import { matrixSetupPlugin } from "../channel.setup.js";
 import { getMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import { resolveConfiguredMatrixBotUserIds } from "./accounts.js";
-import { openMatrixCredentialsStore } from "./credentials-read.js";
+import {
+  captureMatrixCredentialsEnv,
+  loadMatrixCredentialsAsync,
+  openMatrixCredentialsStore,
+} from "./credentials-read.js";
 import {
   clearMatrixCredentials,
   credentialsMatchConfig,
@@ -238,6 +242,22 @@ it("keeps persisted-auth presence scoped to valid live records and the supplied 
   store.register(key, credentials, { ttlMs: 60_000 });
   now.mockRestore();
   expect(await hasAuth()).toBe(false);
+});
+
+it("keeps credential writes and capture-based reads on the runtime state dir", async () => {
+  // Regression: an env-carried OPENCLAW_STATE_DIR must not split the credentials
+  // store from the runtime-pinned directory that read-side captures resolve.
+  const foreignDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-creds-env-"));
+  try {
+    await saveMatrixCredentials(auth, { OPENCLAW_STATE_DIR: foreignDir }, "default");
+    const loaded = await loadMatrixCredentialsAsync(
+      captureMatrixCredentialsEnv({ OPENCLAW_STATE_DIR: foreignDir }),
+      "default",
+    );
+    expect(loaded).toMatchObject(auth);
+  } finally {
+    fs.rmSync(foreignDir, { recursive: true, force: true });
+  }
 });
 
 it.each([
