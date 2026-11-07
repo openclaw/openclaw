@@ -1,7 +1,4 @@
-import type { IncomingMessage } from "node:http";
-import { Readable } from "node:stream";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
-import { filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const HEYGEN_MODELS = [
   "heygen-voice-1",
@@ -12,7 +9,6 @@ export type HeyGenModel = (typeof HEYGEN_MODELS)[number];
 
 export const HEYGEN_MP3_OUTPUT = { encoding: "mp3", sample_rate_hertz: 44_100 } as const;
 export const HEYGEN_PCM_OUTPUT = { encoding: "pcm", sample_rate_hertz: 24_000 } as const;
-const HEYGEN_SOCKET_MP3_OUTPUT = "mp3_44100_128";
 
 const HEYGEN_ERROR_LABEL = "HeyGen TTS API error";
 const HEYGEN_VOICE_PAGE_SIZE = 100;
@@ -37,7 +33,7 @@ type HeyGenAudioStream = {
 
 type HeyGenOutputFormat = typeof HEYGEN_MP3_OUTPUT | typeof HEYGEN_PCM_OUTPUT;
 
-// The guard's timeout covers the whole body. A professional take renders for minutes.
+// The guard's timeout covers the whole body. Playback reads a long reply for minutes.
 function refreshTimeoutOnEachChunk(response: Response, refreshTimeout?: () => void): Response {
   const refresh = new TransformStream<Uint8Array, Uint8Array>({
     transform: (chunk, controller) => {
@@ -90,7 +86,7 @@ export async function heygenTts(
   }
 }
 
-export async function heygenHttpTtsStream(params: HeyGenTtsRequest): Promise<HeyGenAudioStream> {
+export async function heygenTtsStream(params: HeyGenTtsRequest): Promise<HeyGenAudioStream> {
   const { createBoundedProviderBinaryStream } =
     await import("openclaw/plugin-sdk/provider-binary-stream");
   const { assertOkOrThrowProviderError, assertProviderBinaryResponseContent } =
@@ -116,161 +112,6 @@ export async function heygenHttpTtsStream(params: HeyGenTtsRequest): Promise<Hey
     await release();
     throw error;
   }
-}
-
-type HeyGenSocketFrame = {
-  audio?: string | null;
-  isFinal?: boolean | null;
-  error?: { request_id?: string };
-};
-
-function toFetchResponse(response: IncomingMessage): Response {
-  // SAFETY: Node creates the global ReadableStream class here.
-  return new Response(Readable.toWeb(response) as ReadableStream<Uint8Array>, {
-    status: response.statusCode,
-    headers: filterStringRecord(response.headers),
-  });
-}
-
-// Each socket carries one text. `multi-stream-input` costs one more admission per context.
-export async function heygenSocketTtsStream(params: HeyGenTtsRequest): Promise<HeyGenAudioStream> {
-  const url = new URL(`${params.baseUrl}/v3/models/audio/tts/stream-input`);
-  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
-  url.searchParams.set("voice_id", params.voiceId);
-  url.searchParams.set("model", params.model);
-  url.searchParams.set("output_format", HEYGEN_SOCKET_MP3_OUTPUT);
-  if (params.language) {
-    url.searchParams.set("language", params.language);
-  }
-
-  const { toStringifiedError } = await import("openclaw/plugin-sdk/error-runtime");
-  const { canonicalizeBase64, rawDataToString } =
-    await import("openclaw/plugin-sdk/realtime-voice-provider");
-  const {
-    createProviderHttpError,
-    formatProviderErrorPayload,
-    openProviderWebSocket,
-    redactProviderResponseErrorText,
-  } = await import("openclaw/plugin-sdk/provider-http");
-  const requestHeaders = { "x-api-key": params.apiKey };
-  const serverError = (text: string) =>
-    new Error(redactProviderResponseErrorText(text, requestHeaders));
-  const socket = await openProviderWebSocket({
-    allowPrivateNetwork: false,
-    baseUrl: params.baseUrl,
-    headers: requestHeaders,
-    timeoutMs: params.timeoutMs,
-    trustConfiguredBaseUrlOrigin: false,
-    url: url.toString(),
-  });
-
-  // Resolve on the first audio. Until then, core can try the next provider.
-  return await new Promise((resolve, reject) => {
-    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
-    let settled = false;
-    let started = false;
-    let totalBytes = 0;
-    let watchdog: ReturnType<typeof setTimeout> | undefined;
-
-    const stop = () => {
-      settled = true;
-      clearTimeout(watchdog);
-      socket.close();
-    };
-
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      stop();
-      if (!started) {
-        reject(error ?? new Error("HeyGen TTS stream returned no audio"));
-      } else if (error) {
-        controller?.error(error);
-      } else {
-        controller?.close();
-      }
-    };
-
-    const refreshWatchdog = () => {
-      clearTimeout(watchdog);
-      watchdog = setTimeout(
-        () => finish(new Error("HeyGen TTS stream timed out")),
-        params.timeoutMs,
-      );
-    };
-
-    const audioStream = new ReadableStream<Uint8Array>({
-      start: (streamController) => {
-        controller = streamController;
-      },
-      cancel: stop,
-    });
-
-    const handleFrame = (frame: HeyGenSocketFrame) => {
-      if (frame.error) {
-        const requestId = frame.error.request_id;
-        const suffix = requestId ? ` [request_id=${requestId}]` : "";
-        throw serverError(`${HEYGEN_ERROR_LABEL}: ${formatProviderErrorPayload(frame)}${suffix}`);
-      }
-      if (frame.audio) {
-        const audio = canonicalizeBase64(frame.audio);
-        if (!audio) {
-          throw new Error("HeyGen TTS stream returned malformed base64 audio");
-        }
-        const chunk = Buffer.from(audio, "base64");
-        totalBytes += chunk.length;
-        if (totalBytes > params.maxBytes) {
-          throw new Error(`HeyGen TTS audio stream exceeds ${params.maxBytes} bytes`);
-        }
-        controller?.enqueue(new Uint8Array(chunk));
-        refreshWatchdog();
-        if (!started) {
-          started = true;
-          resolve({ audioStream, release: async () => finish() });
-        }
-      }
-      if (frame.isFinal) {
-        finish();
-      }
-    };
-
-    refreshWatchdog();
-
-    socket.once("unexpected-response", (_request, response) => {
-      void Promise.resolve()
-        .then(() =>
-          createProviderHttpError(toFetchResponse(response), HEYGEN_ERROR_LABEL, {
-            requestHeaders,
-          }),
-        )
-        .then(finish, finish);
-    });
-
-    socket.on("error", (error) => finish(toStringifiedError(error)));
-
-    socket.once("close", (code, reason) => {
-      finish(
-        serverError(`HeyGen TTS stream closed before final audio (${code}): ${reason.toString()}`),
-      );
-    });
-
-    socket.once("open", () => {
-      socket.send(JSON.stringify({ text: params.text }));
-      socket.send(JSON.stringify({ text: "" }));
-    });
-
-    socket.on("message", (data) => {
-      if (settled) {
-        return;
-      }
-      try {
-        handleFrame(JSON.parse(rawDataToString(data)));
-      } catch (error) {
-        finish(toStringifiedError(error));
-      }
-    });
-  });
 }
 
 type HeyGenVoice = {

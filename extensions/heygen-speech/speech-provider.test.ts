@@ -1,10 +1,7 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
-import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
+import { createServer } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { rawDataToString } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { afterAll, afterEach, assert, expect, it, vi } from "vitest";
-import { WebSocketServer, type WebSocket } from "ws";
 import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 import { buildHeyGenSpeechProvider } from "./speech-provider.js";
@@ -19,14 +16,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   transcodeAudioBufferToOpus: transcodeMock,
 }));
-vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>();
-  return {
-    ...actual,
-    openProviderWebSocket: (params: Parameters<typeof actual.openProviderWebSocket>[0]) =>
-      actual.openProviderWebSocket({ ...params, allowPrivateNetwork: true }),
-  };
-});
 
 function respond(handler: (url: string, init?: RequestInit) => Response) {
   fetchMock.mockImplementation(async ({ url, init }: { url: string; init?: RequestInit }) => ({
@@ -34,48 +23,6 @@ function respond(handler: (url: string, init?: RequestInit) => Response) {
     release: async () => {},
   }));
 }
-
-const closers: Array<() => Promise<void>> = [];
-
-async function serve(listener: Server): Promise<string> {
-  const port = await listenOnLoopback(listener);
-  closers.push(async () => {
-    listener.closeAllConnections();
-    await new Promise((resolve) => {
-      listener.close(resolve);
-    });
-  });
-  return `http://127.0.0.1:${port}`;
-}
-
-async function createSpeechServer(speak: (client: WebSocket) => void) {
-  const listener = createServer();
-  const sockets = new WebSocketServer({ server: listener });
-  const frames: unknown[] = [];
-  const upgrades: Array<{ url: URL; headers: IncomingHttpHeaders }> = [];
-  listener.on("upgrade", ({ url, headers }) =>
-    upgrades.push({ url: new URL(url ?? "/", "http://127.0.0.1"), headers }),
-  );
-  sockets.on("connection", (client) => {
-    client.on("message", (data) => {
-      const frame = JSON.parse(rawDataToString(data)) as { text: string };
-      frames.push(frame);
-      if (!frame.text) {
-        speak(client);
-      }
-    });
-  });
-  closers.push(async () => sockets.clients.forEach((client) => client.terminate()));
-  return { baseUrl: await serve(listener), frames, upgrades };
-}
-
-const audio = (...bytes: number[]) =>
-  JSON.stringify({ audio: Buffer.from(bytes).toString("base64") });
-const finalFrame = JSON.stringify({ audio: null, isFinal: true });
-const errorFrame = JSON.stringify({
-  message: "Voice not found",
-  error: { code: "voice_not_found", message: "Voice not found", request_id: "req-1" },
-});
 
 const provider = buildHeyGenSpeechProvider();
 const request = { text: "hi", cfg: {}, providerConfig: { apiKey: "key" }, timeoutMs: 1_000 };
@@ -91,22 +38,15 @@ async function streamSpeech(providerConfig: Record<string, unknown>, extra = {})
   return result;
 }
 
-async function streamOverSocket(speak: (client: WebSocket) => void, extra = {}) {
-  const { baseUrl } = await createSpeechServer(speak);
-  return await streamSpeech({ baseUrl, streamTransport: "websocket" }, extra);
-}
-
 const readAudio = async (stream: ReadableStream<Uint8Array>) =>
   Buffer.from(await new Response(stream).arrayBuffer());
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
   vi.doUnmock("openclaw/plugin-sdk/media-runtime");
-  vi.doUnmock("openclaw/plugin-sdk/provider-http");
   vi.resetModules();
 });
-afterEach(async () => {
-  await Promise.all(closers.splice(0).map((close) => close()));
+afterEach(() => {
   fetchMock.mockReset();
   transcodeMock.mockReset();
   vi.unstubAllEnvs();
@@ -198,21 +138,25 @@ it("keeps a long HTTP take alive while audio arrives", async () => {
   fetchMock.mockImplementation((params: Parameters<typeof fetchWithSsrFGuard>[0]) =>
     fetchWithSsrFGuard({ ...params, policy: { allowPrivateNetwork: true } }),
   );
-  const baseUrl = await serve(
-    createServer((_request, response) => {
-      response.writeHead(200, { "content-type": "audio/mpeg" });
-      let sent = 0;
-      const timer = setInterval(() => {
-        response.write(Buffer.from([++sent]));
-        if (sent === 4) {
-          clearInterval(timer);
-          response.end();
-        }
-      }, 200);
-    }),
-  );
-  const result = await streamSpeech({ baseUrl }, { timeoutMs: 500 });
-  expect(await readAudio(result.audioStream)).toEqual(Buffer.from([1, 2, 3, 4]));
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "audio/mpeg" });
+    let sent = 0;
+    const timer = setInterval(() => {
+      response.write(Buffer.from([++sent]));
+      if (sent === 4) {
+        clearInterval(timer);
+        response.end();
+      }
+    }, 200);
+  });
+  const port = await listenOnLoopback(server);
+  try {
+    const result = await streamSpeech({ baseUrl: `http://127.0.0.1:${port}` }, { timeoutMs: 500 });
+    expect(await readAudio(result.audioStream)).toEqual(Buffer.from([1, 2, 3, 4]));
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
 });
 
 it("transcodes voice notes to Opus", async () => {
@@ -230,149 +174,31 @@ it("transcodes voice notes to Opus", async () => {
   );
 });
 
-it("streams one complete text over the socket", async () => {
-  const { baseUrl, frames, upgrades } = await createSpeechServer((client) => {
-    client.send(audio(1, 2));
-    client.send(audio(3));
-    client.send(finalFrame);
-  });
-  const result = await streamSpeech({
-    baseUrl,
-    language: "en",
-    model: "heygen-voice-1",
-    streamTransport: "websocket",
-    voiceId: "v",
-  });
-  expect(result).toMatchObject(mp3Result);
-  expect(await readAudio(result.audioStream)).toEqual(Buffer.from([1, 2, 3]));
-  expect(frames).toEqual([{ text: "hi" }, { text: "" }]);
-  const upgrade = upgrades[0];
-  assert(upgrade);
-  expect(upgrade.url.pathname).toBe("/v3/models/audio/tts/stream-input");
-  expect(upgrade.headers["x-api-key"]).toBe("key");
-  expect(Object.fromEntries(upgrade.url.searchParams)).toEqual({
-    language: "en",
-    model: "heygen-voice-1",
-    output_format: "mp3_44100_128",
-    voice_id: "v",
-  });
-});
-
-it.each([
-  [
-    "an error frame",
-    (client: WebSocket) => {
-      client.send(errorFrame);
-      client.close(1008);
-    },
-    "HeyGen TTS API error: Voice not found [code=voice_not_found] [request_id=req-1]",
-  ],
-  ["a capacity close", (client: WebSocket) => client.close(1013, "busy"), "(1013): busy"],
-  ["an empty result", (client: WebSocket) => client.send(finalFrame), "returned no audio"],
-  [
-    "malformed audio",
-    (client: WebSocket) => client.send(JSON.stringify({ audio: "%%%" })),
-    "malformed base64",
-  ],
-  ["a non-JSON frame", (client: WebSocket) => client.send("nope"), "JSON"],
-])("rejects %s before audio", async (_name, speak, message) => {
-  await expect(streamOverSocket(speak)).rejects.toThrow(message);
-});
-
-it.each([
-  [
-    "an error frame",
-    (client: WebSocket, apiKey: string) =>
-      client.send(JSON.stringify({ error: { message: `bad key ${apiKey}` } })),
-  ],
-  [
-    "a close reason",
-    (client: WebSocket, apiKey: string) => client.close(1008, `bad key ${apiKey}`),
-  ],
-])("redacts the API key from %s", async (_name, fail) => {
-  const apiKey = "opaque-heygen-secret42";
-  const { baseUrl } = await createSpeechServer((client) => fail(client, apiKey));
-  const error: unknown = await streamSpeech({
-    apiKey,
-    baseUrl,
-    streamTransport: "websocket",
-  }).catch((cause: unknown) => cause);
-  assert(error instanceof Error);
-  expect(error.message).toContain("bad key");
-  expect(error.message).not.toContain(apiKey);
-});
-
-it("rejects a silent socket at the timeout", async () => {
-  await expect(streamOverSocket(() => {}, { timeoutMs: 20 })).rejects.toThrow("timed out");
-});
-
-it("keeps the code and request id from a refused handshake", async () => {
-  const body = JSON.stringify({
-    error: { code: "rate_limit_exceeded", message: "Too many requests" },
-  });
-  const listener = createServer();
-  listener.on("upgrade", (_request, socket) => {
-    socket.end(
-      [
-        "HTTP/1.1 429 Too Many Requests",
-        "content-type: application/json",
-        `content-length: ${body.length}`,
-        "x-request-id: req-2",
-        "connection: close",
-        "",
-        body,
-      ].join("\r\n"),
-    );
-  });
-  const baseUrl = await serve(listener);
-  await expect(streamSpeech({ baseUrl, streamTransport: "websocket" })).rejects.toMatchObject({
-    message:
-      "HeyGen TTS API error (429): Too many requests [code=rate_limit_exceeded] [request_id=req-2]",
-    status: 429,
-  });
-});
-
-it.each([
-  ["drops", (client: WebSocket) => client.terminate(), "closed before final audio (1006)"],
-  ["sends an error", (client: WebSocket) => client.send(errorFrame), "voice_not_found"],
-])("errors the stream when the socket %s after audio", async (_name, fail, message) => {
-  const result = await streamOverSocket((client) => {
-    client.send(audio(1));
-    fail(client);
-  });
-  await expect(readAudio(result.audioStream)).rejects.toThrow(message);
-});
-
 it("errors the stream past the configured media limit", async () => {
-  const result = await streamOverSocket(
-    (client) => {
-      client.send(audio(1));
-      client.send(audio(2));
-    },
+  respond(() => new Response(Buffer.from([1, 2]), { headers: { "content-type": "audio/mpeg" } }));
+  const result = await streamSpeech(
+    {},
     { cfg: { agents: { defaults: { mediaMaxMb: 1 / (1024 * 1024) } } } },
   );
   await expect(readAudio(result.audioStream)).rejects.toThrow("exceeds 1 bytes");
 });
 
-it("closes the socket on release", async () => {
-  const closed = createDeferred<number>();
-  const result = await streamOverSocket((client) => {
-    client.once("close", closed.resolve);
-    client.send(audio(1));
+it("releases the request when playback stops", async () => {
+  const release = vi.fn(async () => {});
+  const response = new Response(new ReadableStream(), {
+    headers: { "content-type": "audio/mpeg" },
   });
+  fetchMock.mockResolvedValue({ response, release });
+  const result = await streamSpeech({});
   await result.release?.();
-  await closed.promise;
-  expect(await readAudio(result.audioStream)).toEqual(Buffer.from([1]));
+  expect(release).toHaveBeenCalledOnce();
 });
 
-it("closes the socket when the reader cancels", async () => {
-  const closed = createDeferred<number>();
-  const result = await streamOverSocket((client) => {
-    client.once("close", closed.resolve);
-    client.send(audio(1));
-  });
-  await result.audioStream.cancel();
-  await closed.promise;
+it("releases the request when HeyGen refuses a stream", async () => {
+  const release = vi.fn(async () => {});
+  fetchMock.mockResolvedValue({ response: new Response("no", { status: 503 }), release });
+  await expect(streamSpeech({})).rejects.toThrow("503");
+  expect(release).toHaveBeenCalledOnce();
 });
 
 const voice = (id: string, status = "ACTIVE") => ({
@@ -412,7 +238,6 @@ it("keeps workspace voices when the public list fails", async () => {
 
 it.each([
   ["model", "heygen-voice-2", 'invalid HeyGen model "heygen-voice-2"'],
-  ["streamTransport", "carrier-pigeon", 'invalid HeyGen streamTransport "carrier-pigeon"'],
   ["apiKey", "   ", "HeyGen API key missing"],
 ])("rejects invalid %s before network access", async (key, value, error) => {
   vi.stubEnv("HEYGEN_API_KEY", "   ");

@@ -10,7 +10,7 @@ openclaw plugins install @openclaw/heygen-speech
 
 The plugin id is `heygen-speech`; the speech provider and TTS config id are
 `heygen`. Configure `tts.provider: "heygen"` and set `HEYGEN_API_KEY`. The
-provider supports buffered audio, streamed playback over HTTP or WebSocket, Opus
+provider supports buffered audio, streamed playback over HTTP, Opus
 voice notes through `ffmpeg`, 24 kHz PCM telephony, and voice discovery.
 
 See [HeyGen Voice](https://docs.openclaw.ai/providers/heygen) for setup, models,

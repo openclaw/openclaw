@@ -18,9 +18,8 @@ import {
   HEYGEN_MODELS,
   HEYGEN_MP3_OUTPUT,
   HEYGEN_PCM_OUTPUT,
-  heygenHttpTtsStream,
-  heygenSocketTtsStream,
   heygenTts,
+  heygenTtsStream,
   listHeyGenVoices,
   type HeyGenModel,
 } from "./tts.js";
@@ -45,14 +44,6 @@ function normalizeModel(value: unknown): HeyGenModel {
   throw new Error(`invalid HeyGen model "${model}"`);
 }
 
-function normalizeStreamTransport(value: unknown) {
-  const transport = trimToUndefined(value) ?? "http";
-  if (transport === "http" || transport === "websocket") {
-    return transport;
-  }
-  throw new Error(`invalid HeyGen streamTransport "${transport}"`);
-}
-
 function normalizeBaseUrl(value: unknown): string {
   return trimToUndefined(value)?.replace(/\/+$/u, "") ?? HEYGEN_BASE_URL;
 }
@@ -69,7 +60,6 @@ function normalizeProviderConfig(rawConfig: Record<string, unknown>) {
     model: normalizeModel(raw?.modelId ?? raw?.model),
     voiceId: trimToUndefined(raw?.speakerVoiceId ?? raw?.voiceId) ?? DEFAULT_VOICE_ID,
     language: trimToUndefined(raw?.language),
-    streamTransport: normalizeStreamTransport(raw?.streamTransport),
   };
 }
 
@@ -111,7 +101,6 @@ async function resolveSynthesisRequest(req: Omit<SpeechSynthesisRequest, "target
     voiceId: trimToUndefined(overrides.voiceId ?? overrides.voice) ?? config.voiceId,
     model: normalizeModel(trimToUndefined(overrides.model) ?? config.model),
     language: config.language,
-    streamTransport: config.streamTransport,
     timeoutMs: req.timeoutMs,
     maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
   };
@@ -171,13 +160,9 @@ export function buildHeyGenSpeechProvider(): SpeechProviderPlugin {
       return { audioBuffer, ...MP3_RESULT };
     },
     streamSynthesize: async (req) => {
-      const { streamTransport, ...params } = await resolveSynthesisRequest(req);
-      const streamParams = { ...params, maxBytes: Math.min(params.maxBytes, MAX_AUDIO_BYTES) };
-      const stream =
-        streamTransport === "websocket"
-          ? await heygenSocketTtsStream(streamParams)
-          : await heygenHttpTtsStream(streamParams);
-      return { ...stream, ...MP3_RESULT };
+      const params = await resolveSynthesisRequest(req);
+      const maxBytes = Math.min(params.maxBytes, MAX_AUDIO_BYTES);
+      return { ...(await heygenTtsStream({ ...params, maxBytes })), ...MP3_RESULT };
     },
     synthesizeTelephony: async (req) => ({
       audioBuffer: await heygenTts(await resolveSynthesisRequest(req), HEYGEN_PCM_OUTPUT),

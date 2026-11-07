@@ -2,7 +2,7 @@
 summary: "Use HeyGen Voice text-to-speech in OpenClaw"
 read_when:
   - You want HeyGen Voice for text-to-speech
-  - You need a HeyGen API key, voice, model, or streaming transport configuration
+  - You need a HeyGen API key, voice, or model configuration
 title: "HeyGen Voice"
 ---
 
@@ -42,14 +42,13 @@ openclaw plugins install @openclaw/heygen-speech
 }
 ```
 
-| Key               | Type                      | Description                                                                  |
-| ----------------- | ------------------------- | ---------------------------------------------------------------------------- |
-| `apiKey`          | string                    | Resolved API key. Supports `${ENV}` and secret refs.                         |
-| `baseUrl`         | string                    | HeyGen API URL. Trailing slashes stripped. Default `https://api.heygen.com`. |
-| `model`           | string                    | One of the [models](#models) below.                                          |
-| `speakerVoiceId`  | string                    | Default voice id. Alias: `voiceId`.                                          |
-| `language`        | string                    | Optional base code such as `en`. Regional codes such as `en-US` fail.        |
-| `streamTransport` | `"http"` \| `"websocket"` | How streamed playback reaches HeyGen. Default `http`.                        |
+| Key              | Type   | Description                                                                  |
+| ---------------- | ------ | ---------------------------------------------------------------------------- |
+| `apiKey`         | string | Resolved API key. Supports `${ENV}` and secret refs.                         |
+| `baseUrl`        | string | HeyGen API URL. Trailing slashes stripped. Default `https://api.heygen.com`. |
+| `model`          | string | One of the [models](#models) below.                                          |
+| `speakerVoiceId` | string | Default voice id. Alias: `voiceId`.                                          |
+| `language`       | string | Optional base code such as `en`. Regional codes such as `en-US` fail.        |
 
 ## Models
 
@@ -67,12 +66,9 @@ The provider does not create voices. To create an instant clone, call `POST /v3/
 
 ## Streaming
 
-Streamed playback, such as Discord voice, requests MP3 and plays it as it arrives.
+Streamed playback, such as Discord voice, streams MP3 over HTTP and plays it as it arrives.
 
-- `http` (default) serves every voice.
-- `websocket` serves instant voices. HeyGen refuses professional voice clones on the socket.
-
-A professional voice clone needs `model: "heygen-voice-1"` and the `http` transport.
+A professional voice clone needs `model: "heygen-voice-1"`.
 
 ## Output
 
