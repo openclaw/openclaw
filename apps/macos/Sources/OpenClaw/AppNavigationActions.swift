@@ -45,6 +45,19 @@ enum AppNavigationActions {
             : DashboardManager.shared.openOrFocusDashboard(for: target)
     }
 
+    @discardableResult
+    static func selectGateway(_ target: DashboardGatewayTarget, in window: NSWindow?) -> Task<Void, Never>? {
+        // Capture the originating shell before any asynchronous connection work.
+        // The visible window, not the app's preferred experience, owns selection.
+        if let source = window?.delegate as? WebChatSwiftUIWindowController {
+            return source.gatewaySelection.select?(target)
+        }
+        if let source = window?.windowController as? DashboardWindowController {
+            return DashboardManager.shared.switchTarget(target, in: source)
+        }
+        return self.openGateway(target)
+    }
+
     static func openPrimaryWebRoute(_ path: String, search: String? = nil) {
         let generation = self.presentationGeneration
         Task {
