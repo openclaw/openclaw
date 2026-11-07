@@ -3,7 +3,7 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatStreamingListRenderingTests {
-    @Test func `reader anchors distinguish repeated paragraph prefixes through finalization`() throws {
+    @Test @MainActor func `reader anchors distinguish repeated paragraph prefixes through finalization`() throws {
         let first = "Deployment checks passed for the staging environment. Region: us-east-1."
         let second = "Deployment checks passed for the staging environment. Region: eu-west-1."
         let text = first + "\n\n" + second
