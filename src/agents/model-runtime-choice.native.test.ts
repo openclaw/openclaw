@@ -351,6 +351,7 @@ it("retains the missing personal account privately but hides its locator in runt
     snapshot: owner.modelCatalog,
     metadataSnapshot: owner.metadataSnapshot,
     preferredProfileId: profileId,
+    profileProvider: request.provider,
     preparedAuthStore: { version: 1, profiles: {} },
     preparedPersonalCatalog: { profiles: {}, links: [], isCurrent: () => true },
   });

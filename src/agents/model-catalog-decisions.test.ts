@@ -473,6 +473,82 @@ describe("captured model decisions", () => {
     expectAvailable(owner.evaluateEntry(entry, [entry], "openclaw"), "openai:chosen");
   });
 
+  it("keeps another provider's stored credential available when a personal pin is missing", () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    const missingPin =
+      "personal:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002";
+    const claude = model("anthropic", "claude-opus-5-5");
+    const preparedAuthStore = authStore(
+      { "anthropic:work": apiKey("anthropic") },
+      { order: { anthropic: ["anthropic:work"] } },
+    );
+    const snapshot = catalogSnapshot([claude]);
+    const preparedPersonalCatalog = { profiles: {}, links: [], isCurrent: () => true };
+    const open = decisions({ preparedAuthStore, snapshot, preparedPersonalCatalog });
+    expect(open.evaluateEntry(claude).availability).toBe(true);
+    const pinned = decisions({
+      cfg: { agents: { defaults: { model: "openai/gpt-5.4" } } },
+      preferredProfileId: missingPin,
+      preparedAuthStore,
+      snapshot,
+      preparedPersonalCatalog,
+    });
+    expect(pinned.evaluateEntry(claude)).toMatchObject({
+      availability: true,
+      selectedProfileId: "anthropic:work",
+    });
+  });
+
+  it.each([undefined, "anthropic"])(
+    "keeps a missing personal pin strict only for its provider (%s)",
+    (profileProvider) => {
+      const missingPin =
+        "personal:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002";
+      const claude = model("anthropic", "claude-opus-5-5");
+      const other = model("other-provider", "available-model");
+      const owner = decisions({
+        cfg: { agents: { defaults: { model: "anthropic/claude-opus-5-5" } } },
+        preferredProfileId: missingPin,
+        pinnedProfileId: missingPin,
+        profileProvider,
+        preparedAuthStore: authStore({
+          "anthropic:work": apiKey("anthropic"),
+          "other-provider:work": apiKey("other-provider"),
+        }),
+        preparedPersonalCatalog: { profiles: {}, links: [], isCurrent: () => true },
+      });
+      expect(owner.evaluateEntry(claude)).toMatchObject({
+        availability: false,
+        selectedProfileId: missingPin,
+      });
+      expectAvailable(owner.evaluateEntry(other), "other-provider:work");
+    },
+  );
+
+  it("keeps a known personal account when the saved provider hint is stale", () => {
+    const profileId =
+      "personal:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002";
+    const owner = decisions({
+      preferredProfileId: profileId,
+      pinnedProfileId: profileId,
+      profileProvider: "previous-provider",
+      preparedAuthStore: authStore({
+        "anthropic:shared": apiKey("anthropic"),
+        "previous:shared": apiKey("previous-provider"),
+      }),
+      preparedPersonalCatalog: {
+        profiles: { [profileId]: { credential: apiKey("anthropic") } },
+        links: [],
+        isCurrent: () => true,
+      },
+    });
+    expectAvailable(owner.evaluateEntry(model("anthropic", "claude-opus-5-5")), profileId);
+    expectAvailable(
+      owner.evaluateEntry(model("previous-provider", "available-model")),
+      "previous:shared",
+    );
+  });
+
   it("retains native provenance and mode without blessing a same-name bearer credential", () => {
     expect(
       resolveUsableAgentCredentialModes({

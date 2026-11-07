@@ -7,15 +7,19 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type * as BundledIds from "../channels/plugins/bundled-ids.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import * as boundaryPath from "../infra/boundary-path.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { readDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { clearUserProfileAuthLink, connectUserModelAccount } from "../state/user-model-accounts.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
@@ -342,6 +346,62 @@ describe("doctor state integrity", () => {
 
 describe("doctor retained session integrity", () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it("diagnoses missing personal session accounts without replacing pins during repair", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const owner = ensureProfileForEmail("doctor-personal-pin@example.test");
+      const { authProfileId } = connectUserModelAccount({
+        ownerProfileId: owner.id,
+        credential: { type: "api_key", provider: "anthropic", key: "synthetic-personal-key" },
+        assertCurrent() {},
+      });
+      clearUserProfileAuthLink({ profileId: owner.id, provider: "anthropic" });
+      const missing = { agentId: "main", sessionKey: "agent:main:main" };
+      const retained = { agentId: "main", sessionKey: "agent:main:retained-account" };
+      const missingPin = `personal:${owner.id}:00000000-0000-4000-8000-000000000002`;
+      for (const [scope, profile] of [
+        [missing, missingPin],
+        [retained, authProfileId],
+      ] as const) {
+        await upsertSessionEntryCore(scope, {
+          sessionId: scope.sessionKey,
+          updatedAt: 1,
+          authProfileOverride: profile,
+          authProfileOverrideSource: "user-link",
+        });
+      }
+      const before = loadSessionEntry(missing);
+      const notes = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
+      for (let attempt = 0; attempt < 2; attempt++) {
+        notes.mockClear();
+        await noteStateIntegrityRaw(cfg, { confirmRuntimeRepair: async () => true });
+        const text = notes.mock.calls.map(([message]) => String(message)).join("\n");
+        expect(text).toContain("agent:main:main: selected personal model account is unavailable");
+        expect(text).toContain("/model <provider>/<model>@<profile>");
+        expect(text).toContain(
+          "then explicitly select the newly connected account for this session",
+        );
+        expect(text).not.toContain(
+          "agent:main:retained-account: selected personal model account is unavailable",
+        );
+        expect(loadSessionEntry(missing)).toEqual(before);
+        expect(loadSessionEntry(retained)?.authProfileOverride).toBe(authProfileId);
+        if (attempt === 0) {
+          connectUserModelAccount({
+            ownerProfileId: owner.id,
+            credential: {
+              type: "api_key",
+              provider: "anthropic",
+              key: "synthetic-reconnected-key",
+            },
+            assertCurrent() {},
+          });
+        }
+      }
+    });
+  });
 
   it("leaves retired recovery state inert without restoring deleted retained rows", async () => {
     await withOpenClawTestState({ label: "retained-session-integrity" }, async (state) => {

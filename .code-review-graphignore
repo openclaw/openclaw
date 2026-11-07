@@ -1,0 +1,32 @@
+# Keep source and regression tests; omit dependencies and generated local output.
+node_modules/
+.pnpm/
+.pnpm-store/
+.git/
+.worktrees/
+.code-review-graph/
+.artifacts/
+.local/
+.superpowers/
+.cache/
+.tmp/
+.crabbox/
+coverage/
+__pycache__/
+.venv/
+DerivedData/
+.build/
+/dist/
+/build/
+/data/
+*.min.js
+*.min.css
+*.map
+*.snap
+
+# Operator tooling and separate native applications are outside this runtime graph.
+/.agents/
+/apps/
+/skills/
+/examples/
+/qa/

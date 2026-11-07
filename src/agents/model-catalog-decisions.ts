@@ -203,12 +203,15 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       }
     : params.snapshot;
   const selectedProfileId = params.preferredProfileId ?? params.pinnedProfileId;
+  const recordedProfileProvider = selectedProfileId
+    ? (authStore.profiles[selectedProfileId]?.provider ??
+      params.cfg.auth?.profiles?.[selectedProfileId]?.provider)
+    : undefined;
+  // Personal credentials own their provider; saved context only scopes missing accounts.
   const profileProvider =
-    params.profileProvider ??
-    (selectedProfileId
-      ? (authStore.profiles[selectedProfileId]?.provider ??
-        params.cfg.auth?.profiles?.[selectedProfileId]?.provider)
-      : undefined);
+    selectedProfileId && isUserModelAuthProfileId(selectedProfileId)
+      ? (recordedProfileProvider ?? params.profileProvider ?? primary.provider)
+      : (params.profileProvider ?? recordedProfileProvider);
   if (
     snapshot.pendingProviders?.length &&
     (selectedProfileId || preferredProfilesByProvider.size)

@@ -1,0 +1,2 @@
+# Personal account ownership, pin scoping, reconnect guidance, and Gateway recovery.
+296

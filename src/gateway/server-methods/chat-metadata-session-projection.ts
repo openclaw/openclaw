@@ -22,6 +22,7 @@ import {
   withCurrentReadAuthority,
   type CurrentReadAuthority,
 } from "../../shared/current-read-authority.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveGatewaySessionRuntimeSelectionLocked } from "../session-utils-projection.js";
 import { workerInferenceMetadata } from "../worker-environments/inference-placement.js";
 import {
@@ -193,6 +194,8 @@ export function resolveSessionCatalogProfiles(
   const runtime = sessionEntry?.agentRuntimeOverride?.trim();
   const provider =
     sessionEntry?.providerOverride ??
+    // Personal locators retain their previous provider when the configured default changes.
+    (profileId && isUserModelAuthProfileId(profileId) ? sessionEntry?.modelProvider : undefined) ??
     (runtime
       ? resolveSessionModelRef(config, sessionEntry, agentId, {
           allowPluginNormalization: false,
