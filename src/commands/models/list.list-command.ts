@@ -128,6 +128,8 @@ export async function modelsListCommand(
               },
               agentId,
               params,
+              // The local CLI reader is the operator; the gateway path gates this by client cap.
+              includeManualSelection: true,
             });
           },
         );
@@ -178,6 +180,9 @@ export async function modelsListCommand(
       contextTokens: model.contextTokens,
       local: model.local ?? null,
       available: model.available ?? null,
+      ...(model.manualSelectionAllowed !== undefined
+        ? { manualSelectionAllowed: model.manualSelectionAllowed }
+        : {}),
       tags: [...new Set([...(model.tags ?? []), ...(model.alias ? [`alias:${model.alias}`] : [])])],
     }));
   if (rows.length === 0 && !opts.json && !opts.plain) {

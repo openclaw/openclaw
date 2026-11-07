@@ -8,6 +8,8 @@ export type ModelRow = {
   contextTokens?: number;
   local: boolean | null;
   available: boolean | null;
+  /** Present when the inventory projects the scoped manual-selection permission. */
+  manualSelectionAllowed?: boolean;
   tags: string[];
 };
 
