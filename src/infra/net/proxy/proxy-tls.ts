@@ -1,5 +1,4 @@
-import { readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readSecretFile, readSecretFileSync } from "@openclaw/fs-safe/secret";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { formatErrorMessage } from "../../errors.js";
@@ -24,6 +23,21 @@ export function resolveManagedProxyCaFileForUrl(params: {
   );
 }
 
+// A managed proxy CA file is a PEM trust bundle. Bound the read through the shared
+// secret-file reader so a misconfigured caFile (config / --proxy-ca-file / env override)
+// cannot hang proxy startup on a special file or allocate unbounded memory. A single
+// root certificate is ~2 KiB and full OS trust bundles measure in the hundreds of KiB
+// (this machine's ~130-certificate system bundle is ~205 KiB), so a 4 MiB bound admits
+// every realistic trust bundle — well over 2000 root certificates, more than any known
+// OS or enterprise trust store — while still rejecting pathological inputs.
+const MANAGED_PROXY_CA_FILE_MAX_BYTES = 4 * 1024 * 1024;
+
+const managedProxyCaFileReadOptions = {
+  maxBytes: MANAGED_PROXY_CA_FILE_MAX_BYTES,
+  // Hardlinked trust bundles are ordinary files; only special files are refused.
+  rejectHardlinks: false,
+} as const;
+
 /** Loads managed proxy TLS options asynchronously for startup paths. */
 export async function loadManagedProxyTlsOptions(
   caFile: string | undefined,
@@ -32,7 +46,9 @@ export async function loadManagedProxyTlsOptions(
     return undefined;
   }
   try {
-    return { ca: await readFile(caFile, "utf8") };
+    return {
+      ca: await readSecretFile(caFile, "Managed proxy CA", managedProxyCaFileReadOptions),
+    };
   } catch (err) {
     throw new Error(`proxy CA file could not be read (${caFile}): ${formatErrorMessage(err)}`, {
       cause: err,
@@ -48,7 +64,9 @@ export function loadManagedProxyTlsOptionsSync(
     return undefined;
   }
   try {
-    return { ca: readFileSync(caFile, "utf8") };
+    return {
+      ca: readSecretFileSync(caFile, "Managed proxy CA", managedProxyCaFileReadOptions),
+    };
   } catch (err) {
     throw new Error(`proxy CA file could not be read (${caFile}): ${formatErrorMessage(err)}`, {
       cause: err,
