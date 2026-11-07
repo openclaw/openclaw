@@ -1,3 +1,4 @@
+import { isCommandExchangeIdempotencyKey } from "../../config/sessions/command-transcript-keys.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { readTranscriptEventAtSeqSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
@@ -45,6 +46,19 @@ type CurrentTurnView = {
   isInterruptedTail?: (entry: SessionEntry) => boolean;
 };
 
+/**
+ * A delivered command exchange (`/stop`, `/new`, …) is a transcript mirror of the
+ * dispatcher's reply, not a model-facing user turn. Walking the current turn must
+ * look past it, or a follow-up queued before the mirror is admitted against the
+ * command row and fails "Persisted user turn changed before replay admission".
+ */
+function isTranscriptOnlyCommandExchangeEntry(entry: SessionEntry): boolean {
+  if (entry.type !== "message") {
+    return false;
+  }
+  return isCommandExchangeIdempotencyKey(Reflect.get(entry.message, "idempotencyKey"));
+}
+
 function traversalEntry(
   entry: SessionEntry | undefined,
   entryId: string,
@@ -57,6 +71,7 @@ function traversalEntry(
     id: entry.id,
     parentId: entry.parentId,
     traversable:
+      isTranscriptOnlyCommandExchangeEntry(entry) ||
       isSessionContextMetadataEntry(entry) ||
       entry.type === "compaction" ||
       (entry.type === "custom_message" &&

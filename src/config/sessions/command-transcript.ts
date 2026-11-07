@@ -5,6 +5,10 @@ import { parseDebugCommand } from "../../auto-reply/reply/debug-commands.js";
 import { logVerbose } from "../../globals.js";
 import { getConfigValueAtPath, parseConfigPath, setConfigValueAtPath } from "../config-paths.js";
 import { REDACTED_SENTINEL } from "../redact-sentinel.js";
+import {
+  COMMAND_INPUT_IDEMPOTENCY_PREFIX,
+  COMMAND_REPLY_IDEMPOTENCY_PREFIX,
+} from "./command-transcript-keys.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
 
 export function scopeCommandTranscriptId(
@@ -144,9 +148,9 @@ async function recordCommandExchange(params: CommandExchangeParams) {
               commandText,
               await redactConfigCommandInput(commandText),
             ),
-            idempotencyKey: `command-input:${params.commandId}`,
+            idempotencyKey: `${COMMAND_INPUT_IDEMPOTENCY_PREFIX}${params.commandId}`,
           },
         }),
-    idempotencyKey: `command-reply:${params.commandId}:${params.replyId}`,
+    idempotencyKey: `${COMMAND_REPLY_IDEMPOTENCY_PREFIX}${params.commandId}:${params.replyId}`,
   });
 }
