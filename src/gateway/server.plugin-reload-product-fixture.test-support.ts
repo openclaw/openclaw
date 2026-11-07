@@ -170,7 +170,7 @@ export async function definePluginReloadProductTest(
           "Product proof requires the existing native Windows Job owner",
         );
       }
-      let output = "";
+      let capturedOutput = "";
       let childPid: number | undefined;
       const { code } = await lifetime.track(
         runVitestShutdownCommand({
@@ -188,13 +188,13 @@ export async function definePluginReloadProductTest(
           onReady(child) {
             childPid = child.pid;
             child.stdout?.on("data", (chunk) => {
-              output += String(chunk);
+              capturedOutput += String(chunk);
               if (options.relayOutput) {
                 process.stdout.write(chunk);
               }
             });
             child.stderr?.on("data", (chunk) => {
-              output += String(chunk);
+              capturedOutput += String(chunk);
               if (options.relayOutput) {
                 process.stderr.write(chunk);
               }
@@ -203,7 +203,7 @@ export async function definePluginReloadProductTest(
         }),
       );
       const report = JSON.parse(fsSync.readFileSync(reportPath, "utf8")) as JsonTestResults;
-      assertResult({ code, output, report, binding, handoff, childPid });
+      assertResult({ code, output: capturedOutput, report, binding, handoff, childPid });
     }),
   );
 }
