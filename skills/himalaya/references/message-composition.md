@@ -1,6 +1,6 @@
 # Message Composition with MML (MIME Meta Language)
 
-Himalaya uses MML for composing emails. MML is a simple XML-based syntax that compiles to MIME messages.
+MML is a simple XML-based syntax that compiles to MIME messages. Himalaya 2.x sends and saves raw RFC 5322 messages and no longer compiles MML itself: compile MML with the standalone [`mml`](https://github.com/pimalaya/mml) composer, then pass the result to `himalaya message send`.
 
 ## Basic Message Structure
 
@@ -155,45 +155,35 @@ Defines a message part.
 
 ## Composing from CLI
 
-### Interactive compose
+`compose`, `reply` and `forward` build the message from flags and print it; add `--send` to send it, or `--save <mailbox>` to keep a copy.
 
-Opens your `$EDITOR`:
+### Compose
 
 ```bash
-himalaya message write
+himalaya message compose --to recipient@example.com --subject "Quick Message" --body "Message body here"
+himalaya message compose --to recipient@example.com --subject "Report" --body-file body.txt --attach report.pdf --send
 ```
 
-### Reply (opens editor with quoted message)
+### Reply
 
 ```bash
-himalaya message reply 42
-himalaya message reply 42 --all  # reply-all
+himalaya message reply 42 --body "Thanks!" --send
 ```
 
 ### Forward
 
 ```bash
-himalaya message forward 42
+himalaya message forward 42 --to someone@example.com --send
 ```
 
-### Send from stdin
+### Send a raw message
 
 ```bash
-cat message.txt | himalaya template send
-```
-
-### Prefill headers from CLI
-
-```bash
-himalaya message write \
-  -H "To:recipient@example.com" \
-  -H "Subject:Quick Message" \
-  "Message body here"
+himalaya message send < message.txt
+cat message.txt | himalaya message send
 ```
 
 ## Tips
 
-- The editor opens with a template; fill in headers and body.
-- Save and exit the editor to send; exit without saving to cancel.
-- MML parts are compiled to proper MIME when sending.
+- Without `--send`, `compose`, `reply` and `forward` only print the message; review it before sending.
 - Use `himalaya message read <id> --raw` to inspect the raw MIME structure of received emails.

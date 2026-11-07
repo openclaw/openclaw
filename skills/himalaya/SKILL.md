@@ -29,7 +29,7 @@ Use `himalaya` for IMAP/SMTP email from shell.
 ## References
 
 - `references/configuration.md`: account config, auth, backend setup.
-- `references/message-composition.md`: MML compose syntax.
+- `references/message-composition.md`: message format, MML syntax, compose commands.
 
 ## Setup
 
@@ -48,20 +48,19 @@ Prefer password managers/keyrings for credentials; do not paste secrets into cha
 himalaya folder list
 himalaya envelope list
 himalaya message read <id>
-himalaya envelope list from alice@example.com subject invoice
+himalaya envelope search from alice@example.com and subject invoice
 ```
 
 ## Write
 
 ```bash
-himalaya message write
-himalaya template write
-himalaya template send < /tmp/message.txt
-himalaya message reply <id>
-himalaya message forward <id>
+himalaya message compose --to bob@example.com --subject "Hello" --body "Hi Bob"
+himalaya message send < /tmp/message.txt
+himalaya message reply <id> --body "Thanks"
+himalaya message forward <id> --to carol@example.com
 ```
 
-Use MML for attachments and rich messages; read `references/message-composition.md` first.
+`compose`, `reply` and `forward` print the message; add `--send` to send it. Use `--attach <path>` for attachments; read `references/message-composition.md` for raw messages.
 
 ## Organize
 
