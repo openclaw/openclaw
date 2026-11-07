@@ -475,6 +475,28 @@ describe("failover diagnostic isolation", () => {
     );
   });
 
+  it("prefers the provider's explicit key-replacement instruction over re-auth", () => {
+    const original = Object.assign(
+      new Error(
+        "401 This API key has expired. Create a new API key in OpenCode Console. Signing in will not renew it.",
+      ),
+      { status: 401, code: "api_key_expired" },
+    );
+    const normalized = coerceToFailoverError(original, { provider: "opencode" });
+    expect(normalized).toMatchObject({ reason: "auth", provider: "opencode" });
+    const hint = buildFailoverRemediationHint(normalized);
+    expect(hint).toContain("Create a new API key");
+    expect(hint).not.toContain("Re-authenticate with:");
+  });
+
+  it("keeps the re-auth hint when the provider states no key replacement", () => {
+    const original = Object.assign(new Error("invalid_api_key"), { status: 401 });
+    const normalized = coerceToFailoverError(original, { provider: "openai" });
+    expect(buildFailoverRemediationHint(normalized)).toBe(
+      "Re-authenticate with: openclaw models auth login --provider 'openai' --force",
+    );
+  });
+
   it("keeps supplemental process diagnostics out of failure policy", () => {
     const diagnostic =
       "413 Request too large on tokens per minute (TPM): Limit 8000, Requested 8098";

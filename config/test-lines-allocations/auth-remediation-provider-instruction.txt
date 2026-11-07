@@ -1,0 +1,2 @@
+# Pins provider-instruction precedence in the auth remediation hint.
+22
