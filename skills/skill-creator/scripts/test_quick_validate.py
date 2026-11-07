@@ -46,7 +46,7 @@ class TestQuickValidate(TestCase):
         skill_dir.mkdir(parents=True, exist_ok=True)
         content = """---
 name: multiline-skill
-description: Works without pyyaml
+description: DESCRIPTION
 allowed-tools:
   - gh
 metadata: |
@@ -56,16 +56,32 @@ metadata: |
 ---
 # Skill
 """
-        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
-
         previous_yaml = quick_validate.yaml
         quick_validate.yaml = None
         try:
-            valid, message = quick_validate.validate_skill(skill_dir)
+            cases = [
+                ("Works without pyyaml\n  Use for notes.", True),
+                *[
+                    (f"{header}\n  Summarize meetings.\n  Use for notes.", True)
+                    for header in (">", ">-", ">+", ">2-", ">-2", "> # notes", "|-", "|2+")
+                ],
+                ("'>'", False),
+                ('">-"', False),
+                (">-\n  Summarize <meetings>.", False),
+                (">-\n  Summarize meetings.\n  # <notes>", False),
+                (">-", False),
+                ("|-", False),
+                (">-\n  " + "x" * 1025, False),
+            ]
+            for description, expected in cases:
+                with self.subTest(description=description):
+                    (skill_dir / "SKILL.md").write_text(
+                        content.replace("DESCRIPTION", description), encoding="utf-8"
+                    )
+                    valid, message = quick_validate.validate_skill(skill_dir)
+                    self.assertEqual(valid, expected, message)
         finally:
             quick_validate.yaml = previous_yaml
-
-        self.assertTrue(valid, message)
 
     def test_rejects_empty_name(self):
         skill_dir = self.temp_dir / "empty-name-skill"
