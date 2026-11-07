@@ -2158,6 +2158,130 @@ export function createEnginePageScenarios(
         return evidence;
       },
     };
+    if (id === "model-providers") {
+      const marker = "Refreshed credential";
+      const refresh: EngineScenario = {
+        ...common,
+        id: "page-model-providers-refresh",
+        initScript: engineProbeInitScript(false, gatewayLatencyMs),
+        expected:
+          "Refresh current credentials: fresh auth rows become searchable independently of catalog completion; one auth and one catalog request complete.",
+        prepare: async (page, gateway) => {
+          await enter(page);
+          await page.waitForFunction(() => {
+            const reads: { pendingMethods: string[] } = Reflect.get(window, "__coldLoad").read();
+            return !reads.pendingMethods.includes("models.list");
+          });
+          await gateway.setMethodResponse("models.authStatus", {
+            ts: time + 1,
+            providers: [
+              {
+                provider: "openai",
+                displayName: "OpenAI",
+                status: "ok",
+                profiles: [
+                  { profileId: "openai:census", type: "oauth", status: "ok", displayName: marker },
+                ],
+              },
+            ],
+          } satisfies ModelAuthStatusResult);
+          assert.equal(await page.getByText(marker, { exact: true }).count(), 0);
+        },
+        run: async (page) => {
+          const probe = await page.evaluateHandle((freshLabel) => {
+            let started = 0;
+            let requestOffset = 0;
+            let readyMs: number | undefined;
+            let readyFrames = 0;
+            let frame = 0;
+            const completion = Promise.withResolvers<{
+              refreshReadyMs: number;
+              catalogResponseMs: number;
+              authRequests: number;
+              catalogRequests: number;
+              freshBeforeCatalog: boolean;
+            }>();
+            const dispose = () => {
+              clearTimeout(timeout);
+              cancelAnimationFrame(frame);
+              document.removeEventListener("click", onRefreshClick, true);
+            };
+            const sample = () => {
+              const row = document.querySelector(
+                '.provider-row[data-provider-id="openai"] .provider-row__summary',
+              );
+              const input = document.querySelector<HTMLInputElement>(
+                'openclaw-model-providers-page input[type="search"]',
+              );
+              const fresh = row?.checkVisibility() && row.textContent?.includes(freshLabel);
+              readyFrames =
+                fresh && input?.checkVisibility() && !input.disabled && !input.readOnly
+                  ? readyFrames + 1
+                  : 0;
+              if (readyFrames >= 2) {
+                readyMs ??= performance.now() - started;
+              }
+              const reads: { rpcs: ColdLoadRpcRecord[] } = Reflect.get(window, "__coldLoad").read();
+              const catalog = reads.rpcs.find(
+                (rpc) => rpc.method === "models.list" && rpc.requestMs >= started && rpc.responseOk,
+              );
+              if (readyMs !== undefined && catalog?.dispatchMs !== undefined) {
+                const requests = (
+                  window as MockGatewayWindow
+                ).openclawControlUiE2eGateway!.requests.slice(requestOffset);
+                const authRequests = requests.filter(
+                  (rpc) => rpc.method === "models.authStatus",
+                ).length;
+                const catalogRequests = requests.filter(
+                  (rpc) => rpc.method === "models.list",
+                ).length;
+                dispose();
+                completion.resolve({
+                  refreshReadyMs: readyMs,
+                  catalogResponseMs: catalog.responseMs + catalog.dispatchMs - started,
+                  authRequests,
+                  catalogRequests,
+                  freshBeforeCatalog: readyMs < catalog.responseMs + catalog.dispatchMs - started,
+                });
+              } else {
+                frame = requestAnimationFrame(sample);
+              }
+            };
+            const onRefreshClick = (event: Event) => {
+              if (
+                !(event.target instanceof Element) ||
+                !event.target.closest(".model-providers__refresh-button")
+              ) {
+                return;
+              }
+              started = performance.now();
+              requestOffset = (window as MockGatewayWindow).openclawControlUiE2eGateway!.requests
+                .length;
+              frame = requestAnimationFrame(sample);
+            };
+            const timeout = setTimeout(() => {
+              dispose();
+              completion.reject(new Error("Fresh Models credentials or catalog did not settle"));
+            }, 60_000);
+            document.addEventListener("click", onRefreshClick, { capture: true });
+            return { completion: completion.promise, dispose };
+          }, marker);
+          try {
+            await page.locator(".model-providers__refresh-button").click();
+            const evidence = await probe.evaluate((state) => state.completion);
+            assert.equal(evidence.authRequests, 1);
+            assert.equal(evidence.catalogRequests, 1);
+            await page.locator('openclaw-model-providers-page input[type="search"]').fill("OpenAI");
+            await page.getByText(marker, { exact: true }).waitFor({ state: "visible" });
+            return evidence;
+          } finally {
+            await probe.evaluate((state) => state.dispose());
+            await probe.dispose();
+          }
+        },
+      };
+      return [visit, revisit, action, leave, refresh].concat(noChanges);
+    }
     if (id === "search") {
       const firstAdvancedOpen: EngineScenario = {
         ...common,

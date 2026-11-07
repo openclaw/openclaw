@@ -94,8 +94,6 @@ export function createModelProviders(
       }
     },
     onComplete: ({ client, data }) => {
-      // A page refresh settles its feedback; an overlapping picker Retry is best effort.
-      core.resetCatalog();
       supplemental.adoptCoreData(client, data);
     },
     onCatalogComplete: (result) => {

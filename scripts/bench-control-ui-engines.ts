@@ -609,11 +609,14 @@ try {
     networkProfiles.some(({ name }) => name !== "localhost") &&
     scenarios.some(
       ({ id }) =>
-        id !== "cold-boot" && id !== "warm-boot" && !/^page-.+-(?:visit|revisit)$/u.test(id),
+        id !== "cold-boot" &&
+        id !== "warm-boot" &&
+        id !== "page-model-providers-refresh" &&
+        !/^page-.+-(?:visit|revisit)$/u.test(id),
     )
   ) {
     throw new Error(
-      "Nonlocal --network-profiles require cold-boot, warm-boot or page-<route>-visit/revisit steps",
+      "Nonlocal --network-profiles require cold-boot, warm-boot, page-<route>-visit/revisit or page-model-providers-refresh steps",
     );
   }
   planned =
