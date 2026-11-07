@@ -29,10 +29,12 @@ import {
   type PublicExporterHealthUpdate,
 } from "./service-exporter-health.js";
 import {
+  createShutdownAwareOtlpExporter,
   errorCategory,
   findOtlpExporterError,
   formatError,
   readErrorCode,
+  resolveOtlpMetricExporterTimeouts,
   resolveOtelHttpAgentOptions,
   resolveSignalOtelUrl,
 } from "./service-exporter.js";
@@ -147,6 +149,7 @@ type DiagnosticsOtelState = {
   unregisterOwnedSdkRuntime?: (() => void) | null;
   unregisterUnhandledRejectionHandler?: (() => void) | null;
   retireExporterRoutes?: (preserveFailures?: boolean) => void;
+  prepareExporterShutdown?: () => void;
 };
 
 export function createDiagnosticsOtelService(): OpenClawPluginService {
@@ -155,6 +158,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
   const stopStarted = async (options?: { preserveExporterRoutes?: boolean }) => {
     const current = state;
+    current.prepareExporterShutdown?.();
     state = options?.preserveExporterRoutes
       ? { retireExporterRoutes: current.retireExporterRoutes }
       : {};
@@ -203,6 +207,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       preserveExporterRoutesOnNextStop = false;
       await stopStarted();
       const active = state;
+      let exporterShutdownStarted = false;
+      active.prepareExporterShutdown = () => {
+        exporterShutdownStarted = true;
+      };
 
       const cfg = ctx.config.diagnostics;
       const otel = cfg?.otel;
@@ -391,16 +399,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           const sdkMetricsEnabled = otelCore.getBooleanFromEnv(
             "OTEL_NODE_EXPERIMENTAL_SDK_METRICS",
           );
-          const metricExporter = metricsToOtlp
-            ? observeOtlpExporterHealth(
-                new OTLPMetricExporter({
-                  ...(metricUrl ? { url: metricUrl } : {}),
-                  ...(headers ? { headers } : {}),
-                  ...(metricHttpAgentOptions ? { httpAgentOptions: metricHttpAgentOptions } : {}),
-                }),
-                { emitExporterEvent, signal: "metrics" },
-              )
-            : undefined;
           const metricInterval =
             typeof otel.flushIntervalMs === "number"
               ? Math.max(1000, otel.flushIntervalMs)
@@ -412,6 +410,40 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             );
             metricTimeout = metricInterval;
           }
+          const configuredMetricTimeout = otelCore.getNumberFromEnv("OTEL_METRIC_EXPORT_TIMEOUT");
+          const shutdownMetricTimeout =
+            configuredMetricTimeout !== undefined &&
+            Number.isFinite(configuredMetricTimeout) &&
+            configuredMetricTimeout > 0
+              ? metricTimeout
+              : undefined;
+          const metricExporter = metricsToOtlp
+            ? (() => {
+                const timeouts = resolveOtlpMetricExporterTimeouts(shutdownMetricTimeout);
+                const createExporter = (timeoutMillis: number) =>
+                  observeOtlpExporterHealth(
+                    new OTLPMetricExporter({
+                      timeoutMillis,
+                      ...(metricUrl ? { url: metricUrl } : {}),
+                      ...(headers ? { headers } : {}),
+                      ...(metricHttpAgentOptions
+                        ? { httpAgentOptions: metricHttpAgentOptions }
+                        : {}),
+                    }),
+                    { emitExporterEvent, signal: "metrics" },
+                  );
+                const normalExporter = createExporter(timeouts.normal);
+                const shutdownExporter =
+                  timeouts.shutdown === timeouts.normal
+                    ? normalExporter
+                    : createExporter(timeouts.shutdown);
+                return createShutdownAwareOtlpExporter(
+                  normalExporter,
+                  shutdownExporter,
+                  () => exporterShutdownStarted,
+                );
+              })()
+            : undefined;
           const metricReader = metricExporter
             ? new PeriodicExportingMetricReader({
                 exporter: metricExporter,

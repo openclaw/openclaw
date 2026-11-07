@@ -233,11 +233,15 @@ esac
         },
       ),
     );
-    expect(loggedArgs.slice(-3)).toEqual([
-      ["config", "set", "logging.file", "~/openclaw-upgrade-survivor/gateway.jsonl"],
-      ["config", "set", "logging.level", "debug"],
-      ["config", "validate"],
-    ]);
+    const loggingFileIndex = loggedArgs.findIndex((args) => args[2] === "logging.file");
+    const loggingLevelIndex = loggedArgs.findIndex((args) => args[2] === "logging.level");
+    const validationIndex = loggedArgs.findIndex((args) => args[1] === "validate");
+    expect(loggedArgs[loggingFileIndex]?.slice(0, 2)).toEqual(["config", "set"]);
+    expect(loggedArgs[loggingFileIndex]?.[2]).toBe("logging.file");
+    expect(loggedArgs[loggingFileIndex]?.[3]).toBe("~/openclaw-upgrade-survivor/gateway.jsonl");
+    expect(loggedArgs[loggingLevelIndex]).toEqual(["config", "set", "logging.level", "debug"]);
+    expect(loggingFileIndex).toBeLessThan(loggingLevelIndex);
+    expect(loggingLevelIndex).toBeLessThan(validationIndex);
     expect(loggedArgs.some((args) => args[2]?.startsWith("logging.console"))).toBe(false);
     expect(
       recipeSteps("tilde-log-path")

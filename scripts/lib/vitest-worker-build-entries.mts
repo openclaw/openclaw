@@ -272,6 +272,7 @@ export const preservedModuleBuildAssets = [
   "scripts/e2e/lib/upgrade-survivor/config-recipe/channels-matrix.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/channels-telegram.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/channels-whatsapp.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/diagnostics-otel.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/gateway-password.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/gateway.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/models-anthropic.json",
