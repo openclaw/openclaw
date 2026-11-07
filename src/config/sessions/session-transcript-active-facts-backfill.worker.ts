@@ -151,12 +151,12 @@ export function backfillTranscriptActiveFactsBatchInTransaction(
             .onRef("event.session_id", "=", "active.session_id")
             .onRef("event.seq", "=", "active.event_seq"),
         )
-        .select([
+        .select((eb) => [
           transcriptEventReadBytesSql("event").$castTo<number | null>().as("bytes"),
           /* kysely-allow-raw: legacy malformed payloads remain unknown under the writer's native projection guard. */
           sql<
             string | null
-          >`CASE WHEN ${transcriptDependencyFactsProjectableSql(database, "event")} AND ${transcriptPredicateSql(database, "navigation_valid", "event")} = 1 THEN ${transcriptEventDependencyNavigationSql(database, sql.ref("active.context_eligible"), "event")} ELSE NULL END`.as(
+          >`CASE WHEN ${transcriptDependencyFactsProjectableSql(database, "event")} AND ${transcriptPredicateSql(database, "navigation_valid", "event")} = 1 THEN ${transcriptEventDependencyNavigationSql(database, eb.ref("active.context_eligible"), "event")} ELSE NULL END`.as(
             "navigation",
           ),
         ])
