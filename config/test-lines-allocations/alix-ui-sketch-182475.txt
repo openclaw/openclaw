@@ -1,2 +1,2 @@
-# Sketch attachment admission controls; existing menu/file and painter contracts remain covered.
-82
+# Sketch admission coverage (82) plus browser regressions for click dots, rejected attachment retry, composer lifetime, and retained side-chat menu (95).
+177

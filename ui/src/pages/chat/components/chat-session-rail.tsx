@@ -194,6 +194,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       attachmentLimits: props.attachmentLimits,
       selectionContextOnly: true,
       imagesOnly: true,
+      cameraActive: props.presented,
       disabled: !props.connected,
       onAttachmentsChange: props.onAttachmentsChange,
       onOpenImage: props.onOpenImage,

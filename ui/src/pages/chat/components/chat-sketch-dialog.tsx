@@ -1,4 +1,4 @@
-import { createSignal, onSettled } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import {
   paintAnnotations,
   type AnnotationStroke,
@@ -15,20 +15,48 @@ export async function openChatSketch(
 ): Promise<void> {
   const initial = readControls();
   const signal = initial.readSignal ?? initial.attachmentReads?.readSignal;
-  if (initial.disabled || !uploadsEnabled(initial.uploadConfig) || signal?.aborted) {
+  if (
+    initial.disabled ||
+    initial.cameraActive === false ||
+    !uploadsEnabled(initial.uploadConfig) ||
+    signal?.aborted
+  ) {
     return;
   }
-  const result = await withPromiseModalHost<string | null>({ signal, value: null }, (modal) =>
-    modal.render(() => <SketchDialog onFinish={modal.finish} />),
+  const currentScope = () => {
+    const current = readControls();
+    return (
+      current.cameraActive !== false &&
+      signal === (current.readSignal ?? current.attachmentReads?.readSignal)
+    );
+  };
+  await withPromiseModalHost<null>({ signal, value: null }, (modal) =>
+    modal.render(() => (
+      <Show when={currentScope()} fallback={<RetireSketch finish={() => modal.finish(null)} />}>
+        <SketchDialog
+          onFinish={(result) => {
+            if (result === null) {
+              modal.finish(null);
+              return;
+            }
+            const current = readControls();
+            if (
+              !signal?.aborted &&
+              signal === (current.readSignal ?? current.attachmentReads?.readSignal) &&
+              attachChatSketch(result, current)
+            ) {
+              modal.finish(null);
+            }
+          }}
+        />
+      </Show>
+    )),
   );
-  const current = readControls();
-  if (
-    result &&
-    !signal?.aborted &&
-    signal === (current.readSignal ?? current.attachmentReads?.readSignal)
-  ) {
-    attachChatSketch(result, current);
-  }
+}
+
+function RetireSketch(props: { finish: () => void }) {
+  onSettled(props.finish);
+  return null;
 }
 
 export function SketchDialog(props: { onFinish: (value: string | null) => void }) {
@@ -61,14 +89,21 @@ export function SketchDialog(props: { onFinish: (value: string | null) => void }
       y: Math.max(0, Math.min(1, (value.clientY - bounds.top) / bounds.height)),
     });
     const stroke: AnnotationStroke = { points: [point(event)] };
+    const appendPoint = (value: PointerEvent) => {
+      const next = point(value);
+      const previous = stroke.points.at(-1);
+      if (!previous || previous.x !== next.x || previous.y !== next.y) {
+        stroke.points.push(next);
+      }
+    };
     drawing = drag.start(event, canvas, {
       move: (next) => {
-        stroke.points.push(point(next));
+        appendPoint(next);
         paint(stroke);
       },
       end: (next) => {
         drawing = false;
-        stroke.points.push(point(next));
+        appendPoint(next);
         strokes.push(stroke);
         paint();
         setCount(strokes.length);
