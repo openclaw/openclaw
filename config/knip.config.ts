@@ -156,6 +156,8 @@ const repositoryScriptEntries = [
   "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-cold-load.ts!",
+  // scripts/README.md invokes the adjacent-build cache inventory comparison.
+  "scripts/compare-control-ui-update-cache.ts!",
   // The history-depth benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-history-depth.ts!",
   // The hosted Doctor benchmark guide invokes this opt-in CLI by path.

@@ -291,8 +291,10 @@ recheck the background download policy. English interface code is included; othe
 catalogs, the isolated Mermaid diagram renderer, and plugin-hosted assets are
 excluded from the background inventory and keep their existing loading behavior.
 
-Reloads reuse cached build-versioned fonts, themes, and the web manifest without
-contacting the Gateway. The service worker keeps the current complete build and
+Reloads reuse cached fonts, themes, and the web manifest without contacting the
+Gateway. Their URLs follow the combined public asset content rather than the release ID,
+so updates that leave the public asset set unchanged keep the same cache entries. An
+update from an older release switches to these URLs once. The service worker keeps the current complete build and
 one complete previous generation, so older open documents can still load their
 cached chunks. An incomplete replacement does not discard the last complete shell.
 Unchanged files referenced by the new inventory are retained before older caches
