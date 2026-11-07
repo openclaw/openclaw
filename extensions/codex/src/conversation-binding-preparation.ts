@@ -413,6 +413,7 @@ async function writeThreadBindingFromResponse(
           ...(resolved.incognito ? { conversationIncognito: true } : {}),
           authProfileId: params.authProfileId,
           model: response.model ?? resolved.model ?? params.model,
+          reasoningEffort: response.reasoningEffort,
           modelProvider: await normalizeCodexAppServerBindingModelProvider({
             authProfileId: params.authProfileId,
             modelProvider: response.modelProvider ?? resolved.modelProvider ?? params.modelProvider,

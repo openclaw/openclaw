@@ -136,6 +136,8 @@ const threadBindingSchema = z
     // Manual attachment records intent; only the harness can attest its native
     // tool catalog and observe a configured reload before admitting a turn.
     pendingResumeConfiguration: z.literal(true).optional(),
+    // Response-backed native setting, separate from per-turn overrides.
+    reasoningEffort: z.string().nullable().optional().catch(undefined),
     modelProvider: z
       .string()
       .transform((value) => value.trim())
