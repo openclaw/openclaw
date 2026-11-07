@@ -14,6 +14,7 @@ import {
   CommandExplanationWorkLimitError,
   explainShellCommand,
 } from "./command-explainer/extract.js";
+import { CommandExplanationUnsupportedControlCharacterError } from "./command-explainer/tree-sitter-runtime.js";
 import type { CommandExplanation } from "./command-explainer/types.js";
 import { isPathInside } from "./path-guards.js";
 
@@ -21,7 +22,8 @@ type UnsafeExecControlShellCommandKind =
   | "approve"
   | "channel-login"
   | "live-state-sqlite"
-  | "incomplete-analysis";
+  | "incomplete-analysis"
+  | "unsupported-control-character";
 
 type ExecControlShellCommandContext = {
   stateDir?: string;
@@ -274,10 +276,13 @@ export async function detectUnsafeExecControlShellCommand(
   const rawCommand = command.trim();
   let explanation: CommandExplanation | null = null;
   try {
-    explanation = await explainShellCommand(rawCommand);
+    explanation = await explainShellCommand(command);
   } catch (error) {
     if (error instanceof CommandExplanationWorkLimitError) {
       return "incomplete-analysis";
+    }
+    if (error instanceof CommandExplanationUnsupportedControlCharacterError) {
+      return "unsupported-control-character";
     }
     // Fall back to line-local shell splitting below.
   }
@@ -314,6 +319,11 @@ function rejectIncompleteCommandAnalysis(
   if (unsafeKind === "incomplete-analysis") {
     throw new Error(
       "exec cannot run a shell command that exceeds the command explanation work limit. Simplify the command so its complete syntax can be inspected before execution.",
+    );
+  }
+  if (unsafeKind === "unsupported-control-character") {
+    throw new Error(
+      "exec cannot run a shell command containing unsupported control characters. Remove them so the complete syntax can be inspected before execution.",
     );
   }
 }

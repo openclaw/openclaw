@@ -7,6 +7,8 @@ const require = createRequire(import.meta.url);
 
 export type BashCommandParser = (source: string) => TreeSitter.Tree;
 
+export class CommandExplanationUnsupportedControlCharacterError extends Error {}
+
 let parserPromise: Promise<BashCommandParser> | null = null;
 const MAX_COMMAND_EXPLANATION_SOURCE_CHARS = 128 * 1024;
 const MAX_COMMAND_EXPLANATION_PARSE_MS = 500;
@@ -41,7 +43,9 @@ function parseBashForCommandExplanation(
   // tree-sitter treats these as whitespace, but POSIX shells treat them as word bytes.
   // Reject the whole source, including decoded wrapper payloads, rather than rewrite it.
   if (/[\r\v\f]/u.test(source)) {
-    throw new Error("Shell command contains unsupported control characters");
+    throw new CommandExplanationUnsupportedControlCharacterError(
+      "Shell command contains unsupported control characters",
+    );
   }
   const deadlineMs = performance.now() + MAX_COMMAND_EXPLANATION_PARSE_MS;
   let timedOut = false;
