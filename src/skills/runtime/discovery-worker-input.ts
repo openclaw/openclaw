@@ -6,7 +6,7 @@ import {
   capturePluginAgentSkillsDirs,
   capturePluginSkillContributions,
 } from "../loading/plugin-skills.js";
-import type { WorkspaceSkillSourcePlanOptions } from "../loading/workspace-skill-sources.js";
+import type { WorkspaceSkillSourcePlanOptions } from "../loading/workspace-skill-source-plan.js";
 import type { WorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.types.js";
 import {
   captureSkillsDiscoveryEnvironment,

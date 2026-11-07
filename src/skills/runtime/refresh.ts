@@ -20,7 +20,7 @@ import type { SkillSnapshotProjectionInput } from "../loading/skill-snapshot-pro
 import {
   splitSkillSourcePlan,
   type WorkspaceSkillSourcePlanOptions,
-} from "../loading/workspace-skill-sources.js";
+} from "../loading/workspace-skill-source-plan.js";
 import type {
   WorkspaceSkillSourcePlan,
   WorkspaceSkillSourceRequest,

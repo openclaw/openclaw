@@ -1,8 +1,8 @@
 import type { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import type { WorkspaceSkillStatusFacts } from "../discovery/status.types.js";
-import type { PluginSkillContribution } from "../loading/plugin-skills.js";
+import type { PluginSkillContribution } from "../loading/plugin-skill-publication.js";
 import type { SkillSnapshotProjectionInput } from "../loading/skill-snapshot-projection.js";
-import type { WorkspaceSkillSourcePlanOptions } from "../loading/workspace-skill-sources.js";
+import type { WorkspaceSkillSourcePlanOptions } from "../loading/workspace-skill-source-plan.js";
 import type {
   WorkspaceSkillSourcePlan,
   WorkspaceSkillSourceRequest,

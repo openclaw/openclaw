@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -8,14 +9,13 @@ import {
   type SkillsDiscoveryOutput,
 } from "./discovery-worker-contract.js";
 
-const worker = vi.hoisted(() => ({
-  read: undefined as ((input: SkillsDiscoveryInput) => SkillsDiscoveryOutput) | undefined,
-}));
+const worker = vi.hoisted(() =>
+  vi.fn<(input: SkillsDiscoveryInput) => Promise<SkillsDiscoveryOutput>>(),
+);
 vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/worker-task-server.js")>()),
-  serveWorkerTasks: (read: (input: SkillsDiscoveryInput) => SkillsDiscoveryOutput) => {
-    worker.read = read;
-  },
+  serveWorkerTasks: (read: Parameters<typeof worker.mockImplementation>[0]) =>
+    worker.mockImplementation(read),
 }));
 // mock-isolation: File discovery must not load the Gateway's writable database owner.
 vi.mock("../../state/openclaw-state-db.js", () => {
@@ -30,6 +30,11 @@ vi.mock("../loading/plugin-skill-bundle.js", () => {
   throw new Error("Skill discovery must not load plugin skill preview readers");
 });
 
+// mock-isolation: Prepared filesystem work must not import the metadata fallback owner.
+vi.mock("../loading/plugin-skills.js", () => {
+  throw new Error("Prepared filesystem work imported plugin metadata fallback");
+});
+
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
 
@@ -42,10 +47,7 @@ it("scans workspace and prepared plugin skills without loading metadata discover
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
 
   await import("./discovery.worker.js");
-  if (!worker.read) {
-    throw new Error("Discovery worker did not register its task handler");
-  }
-  const result = worker.read({
+  const result = await worker({
     kind: "scan",
     path: "",
     requests: [
@@ -94,29 +96,39 @@ it("scans workspace and prepared plugin skills without loading metadata discover
     ],
   });
 
-  const plan = worker.read({
-    kind: "plan",
-    input: {
-      workspaceDir,
-      environment: captureSkillsDiscoveryEnvironment(),
-      acpRuntimeAvailable: false,
-      pluginContributions: [
-        { id: "fixture", origin: "config", rootDir: workspaceDir, roots: ["skills"] },
-      ],
-      options: {
-        bundledSkillsDir: "",
-        managedSkillsDir: path.join(workspaceDir, "managed-skills"),
-        pluginSkillsDir: path.join(workspaceDir, "plugin-skills"),
+  for (const included of [true, false]) {
+    const plan = await worker({
+      kind: "plan",
+      input: {
+        workspaceDir,
+        environment: captureSkillsDiscoveryEnvironment(),
+        acpRuntimeAvailable: false,
+        pluginContributions: included
+          ? [{ id: "fixture", origin: "config", rootDir: workspaceDir, roots: ["skills"] }]
+          : [],
+        options: {
+          bundledSkillsDir: "",
+          managedSkillsDir: path.join(workspaceDir, "managed-skills"),
+          pluginSkillsDir: path.join(workspaceDir, "plugin-skills"),
+        },
       },
-    },
-  });
-  expect(plan).toMatchObject({
-    kind: "plan",
-    plan: {
-      pluginSkillRoots: [{ dir: skillRoot, rejectHardlinks: true }],
-      roots: expect.arrayContaining([
-        expect.objectContaining({ dir: skillRoot, source: "openclaw-extra", tier: "extra" }),
-      ]),
-    },
-  });
+    });
+    expect(plan).toMatchObject({
+      kind: "plan",
+      plan: {
+        pluginSkillRoots: included ? [{ dir: skillRoot, rejectHardlinks: true }] : [],
+        roots: expect.arrayContaining(
+          included
+            ? [expect.objectContaining({ dir: skillRoot, source: "openclaw-extra", tier: "extra" })]
+            : [],
+        ),
+      },
+    });
+    const link = path.join(workspaceDir, "plugin-skills", "fixture");
+    if (included) {
+      expect(await fs.realpath(link)).toBe(await fs.realpath(skillDir));
+    } else {
+      await expect(fs.lstat(link)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  }
 });
