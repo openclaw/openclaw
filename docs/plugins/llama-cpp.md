@@ -99,7 +99,7 @@ cards are not added together to assume a model will fit. Existing Gemma 4 E4B
 configurations and cached custom models remain supported.
 
 The chat download also includes your configured local embedding model, or
-EmbeddingGemma by default (about 0.3 GB). Leave additional disk space for the
+EmbeddingGemma 2 by default (about 0.3 GB, text-only). Leave additional disk space for the
 runtime and download staging. Setup checks this before offering a recommended model.
 When the cache and runtime use independent volumes, setup checks each volume's
 free space separately. Shared storage pools and volumes whose independence cannot
@@ -520,7 +520,7 @@ To choose the embedding model explicitly:
     search: {
       provider: "local",
       local: {
-        modelPath: "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
+        modelPath: "hf:ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-Q8_0.gguf",
       },
     },
   },
@@ -533,6 +533,41 @@ prefixes rebuild once on the next search or sync, without `--force`. Cached raw
 embeddings are not reused, and keyword search remains available during recovery.
 Run `openclaw memory status --index` after intentionally changing the embedding
 model.
+
+### Upgrading local embeddings
+
+The managed default is EmbeddingGemma 2 Q8_0 with 768-dimensional text vectors.
+Its text-only download does not include a multimodal projector or enable image,
+audio, or video indexing. The operating context and physical batch remain 2,048
+tokens to preserve memory budgets and support explicitly configured older models.
+
+Normal OpenClaw updates run Doctor, which moves the exact previous managed
+`b10809` executable path to the current verified runtime. Direct package/source
+upgrades must run `openclaw doctor --fix` before restarting. The existing managed
+installer verifies and prepares the replacement runtime; no additional service is
+created. Custom executable paths are not changed and must already support
+EmbeddingGemma 2, or be upgraded by their operator.
+
+Services started with a direct `--model` argument instead of a managed
+`--models-preset` must set `memory.search.local.modelPath` to the model they
+actually load. Without that explicit selection, initialization stops before
+downloading or embedding rather than labeling existing vectors as the new default.
+To use the managed default, rerun llama.cpp setup; changing `modelPath` alone
+does not replace a model selected by custom service arguments.
+
+An explicit `memory.search.local.modelPath`, including the previous 300M model
+or its cache path, remains authoritative. To opt into the new model, select the
+URI above and rerun managed setup. An unset `modelPath` uses the new default.
+Existing preset context, batch, and slot overrides are retained: the historical
+`embeddinggemma-300m-qat-q8_0` section name is a stable router address, not the
+embedding index's model identity.
+
+The two models have different vector spaces even though both return 768 numbers.
+Old vectors are never relabeled or reused for the new model. After switching,
+rebuild each affected agent with `openclaw memory index --force --agent <id>`,
+following the [memory CLI's offline maintenance procedure](/cli/memory), then
+verify with `openclaw memory status --deep --agent <id>`. Semantic search remains
+paused until the new index is ready; keyword search and source memories remain.
 
 ## Troubleshooting
 

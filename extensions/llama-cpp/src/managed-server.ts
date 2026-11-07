@@ -19,6 +19,7 @@ import {
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_REVISION,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SHA256,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES,
+  LEGACY_LLAMA_CPP_EMBEDDING_MODEL,
   LLAMA_CPP_DEFAULT_PORT,
   resolveCachedLlamaCppModelPath,
   resolveHomePath,
@@ -196,9 +197,17 @@ function defaultArtifact(source: string): ModelArtifact | undefined {
   if (source === DEFAULT_LLAMA_CPP_EMBEDDING_MODEL) {
     return {
       fileName: DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
-      url: `https://huggingface.co/ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/resolve/${DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_REVISION}/embeddinggemma-300m-qat-Q8_0.gguf?download=true`,
+      url: `https://huggingface.co/ggml-org/embeddinggemma-2-GGUF/resolve/${DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_REVISION}/embeddinggemma-2-Q8_0.gguf?download=true`,
       expectedSize: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES,
       expectedSha256: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SHA256,
+    };
+  }
+  if (source === LEGACY_LLAMA_CPP_EMBEDDING_MODEL.source) {
+    return {
+      fileName: LEGACY_LLAMA_CPP_EMBEDDING_MODEL.cacheFile,
+      url: `https://huggingface.co/ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/resolve/${LEGACY_LLAMA_CPP_EMBEDDING_MODEL.revision}/embeddinggemma-300m-qat-Q8_0.gguf?download=true`,
+      expectedSize: LEGACY_LLAMA_CPP_EMBEDDING_MODEL.sizeBytes,
+      expectedSha256: LEGACY_LLAMA_CPP_EMBEDDING_MODEL.sha256,
     };
   }
   return undefined;

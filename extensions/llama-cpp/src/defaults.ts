@@ -29,16 +29,27 @@ export const DEFAULT_LLAMA_CPP_MODEL_SHA256 =
 export const DEFAULT_LLAMA_CPP_CONTEXT_SIZE = 65536;
 
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
-  "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf";
+  "hf:ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-Q8_0.gguf";
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_REVISION =
-  "66f974f8cd48cc3b9c41c516b95508e75b4bee64";
+  "6ea3e3a309d12a4779cfda98b8c19800d2d5da71";
+// Stable router slot, also used for custom GGUFs. Keep the shipped name so existing
+// preset overrides survive model upgrades; the index identity uses the model URI.
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID = "embeddinggemma-300m-qat-q8_0";
 export const DEFAULT_LLAMA_CPP_EMBEDDING_CONTEXT_SIZE = 2048;
-export const DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE =
-  "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf";
-export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES = 328_577_056;
+export const DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE = "hf_ggml-org_embeddinggemma-2-Q8_0.gguf";
+export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES = 309_855_456;
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SHA256 =
-  "6fa0c02a9c302be6f977521d399b4de3a46310a4f2621ee0063747881b673f67";
+  "2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135";
+
+// Explicitly selected 300M models retain their verified artifact and index identity.
+// Never alias these vectors to EmbeddingGemma 2, despite the identical dimensions.
+export const LEGACY_LLAMA_CPP_EMBEDDING_MODEL = {
+  source: "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
+  cacheFile: "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf",
+  revision: "66f974f8cd48cc3b9c41c516b95508e75b4bee64",
+  sizeBytes: 328_577_056,
+  sha256: "6fa0c02a9c302be6f977521d399b4de3a46310a4f2621ee0063747881b673f67",
+} as const;
 
 export function resolveLlamaCppDataDir(): string {
   return path.join(resolveManagedResourceStateDir(), "tools", "llama.cpp");
@@ -63,14 +74,24 @@ export function resolveLlamaCppEmbeddingModel(
   const resolvedPath = /^(?:hf:|https?:\/\/)/iu.test(source)
     ? undefined
     : path.resolve(cacheDir, source);
+  const recipe = [
+    {
+      source: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      cacheFile: DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
+    },
+    LEGACY_LLAMA_CPP_EMBEDDING_MODEL,
+  ].find(
+    (candidate) =>
+      source === candidate.source ||
+      resolvedPath === path.resolve(cacheDir, candidate.cacheFile) ||
+      resolvedPath === path.resolve(resolveLegacyLlamaCppModelCacheDir(), candidate.cacheFile),
+  );
   return {
     source,
     cacheDir,
-    isDefault:
-      source === DEFAULT_LLAMA_CPP_EMBEDDING_MODEL ||
-      resolvedPath === path.resolve(cacheDir, DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE) ||
-      resolvedPath ===
-        path.resolve(resolveLegacyLlamaCppModelCacheDir(), DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE),
+    canonicalSource: recipe?.source ?? source,
+    cacheFile: recipe?.cacheFile,
+    isDefault: recipe?.source === DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
   };
 }
 

@@ -518,7 +518,10 @@ again to avoid reusing vectors from the previous model.
     Install the official [llama.cpp provider](/plugins/llama-cpp), then choose llama.cpp once in
     interactive setup. OpenClaw installs a pinned, verified `llama-server` and
     writes its loopback `localService` configuration. Default model:
-    `embeddinggemma-300m-qat-Q8_0.gguf` (~0.3 GB, auto-downloaded).
+    `embeddinggemma-2-Q8_0.gguf` (~0.3 GB, auto-downloaded, text-only).
+    Existing explicit model selections remain unchanged. See the
+    [managed model upgrade](/plugins/llama-cpp#upgrading-local-embeddings) before
+    rebuilding an index created with the previous default.
 
     Use the standalone CLI to verify the same provider path the Gateway uses:
 
