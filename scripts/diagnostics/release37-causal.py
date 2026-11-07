@@ -271,6 +271,8 @@ def run(options):
     if options.exclusive_account != os.environ.get('USER') or options.exclusive_account in ('root', 'openclaw'):
         raise RuntimeError('must name the exclusive non-live executor account')
     home = Path.home()
+    # sudo preserves the runner cwd, which this dedicated UID cannot traverse.
+    os.chdir(home)
     if (home / '.ocm').exists() or (home / '.openclaw').exists():
         raise RuntimeError('refusing account with existing OCM or OpenClaw state')
     if os.uname().machine != 'x86_64' or len(os.sched_getaffinity(0)) < 4:
