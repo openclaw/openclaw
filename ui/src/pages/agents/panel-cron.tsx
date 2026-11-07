@@ -170,7 +170,8 @@ export function AgentCron(
         {params.read().jobs &&
         !params.readState().cronLoading &&
         !params.readState().cronJobsError &&
-        params.readState().cronJobs.length === 0 ? (
+        params.readState().cronJobs.length === 0 &&
+        params.readState().cronJobsSnapshotRevision !== null ? (
           <SettingsEmpty message={t("agents.cronPanel.noJobs")} />
         ) : (
           <>
@@ -216,16 +217,20 @@ export function AgentCron(
               }}
             </For>
             <CronReadBoundary read={params.read().jobs}>
-              {(pending) => (
-                <CronJobsPagination
-                  jobsShown={params.readState().cronJobs.length}
-                  jobsTotal={params.readState().cronJobsTotal}
-                  hasMore={params.readState().cronJobsHasMore}
-                  loading={pending && !params.read().jobs?.append}
-                  loadingMore={pending && params.read().jobs?.append === true}
-                  onLoadMore={params.onLoadMore}
-                />
-              )}
+              {(pending) =>
+                params.readState().cronJobsSnapshotRevision === null ? (
+                  undefined
+                ) : (
+                  <CronJobsPagination
+                    jobsShown={params.readState().cronJobs.length}
+                    jobsTotal={params.readState().cronJobsTotal}
+                    hasMore={params.readState().cronJobsHasMore}
+                    loading={pending && !params.read().jobs?.append}
+                    loadingMore={pending && params.read().jobs?.append === true}
+                    onLoadMore={params.onLoadMore}
+                  />
+                )
+              }
             </CronReadBoundary>
           </>
         )}

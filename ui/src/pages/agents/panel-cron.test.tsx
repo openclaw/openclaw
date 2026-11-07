@@ -117,6 +117,30 @@ describe("Agent Cron native reads and actions", () => {
     await waitForSolid(() => expect(container.textContent).toContain("Job first"));
   });
 
+  it("shows the read error without an empty state or pagination footer before an inventory is established", async () => {
+    let failJobs = true;
+    const { container } = mount((method, params) => {
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      if (isRecord(params) && params.limit === 50 && failJobs) {
+        throw new Error("Synthetic jobs unavailable");
+      }
+      return pageOf([job("first")]);
+    });
+    await waitForSolid(() =>
+      expect(container.textContent).toContain("Synthetic jobs unavailable"),
+    );
+    expect(container.textContent).not.toContain("No automations yet.");
+    expect(container.textContent).not.toContain("0 of");
+    failJobs = false;
+    button(container, "Refresh").click();
+    await waitForSolid(() => {
+      expect(container.textContent).not.toContain("Synthetic jobs unavailable");
+      expect(container.textContent).toContain("Job first");
+    });
+  });
+
   it("shows the empty state only once the settled read confirms no jobs", async () => {
     const { container } = mount((method, params) => {
       if (method === "cron.status") {
