@@ -1,0 +1,2 @@
+# New-session link recovers its href after cold connection and retires it during reconnect.
+29
