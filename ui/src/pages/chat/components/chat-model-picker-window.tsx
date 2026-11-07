@@ -21,8 +21,11 @@ export function createModelPickerWindow(
   allowNaturalLayout: () => boolean,
 ) {
   let viewport: HTMLDivElement;
+  // A lone filtered result has no cross-group rank to position.
   const naturalRows = createMemo(() =>
-    allowNaturalLayout() && rows().length <= 24 ? new Set(rows()) : undefined,
+    (allowNaturalLayout() || rows().length < 2) && rows().length <= 24
+      ? new Set(rows())
+      : undefined,
   );
   const [window, setWindow] = createSignal<{ items: VirtualItem[]; height: number }>({
     items: [],
