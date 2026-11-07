@@ -1082,30 +1082,51 @@ export function createEngineEventLoadScenarios(
                   );
                   if (!visibleRow) {
                     blank++;
-                    firstBlankFrame ??= JSON.stringify({
-                      step,
-                      elapsedMs: performance.now() - started,
-                      scrollTop: thread.scrollTop,
-                      scrollHeight: thread.scrollHeight,
-                      viewport: { top, bottom, left, right },
-                      rows: [...thread.querySelectorAll<HTMLElement>(".chat-virtual-row")].map(
-                        (row) => {
-                          const bounds = row.getBoundingClientRect();
-                          return {
-                            index: row.dataset.index,
-                            key: row.dataset.virtualRowKey,
-                            prepared: row.dataset.preparedRow,
-                            preparing: row.dataset.preparingRow,
-                            streaming: row.dataset.streamingRow,
-                            top: bounds.top,
-                            bottom: bounds.bottom,
-                            left: bounds.left,
-                            right: bounds.right,
-                            children: row.childElementCount,
-                          };
-                        },
-                      ),
-                    });
+                    if (firstBlankFrame === undefined) {
+                      const capture = () => {
+                        const bounds = thread.getBoundingClientRect();
+                        return {
+                          step,
+                          elapsedMs: performance.now() - started,
+                          scrollTop: thread.scrollTop,
+                          scrollHeight: thread.scrollHeight,
+                          innerHeight:
+                            thread.querySelector<HTMLElement>(".chat-thread-inner")?.style.height,
+                          blockTop:
+                            thread.querySelector<HTMLElement>(".chat-virtual-block")?.style.top,
+                          viewport: {
+                            top: bounds.top + thread.clientTop,
+                            bottom: bounds.top + thread.clientTop + thread.clientHeight,
+                            left: bounds.left + thread.clientLeft,
+                            right: bounds.left + thread.clientLeft + thread.clientWidth,
+                          },
+                          rows: [...thread.querySelectorAll<HTMLElement>(".chat-virtual-row")].map(
+                            (row) => {
+                              const rect = row.getBoundingClientRect();
+                              return {
+                                index: row.dataset.index,
+                                key: row.dataset.virtualRowKey,
+                                prepared: row.dataset.preparedRow,
+                                preparing: row.dataset.preparingRow,
+                                streaming: row.dataset.streamingRow,
+                                top: rect.top,
+                                bottom: rect.bottom,
+                                left: rect.left,
+                                right: rect.right,
+                                children: row.childElementCount,
+                              };
+                            },
+                          ),
+                        };
+                      };
+                      const before = capture();
+                      // Keep the target fixed while the current render opportunity finishes.
+                      // This diagnostic runs only in an observation already marked as failed.
+                      await new Promise<void>((resolve) => {
+                        setTimeout(resolve, 0);
+                      });
+                      firstBlankFrame = JSON.stringify({ before, afterRenderTask: capture() });
+                    }
                   }
                 }
                 const observedMs = performance.now() - started;
