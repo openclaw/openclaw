@@ -531,10 +531,14 @@ function createTelegramAccountThrottler(
     // Classify at the call site: queued work later runs in the drain's async context.
     const callerScope = requestScopes.getStore();
     const effect = captureEffectAuthority();
+    const runInCaller = AsyncLocalStorage.snapshot();
     const replaceable = method === "sendChatAction" || callerScope?.replaceable === true;
     const scope = replaceable ? { ...callerScope, replaceable: true as const } : callerScope;
     // Waiting and retry policy runs outside the queues; admission runs at the network edge.
-    const admitted = admitAtNetwork(floodGate, scope, (...args) => effect.run(() => prev(...args)));
+    const guarded = admitAtNetwork(floodGate, scope, (...args) => effect.run(() => prev(...args)));
+    // A shared drain may belong to an earlier, now-ended turn. Re-enter this
+    // request for both its live authority check and the actual dispatch.
+    const admitted: TelegramApiCall = (...args) => runInCaller(guarded, ...args);
     const send = callThroughFloodGate(
       floodGate,
       replaceable,

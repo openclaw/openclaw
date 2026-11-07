@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { Api } from "grammy";
 import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
@@ -5,6 +6,7 @@ import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vi
 import {
   getOrCreateAccountThrottler,
   releaseAccountThrottler,
+  runAuthorizedTelegramRequest,
   runReplaceableTelegramRequest,
 } from "./account-throttler.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
@@ -148,6 +150,73 @@ function laneProbe(
 beforeEach(() => {
   resetTelegramAccountThrottlersForTest();
 });
+
+it.each([
+  { state: "active", chatId: -100123 },
+  { state: "canceled", chatId: -100123 },
+  { state: "active", chatId: 42 },
+  { state: "canceled", chatId: 42 },
+] as const)(
+  "dispatches a queued send in its own $state caller context for chat $chatId",
+  async ({ state, chatId }) => {
+    vi.useFakeTimers();
+    const callers = new AsyncLocalStorage<{ name: string; signal: AbortSignal }>();
+    const old = new AbortController();
+    const current = new AbortController();
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    let calls = 0;
+    const api = createApi("caller-context", true, async () => {
+      if (++calls === 1) {
+        entered.resolve();
+        await release.promise;
+        return messageResponse("first");
+      }
+      const caller = callers.getStore();
+      caller?.signal.throwIfAborted();
+      return messageResponse(caller?.name);
+    });
+    const send = () =>
+      runAuthorizedTelegramRequest(
+        () => callers.getStore()?.signal.throwIfAborted(),
+        () => api.sendMessage(chatId, "result"),
+      );
+    const first = callers.run({ name: "old", signal: old.signal }, send);
+    await tick(1_000);
+    await entered.promise;
+    const queued = callers.run({ name: "current", signal: current.signal }, send);
+    const observed = queued.then(
+      (value) => ({ value }),
+      (error) => ({ error }),
+    );
+    onTestFinished(async () => {
+      try {
+        release.resolve();
+        await tick(1_000);
+        await Promise.allSettled([first, queued]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+    if (state === "active") {
+      old.abort(new Error("previous caller ended"));
+    } else {
+      current.abort(new Error("current caller canceled"));
+    }
+    release.resolve();
+    await tick(1_000);
+    await first;
+    if (state === "active") {
+      await expect(observed).resolves.toEqual({ value: { text: "current" } });
+      expect(calls).toBe(2);
+    } else {
+      await expect(observed).resolves.toMatchObject({
+        error: { message: "current caller canceled" },
+      });
+      expect(calls).toBe(1);
+    }
+  },
+);
 
 it("preserves the group message budget while sending topic actions", async () => {
   vi.useFakeTimers();
