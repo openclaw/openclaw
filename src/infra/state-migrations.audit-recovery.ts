@@ -166,7 +166,16 @@ export async function readLegacyAuditRecoverySourceForBackup(
     restoreRelativePath,
     linkedJournal ? stagingRelativePath : undefined,
   );
-  const journal = parseAuditRecoveryRestoreJournal(restoreSnapshot.raw);
+  let journal: ParsedAuditRecoveryRestoreJournal;
+  try {
+    journal = parseAuditRecoveryRestoreJournal(restoreSnapshot.raw);
+  } catch {
+    // Parser errors can contain journal contents, so do not retain them as causes.
+    throw new Error(
+      `Cannot back up legacy audit archive ${path.join(root.rootReal, relativePath)}: recovery journal ${path.join(root.rootReal, restoreRelativePath)} is invalid. ` +
+        "Preserve the archive and recovery sidecars, restore the journal from a trusted copy, then retry backup.",
+    );
+  }
   const progress = await readAuditRecoveryProgress({ root, relativePath, journal });
   const scrubbedContent = buildScrubbedAuditRecoveryContent(
     journal.sourceRaw,
