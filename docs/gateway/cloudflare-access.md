@@ -223,6 +223,11 @@ onboarding flow. See [Nodes](/nodes/node-host#gateway-deployments-that-cannot-ho
 If you do neither, `openclaw connect` fails against the tunnel even though the browser
 works, because the join request is redirected to the Access login page.
 
+These exemptions do not authenticate the main Gateway WebSocket used by mobile
+setup codes. With a hostname-only Gateway URL, that socket uses `/`, which is
+also the Control UI root. Do not bypass Access for `/` or `/*` to make mobile
+pairing work; that also removes Access protection from the Control UI.
+
 ## Step 5: Connect each client
 
 **Control UI.** Open `https://gateway.example` and sign in through Access. With
@@ -252,6 +257,15 @@ the WebSocket upgrade. Configure `gateway.remote.edgeAuth` as described in
 `cloudflared access login https://gateway.example` once to cache a token.
 
 **Nodes.** Follow the choice made in step 4.
+
+**iOS app.** Scan or paste a mobile setup code in the app's Gateway settings.
+When Access challenges the connection, tap **Connect**, complete the website
+sign-in in the app's browser, tap **Done**, then choose **Continue** to authorize
+the native connection. Signing in with Safari alone does not authorize the app.
+Normal Gateway pairing and permissions still apply after Access succeeds.
+See [iOS Cloudflare Access sign-in](/platforms/ios#cloudflare-access-sign-in) for
+reconnection, expiry, and sign-out behavior. Existing service headers or WARP
+connections do not need another prompt when the connection check already succeeds.
 
 ## Verify
 
