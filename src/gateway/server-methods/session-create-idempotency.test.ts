@@ -116,7 +116,13 @@ it("rejects idempotent creation without a principal or device namespace", async 
   const { execute, call } = createFixture();
   const anonymous = await call({ agentId: "main", idempotencyKey: "create-once" }, null as never);
 
-  expectRejected(anonymous, "INVALID_REQUEST", expect.stringContaining("identity"));
+  expectRejected(
+    anonymous,
+    "INVALID_REQUEST",
+    expect.stringMatching(
+      /agent runtime identity alone cannot scope replay.*omit idempotencyKey and pass a deterministic session key/u,
+    ),
+  );
   expect(execute).not.toHaveBeenCalled();
 });
 
