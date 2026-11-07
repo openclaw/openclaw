@@ -26,6 +26,7 @@ import {
   parseLocalWorkspaceSourcePaths,
   prepareLocalWorkspaceBuildInputs,
   selectLocalWorkspaceCanonicalPaths,
+  readLocalWorkspaceGitExclusions,
 } from "./local-workspace-inventory.js";
 import type {
   LocalWorkspaceManifestAction,
@@ -189,20 +190,18 @@ export function projectionOperations(
     });
   };
   const capture = async (target: Direction, preserveDirectories?: ReadonlySet<string>) => {
-    const selected = current();
     const root = sourcePath(target);
     await assertLocalWorkspaceDirectory(root);
-    // Never inspect guest Git metadata on the host. Canonical inventory uses only
-    // the trusted managed worktree; ignored host files cannot enter the projection.
+    // The trusted host index owns source admission; never inspect guest Git metadata.
     const paths = await canonicalPaths();
     const snapshot = await captureWorkspaceManifestDocument({
       root,
-      baseCommit: selected.base_commit,
+      baseCommit: current().base_commit,
       includePaths: target === "projection" ? paths : undefined,
       // Archived projections are checked against their retained receipt without a live index.
       gitIgnore:
         target === "canonical" && owner.worktree.removedAt === undefined
-          ? { root: owner.worktree.path, retainedPaths: paths }
+          ? await readLocalWorkspaceGitExclusions(owner.worktree.path, root, paths)
           : undefined,
       buildCacheInputs: new Set(await buildCacheInputs()),
       preserveDirectories,

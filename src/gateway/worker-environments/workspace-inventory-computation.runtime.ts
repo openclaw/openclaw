@@ -104,34 +104,32 @@ async function* readBoundedGitPathCandidates(filePath: string): AsyncGenerator<s
   }
 }
 
-/** Exact input exemptions for transfer and ignored-directory traversal. */
-export async function readWorkspaceStagedInputDirectoriesImpl(rootDir: string): Promise<string[]> {
-  const root = await fsRoot(rootDir);
-  const inbound = await root.stat("media/inbound").catch(() => undefined);
-  if (!inbound?.isDirectory || inbound.isSymbolicLink) {
-    return [];
-  }
-  const isStagedInput = createStagedInputPathMatcher(root);
-  const directories: string[] = [];
-  let candidates = 0;
-  for await (const entry of await fs.opendir(path.join(rootDir, "media/inbound"))) {
-    if (++candidates > MAX_WORKSPACE_INVENTORY_ENTRIES) {
-      throw workspaceInventoryError("Cloud workspace has too many entries");
-    }
-    const directory = stagedInputPathDirectory(`media/inbound/${entry.name}`);
-    if (entry.isDirectory() && directory && (await isStagedInput(directory))) {
-      directories.push(directory);
-    }
-  }
-  return directories.toSorted();
-}
-
 export async function executeWorkspaceInventoryComputation(
   command: WorkspaceInventoryComputationCommand,
 ): Promise<WorkspaceInventoryComputationResult> {
   switch (command.type) {
-    case "workspace.inventory.staged-directories":
-      return await readWorkspaceStagedInputDirectoriesImpl(command.input.rootDir);
+    case "workspace.inventory.staged-directories": {
+      // Exact rsync exemptions, prepared once without walking input file contents.
+      const rootDir = command.input.rootDir;
+      const root = await fsRoot(rootDir);
+      const inbound = await root.stat("media/inbound").catch(() => undefined);
+      if (!inbound?.isDirectory || inbound.isSymbolicLink) {
+        return [];
+      }
+      const isStagedInput = createStagedInputPathMatcher(root);
+      const directories: string[] = [];
+      let candidates = 0;
+      for await (const entry of await fs.opendir(path.join(rootDir, "media/inbound"))) {
+        if (++candidates > MAX_WORKSPACE_INVENTORY_ENTRIES) {
+          throw workspaceInventoryError("Cloud workspace has too many entries");
+        }
+        const directory = stagedInputPathDirectory(`media/inbound/${entry.name}`);
+        if (entry.isDirectory() && directory && (await isStagedInput(directory))) {
+          directories.push(directory);
+        }
+      }
+      return directories.toSorted();
+    }
     case "workspace.inventory.select": {
       const params = command.input;
       const canonicalRoot = await fs.realpath(params.gitRoot);

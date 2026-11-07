@@ -38,13 +38,13 @@ import {
   proveArchivedInputRetention,
   proveLastFileDirectoryRetention,
 } from "./local-workspace-directory-retention.test-support.js";
+import { proveGitIgnoredWorkspaceOutputs } from "./local-workspace-generated-paths.test-support.js";
 import {
   expectMissing,
   observeAcknowledgedUpdate,
   prepareLocalWorkspaceArchiveFixture,
   prepareSandboxCheckpointFixture,
   proveAbsentProjectionCheckpoints,
-  proveGitIgnoredWorkspaceOutputs,
   proveHostAdmittedBuildInputs,
   proveInterruptedWorkspaceCheckpoint,
   proveIncrementalWorkspaceEdits,
@@ -909,9 +909,6 @@ it.each(["legacy decoder", "failed restore retry", "retention", "legacy retentio
     if (process.platform !== "win32") {
       await fs.symlink("../source.txt", path.join(projection, "guest-ignored/link"));
     }
-    await writeText(projection, ".gitignore", ".env.local\n.env.allowed\n");
-    await synchronize();
-    await writeText(projection, ".gitignore", ".env.local\n.env.allowed\nguest-ignored/\n");
     await synchronize();
     expect(await fs.readFile(path.join(canonical, "guest-ignored/data"))).toEqual(bytes);
     const removed = await service.remove({

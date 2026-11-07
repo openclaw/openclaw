@@ -138,18 +138,27 @@ describe("resident node manifest capture", () => {
     }
   });
 
-  it("keeps Git eligibility and prior ignored paths identical without a manifest child", async () => {
+  it("keeps initial Git admission distinct from authored checkpoint results without a manifest child", async () => {
     const { capture, workspaceDir, runStandalone } = await fixture();
     const homeDir = path.dirname(workspaceDir);
     const baseCommit = "a".repeat(40);
-    await fs.writeFile(path.join(workspaceDir, ".gitignore"), "*.ignored\n");
+    await fs.writeFile(path.join(workspaceDir, ".gitignore"), "*.ignored\ndist/\n");
     await fs.writeFile(path.join(workspaceDir, "keep.ignored"), "retained");
-    await fs.writeFile(path.join(workspaceDir, "skip.ignored"), "excluded");
+    await fs.writeFile(path.join(workspaceDir, "new.ignored"), "authored");
     await fs.writeFile(path.join(workspaceDir, "new.txt"), "new");
     expect(
       (await exec.runCommandWithTimeout(["git", "init", "-q", workspaceDir], { timeoutMs: 10_000 }))
         .code,
     ).toBe(0);
+    await fs.mkdir(path.join(workspaceDir, "dist"));
+    await fs.writeFile(path.join(workspaceDir, "dist", "output.js"), "generated");
+    const initial = await runStandalone([baseCommit, "eligible"], homeDir);
+    expect(initial.code, initial.stderr).toBe(0);
+    expect(
+      (await readWorkspaceManifest(homeDir, initial.stdout.trim())).manifest.entries.map(
+        (entry) => entry.path,
+      ),
+    ).toEqual([".gitignore", "new.txt"]);
     const { rawManifest } = manifestFixture([fileEntry("keep.ignored", Buffer.from("retained"))], {
       baseCommit,
     });
@@ -164,6 +173,7 @@ describe("resident node manifest capture", () => {
     expect(manifest.entries.map((entry) => entry.path)).toEqual([
       ".gitignore",
       "keep.ignored",
+      "new.ignored",
       "new.txt",
     ]);
   });

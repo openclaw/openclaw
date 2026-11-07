@@ -13,7 +13,6 @@ import {
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import { readLocalWorkspaceIgnoredPaths } from "./local-workspace-inventory.js";
 import {
   activeWorkspaceHashContext,
   workspaceCtimeIsReusable,
@@ -30,8 +29,11 @@ import {
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
-import { workspacePathAncestors } from "./workspace-path-ancestors.js";
-import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-exclusions.js";
+import {
+  isDerivedWorkspacePath,
+  isIgnoredWorkspaceBuildOutput,
+  buildCacheInputPaths,
+} from "./workspace-path-exclusions.js";
 
 type WorkspaceFileSnapshot =
   | { type: "file"; mode: number; size: number; sha256: string }
@@ -189,7 +191,7 @@ type ActualWorkspaceManifestOptions = {
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
   buildCacheInputs?: ReadonlySet<string>;
-  gitIgnore?: { root: string; retainedPaths: ReadonlySet<string> };
+  gitIgnore?: { paths: ReadonlySet<string>; retainedPaths: ReadonlySet<string> };
   signal?: AbortSignal;
 };
 
@@ -219,19 +221,7 @@ export async function scanActualWorkspaceManifest(
     throw error;
   }
   const retained = buildCacheInputPaths(params.buildCacheInputs);
-  const ignored = params.gitIgnore
-    ? await readLocalWorkspaceIgnoredPaths(params.gitIgnore.root, root)
-    : undefined;
-  const inputParents = new Set<string>();
-  if (ignored?.size) {
-    const { readWorkspaceStagedInputDirectoriesImpl } =
-      await import("./workspace-inventory-computation.runtime.js");
-    for (const directory of await readWorkspaceStagedInputDirectoriesImpl(root)) {
-      for (const parent of workspacePathAncestors(directory)) {
-        inputParents.add(parent);
-      }
-    }
-  }
+  const ignored = params.gitIgnore?.paths;
   const isExcluded = async (relative: string): Promise<boolean> => {
     const retainedInput = retained.has(relative) || (await isStagedInput(relative));
     if (
@@ -244,27 +234,10 @@ export async function scanActualWorkspaceManifest(
     ) {
       return true;
     }
-    if (
-      !ignored?.size ||
-      retainedInput ||
-      inputParents.has(relative) ||
-      params.gitIgnore?.retainedPaths.has(relative)
-    ) {
+    if (!ignored?.size || retainedInput || params.gitIgnore?.retainedPaths.has(relative)) {
       return false;
     }
-    if (ignored.has(relative)) {
-      return true;
-    }
-    // Git collapses ignored directories so generated trees are never traversed.
-    for (let parent = relative; parent; parent = path.posix.dirname(parent)) {
-      if (ignored.has(`${parent}/`)) {
-        return true;
-      }
-      if (!parent.includes("/")) {
-        break;
-      }
-    }
-    return false;
+    return isIgnoredWorkspaceBuildOutput(relative, ignored);
   };
   let entryCount = 0;
   let totalBytes = 0;

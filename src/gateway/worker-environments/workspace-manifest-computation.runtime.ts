@@ -261,7 +261,7 @@ export async function executeWorkspaceManifestComputation(
           ...input,
           includePaths: input.includePaths && new Set(input.includePaths),
           gitIgnore: input.gitIgnore && {
-            root: input.gitIgnore.root,
+            paths: new Set(input.gitIgnore.paths),
             retainedPaths: new Set(input.gitIgnore.retainedPaths),
           },
           buildCacheInputs: input.buildCacheInputs && new Set(input.buildCacheInputs),

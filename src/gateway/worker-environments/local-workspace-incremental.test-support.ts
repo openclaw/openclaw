@@ -237,51 +237,6 @@ export async function proveHostAdmittedBuildInputs(owner: LocalWorkspaceOwner) {
   }
 }
 
-export async function proveGitIgnoredWorkspaceOutputs(owner: LocalWorkspaceOwner, root: string) {
-  const canonical = owner.worktree.path;
-  const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
-  await writeText(canonical, ".gitignore", ".env.local\ndist/\n.cache/\n");
-  await fs.mkdir(path.join(canonical, "dist"));
-  await writeText(canonical, "dist/tracked.txt", "tracked input\n");
-  await git(canonical, "add", "-f", ".gitignore", "dist/tracked.txt");
-  await git(canonical, "commit", "--quiet", "-m", "tracked ignored input");
-  const globalIgnore = path.join(root, "global-ignore");
-  await fs.writeFile(globalIgnore, "global-output/\n");
-  const globalConfig = path.join(root, "global-config");
-  await fs.writeFile(globalConfig, `[core]\nexcludesFile = ${JSON.stringify(globalIgnore)}\n`);
-  vi.stubEnv("GIT_CONFIG_GLOBAL", globalConfig);
-  const infoExclude = await git(canonical, "rev-parse", "--git-path", "info/exclude");
-  await fs.appendFile(path.resolve(canonical, infoExclude), "info-output/\n");
-  const projection = await prepare(owner);
-  await writeText(projection, "source.txt", "guest edit\n");
-  await writeText(projection, "dist/tracked.txt", "tracked edit\n");
-  const ignored = [
-    "dist/generated.js",
-    ".cache/openclaw-bun/runtime",
-    "info-output/generated",
-    "global-output/generated",
-  ];
-  for (const relative of ignored) {
-    await fs.mkdir(path.dirname(path.join(projection, relative)), { recursive: true });
-    await writeText(projection, relative, "disposable output\n");
-  }
-  // The guest owns these bytes, so host inventory must never load this configuration.
-  await writeText(projection, ".git/config", "invalid guest Git configuration\n");
-  await synchronize(owner);
-  await expectText(canonical, "source.txt", "guest edit\n");
-  await expectText(canonical, "dist/tracked.txt", "tracked edit\n");
-  const accepted = await withLocalWorkspaceProjection(owner, (state) => state.baselineDocument());
-  expect(
-    parseWorkerWorkspaceManifest(accepted.rawManifest, accepted.manifestRef).entries.map(
-      (entry) => entry.path,
-    ),
-  ).toEqual([".gitignore", "dist/tracked.txt", "source.txt"]);
-  for (const relative of ignored) {
-    await expectMissing(canonical, relative);
-    await expectText(projection, relative, "disposable output\n");
-  }
-}
-
 export async function proveStagedInputCheckpointOwnership(owner: LocalWorkspaceOwner) {
   const projection = await prepare(owner);
   const directory = stagedInputDirectory(randomUUID());

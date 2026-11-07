@@ -117,11 +117,14 @@ Workspace manifest downloads use gzip when the node supports it and remain compa
 
 For a Gateway-source worktree, OpenClaw sends a fresh eligible inventory at dispatch. Files created only on the Gateway afterward remain local until explicitly staged with `git add`. Before the next worker turn executes, reconciliation admits those staged paths, preserves independent worker edits, and retains conflicting worker bytes for inspection. Completed turns also reconcile workspace changes. Unstaged new inputs require a fresh dispatch.
 
-Git-backed worker result capture also honors Git's standard ignore rules
-(`.gitignore`, `.git/info/exclude`, and global excludes). Ignored build outputs such
-as `dist/` and `.cache/` do not consume the changed-result byte budget. Tracked
-files, explicit `.worktreeinclude` inputs, and exact previously captured paths
-remain eligible. Plain workspaces retain their filesystem capture policy.
+Git-backed worker result capture uses Git's standard ignore rules (`.gitignore`,
+`.git/info/exclude`, and global excludes) to omit new build output under
+checkout-root `dist/` and `.cache/openclaw-bun/`. Other ignored authored files,
+including `.artifacts/` reports and screenshots referenced by saved messages,
+still synchronize: ignore rules alone do not make them disposable. Tracked files,
+explicit `.worktreeinclude` inputs, and exact previously captured paths remain
+eligible. Initial source admission still uses Git eligibility; plain workspaces
+retain their filesystem capture policy.
 
 ### Deliver skills to the worker
 

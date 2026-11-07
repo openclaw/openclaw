@@ -85,10 +85,14 @@ paths are admitted before guest execution and retained in the projection binding
 Later host-created paths enter an existing projection only after the host stages
 them in the host Git index (`git add`); changing an ignore rule alone does
 not admit host files, including newly provisioned files. Existing admitted source
-edits and eligible guest-created files continue to reconcile. New ignored files
-stay in the sandbox: result capture honors its `.gitignore` files and the trusted
-host repository's `.git/info/exclude` and global excludes. Tracked files and exact
-previously admitted or accepted paths remain protected when ignore rules change.
+edits and guest-created files continue to reconcile, including ignored reports
+and attachments. An ignore rule alone does not make an authored file disposable.
+Result capture excludes new ignored build outputs only under checkout-root
+`dist/` and `.cache/openclaw-bun/`, using the guest's `.gitignore` files and the
+trusted host repository's `.git/info/exclude` and global excludes. Tracked files
+and exact previously admitted or accepted paths remain protected when ignore
+rules change. Save durable reports and screenshots outside disposable build/cache
+roots; ordinary `.artifacts/` outputs remain available to saved message references.
 Source filenames must be valid UTF-8; rename invalid Git paths
 before retrying preparation. Publication uses the same admission boundary.
 
@@ -133,10 +137,10 @@ synchronized or restored onto another runtime. Save durable outputs outside it;
 other `.openclaw/` content and nested project fixtures still reconcile.
 Synchronization and recovery of older pending results exclude these exact paths,
 so dependency and test-tool downloads do not count as authored workspace results.
-Other eligible guest-created files under `.cache/`, `.local/`, and `.artifacts/`
-still reconcile, including nested paths and explicit staged inputs. Ignored build
-outputs are excluded before hashing and result-size accounting; their local bytes
-remain available to the sandbox. Source changes cannot remove a
+Other guest-created files under `.cache/`, `.local/`, and `.artifacts/` still
+reconcile, including ignored paths and explicit staged inputs. Only the declared
+disposable build/cache roots are excluded before hashing and result-size accounting;
+their local bytes remain available to the sandbox. Source changes cannot remove a
 runtime-owned lock subtree by replacing its parent directory.
 
 pnpm can select `.openclaw/.pnpm-store/` when installing beneath a protected
@@ -177,7 +181,10 @@ ask a Gateway administrator to recover the saved baseline inventory before retry
 Recreating a sandbox does not repair missing baseline records.
 
 For Git-backed native-node and SSH workspaces, worker-side captures also exclude
-new generated files under those two build-cache roots. Tracked files, ignored
+new generated files under those two build-cache roots and new Git-ignored output
+under checkout-root `dist/` and `.cache/openclaw-bun/`. Result captures retain
+other ignored authored files; initial source admission still uses Git eligibility.
+Tracked files, ignored
 files explicitly selected by `.worktreeinclude`, and exact inputs recorded in a
 prior capture remain part of the workspace. Ordinary `.artifacts/` reports still
 synchronize, and unreadable authored files still fail capture. Plain workspaces

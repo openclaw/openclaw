@@ -69,6 +69,17 @@ ${MANAGED_SANDBOX_SKILLS_PATH_JS}
 const DERIVED_WORKSPACE_ROOT_PATHS = ${JSON.stringify(DERIVED_WORKSPACE_ROOT_PATHS)};
 const PNPM_FALLBACK_STORE_ROOT_PATH = ${JSON.stringify(PNPM_FALLBACK_STORE_ROOT_PATH)};
 const BUILD_CACHE_ROOT_PATHS = ${JSON.stringify(BUILD_CACHE_ROOT_PATHS)};
+// Git ignores make only known build roots disposable, never arbitrary authored
+// reports. The Bun staging owner downloads its runtime under .cache/openclaw-bun.
+function isIgnoredWorkspaceBuildOutput(relativePath, ignoredPaths) {
+  if (!["dist", ".cache/openclaw-bun"].some(
+    (root) => relativePath === root || relativePath.startsWith(root + "/"),
+  )) return false;
+  for (let candidate = relativePath; candidate; candidate = candidate.slice(0, Math.max(0, candidate.lastIndexOf("/")))) {
+    if (ignoredPaths.has(candidate) || ignoredPaths.has(candidate + "/")) return true;
+  }
+  return false;
+}
 function isBuildCacheWorkspacePath(relativePath) {
   return BUILD_CACHE_ROOT_PATHS.some((root) => relativePath === root || relativePath.startsWith(root + "/"));
 }
@@ -128,6 +139,7 @@ function projectWorkspaceEntries(entries, isRetainedInput, excludeBuildCaches = 
 
 export const {
   isDerivedWorkspacePath,
+  isIgnoredWorkspaceBuildOutput,
   isRuntimeOwnedWorkspacePath,
   projectWorkspaceEntries,
   buildCacheInputPaths,
@@ -138,6 +150,10 @@ export const {
     excludeBuildCaches?: boolean,
     includeLegacyPnpmStore?: boolean,
   ) => boolean;
+  isIgnoredWorkspaceBuildOutput: (
+    relativePath: string,
+    ignoredPaths: ReadonlySet<string>,
+  ) => boolean;
   isRuntimeOwnedWorkspacePath: (relativePath: string) => boolean;
   buildCacheInputPaths: (paths?: Iterable<string>) => Set<string>;
   projectWorkspaceEntries: <T extends { path: string; type: string }>(
@@ -146,7 +162,7 @@ export const {
     excludeBuildCaches?: boolean,
   ) => T[];
 } = compileFunction(
-  `${WORKSPACE_PATH_EXCLUSIONS_JS}\nreturn { isDerivedWorkspacePath, isRuntimeOwnedWorkspacePath, projectWorkspaceEntries, buildCacheInputPaths };`,
+  `${WORKSPACE_PATH_EXCLUSIONS_JS}\nreturn { isDerivedWorkspacePath, isIgnoredWorkspaceBuildOutput, isRuntimeOwnedWorkspacePath, projectWorkspaceEntries, buildCacheInputPaths };`,
 )();
 
 export const DERIVED_WORKSPACE_RSYNC_EXCLUDES = [

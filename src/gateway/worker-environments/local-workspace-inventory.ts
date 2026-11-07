@@ -38,7 +38,11 @@ export function parseLocalWorkspaceSourcePaths(value: string): string[] {
 }
 
 /** Read guest ignore files with the host's index/config, never guest Git metadata. */
-export async function readLocalWorkspaceIgnoredPaths(root: string, projection: string) {
+export async function readLocalWorkspaceGitExclusions(
+  root: string,
+  projection: string,
+  retainedPaths: ReadonlySet<string>,
+) {
   const listed = await requireGitBuffer(root, [
     `--work-tree=${projection}`,
     "ls-files",
@@ -49,7 +53,7 @@ export async function readLocalWorkspaceIgnoredPaths(root: string, projection: s
     "--directory",
     "-z",
   ]);
-  return new Set(decodeLocalWorkspaceGitPaths(listed));
+  return { paths: new Set(decodeLocalWorkspaceGitPaths(listed)), retainedPaths };
 }
 
 /** Admit untracked source once, before any guest can change canonical ignore rules. */

@@ -76,6 +76,24 @@ export async function runWorkspaceManifestProgram(
   ];
   const PNPM_FALLBACK_STORE_ROOT_PATH = ".openclaw/.pnpm-store";
   const BUILD_CACHE_ROOT_PATHS = [".artifacts/build-all-cache", ".artifacts/build-cache-inputs"];
+  // Git ignores make only known build roots disposable, never arbitrary authored
+  // reports. The Bun staging owner downloads its runtime under .cache/openclaw-bun.
+  function isIgnoredWorkspaceBuildOutput(relativePath, ignoredPaths) {
+    if (
+      !["dist", ".cache/openclaw-bun"].some(
+        (root) => relativePath === root || relativePath.startsWith(root + "/"),
+      )
+    )
+      return false;
+    for (
+      let candidate = relativePath;
+      candidate;
+      candidate = candidate.slice(0, Math.max(0, candidate.lastIndexOf("/")))
+    ) {
+      if (ignoredPaths.has(candidate) || ignoredPaths.has(candidate + "/")) return true;
+    }
+    return false;
+  }
   function isBuildCacheWorkspacePath(relativePath) {
     return BUILD_CACHE_ROOT_PATHS.some(
       (root) => relativePath === root || relativePath.startsWith(root + "/"),
@@ -373,14 +391,28 @@ export async function runWorkspaceManifestProgram(
   // Git base enables build-cache projection; filesystem metadata is not admission.
   const excludeBuildCaches = Boolean(requestedBaseCommit);
   const retainedBuildCacheInputs = new Set();
-  function retainBuildCacheInput(relative) {
+  const retainedResultPaths = new Set();
+  let ignoredOutputPaths = new Set();
+  function retainWorkspaceInput(relative) {
     for (const entry of buildCacheInputPaths([relative])) retainedBuildCacheInputs.add(entry);
+    // Keep ancestors traversable when Git collapses an ignored output directory.
+    for (
+      let parent = relative;
+      parent;
+      parent = parent.slice(0, Math.max(0, parent.lastIndexOf("/")))
+    ) {
+      retainedResultPaths.add(parent);
+    }
   }
   function isRetainedWorkspaceInput(relative) {
     return isStagedInput(relative) || retainedBuildCacheInputs.has(relative);
   }
   function isExcludedWorkspacePath(relative) {
-    return isDerivedWorkspacePath(relative, isRetainedWorkspaceInput(relative), excludeBuildCaches);
+    return (
+      isDerivedWorkspacePath(relative, isRetainedWorkspaceInput(relative), excludeBuildCaches) ||
+      (!retainedResultPaths.has(relative) &&
+        isIgnoredWorkspaceBuildOutput(relative, ignoredOutputPaths))
+    );
   }
   function recordEntry(relative, entry) {
     assertManifestCurrent();
@@ -553,7 +585,7 @@ export async function runWorkspaceManifestProgram(
   async function initializeBuildCacheInputs() {
     if (!excludeBuildCaches) return undefined;
     for (const relative of await nulPaths(["--full-name", "--cached"])) {
-      retainBuildCacheInput(relative);
+      retainWorkspaceInput(relative);
     }
     const manifestRoot = path.join(process.env.HOME, ".openclaw-worker", "manifests");
     for (const digest of priorManifestDigests) {
@@ -562,11 +594,11 @@ export async function runWorkspaceManifestProgram(
           fail("invalid prior workspace manifest entry");
         // Older receipts cannot distinguish generated caches from original inputs.
         // Preserve their exact paths while excluding newly generated descendants.
-        retainBuildCacheInput(entry.path);
+        retainWorkspaceInput(entry.path);
       }
     }
     const ignoredPaths = await readIgnoredWorkspacePaths();
-    for (const relative of ignoredPaths.included) retainBuildCacheInput(relative);
+    for (const relative of ignoredPaths.included) retainWorkspaceInput(relative);
     return ignoredPaths;
   }
   async function eligiblePaths(ignoredPaths) {
@@ -586,7 +618,7 @@ export async function runWorkspaceManifestProgram(
       // before guest work. Preserve that selection, including host-staged inputs
       // absent from the worker index. Later captures have a prior receipt instead.
       if (excludeBuildCaches && priorManifestDigests.length === 0) {
-        retainBuildCacheInput(relative);
+        retainWorkspaceInput(relative);
       }
     }
     for (const relative of await nulPaths([
@@ -871,9 +903,20 @@ export async function runWorkspaceManifestProgram(
     }
     const ignoredPaths = await initializeBuildCacheInputs();
     assertManifestCurrent();
-    if (eligibleOnly || requestedBaseCommit) {
+    if (eligibleOnly && priorManifestDigests.length === 0) {
       for (const relative of await eligiblePaths(ignoredPaths)) addWithParents(relative);
     } else {
+      if (requestedBaseCommit) {
+        ignoredOutputPaths = new Set(
+          await nulPaths([
+            "--full-name",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+          ]),
+        );
+      }
       walk("");
     }
     const entries = [...entriesByPath.values()];

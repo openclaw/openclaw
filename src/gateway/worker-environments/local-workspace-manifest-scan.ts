@@ -26,6 +26,7 @@ import {
   localWorkspaceManifestDocument as manifestDocument,
   parseLocalWorkspaceSourcePaths,
   selectLocalWorkspaceCanonicalPaths,
+  readLocalWorkspaceGitExclusions,
 } from "./local-workspace-inventory.js";
 import {
   createLocalWorkspaceManifestTree,
@@ -563,7 +564,11 @@ export async function executeLocalWorkspaceManifestRead(
       includePaths: target === "projection" ? canonicalPaths : undefined,
       gitIgnore:
         target === "canonical"
-          ? { root: action.canonicalRoot, retainedPaths: canonicalPaths }
+          ? await readLocalWorkspaceGitExclusions(
+              action.canonicalRoot,
+              row.projection_path,
+              canonicalPaths,
+            )
           : undefined,
       preserveDirectories,
       buildCacheInputs: new Set(retained),

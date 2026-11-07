@@ -160,7 +160,7 @@ async function captureWorkspace(type: WorkspaceCaptureCommand, params: Workspace
         baseCommit,
         includePaths: includePaths === undefined ? undefined : [...includePaths],
         gitIgnore: gitIgnore && {
-          root: gitIgnore.root,
+          paths: [...gitIgnore.paths],
           retainedPaths: [...gitIgnore.retainedPaths],
         },
         buildCacheInputs: buildCacheInputs === undefined ? undefined : [...buildCacheInputs],
