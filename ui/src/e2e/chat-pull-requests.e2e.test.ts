@@ -872,7 +872,7 @@ suite.define(() => {
     });
     expect(publicationRequestKey(second.params)).toBe(publicationRequestKey(first.params));
     const failure = page.locator('.chat-pr__publication-outcome[data-state="failed"]');
-    await pollText(failure).toContain("Publication failed");
+    await pollText(failure).toContain("Couldn’t publish");
     await pollText(failure).toContain("Check repository write access");
     await pollCount(page.getByRole("button", { name: "Choose a new publication" })).toBe(1);
     await pollText(page.locator("[data-publication-account]")).toContain("Publish as @system-bot");

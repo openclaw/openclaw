@@ -176,6 +176,7 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
     "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
     "ui/src/e2e/service-worker-update.e2e.test.ts",
+    "ui/src/lib/openclaw-id/onepassword-save.retention.e2e.test.ts",
   ]);
   expect(localSelected[3]).toEqual(
     uiE2ePrivateServerTestFiles.filter((file) => uiE2eSerialTestFiles.includes(file)),

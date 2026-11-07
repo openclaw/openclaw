@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -205,7 +206,8 @@ export async function restoreUpdateDatabaseBackup(params: {
             shellEnvFallback: "defer",
           }).readConfigFileSnapshot();
           const { preparePostgresRestore } = await import("../snapshot/database-backup.js");
-          const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}`;
+          // Keep prior recovery preparations intact without occupying a retry's fresh target.
+          const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}-${randomUUID()}`;
           const prepared = await preparePostgresRestore({
             directory: entry.exportDirectory,
             anchorPath: snapshotPath,

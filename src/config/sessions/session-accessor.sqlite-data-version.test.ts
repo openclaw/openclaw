@@ -43,6 +43,7 @@ import { appendTranscriptEventsInTransaction as appendEvents } from "./session-a
 import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import { readSessionEntryList } from "./session-entry-list.worker.js";
+import { readSessionTranscriptMaintenance } from "./session-transcript-maintenance-read.js";
 import { promptReport } from "./system-prompt-report.test-support.js";
 import type { SessionEntry } from "./types.js";
 
@@ -512,6 +513,19 @@ it("omits saved prompts from metadata reads and transcript batches", async () =>
     (sql) => (/(?:from|join)\s+"session_nodes"/i.test(sql) ? "entries" : null),
   );
   using _ = { [Symbol.dispose]: queries.restore };
+  const maintenance = () =>
+    readSessionTranscriptMaintenance(
+      openOpenClawAgentDatabase(scope),
+      { ...scope, storePath: resolveOpenClawAgentSqlitePath(scope), sessionId: sessionKey },
+      { operation: "version" },
+    );
+  expect(maintenance()).toMatchObject({
+    lifecycleRevision: "original",
+    appendParentId: null,
+    version: { rawSeq: null },
+  });
+  expect(queries.textBytes.entries).toBeLessThan(2048);
+  queries.textBytes.entries = 0;
   expect(read("list")).toEqual(expected);
   expect(queries.textBytes.entries).toBeLessThan(2048);
   queries.textBytes.entries = 0;
@@ -530,9 +544,13 @@ it("omits saved prompts from metadata reads and transcript batches", async () =>
   expect(read(undefined, sessionKey.replace("agent:", "AGENT:"))).toEqual(read());
   await patchSessionEntryCore(scope, (entry) => {
     expect(entry.skillsSnapshot?.prompt).toBe(savedPrompt);
-    return { label: "renamed" };
+    return { label: "renamed", lifecycleRevision: "replacement" };
   });
   expect(read()).toMatchObject({ label: "renamed", skillsSnapshot: { prompt: savedPrompt } });
+  expect(maintenance()).toMatchObject({
+    lifecycleRevision: "replacement",
+    appendParentId: "second",
+  });
 });
 
 it("validates a folded sibling before selecting or preparing the exact opaque target", async () => {

@@ -1,7 +1,12 @@
 import { assertSyncTransactionResult, sqlPublicationAnchor } from "../sql-connection.js";
 import type { PostgresSqlConnection } from "../sql-connection.js";
-import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
+import {
+  discardSqliteTransactionState,
+  prepareSqliteTransactionCommit,
+  withSqlitePostCommitPublications,
+} from "../sqlite-post-commit.js";
 import { beginPostgresReadSnapshotScope } from "../sqlite-schema-facts.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import { currentSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-settlement.js";
 
 function assertPostgresOperationCurrent(): void {
@@ -22,6 +27,7 @@ export function runPostgresTransactionSync<T>(
   const anchor = sqlPublicationAnchor(db);
   return withSqlitePostCommitPublications(anchor, () => {
     const nested = db.isTransaction && !reserved;
+    let writeCommitted = false;
     let closeReadScope: (() => void) | undefined;
     try {
       if (nested) {
@@ -43,8 +49,13 @@ export function runPostgresTransactionSync<T>(
       } else {
         const commit = () => {
           assertPostgresOperationCurrent();
+          if (!readOnly) {
+            // Staged fences and predicates belong to physical COMMIT, never savepoint release.
+            prepareSqliteTransactionCommit(db);
+          }
           // End read snapshots without publishing the connection's COMMIT write receipt.
           db.exec(readOnly ? "ROLLBACK" : "COMMIT");
+          writeCommitted = !readOnly;
         };
         if (options?.withCommit) {
           assertSyncTransactionResult(options.withCommit(commit));
@@ -54,19 +65,30 @@ export function runPostgresTransactionSync<T>(
       }
       return result;
     } catch (error) {
-      try {
-        if (nested) {
-          db.exec("ROLLBACK TO SAVEPOINT openclaw_tx_nested");
-          db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
-        } else if (db.isTransaction) {
-          db.exec("ROLLBACK");
-        }
-      } catch {
-        // An unjoinable rollback cannot leave a reusable connection behind.
+      let unsafe = hasSqliteWorkerOutcomeUnknown(error) || writeCommitted;
+      if (!unsafe) {
         try {
-          db.close();
+          if (nested) {
+            db.exec("ROLLBACK TO SAVEPOINT openclaw_tx_nested");
+            db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
+          } else if (db.isTransaction) {
+            db.exec("ROLLBACK");
+          }
         } catch {
-          // Retain the operation failure after retiring the connection.
+          unsafe = true;
+        }
+      }
+      if (unsafe) {
+        try {
+          // Unknown or already committed writes cannot restore pre-write authority.
+          // Drain every savepoint before close or an outer catch could publish stale facts.
+          discardSqliteTransactionState(db, error, "unknown");
+        } finally {
+          try {
+            db.close();
+          } catch {
+            // Retain the operation failure or its invalidation aggregate.
+          }
         }
       }
       throw error;

@@ -4,6 +4,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { coerceConfigFormNumberString } from "./config-form.numeric.ts";
 import { schemaMayAcceptString, schemaType, type JsonSchema } from "./config-form.shared.ts";
+import { Checkbox } from "./solid/checkbox.tsx";
 
 export type ConfigFormCollectionDraftProps = {
   schema: JsonSchema;
@@ -225,9 +226,8 @@ export function ConfigCollectionDraft(
                   </Show>
                   <Show when={canUseNull()}>
                     <label class="field checkbox">
-                      <input
+                      <Checkbox
                         data-collection-draft-null
-                        type="checkbox"
                         checked={draft.isNull}
                         onChange={(event) => editDraft({ isNull: event.currentTarget.checked })}
                       />

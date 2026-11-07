@@ -642,7 +642,6 @@ export function* iterateVisibleMessageMetadata(
 /** Reads logical transcript bytes, reusing cached retained-tail facts after resets. */
 export function readVisibleTranscriptStats(
   projection: CurrentTranscriptProjection,
-  freshBoundary = false,
 ): SessionTranscriptContextStats {
   if (projection.contextStats) {
     return projection.contextStats;
@@ -652,7 +651,7 @@ export function readVisibleTranscriptStats(
     return { eventCount, sizeBytes, boundaryActivePosition: -1 };
   }
   const key = `${projection.database.path}\0${projection.resolved.sessionId}\0context`;
-  const cacheable = !freshBoundary && !hasUncommittedSqliteWrites(projection.database.db);
+  const cacheable = !hasUncommittedSqliteWrites(projection.database.db);
   const cached = cacheable ? resetMessageWindowCache.get(key) : undefined;
   const stats = cached && "window" in cached ? cached.stats : undefined;
   if (
