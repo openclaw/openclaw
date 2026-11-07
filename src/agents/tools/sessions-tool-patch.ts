@@ -7,6 +7,7 @@ import {
   type SessionsPatchManyTarget,
   type SessionsPatchMutation,
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
+import { isSessionDefaultDirectiveValue } from "../../auto-reply/thinking.shared.js";
 import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -81,7 +82,8 @@ export function readSessionsToolPatch(params: Record<string, unknown>): Sessions
       normalizeToolModelOverride(readToolStringParam(params, "model", { required: true })) ?? null;
   }
   if (params.thinkingLevel !== undefined) {
-    patch.thinkingLevel = readToolStringParam(params, "thinkingLevel", { required: true });
+    const thinkingLevel = readToolStringParam(params, "thinkingLevel", { required: true });
+    patch.thinkingLevel = isSessionDefaultDirectiveValue(thinkingLevel) ? null : thinkingLevel;
   }
   if (Object.keys(patch).length === 0) {
     throw new ToolInputError("Patch setting required");

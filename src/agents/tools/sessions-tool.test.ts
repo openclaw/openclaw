@@ -687,6 +687,33 @@ describe("sessions tool", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
+  it.each(["default", "inherit", "Reset"])(
+    "clears the thinking override when thinkingLevel is %s",
+    async (thinkingLevel) => {
+      const callGateway = vi.fn().mockResolvedValue({ ok: true });
+      const tool = mainTool({ callGateway });
+
+      await tool.execute("patch-thinking-default", { action: "patch", thinkingLevel });
+
+      expectGateway(callGateway, "sessions.patch", {
+        key: "agent:main:main",
+        thinkingLevel: null,
+      });
+    },
+  );
+
+  it("keeps an explicit thinking level as an override", async () => {
+    const callGateway = vi.fn().mockResolvedValue({ ok: true });
+    const tool = mainTool({ callGateway });
+
+    await tool.execute("patch-thinking-off", { action: "patch", thinkingLevel: "off" });
+
+    expectGateway(callGateway, "sessions.patch", {
+      key: "agent:main:main",
+      thinkingLevel: "off",
+    });
+  });
+
   it.each([undefined, "tree"] as const)(
     "applies %s visibility when a non-main session categorizes a sibling",
     async (visibility) => {
