@@ -31,6 +31,7 @@ import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
+import { hasRetiredGitPluginInstallCandidates } from "./retired-git-installs.js";
 import type { PluginUninstallDirectoryRemoval } from "./uninstall.js";
 
 async function persistPluginInstall(
@@ -372,10 +373,7 @@ it("keeps a replaced git checkout when activation fails", async () => {
   ).rejects.toMatchObject({ name: "PluginInstallPersistedError", cause: activation });
   expect(fs.readFileSync(path.join(previousRepo, "kept.txt"), "utf8")).toBe("old");
   expect(removeDirectory).not.toHaveBeenCalled();
-  const markers = fs
-    .readdirSync(path.join(stateDir, "git", ".openclaw-retired-git-installs"))
-    .filter((name) => name.endsWith(".json"));
-  expect(markers).not.toHaveLength(0);
+  expect(await hasRetiredGitPluginInstallCandidates(env)).toBe(true);
 });
 
 it("preserves replaced npm install directories across generation updates", async () => {

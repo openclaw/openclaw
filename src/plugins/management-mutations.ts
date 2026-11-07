@@ -589,20 +589,27 @@ export async function reloadManagedPlugin(
     const {
       cleanupRetiredGitPluginInstalls,
       collectConfiguredPluginReferencePaths,
+      currentGatewayStartupPluginProtection,
       gitInstallProtectPaths,
     } = await import("./retired-git-installs.js");
     const { getRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
     const { getActivePluginRegistry } = await import("./runtime.js");
+    const startupProtection = currentGatewayStartupPluginProtection();
     const retired = await cleanupRetiredGitPluginInstalls({
       env,
       pluginIds,
       installOwners,
       protectPaths: gitInstallProtectPaths({
-        installPaths: Object.values(metadata.index.installRecords ?? {}).map(
-          (record) => record.installPath,
-        ),
+        installPaths: [
+          ...Object.values(metadata.index.installRecords ?? {}).map((record) => record.installPath),
+          ...startupProtection.paths,
+        ],
         plugins: getActivePluginRegistry()?.plugins,
-        extra: collectConfiguredPluginReferencePaths([config, getRuntimeConfigSnapshot()]),
+        extra: collectConfiguredPluginReferencePaths([
+          config,
+          getRuntimeConfigSnapshot(),
+          ...startupProtection.configs,
+        ]),
       }),
       assertCurrent: beforePersistentApply,
       beforePersistentApply,

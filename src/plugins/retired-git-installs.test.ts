@@ -3,14 +3,27 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  updateConfigMachineState,
+  writeConfigMachineState,
+} from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
   cleanupRetiredGitPluginInstalls,
   collectConfiguredPluginReferencePaths,
   hasRetiredGitPluginInstallCandidates,
   rememberRetiredGitPluginInstall,
-  retiredGitInstallMarkerDirectory,
+  RETIRED_GIT_INSTALLS_STATE_KEY,
 } from "./retired-git-installs.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+});
 
 function retiredCheckout() {
   const stateDir = tempDirs.make("openclaw-retired-git-");
@@ -25,6 +38,10 @@ function retiredCheckout() {
     replacement: path.join(stateDir, "git", "git-new", "repo"),
     [Symbol.dispose]() {},
   };
+}
+
+function storedRecords(env: NodeJS.ProcessEnv) {
+  return readConfigMachineState<unknown[]>(RETIRED_GIT_INSTALLS_STATE_KEY, { env });
 }
 
 async function remember(directory: ReturnType<typeof retiredCheckout>, pluginId = "demo-slow") {
@@ -64,17 +81,23 @@ it("removes a retired git checkout after the replacement is the only user", asyn
   expect(removed.removed).toBe(1);
   expect(fs.existsSync(directory.repo)).toBe(false);
   expect(fs.existsSync(directory.parentDir)).toBe(false);
+  expect(storedRecords(directory.env)).toBeUndefined();
 });
 
 it("leaves a checkout in place when the marker inode no longer matches", async () => {
   using directory = retiredCheckout();
   await remember(directory);
-  const markerDir = retiredGitInstallMarkerDirectory(directory.env);
-  const markerName = fs.readdirSync(markerDir).find((name) => name.endsWith(".json"));
-  const markerPath = path.join(markerDir, markerName ?? "");
-  const marker = JSON.parse(fs.readFileSync(markerPath, "utf8")) as { ino: string };
-  marker.ino = "0";
-  fs.writeFileSync(markerPath, `${JSON.stringify(marker)}\n`);
+  updateConfigMachineState<Array<{ ino: string }>>(
+    RETIRED_GIT_INSTALLS_STATE_KEY,
+    (current) => {
+      const [marker] = current ?? [];
+      if (!marker) {
+        throw new Error("missing retirement record");
+      }
+      return [{ ...marker, ino: "0" }];
+    },
+    { env: directory.env },
+  );
   const removed = await cleanupRetiredGitPluginInstalls({
     env: directory.env,
     pluginIds: ["demo-slow"],
@@ -88,18 +111,19 @@ it("does not delete a marker that points outside the managed git root", async ()
   using directory = retiredCheckout();
   const outside = tempDirs.make("openclaw-not-a-plugin-");
   fs.writeFileSync(path.join(outside, "kept.txt"), "stay");
-  const markerDir = retiredGitInstallMarkerDirectory(directory.env);
-  fs.mkdirSync(markerDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(markerDir, "tamper.json"),
-    `${JSON.stringify({
-      version: 1,
-      pluginId: "demo-slow",
-      target: outside,
-      parentDir: path.dirname(outside),
-      dev: "1",
-      ino: "1",
-    })}\n`,
+  writeConfigMachineState(
+    RETIRED_GIT_INSTALLS_STATE_KEY,
+    [
+      {
+        version: 1,
+        pluginId: "demo-slow",
+        target: outside,
+        parentDir: path.dirname(outside),
+        dev: "1",
+        ino: "1",
+      },
+    ],
+    { env: directory.env },
   );
   const removed = await cleanupRetiredGitPluginInstalls({
     env: directory.env,
@@ -162,4 +186,26 @@ it("stops before deleting when administrator authority is revoked", async () => 
     }),
   ).rejects.toThrow("administrator revoked");
   expect(fs.readFileSync(path.join(directory.repo, "kept.txt"), "utf8")).toBe("old");
+  expect(storedRecords(directory.env)?.length).toBe(1);
+});
+
+it("keeps the retirement record when the state database cannot be read", async () => {
+  using directory = retiredCheckout();
+  await remember(directory);
+  const databasePath = resolveOpenClawStateSqlitePath(directory.env);
+  await closeOpenClawStateDatabaseAsync();
+  fs.chmodSync(databasePath, 0);
+  try {
+    const removed = await cleanupRetiredGitPluginInstalls({
+      env: directory.env,
+      protectPaths: [],
+    });
+    expect(removed.removed).toBe(0);
+    expect(removed.warnings.join("\n")).toContain("unable to open database file");
+    expect(fs.readFileSync(path.join(directory.repo, "kept.txt"), "utf8")).toBe("old");
+  } finally {
+    fs.chmodSync(databasePath, 0o600);
+    await closeOpenClawStateDatabaseAsync();
+  }
+  expect(storedRecords(directory.env)?.length).toBe(1);
 });

@@ -2,7 +2,6 @@
 // did not finish. The previous generation can still be running, so the install
 // must not delete it in that failure. Reload and Gateway startup remove it
 // once no loaded plugin or install record still uses the path.
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -10,6 +9,9 @@ import { visitConfigValueTree } from "../config/value-tree.js";
 import { ignoreMissingPath } from "../infra/errno.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { isPathStrictlyInside } from "../infra/path-guards.js";
+import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
+import { updateConfigMachineState } from "../state/config-machine-state-write.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { normalizePluginId } from "./config-state.js";
 import { resolveDefaultPluginGitDir } from "./install-paths.js";
 import {
@@ -17,7 +19,8 @@ import {
   type PluginUninstallDirectoryRemoval,
 } from "./uninstall.js";
 
-const RETIRED_GIT_INSTALL_MARKER_DIR = ".openclaw-retired-git-installs";
+/** Existing machine-state row. Install records stay unchanged. */
+export const RETIRED_GIT_INSTALLS_STATE_KEY = "plugins.retiredGitInstalls";
 
 type RetiredGitInstallMarker = {
   version: 1;
@@ -28,21 +31,95 @@ type RetiredGitInstallMarker = {
   ino: string;
 };
 
-export function retiredGitInstallMarkerDirectory(env?: NodeJS.ProcessEnv): string {
-  return path.join(resolveDefaultPluginGitDir(env), RETIRED_GIT_INSTALL_MARKER_DIR);
+type GatewayStartupPluginProtection = {
+  configs: readonly unknown[];
+  paths: readonly string[];
+};
+
+// Reload runs in this Gateway process and does not receive the boot closure
+// that idle cleanup already has. Remember those paths until process exit.
+let startupProtection: GatewayStartupPluginProtection = { configs: [], paths: [] };
+
+export function rememberGatewayStartupPluginProtection(
+  protection: GatewayStartupPluginProtection,
+): void {
+  startupProtection = {
+    configs: protection.configs.filter((config) => config != null),
+    paths: [...protection.paths],
+  };
+}
+
+export function currentGatewayStartupPluginProtection(): GatewayStartupPluginProtection {
+  return startupProtection;
+}
+
+function stateOptions(env?: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
+  return env ? { env } : {};
+}
+
+function markerFrom(value: unknown): RetiredGitInstallMarker | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const { version, pluginId, target, parentDir, dev, ino } = value;
+  if (
+    version !== 1 ||
+    typeof pluginId !== "string" ||
+    typeof target !== "string" ||
+    typeof parentDir !== "string" ||
+    typeof dev !== "string" ||
+    typeof ino !== "string"
+  ) {
+    return null;
+  }
+  return { version, pluginId, target, parentDir, dev, ino };
+}
+
+async function readRetiredGitInstallState(
+  env?: NodeJS.ProcessEnv,
+): Promise<{ records: unknown[] | undefined } | { unreadable: string }> {
+  try {
+    const value = await readConfigMachineStateAsync<unknown>(
+      RETIRED_GIT_INSTALLS_STATE_KEY,
+      stateOptions(env),
+    );
+    if (value === undefined) {
+      return { records: undefined };
+    }
+    if (!Array.isArray(value)) {
+      return { unreadable: "retired git install record is unreadable" };
+    }
+    return { records: value };
+  } catch (error: unknown) {
+    return { unreadable: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function replaceRetiredGitInstallState(
+  env: NodeJS.ProcessEnv | undefined,
+  update: (current: unknown[] | undefined) => unknown[] | undefined,
+): void {
+  updateConfigMachineState<unknown[]>(
+    RETIRED_GIT_INSTALLS_STATE_KEY,
+    (current) => {
+      if (current !== undefined && !Array.isArray(current)) {
+        throw new Error("retired git install record is unreadable");
+      }
+      return update(current);
+    },
+    stateOptions(env),
+  );
 }
 
 /** True when a published Git retirement still needs the cleanup owner. */
 export async function hasRetiredGitPluginInstallCandidates(
   env?: NodeJS.ProcessEnv,
 ): Promise<boolean> {
-  let names: string[] = [];
-  try {
-    names = await fs.readdir(retiredGitInstallMarkerDirectory(env));
-  } catch (error: unknown) {
-    ignoreMissingPath(error);
+  const read = await readRetiredGitInstallState(env);
+  if ("unreadable" in read) {
+    return true;
   }
-  return names.some((name) => name.endsWith(".json"));
+  return (read.records?.length ?? 0) > 0;
 }
 
 /** Absolute and home-relative config values that may still name a retired checkout. */
@@ -58,11 +135,6 @@ export function collectConfiguredPluginReferencePaths(configs: Iterable<unknown>
     return true;
   });
   return configuredPaths;
-}
-
-function markerPathFor(target: string, env?: NodeJS.ProcessEnv): string {
-  const digest = createHash("sha256").update(path.resolve(target)).digest("hex");
-  return path.join(retiredGitInstallMarkerDirectory(env), `${digest}.json`);
 }
 
 function pathsOverlap(left: string, right: string): boolean {
@@ -120,11 +192,13 @@ export async function rememberRetiredGitPluginInstall(params: {
     dev: stat.dev.toString(),
     ino: stat.ino.toString(),
   };
-  const markerPath = markerPathFor(checkout.target, params.env);
-  const temporaryPath = `${markerPath}.${process.pid}.tmp`;
-  await fs.mkdir(path.dirname(markerPath), { recursive: true });
-  await fs.writeFile(temporaryPath, `${JSON.stringify(marker)}\n`, "utf8");
-  await fs.rename(temporaryPath, markerPath);
+  replaceRetiredGitInstallState(params.env, (current) => [
+    ...(current ?? []).filter((entry) => {
+      const existing = markerFrom(entry);
+      return !existing || path.resolve(existing.target) !== checkout.target;
+    }),
+    marker,
+  ]);
   return true;
 }
 
@@ -132,8 +206,14 @@ export async function forgetRetiredGitPluginInstall(params: {
   target: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  await fs.rm(markerPathFor(params.target, params.env), { force: true });
-  await fs.rmdir(retiredGitInstallMarkerDirectory(params.env)).catch(() => undefined);
+  const target = path.resolve(params.target);
+  replaceRetiredGitInstallState(params.env, (current) => {
+    const kept = (current ?? []).filter((entry) => {
+      const existing = markerFrom(entry);
+      return !existing || path.resolve(existing.target) !== target;
+    });
+    return kept.length > 0 ? kept : undefined;
+  });
 }
 
 export function gitInstallProtectPaths(sources: {
@@ -163,30 +243,6 @@ export function gitInstallProtectPaths(sources: {
   return paths;
 }
 
-function readMarker(contents: string): RetiredGitInstallMarker | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(contents);
-  } catch {
-    return null;
-  }
-  if (!isRecord(parsed)) {
-    return null;
-  }
-  const { version, pluginId, target, parentDir, dev, ino } = parsed;
-  if (
-    version !== 1 ||
-    typeof pluginId !== "string" ||
-    typeof target !== "string" ||
-    typeof parentDir !== "string" ||
-    typeof dev !== "string" ||
-    typeof ino !== "string"
-  ) {
-    return null;
-  }
-  return { version, pluginId, target, parentDir, dev, ino };
-}
-
 /** Remove retired Git checkouts that are no longer loaded or configured. */
 export async function cleanupRetiredGitPluginInstalls(params: {
   env?: NodeJS.ProcessEnv;
@@ -197,30 +253,26 @@ export async function cleanupRetiredGitPluginInstalls(params: {
   beforePersistentApply?: () => void;
 }): Promise<{ removed: number; warnings: string[] }> {
   const warnings: string[] = [];
-  const markerDir = retiredGitInstallMarkerDirectory(params.env);
-  let names: string[] = [];
-  try {
-    names = await fs.readdir(markerDir);
-  } catch (error: unknown) {
-    ignoreMissingPath(error);
+  const read = await readRetiredGitInstallState(params.env);
+  // A missing row is the only absence. A read failure must not delete the obligation.
+  if ("unreadable" in read) {
+    return { removed: 0, warnings: [read.unreadable] };
   }
+  const records = read.records ?? [];
   const wanted = new Set<string>();
   const scoped = params.pluginIds !== undefined || params.installOwners !== undefined;
   for (const pluginId of [...(params.pluginIds ?? []), ...(params.installOwners ?? [])]) {
     wanted.add(normalizePluginId(pluginId));
   }
+  const finished = new Set<string>();
   let removed = 0;
-  for (const name of names) {
-    if (!name.endsWith(".json")) {
-      continue;
-    }
+  for (const entry of records) {
     await params.assertCurrent?.();
-    const markerPath = path.join(markerDir, name);
-    const marker = readMarker(await fs.readFile(markerPath, "utf8").catch(() => ""));
+    const marker = markerFrom(entry);
     if (!marker) {
-      await fs.rm(markerPath, { force: true });
       continue;
     }
+    const target = path.resolve(marker.target);
     if (scoped && !wanted.has(normalizePluginId(marker.pluginId))) {
       continue;
     }
@@ -232,7 +284,7 @@ export async function cleanupRetiredGitPluginInstalls(params: {
       params.env,
     );
     if (!checkout || path.resolve(marker.target) !== checkout.target) {
-      await fs.rm(markerPath, { force: true });
+      finished.add(target);
       continue;
     }
     if (params.protectPaths.some((protectedPath) => pathsOverlap(protectedPath, checkout.target))) {
@@ -243,7 +295,7 @@ export async function cleanupRetiredGitPluginInstalls(params: {
       return null;
     });
     if (!stat) {
-      await fs.rm(markerPath, { force: true });
+      finished.add(target);
       await fs.rmdir(checkout.parentDir).catch(() => undefined);
       continue;
     }
@@ -252,7 +304,7 @@ export async function cleanupRetiredGitPluginInstalls(params: {
       stat.dev.toString() !== marker.dev ||
       stat.ino.toString() !== marker.ino
     ) {
-      await fs.rm(markerPath, { force: true });
+      finished.add(target);
       continue;
     }
     await params.assertCurrent?.();
@@ -266,9 +318,17 @@ export async function cleanupRetiredGitPluginInstalls(params: {
     warnings.push(...result.warnings);
     if (result.directoryRemoved) {
       removed += 1;
-      await fs.rm(markerPath, { force: true });
+      finished.add(target);
     }
   }
-  await fs.rmdir(markerDir).catch(() => undefined);
+  if (finished.size > 0 || records.some((entry) => markerFrom(entry) === null)) {
+    replaceRetiredGitInstallState(params.env, (current) => {
+      const kept = (current ?? []).filter((entry) => {
+        const marker = markerFrom(entry);
+        return marker !== null && !finished.has(path.resolve(marker.target));
+      });
+      return kept.length > 0 ? kept : undefined;
+    });
+  }
   return { removed, warnings };
 }

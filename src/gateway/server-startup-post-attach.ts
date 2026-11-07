@@ -213,6 +213,7 @@ export async function startGatewayPostAttachRuntime(params: {
         cleanupRetiredGitPluginInstalls,
         collectConfiguredPluginReferencePaths,
         gitInstallProtectPaths,
+        rememberGatewayStartupPluginProtection,
       } = await import("../plugins/retired-git-installs.js");
       const { getRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
       const assertStartupCurrent = () => {
@@ -220,6 +221,14 @@ export async function startGatewayPostAttachRuntime(params: {
           throw new Error("Gateway is closing");
         }
       };
+      rememberGatewayStartupPluginProtection({
+        configs: [params.cfgAtStart],
+        paths: pluginRegistry.plugins.flatMap((plugin) =>
+          [plugin.rootDir, plugin.source].filter((value): value is string =>
+            Boolean(value?.trim()),
+          ),
+        ),
+      });
       await cleanupRetiredGitPluginInstalls({
         protectPaths: gitInstallProtectPaths({
           plugins: pluginRegistry.plugins,
