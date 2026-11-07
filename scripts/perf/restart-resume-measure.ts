@@ -13,6 +13,11 @@
  * The context provides only preparation's configuration; returned admission work is
  * never invoked unless --resume is selected. Neither mode measures Gateway readiness.
  * Process CPU includes workers; sampled allocation covers only the host isolate.
+ * --mark measures shutdown marker persistence for 60 live run-registry owners.
+ * --heap-mib retains numeric arrays across collections to exercise a large old heap.
+ * --shutdown-baseline pins server-run-shutdown.ts; --cancel-dependent holds subagent
+ * settlement until received-work cancellation, under --shutdown-budget-ms (default 85000).
+ * This is owner proof, not model cancellation or a complete Gateway shutdown.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -22,6 +27,7 @@ import { Session } from "node:inspector/promises";
 import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
@@ -39,12 +45,39 @@ const { values } = parseArgs({
     seed: { type: "boolean" },
     resume: { type: "boolean" },
     markers: { type: "boolean" },
+    mark: { type: "boolean" },
+    "heap-mib": { type: "string", default: "0" },
+    "shutdown-baseline": { type: "string" },
+    "subagent-ms": { type: "string", default: "0" },
+    "cancel-dependent": { type: "boolean" },
+    "shutdown-budget-ms": { type: "string", default: "85000" },
     "baseline-resumes": { type: "string", default: "4" },
   },
 });
 assert(values.root && values.baseline && values.output && global.gc);
 assert(!existsSync(values.output), "Refusing to overwrite evidence");
 assert(!values.markers || values.resume, "--markers requires --resume");
+assert(!values.mark || !values.resume, "--mark and --resume are separate workloads");
+assert(!values["shutdown-baseline"] || values.mark, "--shutdown-baseline requires --mark");
+assert(!values["cancel-dependent"] || values["shutdown-baseline"]);
+const shutdownBudgetMs = parseStrictIntegerOption({
+  raw: values["shutdown-budget-ms"],
+  label: "--shutdown-budget-ms",
+  min: 1,
+  fallback: 85_000,
+});
+const subagentMs = parseStrictIntegerOption({
+  raw: values["subagent-ms"],
+  label: "--subagent-ms",
+  min: 0,
+  fallback: 0,
+});
+const heapMiB = parseStrictIntegerOption({
+  raw: values["heap-mib"],
+  label: "--heap-mib",
+  min: 0,
+  fallback: 0,
+});
 const iterations = parseStrictIntegerOption({
   raw: values.iterations,
   label: "--iterations",
@@ -104,6 +137,17 @@ if (values.control) {
   sources[1] = sources[0]!;
 }
 const urls = sources.map((_, arm) => `${canonical}?restart-measure=${arm}`);
+const shutdownCanonical = new URL("../../src/gateway/server-run-shutdown.ts", import.meta.url).href;
+const shutdownSources = values["shutdown-baseline"]
+  ? [
+      readFileSync(values["shutdown-baseline"], "utf8"),
+      readFileSync(new URL(shutdownCanonical), "utf8"),
+    ]
+  : [];
+if (values.control && shutdownSources.length) {
+  shutdownSources[1] = shutdownSources[0]!;
+}
+const shutdownUrls = shutdownSources.map((_, arm) => `${shutdownCanonical}?restart-measure=${arm}`);
 const loaded = new Set<string>();
 const handoff = new URL("../../src/auto-reply/reply/session-event-handoff.ts", import.meta.url);
 const countedHandoff = `${handoff.href}?restart-resume-measure`;
@@ -119,6 +163,14 @@ registerHooks({
     return nextResolve(specifier, context);
   },
   load(url, context, nextLoad) {
+    const shutdownArm = shutdownUrls.indexOf(url);
+    if (shutdownArm >= 0) {
+      return {
+        format: "module",
+        source: stripTypeScriptTypes(shutdownSources[shutdownArm]!),
+        shortCircuit: true,
+      };
+    }
     if (url === countedHandoff) {
       return {
         format: "module",
@@ -154,6 +206,10 @@ type MeasureInput = {
   log: { warn: (message: string) => void };
 };
 type Owner = {
+  persistRunningSessionsForRestart(input: {
+    cfg: OpenClawConfig;
+    signal?: AbortSignal;
+  }): Promise<void>;
   resumeMarkedSessions(input: MeasureInput): Promise<void>;
   prepareAgentRestartRecovery(input: {
     context: { getRuntimeConfig: () => OpenClawConfig };
@@ -169,6 +225,12 @@ for (const url of urls) {
   owners.push(await import(url));
 }
 assert.equal(loaded.size, 2);
+const shutdownOwners: Array<typeof import("../../src/gateway/server-run-shutdown.js")> = [];
+for (const url of shutdownUrls) {
+  shutdownOwners.push(await import(url));
+}
+const { runWithProcessCleanupBudget } =
+  await import("../../src/process/supervisor/cleanup-budget.js");
 const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.js");
 setRuntimeConfigSnapshot(cfg);
 const signal = new AbortController().signal;
@@ -189,13 +251,44 @@ const { writeSessionEntry, readExactSessionEntryRow } =
   await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
 const seededRows = agent
   .openOpenClawAgentDatabase({ agentId: "main" })
-  .db.prepare("SELECT session_key, entry_json FROM session_nodes ORDER BY session_key LIMIT 12")
+  .db.prepare(
+    `SELECT session_key, entry_json FROM session_nodes ORDER BY session_key LIMIT ${values.mark ? 60 : 12}`,
+  )
   .all()
   .map((row) => ({
     sessionKey: String(row.session_key),
     entry: JSON.parse(String(row.entry_json)),
   }));
 const predecessor = { startedAt: Date.now() - 60_000, endedAt: Date.now() };
+const registry = await import("../../src/infra/agent-run-registry.js");
+const claims = values.mark
+  ? seededRows.map(({ sessionKey, entry }, index) => {
+      const runId = `synthetic-shutdown-${index}`;
+      return {
+        runId,
+        claim: registry.claimAgentRunContext(
+          runId,
+          { agentId: "main", sessionKey, sessionId: entry.sessionId },
+          { trackOwner: true, ownsContext: true },
+        ),
+      };
+    })
+  : [];
+const retainedHeap = Array.from({ length: heapMiB }, (_, index) =>
+  Array.from({ length: (1024 * 1024) / 8 }, () => index),
+);
+global.gc();
+const retainedHeapUsed = process.memoryUsage().heapUsed;
+const seedMarkers = () =>
+  agent.runOpenClawAgentWriteTransaction(
+    (owned) => {
+      assert.equal(seededRows.length, 60);
+      for (const { sessionKey, entry } of seededRows) {
+        writeSessionEntry(owned, sessionKey, { ...entry, resumeAfterRestart: undefined });
+      }
+    },
+    { agentId: "main" },
+  );
 const seedResume = () =>
   agent.runOpenClawAgentWriteTransaction(
     (owned) => {
@@ -223,8 +316,52 @@ const onAdmission = () => {
   admissions++;
 };
 admissionDiagnostics.subscribe(onAdmission);
+const shutdownTimings: Array<{
+  cancelMs?: number;
+  prepareMs: number;
+  releasedMs: number;
+  failed: boolean;
+}> = [];
 const measureOwner = async (arm: number) => {
-  if (values.resume) {
+  if (values.mark) {
+    const shutdown = shutdownOwners[arm];
+    if (shutdown) {
+      const start = performance.now();
+      let cancelMs: number | undefined;
+      const cancelled = Promise.withResolvers<void>();
+      const keepAlive = setTimeout(() => {}, shutdownBudgetMs + subagentMs + 1_000);
+      const result = await runWithProcessCleanupBudget(
+        { deadline: start + shutdownBudgetMs, warn: console.warn },
+        () =>
+          shutdown.prepareGatewayRunShutdown({
+            resolveGatewayContext: () => undefined,
+            warnings: [],
+            persistRunningSessionsForRestart: (markerSignal) =>
+              owners[arm]!.persistRunningSessionsForRestart({ cfg, signal: markerSignal }),
+            terminateRunningSubagentsForShutdown: () =>
+              values["cancel-dependent"] ? cancelled.promise : delay(subagentMs),
+            cancelReceivedWork: () => {
+              cancelMs = performance.now() - start;
+              cancelled.resolve();
+            },
+          }),
+      );
+      const prepareMs = performance.now() - start;
+      await result.released;
+      clearTimeout(keepAlive);
+      shutdownTimings.push({
+        cancelMs,
+        prepareMs,
+        releasedMs: performance.now() - start,
+        failed: Boolean(result.failure),
+      });
+      if (!values["cancel-dependent"]) {
+        assert.equal(result.failure, undefined);
+      }
+    } else {
+      await owners[arm]!.persistRunningSessionsForRestart({ cfg, signal });
+    }
+  } else if (values.resume) {
     await owners[arm]!.resumeMarkedSessions({
       ...input,
       context: { getRuntimeConfig: () => cfg, restartResumeWindow: predecessor },
@@ -250,9 +387,20 @@ const onTask = (value: unknown) => {
 };
 taskDiagnostics.subscribe(onTask);
 try {
+  // A short synthetic process deadline must not accidentally measure cold worker bootstrap.
+  const markerWarmupStarted = performance.now();
+  if (shutdownOwners.length) {
+    await owners[0]!.persistRunningSessionsForRestart({ cfg, signal });
+  }
+  const markerWarmupMs = shutdownOwners.length
+    ? performance.now() - markerWarmupStarted
+    : undefined;
   // Startup preparation and worker initialization are distinct from warmed discovery.
   if (values.resume) {
     seedResume();
+  }
+  if (values.mark) {
+    seedMarkers();
   }
   const coldStarted = performance.now();
   await measureOwner(0);
@@ -260,12 +408,16 @@ try {
   if (values.resume) {
     seedResume();
   }
+  if (values.mark) {
+    seedMarkers();
+  }
   await measureOwner(1);
   if (values.allocation) {
     inspector.connect();
   }
   for (let pair = 0; pair < 5; pair++) {
     for (const arm of pair % 2 ? [1, 0] : [0, 1]) {
+      shutdownTimings.length = 0;
       let wallMs = 0;
       let processCpuMs = 0;
       let threadCpuMs = 0;
@@ -276,6 +428,9 @@ try {
       for (let iteration = 0; iteration < iterations; iteration++) {
         if (values.resume) {
           seedResume();
+        }
+        if (values.mark) {
+          seedMarkers();
         }
         global.gc();
         if (values.allocation) {
@@ -299,6 +454,18 @@ try {
         if (values.allocation) {
           sampledBytes += sumSampledHeapBytes(
             (await inspector.post("HeapProfiler.stopSampling")).profile.head,
+          );
+        }
+        if (values.mark) {
+          assert.equal(
+            seededRows.filter(
+              ({ sessionKey }) =>
+                readExactSessionEntryRow(
+                  agent.openOpenClawAgentDatabase({ agentId: "main" }),
+                  sessionKey,
+                )?.entry.resumeAfterRestart,
+            ).length,
+            60,
           );
         }
       }
@@ -326,6 +493,8 @@ try {
         sampledBytes: values.allocation ? sampledBytes / iterations : undefined,
         historyWorkerTasksPerPreparation: workerTasks / iterations,
         resumedPerCall: values.resume ? resumedPerCall : undefined,
+        markedPerCall: values.mark ? 60 : undefined,
+        shutdownTimings: shutdownTimings.slice(),
         settledStaleRuns,
         hostLoad,
       });
@@ -335,18 +504,29 @@ try {
     values.output,
     `${JSON.stringify(
       {
-        scope: values.resume
-          ? "Exported restart selection and terminal settlement; real SQLite reads/writes; model admission counted only"
-          : "Exported restart preparation; real SQLite worker reads; no resume admission",
+        scope: values.mark
+          ? "Exported shutdown marker persistence; 60 live run-registry owners; real SQLite writes; no model cancellation or complete Gateway shutdown"
+          : values.resume
+            ? "Exported restart selection and terminal settlement; real SQLite reads/writes; model admission counted only"
+            : "Exported restart preparation; real SQLite worker reads; no resume admission",
         markers: values.markers ?? false,
         node: process.version,
         mode: values.allocation ? "allocation" : "timing",
         control: values.control ?? false,
         iterations,
+        heapMiB,
+        subagentMs,
+        cancelDependent: values["cancel-dependent"] ?? false,
+        shutdownBudgetMs,
+        markerWarmupMs,
+        retainedHeapUsed,
         baselineResumes,
         coldFirstArmMs: coldMs,
         fixture,
         sourceHashes: sources.map((source) => createHash("sha256").update(source).digest("hex")),
+        shutdownSourceHashes: shutdownSources.map((source) =>
+          createHash("sha256").update(source).digest("hex"),
+        ),
         samples,
       },
       null,
@@ -355,6 +535,10 @@ try {
   );
   console.log(JSON.stringify({ output: values.output, samples }));
 } finally {
+  assert.equal(retainedHeap.length, heapMiB);
+  for (const { runId, claim } of claims) {
+    registry.releaseAgentRunContext(runId, claim);
+  }
   taskDiagnostics.unsubscribe(onTask);
   admissionDiagnostics.unsubscribe(onAdmission);
   inspector.disconnect();

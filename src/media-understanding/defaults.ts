@@ -14,7 +14,8 @@ import {
   resolveAutoMediaKeyProvidersFromRegistry,
   resolveDefaultMediaModelFromRegistry,
 } from "./provider-registry-metadata.js";
-import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
+import type { MediaUnderstandingCapability } from "./types.js";
 export { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
 
 // Defaults follow the selected immutable manifest generation, including retained

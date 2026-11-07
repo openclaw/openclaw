@@ -18,6 +18,10 @@ export declare function withDependencyCacheLock<T>(
   cache: string,
   operation: (lock: CacheLock) => T,
 ): T;
+export declare function recoverDependencyCache(
+  planPath: string,
+  planSha256: string,
+): { state: "recovered" | "already-recovered"; installations: number; planSha256: string };
 export declare function holdDependencyCache(
   lock: CacheLock,
   entry: string,

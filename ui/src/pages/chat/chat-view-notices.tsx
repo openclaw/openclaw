@@ -38,6 +38,7 @@ export type ChatViewNoticesProps = {
   diskSpace?: SessionPlacementDiskSpace;
   workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
   error?: string | null;
+  errorDetail?: unknown;
   onDismissError?: () => void;
 };
 

@@ -7,7 +7,7 @@ import {
   resolveConfiguredMediaProviderCapabilities,
 } from "./config-provider-models.js";
 import { buildMediaProviderIdentityRegistry } from "./provider-identities.js";
-import type { MediaUnderstandingProvider } from "./types.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 
 function mergeProviderIntoRegistry(
   registry: Map<string, MediaUnderstandingProvider>,

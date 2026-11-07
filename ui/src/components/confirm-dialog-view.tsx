@@ -7,6 +7,7 @@ import type {
   ConfirmDialogChoiceOptions,
   ConfirmDialogOptions,
 } from "./confirm-dialog-types.ts";
+import { Checkbox } from "./solid/checkbox.tsx";
 import { DialogHeader } from "./solid/dialog-header.tsx";
 
 export type ConfirmDialogViewOptions = ConfirmDialogOptions & Partial<ConfirmDialogChoiceOptions>;
@@ -17,7 +18,6 @@ export function ConfirmDialogView(props: {
 }) {
   // A confirmation keeps the request it opened for until it settles.
   const initialOptions = untrack(() => props.options);
-  const title = () => initialOptions.title ?? t("common.confirm");
   let skipRequested = false;
   let cancelButton!: HTMLButtonElement;
   let actions!: HTMLElement;
@@ -91,7 +91,7 @@ export function ConfirmDialogView(props: {
           props.finish("confirm");
         }}
       >
-        {initialOptions.confirmLabel ?? t("common.confirm")}
+        {initialOptions.confirmLabel}
       </button>
     </>
   );
@@ -99,13 +99,13 @@ export function ConfirmDialogView(props: {
   return (
     <openclaw-modal-dialog
       prop:initialFocus={() => cancelButton}
-      label={title()}
+      label={initialOptions.title}
       description={initialOptions.message}
       onModal-cancel={() => props.finish(null)}
     >
       <div class="oc-dialog confirm-dialog">
         <DialogHeader
-          title={title()}
+          title={initialOptions.title}
           description={<p>{initialOptions.message}</p>}
           onClose={() => props.finish(null)}
         />
@@ -118,8 +118,7 @@ export function ConfirmDialogView(props: {
             ) : undefined}
             {initialOptions.requiredAcknowledgement ? (
               <label class="field checkbox">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={acknowledged()}
                   onChange={(event) => setAcknowledged(event.currentTarget.checked)}
                 />
@@ -128,8 +127,7 @@ export function ConfirmDialogView(props: {
             ) : undefined}
             {initialOptions.skipPreference && !initialOptions.requiredAcknowledgement ? (
               <label class="field checkbox exec-approval-skip">
-                <input
-                  type="checkbox"
+                <Checkbox
                   onChange={(event) => {
                     skipRequested = event.currentTarget.checked;
                   }}

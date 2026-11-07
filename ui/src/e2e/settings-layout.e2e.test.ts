@@ -120,7 +120,7 @@ const responsiveViewports = [
 ] as const;
 
 const standaloneHeaderCases = [
-  { route: "cron", subtitle: "Scheduled tasks and recurring agent runs." },
+  { route: "cron", subtitle: "Schedule recurring tasks for your agent." },
   { route: "usage", subtitle: "API usage and costs." },
   {
     route: "memory-import",
@@ -232,7 +232,7 @@ suite.define(() => {
         const stopCapturing: Array<() => void> = [];
         const settingsOnlyCopy = [
           "Global model defaults and provider access for your agents.",
-          "Find existing connections or prepare a local model for {agent}.",
+          "Find saved accounts or set up a local model for {agent}. This changes only this agent’s model, not the defaults for other agents.",
         ];
         // Keep each cold-boot document alive through the final assertions: replacing
         // an observed document cancels its idle imports and creates test-owned failures.
@@ -274,7 +274,7 @@ suite.define(() => {
               "Utility model",
             );
             await openModelSetup(page);
-            await page.getByText(/Find existing connections or prepare a local model/).waitFor();
+            await page.getByText(/Find saved accounts or set up a local model/).waitFor();
           }
           if (recordVisuals) {
             await page.screenshot({
@@ -847,7 +847,7 @@ suite.define(() => {
           (await page.locator(".cron-list-hub-tabs .hub-tab").allTextContents()).map((label) =>
             label.trim(),
           ),
-        ).toEqual(["All", "Active", "Paused", "Run history"]);
+        ).toEqual(["All", "Active", "Paused", "Activity history"]);
         expect(await page.locator(".cron-toolbar__filters").getByRole("radiogroup").count()).toBe(
           0,
         );
@@ -868,7 +868,7 @@ suite.define(() => {
           });
         }
         await page.locator(".agent-select__trigger").click();
-        const pickerTitle = page.locator(".agent-select__menu-title");
+        const pickerTitle = page.locator(".agent-select__menu .oc-menu-heading__label");
         await pickerTitle.waitFor();
         expect(await pickerTitle.textContent()).toBe("Agent");
         expect(

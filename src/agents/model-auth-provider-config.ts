@@ -159,14 +159,22 @@ export function getCustomProviderApiKey(
 /** Resolves custom provider API keys that are usable without mutating secret stores. */
 export function resolveUsableCustomProviderApiKey(params: {
   cfg: OpenClawConfig | undefined;
+  sourceConfig?: OpenClawConfig;
   provider: string;
   env?: NodeJS.ProcessEnv;
   secretSentinels?: boolean;
+  authStore?: AuthProfileStore;
 }): {
   apiKey: string;
   source: string;
 } | null {
-  const input = resolveProviderConfigSecretInput(params.cfg, params.provider);
+  if (
+    params.authStore &&
+    (resolveInlineProviderApiKeyCooldownUntil(params.authStore, params.provider) ?? 0) > Date.now()
+  ) {
+    return null;
+  }
+  const input = resolveProviderConfigSecretInput(params.cfg, params.provider, params.sourceConfig);
   const { providerConfig: customProviderConfig, ref: apiKeyRef } = input;
   if (apiKeyRef) {
     const envVarName = apiKeyRef.source === "env" ? apiKeyRef.id.trim() : "";
@@ -236,7 +244,8 @@ export const hasUsableCustomProviderApiKey = (
   cfg: OpenClawConfig | undefined,
   provider: string,
   env?: NodeJS.ProcessEnv,
-) => Boolean(resolveUsableCustomProviderApiKey({ cfg, provider, env }));
+  sourceConfig?: OpenClawConfig,
+) => Boolean(resolveUsableCustomProviderApiKey({ cfg, provider, env, sourceConfig }));
 
 /** True when explicit provider config should outrank profile/environment auth. */
 export function shouldPreferExplicitConfigApiKeyAuth(

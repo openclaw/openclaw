@@ -11,7 +11,7 @@ import type { GatewaySessionRow } from "./session-utils.types.js";
 
 const row: GatewaySessionRow = { key: "one", kind: "direct", updatedAt: 1, rowMode: "sidebar" };
 
-it("packs all-row facts without encoding their identical recipient lists", () => {
+it("packs all-row facts without building or encoding their identical recipient lists", () => {
   const rows = ["one", "two", "three"].map((key) => ({
     key,
     kind: "direct" as const,
@@ -20,12 +20,48 @@ it("packs all-row facts without encoding their identical recipient lists", () =>
     visibility: "shared" as const,
   }));
   using join = vi.spyOn(Array.prototype, "join");
-  const packed = shareSessionRowFacts(rows);
+  const push = Array.prototype.push;
+  let indices = 0;
+  let packed: ReturnType<typeof shareSessionRowFacts>;
+  try {
+    // oxlint-disable-next-line no-extend-native -- Vitest spies use push internally; restore this synchronous work counter in finally.
+    Array.prototype.push = function <T>(this: T[], ...items: T[]) {
+      if (items.length === 1 && typeof items[0] === "number") {
+        indices++;
+      }
+      return push.apply(this, items);
+    };
+    packed = shareSessionRowFacts(rows);
+  } finally {
+    // oxlint-disable-next-line no-extend-native -- Restore the original method after the synchronous work counter.
+    Array.prototype.push = push;
+  }
   const joins = join.mock.calls.length;
   join.mockRestore();
   expect(joins).toBe(0);
+  expect(indices).toBe(rows.length);
   expect(packed.sharedFacts).toEqual([{ pinned: false, visibility: "shared" }]);
   expect(packed.sessions.map((value) => value.sharedFacts)).toEqual([[0], [0], [0]]);
+});
+
+it("does not reread required row facts when only a sibling identity changes", () => {
+  let reads = 0;
+  const stable: GatewaySessionRow = Object.freeze({
+    get key() {
+      reads++;
+      return "stable";
+    },
+    kind: "direct",
+    updatedAt: 1,
+    label: "Stable",
+    pinned: false,
+  });
+  const sibling = { ...row, label: "Sibling", pinned: false };
+  const first = shareSessionRowFacts([stable, sibling]);
+  reads = 0;
+  const changed = shareSessionRowFacts([stable, { ...sibling, updatedAt: 2 }]);
+  expect(changed.sessions[0]).toBe(first.sessions[0]);
+  expect(reads).toBe(0);
 });
 
 let cache: SessionListViewCache;

@@ -240,11 +240,6 @@
   transform: none;
 }
 
-.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__input[data-incognito="true"] {
-  border-style: dashed;
-  border-color: var(--chat-composer-hairline);
-}
-
 .agent-chat__composer-shell[data-mobile-composer="true"] .chat-queue {
   --chat-queue-row-height: 36px;
 

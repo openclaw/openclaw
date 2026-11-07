@@ -41,7 +41,7 @@ it("names connected and unconnected provider actions with their displayed provid
   // The saved key's own row owns replacing it, so the footer doesn't offer it again.
   expect(actions(container, "openai")).toEqual([
     { name: "Remove provider: OpenAI", text: "Remove provider", disabled: false },
-    { name: "Test connection: OpenAI", text: "Test connection", disabled: false },
+    { name: "Test access: OpenAI", text: "Test access", disabled: false },
     { name: "Add account: OpenAI", text: "Add account", disabled: false },
   ]);
   const keyRow = container.querySelector(
@@ -52,7 +52,7 @@ it("names connected and unconnected provider actions with their displayed provid
     "Replace API key: OpenAI",
   );
   expect(actions(container, "anthropic")).toEqual([
-    { name: "Connect provider: Anthropic", text: "Connect", disabled: false },
+    { name: "Add account: Anthropic", text: "Add account", disabled: false },
     { name: "Set API key: Anthropic", text: "Set API key", disabled: false },
   ]);
 });
@@ -76,7 +76,7 @@ it("keeps provider identification through probe and access changes", () => {
   flush();
   expect(actions(container, "openai")).toEqual([
     { name: "Remove provider: OpenAI", text: "Remove provider", disabled: true },
-    { name: "Test connection: OpenAI", text: "Test connection", disabled: true },
+    { name: "Test access: OpenAI", text: "Test access", disabled: true },
     { name: "Add account: OpenAI", text: "Add account", disabled: true },
   ]);
 });

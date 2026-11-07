@@ -20,7 +20,8 @@ vi.mock("../sqlite-snapshot-source.js", async (importOriginal) => {
   const copy = await import("../sqlite-readonly-location.js");
   return {
     ...actual,
-    prepareSqliteReadOnlyLocationSync: copy.prepareSqliteReadOnlyLocationSyncInProcess,
+    prepareSqliteReadOnlyLocationSync: (pathname: string) =>
+      copy.prepareSqliteReadOnlyLocationSyncInProcess(pathname),
     prepareSqliteReadOnlyLocation: (pathname: string) =>
       copy.prepareSqliteReadOnlyCopyInProcess(pathname),
   };

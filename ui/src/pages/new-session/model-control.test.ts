@@ -341,7 +341,7 @@ it.each([true, false])("checks cloud execution support: %s", (supported) => {
   });
   expect(
     control.cloudRuntimeUnsupportedReason({ id: "aws", providerId: "crabbox", executionModes }),
-  ).toBe(supported ? undefined : "The codex runtime does not support cloud workers.");
+  ).toBe(supported ? undefined : "The codex runtime doesn’t support cloud devices.");
 });
 it.each([true, false])(
   "requires device-placement metadata despite a support flag: %s",
@@ -356,7 +356,7 @@ it.each([true, false])(
         : undefined,
     });
     expect(control.devicePlacementUnsupportedReason()).toBe(
-      supported ? undefined : "This runtime does not support paired devices",
+      supported ? undefined : "This runtime doesn’t support paired devices",
     );
   },
 );

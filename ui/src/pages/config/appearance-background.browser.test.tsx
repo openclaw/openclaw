@@ -372,9 +372,7 @@ it("presents background upload failure and retry without losing the selected con
   });
   second.resolve({ status: "ok", asset: null, preference: null });
   await waitForSolid(() => {
-    expect(element.querySelector('[role="status"]')?.textContent).toContain(
-      "Background image saved.",
-    );
+    expect(element.querySelector('[role="status"]')).toBeNull();
     expect(element.querySelector('[role="alert"]')).toBeNull();
     expect(upload.disabled).toBe(false);
   });
@@ -417,9 +415,7 @@ it("retires an unresolved upload before admitting the replacement profile's uplo
   chooseBackgroundFile(input);
   await waitForSolid(() => {
     expect(uploads).toBe(2);
-    expect(element.querySelector('[role="status"]')?.textContent).toContain(
-      "Background image saved.",
-    );
+    expect(element.querySelector('[role="status"]')).toBeNull();
     expect(upload.disabled).toBe(false);
   });
   abandoned.reject(new Error("Retired upload failure"));
@@ -475,9 +471,7 @@ it("keeps the current profile's upload while its background metadata refresh is 
   expect(element.querySelector('[role="status"]')?.textContent).toContain("Preparing your image");
   replacementUpload.resolve(saved);
   await waitForSolid(() => {
-    expect(element.querySelector('[role="status"]')?.textContent).toContain(
-      "Background image saved.",
-    );
+    expect(element.querySelector('[role="status"]')).toBeNull();
     expect(upload.disabled).toBe(false);
   });
   replacementMetadata.resolve(saved);
@@ -521,9 +515,7 @@ it("shows invalid background file feedback and clears it when a valid upload sta
   completion.resolve(saved);
   await waitForSolid(() => {
     expect(upload.disabled).toBe(false);
-    expect(element.querySelector('[role="status"]')?.textContent).toContain(
-      "Background image saved.",
-    );
+    expect(element.querySelector('[role="status"]')).toBeNull();
     expect(element.querySelector('[role="alert"]')).toBeNull();
   });
 });
@@ -613,7 +605,7 @@ it("recovers thumbnail errors without waiting for a retired image and revokes th
   first.reject(new Error("Synthetic thumbnail failure"));
   await waitForSolid(() =>
     expect(element.querySelector('[role="alert"]')?.textContent).toContain(
-      "Your background image could not be loaded",
+      "Couldn’t load your background image",
     ),
   );
   element.querySelector<HTMLButtonElement>('[data-background-source="theme"]')!.click();

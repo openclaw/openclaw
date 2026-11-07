@@ -12,6 +12,7 @@ import {
 } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
@@ -20,6 +21,7 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { AgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
@@ -38,6 +40,7 @@ import { AgentPanelAction } from "./panel-ui.tsx";
 import { renderAgentContextSection } from "./panels-overview.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
+registerEnglishCatalog(registerCronEnglish);
 
 /** Only transient notices and controls live here; cached rows keep their DOM lifetime. */
 function CronReadBoundary(props: {
@@ -54,9 +57,9 @@ function CronReadBoundary(props: {
           <Errored
             fallback={(error) =>
               props.reportError ? (
-                <div class="callout danger" role={props.errorRole}>
+                <InlineAlert tone="danger" role={props.errorRole}>
                   {formatUiError(error())}
-                </div>
+                </InlineAlert>
               ) : (
                 props.children(false)
               )
@@ -106,7 +109,9 @@ export function AgentCron(
         {() => undefined}
       </CronReadBoundary>
       <CronReadBoundary read={params.read().command} reportError>
-        {(_pending, message) => (message ? <div class="callout danger">{message}</div> : undefined)}
+        {(_pending, message) =>
+          message ? <InlineAlert tone="danger">{message}</InlineAlert> : undefined
+        }
       </CronReadBoundary>
       <Show when={params.read().command && params.readState().cronNotice}>
         {(notice) => (

@@ -822,6 +822,8 @@ export type SessionEntryCreationPhase =
   | "publication";
 
 export type SessionEntryCreateWithTranscriptOptions = {
+  /** Opt in to storage-certified rejection outcomes for an external creation claim. */
+  certifyNotCommitted?: true;
   creationOperation?: SessionCreationOperation;
   /** Explicit label claim, checked again inside the final write transaction. */
   label?: string;

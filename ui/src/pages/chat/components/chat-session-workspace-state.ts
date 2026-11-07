@@ -658,7 +658,8 @@ export async function requestCloseSessionWorkspacePreview(
     } else {
       try {
         const choice = await showConfirmChoiceDialog({
-          message: t("chat.sidePanel.closeFileChanges", { file: preview.label }),
+          title: t("chat.sidePanel.closeFileChanges", { file: preview.label }),
+          message: t("chat.detailPanel.discardBody"),
           confirmLabel: t("common.save"),
           alternativeLabel: t("chat.detailPanel.discard"),
           cancelLabel: t("common.cancel"),

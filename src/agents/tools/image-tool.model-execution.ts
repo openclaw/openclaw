@@ -13,8 +13,8 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "../../media-understanding/provider-registry.js";
+import type { MediaUnderstandingProvider } from "../../media-understanding/provider-types.js";
 import { resolveTimeoutMs } from "../../media-understanding/resolve.js";
-import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
 import type { ImageCompressionPolicy } from "../../media/web-media.js";
 import { resolvePluginCapabilityProvider } from "../../plugins/capability-provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
