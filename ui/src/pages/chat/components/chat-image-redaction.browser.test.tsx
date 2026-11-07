@@ -1,6 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createComponent, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { page, userEvent } from "vitest/browser";
+import "../../../styles.css";
+import "../../../styles/chat.ts";
+import "../../../styles/chat/composer.css";
 import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
 import { waitForRenderedModalDialog } from "../../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -15,6 +19,7 @@ import {
   renderChatPropsInto,
 } from "../chat-view.test-helpers.ts";
 import { chatAttachmentFromDataUrl } from "./chat-attachments.ts";
+import { AttachmentPreview } from "./chat-attachments.tsx";
 import { ImageRedactionButton } from "./chat-image-redaction-button.tsx";
 
 function original() {
@@ -70,6 +75,40 @@ async function cover(modal: HTMLElement) {
   await vi.waitFor(() => expect(modal.textContent).toContain("Covered areas: 1"));
 }
 
+it.each(["ltr", "rtl"] as const)(
+  "preserves native image preview and keyboard redaction in %s",
+  async (dir) => {
+    const { attachment } = original();
+    const onOpenImage = vi.fn();
+    const view = mountSolid(() => (
+      <div dir={dir} style={{ width: "320px", padding: "24px" }}>
+        <AttachmentPreview attachments={[attachment]} onOpenImage={onOpenImage} />
+      </div>
+    ));
+    onTestFinished(view.unmount);
+    const preview = await vi.waitFor(() =>
+      expectDefined(
+        view.container.querySelector<HTMLButtonElement>(".chat-attachment-image-button"),
+        "image preview",
+      ),
+    );
+    await page.elementLocator(preview).click();
+    expect(onOpenImage).toHaveBeenCalledExactlyOnceWith({
+      src: expect.any(String),
+      title: "private.png",
+    });
+    const redact = expectDefined(
+      view.container.querySelector<HTMLButtonElement>(".chat-attachment-redact"),
+      "redact action",
+    );
+    expect(redact.getAttribute("aria-label")).toBe("Redact image");
+    redact.focus();
+    await userEvent.keyboard("{Enter}");
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    expect(modal.textContent).toContain("Covered areas: 0");
+  },
+);
+
 it("retains editable areas and original custody when replacement admission rejects Apply", async () => {
   const { attachment, data } = original();
   const changed = vi.fn();
@@ -78,7 +117,7 @@ it("retains editable areas and original custody when replacement admission rejec
       attachment,
       controls: {
         attachments: [attachment],
-        attachmentLimits: { maxBytes: 1, maxImageBytes: 1 },
+        attachmentLimits: { maxBytes: 1, maxImageBytes: 1, maxBatchBytes: 1 },
         onAttachmentsChange: changed,
       },
     }),

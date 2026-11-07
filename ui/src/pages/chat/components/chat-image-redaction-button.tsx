@@ -1,4 +1,5 @@
 import { lazy, onSettled } from "solid-js";
+import { Icon } from "../../../components/solid/icon.tsx";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
@@ -72,23 +73,21 @@ export function ImageRedactionButton(props: {
   return (
     <button
       type="button"
-      class="chat-attachment-redact"
+      class="btn btn--xs chat-attachment-redact"
       style={{
         position: "absolute",
-        "inset-inline": 0,
+        "inset-inline-end": 0,
         bottom: 0,
-        border: 0,
-        padding: "0.25rem",
-        background: "var(--bg-elevated)",
-        color: "var(--text)",
-        "font-size": "0.7rem",
+        width: "24px",
+        height: "24px",
+        padding: 0,
       }}
       disabled={props.controls.disabled}
       aria-label={t("chat.attachments.redactImage")}
       title={t("chat.attachments.redactImage")}
       onClick={() => void redact()}
     >
-      {t("chat.attachments.redactImage")}
+      <Icon name="pencil" />
     </button>
   );
 }
