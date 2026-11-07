@@ -298,7 +298,7 @@ it.each(["refresh", "details", "message"] as const)(
     expect(notice.textContent).toContain(
       diagnostic === "Stopped." ? diagnostic : "Request interrupted.",
     );
-    expect(notice.querySelector(".chat-error__dismiss")).toBeNull();
+    expect(notice.querySelector(".app-toast__dismiss")).toBeNull();
     const details = notice.querySelector("details");
     if (variant === "message") {
       expect(details).toBeNull();

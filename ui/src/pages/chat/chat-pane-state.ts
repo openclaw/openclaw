@@ -14,7 +14,7 @@ import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
+import { dismissChatRunError, hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 
 registerChatSessionEnglish();
 
@@ -33,6 +33,7 @@ export function createChatPaneRunRecoveryActions(
     | "chatReplyTarget"
     | "chatGoalDraftMode"
     | "chatRunError"
+    | "chatDismissedRunErrorId"
   >,
   options: {
     canSend: boolean;
@@ -72,7 +73,7 @@ export function createChatPaneRunRecoveryActions(
         }
       : undefined,
     // Reply failures can be dismissed; placement failures keep their recovery action.
-    onDismissRunError: state.chatRunError ? () => void (state.chatRunError = null) : undefined,
+    onDismissRunError: state.chatRunError ? () => dismissChatRunError(state) : undefined,
   };
 }
 

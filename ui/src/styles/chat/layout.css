@@ -430,12 +430,6 @@ openclaw-pending-session-create {
   display: none;
 }
 
-.chat-topbar-notices .chat-error__dismiss {
-  width: 24px;
-  height: 24px;
-  margin: -1px -3px -1px 0;
-}
-
 .chat-workspace-conflict-notice {
   display: block;
   padding: 0;
