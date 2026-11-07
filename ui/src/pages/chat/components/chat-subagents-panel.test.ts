@@ -441,7 +441,8 @@ it("marks desktop failures read one at a time and all at once, keeping them in F
     false,
   );
   const failedRows = () => f.panel.querySelectorAll('.subagents-desktop__row[data-group="failed"]');
-  const mark = () => f.panel.querySelectorAll<HTMLButtonElement>(".subagents-desktop__dismiss");
+  const mark = () =>
+    f.panel.querySelectorAll<HTMLButtonElement>(".subagents-desktop__row .oc-icon-button");
   const open = (key: string) =>
     f.panel.querySelector(
       `[data-session-key="agent:worker:subagent:${key}"] .subagents-desktop__open`,
@@ -450,7 +451,7 @@ it("marks desktop failures read one at a time and all at once, keeping them in F
   // Grouping stays by run outcome: an already-read failure is still listed as Failed.
   expect(failedRows()).toHaveLength(5);
   expect(mark()[0]!.getAttribute("aria-label")).toBe("Mark Worker a as read");
-  const markAll = () => f.find(".subagents-desktop__dismiss-all");
+  const markAll = () => f.find(".subagents-desktop__heading .btn");
   expect(markAll()?.textContent).toBe("Mark all as read");
 
   mark()[0]!.focus();
@@ -485,9 +486,10 @@ it("marks desktop failures read one at a time and all at once, keeping them in F
 
 it("marks a mobile failure read in place and keeps focus on its row", async () => {
   const f = mountFailures([failed("a"), failed("b")], true);
-  const mark = () => f.panel.querySelectorAll<HTMLButtonElement>(".chat-subagents-mobile__dismiss");
+  const mark = () =>
+    f.panel.querySelectorAll<HTMLButtonElement>(".chat-subagents-mobile__row .oc-icon-button");
   await waitForSolid(() => expect(mark()).toHaveLength(2));
-  expect(f.find(".chat-subagents-mobile__dismiss-all")?.textContent).toBe("Mark all as read");
+  expect(f.find(".chat-subagents-mobile__group > .btn")?.textContent).toBe("Mark all as read");
   const row = f.panel.querySelector('[data-session-key="agent:worker:subagent:a"]')!;
   mark()[0]!.click();
   await waitForSolid(() => expect(mark()).toHaveLength(1));
@@ -499,7 +501,7 @@ it("marks a mobile failure read in place and keeps focus on its row", async () =
   await waitForSolid(() =>
     expect(document.activeElement).toBe(row.querySelector(".chat-subagents-mobile__open")),
   );
-  expect(f.find(".chat-subagents-mobile__dismiss-all")).toBeNull();
+  expect(f.find(".chat-subagents-mobile__group > .btn")).toBeNull();
 });
 
 it.each([false, true])(
@@ -514,7 +516,9 @@ it.each([false, true])(
       mobile,
       new Set(["agent:worker:subagent:a"]),
     );
-    const selector = mobile ? ".chat-subagents-mobile__dismiss" : ".subagents-desktop__dismiss";
+    const selector = mobile
+      ? ".chat-subagents-mobile__row .oc-icon-button"
+      : ".subagents-desktop__row .oc-icon-button";
     const mark = () => f.panel.querySelectorAll<HTMLButtonElement>(selector);
     await waitForSolid(() => expect(mark()).toHaveLength(2));
 

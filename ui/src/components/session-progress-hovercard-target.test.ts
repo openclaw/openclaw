@@ -204,7 +204,7 @@ describe("session progress hovercard ownership", () => {
     flush();
     await harness.focus();
     const dismiss = () =>
-      getPortal()?.querySelector<HTMLButtonElement>(".session-hovercard__dismiss") ?? null;
+      getPortal()?.querySelector<HTMLButtonElement>(".session-hovercard__error .btn") ?? null;
     await waitForSolid(() => expect(dismiss()).not.toBeNull());
     dismiss()!.click();
     await waitForSolid(() =>
@@ -242,7 +242,7 @@ describe("session progress hovercard ownership", () => {
     flush();
     await harness.focus();
     const dismiss = () =>
-      getPortal()?.querySelector<HTMLButtonElement>(".session-hovercard__dismiss") ?? null;
+      getPortal()?.querySelector<HTMLButtonElement>(".session-hovercard__error .btn") ?? null;
     await waitForSolid(() => expect(dismiss()).not.toBeNull());
     dismiss()!.click();
     await waitForSolid(() =>
@@ -283,7 +283,7 @@ describe("session progress hovercard ownership", () => {
     flush();
     await harness.focus();
     await waitForSolid(() => expect(portalText()).toContain("Synthetic child failure"));
-    expect(getPortal()?.querySelector(".session-hovercard__dismiss")).toBeNull();
+    expect(getPortal()?.querySelector(".session-hovercard__error .btn")).toBeNull();
   });
 
   it("retires a removed provider while its progress request is pending", async () => {

@@ -350,7 +350,7 @@ suite.define(() => {
         await openChatSidePanelType(page, "Subagents");
         await panel.locator(`[data-session-key="${failures[3]!.key}"]`).waitFor();
         await capture("failed-mobile-before");
-        const mobileDismiss = panel.locator(".chat-subagents-mobile__dismiss");
+        const mobileDismiss = panel.locator(".chat-subagents-mobile__row .oc-icon-button");
         await expect.poll(() => mobileDismiss.count()).toBe(4);
         await panel
           .getByRole("button", { name: `Mark ${failures[3]!.label} as read`, exact: true })
@@ -366,7 +366,7 @@ suite.define(() => {
         await page.setViewportSize({ width: 1440, height: 1000 });
         await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
         await openChatSidePanelType(page, "Subagents");
-        const desktopMark = panel.locator(".subagents-desktop__dismiss");
+        const desktopMark = panel.locator(".subagents-desktop__row .oc-icon-button");
         await expect.poll(() => desktopMark.count()).toBe(3);
         const first = panel.getByRole("button", {
           name: `Mark ${failures[0]!.label} as read`,

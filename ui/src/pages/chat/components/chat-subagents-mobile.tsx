@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
@@ -116,13 +117,13 @@ function MobileRow(props: {
       </Show>
       <Show when={props.item.dismiss}>
         {(dismiss) => (
-          <button
-            class="chat-subagents-mobile__dismiss"
-            ref={(button) => {
+          <IconButton
+            icon="check"
+            label={dismiss().label}
+            tooltip={false}
+            ref={(button: HTMLButtonElement) => {
               dismissButton = button;
             }}
-            type="button"
-            aria-label={dismiss().label}
             onClick={() =>
               void dismiss()
                 .onDismiss()
@@ -133,9 +134,7 @@ function MobileRow(props: {
                   }
                 })
             }
-          >
-            <Icon name="check" />
-          </button>
+          />
         )}
       </Show>
       <Icon class="chat-subagents-mobile__chevron" name="chevronRight" />
@@ -211,7 +210,7 @@ export function ChatSubagentsMobileList(props: ChatSubagentsMobileListProps) {
           <Show when={props.finishedOpen && props.dismissAll}>
             {(dismissAll) => (
               <button
-                class="chat-subagents-mobile__dismiss-all"
+                class="btn btn--ghost btn--xs"
                 type="button"
                 onClick={(event) => {
                   const button = event.currentTarget;

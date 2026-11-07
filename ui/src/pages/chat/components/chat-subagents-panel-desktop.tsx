@@ -8,6 +8,7 @@ import {
   createUniqueId,
   onSettled,
 } from "solid-js";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
@@ -186,16 +187,14 @@ function DesktopRow(props: {
         </button>
       </Show>
       <Show when={group() === "failed" && props.canDismiss(props.row)}>
-        <button
-          class="subagents-desktop__dismiss"
+        <IconButton
+          size={28}
+          icon="check"
+          label={t("chat.subagentsPanel.markFailureRead", { name: name() })}
+          tooltip={false}
           ref={[elementRef(props.registerDismiss.bind(undefined, props.row.session.key))]}
-          type="button"
-          aria-label={t("chat.subagentsPanel.markFailureRead", { name: name() })}
-          title={t("chat.subagentsPanel.markFailureRead", { name: name() })}
           onClick={() => props.onDismiss([props.row])}
-        >
-          <Icon name="check" />
-        </button>
+        />
       </Show>
     </div>
   );
@@ -373,7 +372,7 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
                       <span class="subagents-desktop__count">{visible(group()).length}</span>
                       <Show when={group() === "failed" && dismissable().length > 1}>
                         <button
-                          class="subagents-desktop__dismiss-all"
+                          class="btn btn--ghost btn--xs"
                           type="button"
                           onClick={() => dismiss(dismissable())}
                         >

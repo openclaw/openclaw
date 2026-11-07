@@ -113,16 +113,14 @@ describe("session hovercard", () => {
     });
     const dismissFailure = vi.fn();
     const container = renderCard({ row: failed, dismissFailure });
-    const button = container.querySelector<HTMLButtonElement>(
-      ".session-hovercard__error .session-hovercard__dismiss",
-    );
+    const button = container.querySelector<HTMLButtonElement>(".session-hovercard__error .btn");
     expect(button?.textContent).toBe("Dismiss");
     button!.click();
     expect(dismissFailure).toHaveBeenCalledOnce();
 
     renderCard({ row: failed }, container);
     expect(container.querySelector(".session-hovercard__error")).not.toBeNull();
-    expect(container.querySelector(".session-hovercard__dismiss")).toBeNull();
+    expect(container.querySelector(".session-hovercard__error .btn")).toBeNull();
   });
 
   it("shows the owning session failure above the notepad", () => {

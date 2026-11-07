@@ -226,7 +226,8 @@
   opacity: 0;
 }
 
-.subagents-desktop__row > .subagents-desktop__stop {
+/* Controls after the row-wide open button sit above it in the action column. */
+.subagents-desktop__row > button + button {
   z-index: 1;
   grid-column: 4;
   grid-row: 1;
@@ -246,47 +247,6 @@
 
 .subagents-desktop__row:is(:hover, :focus-within) .subagents-desktop__stop:disabled {
   opacity: 0.45;
-}
-
-.subagents-desktop__dismiss {
-  z-index: 1;
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  margin-left: 8px;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  grid-column: 4;
-  grid-row: 1;
-}
-
-.subagents-desktop__dismiss:hover,
-.subagents-desktop__dismiss:focus-visible {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.subagents-desktop__dismiss svg {
-  width: 12px;
-  height: 12px;
-}
-
-.subagents-desktop__dismiss-all {
-  margin-left: auto;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-}
-
-.subagents-desktop__dismiss-all:hover,
-.subagents-desktop__dismiss-all:focus-visible {
-  color: var(--text);
 }
 
 .subagents-desktop__row[data-group="done"] .subagents-desktop__open {
