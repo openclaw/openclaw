@@ -11,6 +11,11 @@ import type {
   CliBackendLiveSessionHandle,
   CliBackendPlugin,
 } from "../../plugins/cli-backend.types.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import {
+  AUDIENCE_CHILD_KEY,
+  withChildAudience,
+} from "../../plugins/memory-provider-runtime.audience.test-support.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import {
@@ -564,38 +569,76 @@ export function registerCliMcpPreparationTests({
   );
 
   it("hands the admitted turn's memory audience to the CLI grant and releases it at run end", async () => {
-    const sessionKey = "agent:main:telegram:direct:owner";
-    const memoryAudience: MemoryAudience = Object.freeze({
-      kind: "owner-private",
-      agentId: "main",
+    // Turn hooks now receive this audience too, and they accept only host-minted ones.
+    await withChildAudience(true, async ({ audience: memoryAudience }) => {
+      const sessionKey = AUDIENCE_CHILD_KEY;
+      const release = vi.fn();
+      const resolveAudience = vi.fn(async () => ({ memoryAudience, release }));
+      const { mint, revokeMinted } = mockCliMcpPreparation({
+        resolveCliMcpMemoryAudience: resolveAudience,
+      });
+      const runBeforePromptBuild = vi.fn(async (_event: unknown, _ctx: unknown) => undefined);
+      vi.mocked(getGlobalHookRunner).mockReturnValue({
+        hasHooks: (hookName: string) => hookName === "before_prompt_build",
+        runBeforePromptBuild,
+      } as never);
+      const sessionEntry = { sessionId: "session-test", chatType: "direct", updatedAt: 1 } as const;
+
+      const context = await getFixture().prepare({
+        sessionKey,
+        senderIsOwner: true,
+        sessionEntry,
+        config: createConfig(),
+      });
+
+      expect(resolveAudience).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ sessionEntry, senderIsOwner: true }),
+        { agentId: "main", sessionKey },
+      );
+      expect(mint).toHaveBeenCalledWith(
+        expect.objectContaining({
+          memoryAudience,
+          context: expect.not.objectContaining({ memoryAudience: expect.anything() }),
+        }),
+      );
+      // The prompt-build hook and the prepared turn carry the same audience as the grant.
+      const hookCtx = runBeforePromptBuild.mock.calls[0]?.[1] as {
+        memoryAudience?: MemoryAudience;
+        assertMemoryAudienceCurrent?: () => void;
+      };
+      expect(hookCtx.memoryAudience).toBe(memoryAudience);
+      expect(() => hookCtx.assertMemoryAudienceCurrent?.()).not.toThrow();
+      expect(context.memoryAudience).toBe(memoryAudience);
+      expect(release).not.toHaveBeenCalled();
+      await context.preparedBackend.cleanup?.();
+      expect(revokeMinted).toHaveBeenCalledExactlyOnceWith(mint.mock.results[0]?.value);
+      expect(release).toHaveBeenCalledOnce();
+      // The grant that carries the audience is revoked before its leases end.
+      expect(revokeMinted.mock.invocationCallOrder[0]).toBeLessThan(
+        release.mock.invocationCallOrder[0] ?? 0,
+      );
     });
+  });
+
+  it("releases the turn audience once when CLI preparation fails after resolving it", async () => {
     const release = vi.fn();
-    const resolveAudience = vi.fn(async () => ({ memoryAudience, release }));
-    const { mint, revokeMinted } = mockCliMcpPreparation({
+    const resolveAudience = vi.fn(async () => ({ release }));
+    mockCliMcpPreparation({
       resolveCliMcpMemoryAudience: resolveAudience,
-    });
-    const sessionEntry = { sessionId: "session-test", chatType: "direct", updatedAt: 1 } as const;
-
-    const context = await getFixture().prepare({
-      sessionKey,
-      senderIsOwner: true,
-      sessionEntry,
-      config: createConfig(),
+      resolveBootstrapContextForRun: async () => {
+        throw new Error("bootstrap unavailable");
+      },
     });
 
-    expect(resolveAudience).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ sessionEntry, senderIsOwner: true }),
-      { agentId: "main", sessionKey },
-    );
-    expect(mint).toHaveBeenCalledWith(
-      expect.objectContaining({
-        memoryAudience,
-        context: expect.not.objectContaining({ memoryAudience: expect.anything() }),
+    await expect(
+      getFixture().prepare({
+        sessionKey: "agent:main:telegram:direct:owner",
+        senderIsOwner: true,
+        sessionEntry: { sessionId: "session-test", chatType: "direct", updatedAt: 1 },
+        config: createConfig(),
       }),
-    );
-    expect(release).not.toHaveBeenCalled();
-    await context.preparedBackend.cleanup?.();
-    expect(revokeMinted).toHaveBeenCalledExactlyOnceWith(mint.mock.results[0]?.value);
+    ).rejects.toThrow("bootstrap unavailable");
+    expect(resolveAudience).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
   });
 
