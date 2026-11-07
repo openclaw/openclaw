@@ -572,4 +572,91 @@ describe("tool result ordering", () => {
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(onAgentEvent.mock.calls.filter(([event]) => event.stream === "assistant")).toEqual([]);
   });
+
+  it("retracts a running deferred dispatcher once its nested target starts", async () => {
+    const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
+    const h = harness({ onAgentEvent });
+    const itemEvents = () =>
+      onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "item")
+        .map(({ data }) => data);
+    try {
+      h.emit({
+        type: "tool_execution_start",
+        toolName: "dispatch_action",
+        toolCallId: "dispatcher",
+        args: { id: "web_search", args: {} },
+      });
+      await h.subscription.waitForPendingEvents();
+      // The running dispatcher publishes its own visible row.
+      expect(
+        itemEvents().filter((data) => data.toolCallId === "dispatcher" && data.phase === "start"),
+      ).toHaveLength(1);
+      // A nested target starts beneath the dispatcher and retracts its row.
+      h.emit({
+        type: "tool_execution_start",
+        toolName: "web_search",
+        toolCallId: "target",
+        args: { query: "fixture" },
+        parentToolCallId: "dispatcher",
+        lifecycleProvenance: "nested",
+      });
+      await h.subscription.waitForPendingEvents();
+      const dispatcherUpdates = itemEvents().filter(
+        (data) => data.toolCallId === "dispatcher" && data.phase === "update",
+      );
+      expect(dispatcherUpdates).toHaveLength(1);
+      expect(dispatcherUpdates[0]?.hideFromChannelProgress).toBe(true);
+      // The nested target remains visible in channel progress.
+      const targetStart = itemEvents().find(
+        (data) => data.toolCallId === "target" && data.phase === "start",
+      );
+      expect(targetStart?.hideFromChannelProgress).not.toBe(true);
+    } finally {
+      await h.finish("Finished.");
+    }
+  });
+
+  it("keeps a running deferred dispatcher when its nested target is routine", async () => {
+    const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
+    const h = harness({ onAgentEvent });
+    const itemEvents = () =>
+      onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "item")
+        .map(({ data }) => data);
+    try {
+      h.emit({
+        type: "tool_execution_start",
+        toolName: "dispatch_action",
+        toolCallId: "dispatcher",
+        args: { id: "progress_card", args: { plan: [] } },
+      });
+      await h.subscription.waitForPendingEvents();
+      // A routine target (progress_card) starts beneath the dispatcher. Its own
+      // activity is hidden from channel progress, so the dispatcher must stay
+      // visible until terminal collapse rather than leaving no row at all.
+      h.emit({
+        type: "tool_execution_start",
+        toolName: "progress_card",
+        toolCallId: "target",
+        args: { plan: [] },
+        parentToolCallId: "dispatcher",
+        lifecycleProvenance: "nested",
+      });
+      await h.subscription.waitForPendingEvents();
+      const dispatcherUpdates = itemEvents().filter(
+        (data) => data.toolCallId === "dispatcher" && data.phase === "update",
+      );
+      expect(dispatcherUpdates).toHaveLength(0);
+      // The routine target start is itself hidden from channel progress.
+      const targetStart = itemEvents().find(
+        (data) => data.toolCallId === "target" && data.phase === "start",
+      );
+      expect(targetStart?.hideFromChannelProgress).toBe(true);
+    } finally {
+      await h.finish("Finished.");
+    }
+  });
 });
