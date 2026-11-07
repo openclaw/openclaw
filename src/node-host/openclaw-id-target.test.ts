@@ -17,11 +17,11 @@ const target = {
 const normalize = (discoveryUrl?: string) =>
   normalizeGatewayConfig({
     kind: "openclaw-id",
-    openclawId: { ...target, ...(discoveryUrl === undefined ? {} : { discoveryUrl }) },
+    openclawId: { ...target, discoveryUrl: discoveryUrl! },
   });
 
 test("saved target retains independent Discovery routing without inferring an origin", () => {
-  expect(normalize()?.openclawId).not.toHaveProperty("discoveryUrl");
+  expect(() => normalize()).toThrow("Discovery origin");
   expect(normalize("https://discovery.example/")?.openclawId?.discoveryUrl).toBe(
     "https://discovery.example",
   );

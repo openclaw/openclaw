@@ -15,10 +15,12 @@ import {
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   fingerprint,
+  formatEd25519PublicKey,
   formatIrohEndpointKey,
   isIrohEndpointKey,
   signStatement,
   ed25519SignerFromSeed,
+  verifyDiscoveryRequest,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { buildWorld } from "../../packages/openclaw-id-protocol/src/testing/world.js";
 import { writeConfigFile } from "../config/config.js";
@@ -28,7 +30,9 @@ import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { createNodeHostGatewayCandidateConnection } from "../node-host/gateway-candidate-connection.js";
 import { withNodeWorkerTransferHttpRequest } from "../node-host/node-worker-transfer-http.js";
+import type { NodeHostOpenClawIdTarget } from "../node-host/openclaw-id-target.js";
 import { startNodeTunnelTransport, loadNodeTunnelKey } from "../node-host/openclaw-id-transport.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { createWorkerConnection } from "../worker/worker-connection.js";
 import { startOpenClawIdIngressListener } from "./openclaw-id/ingress-listener.js";
 import { loadIrohBinding } from "./openclaw-id/tunnel-child/addon.js";
@@ -54,6 +58,8 @@ describe.skipIf(!hasBinding)("native OpenClaw ID node transport", () => {
   let supervisor: ReturnType<typeof createTunnelSupervisor>;
   let transport: Awaited<ReturnType<typeof startNodeTunnelTransport>>;
   let dir: string;
+  let discovery: Awaited<ReturnType<typeof reserveTestPortListener<http.Server>>>;
+  const discoveryErrors: string[] = [];
   const terminal = vi.fn();
   let workerServer: WebSocketServer;
   const admission: WorkerConnectParams["admission"] = {
@@ -138,9 +144,8 @@ describe.skipIf(!hasBinding)("native OpenClaw ID node transport", () => {
       gatewayServer: () => upstream,
       log: { warn: () => {} },
     });
-    const peerKey = formatIrohEndpointKey(
-      (await ed25519SignerFromSeed(loadNodeTunnelKey(dir))).publicKey,
-    );
+    const nodeSigner = await ed25519SignerFromSeed(loadNodeTunnelKey(dir));
+    const peerKey = formatIrohEndpointKey(nodeSigner.publicKey);
     const principal = { kind: "owner" as const, peerKey };
     // Until the node-principal stack lands, use the existing test resolver; no Gateway auth changes.
     setOpenClawIdTunnelPrincipalResolver(async (key) => (key === peerKey ? principal : undefined));
@@ -175,17 +180,80 @@ describe.skipIf(!hasBinding)("native OpenClaw ID node transport", () => {
       { ...world.binding.body, k_srv: ready.endpointKey },
       world.root,
     );
+    const snapshot = await signStatement(
+      "MembershipSnapshot",
+      {
+        claw_id: binding.body.claw_id,
+        seq: 1,
+        binding_seq: binding.body.binding_seq,
+        owner_devices: [],
+        owner_peer_keys: [],
+        node_peer_keys: [peerKey],
+        members: [],
+        protocols: { statement: [1], descriptor: [1] },
+        issued_at: Math.floor(Date.now() / 1000),
+      },
+      world.gateway.signer,
+    );
+    discovery = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        http.createServer((req, res) => {
+          void (async () => {
+            const signature = await verifyDiscoveryRequest(
+              {
+                method: req.method!,
+                path: req.url!,
+                body: new Uint8Array(),
+              },
+              String(req.headers["openclaw-signature"]),
+              Math.floor(Date.now() / 1000),
+            );
+            expect(signature.ok).toBe(true);
+            if (!signature.ok) {
+              throw new Error("invalid node Discovery signature");
+            }
+            expect(signature.keyid).toBe(formatEd25519PublicKey(nodeSigner.publicKey));
+            expect(req.url).toBe(`/v1/claws/${binding.body.claw_id}/node/descriptor`);
+            expect(req.headers.authorization).toBeUndefined();
+            res.setHeader("content-type", "application/json");
+            res.end(
+              JSON.stringify({
+                descriptor: {
+                  v: 1,
+                  claw_id: binding.body.claw_id,
+                  transport: "iroh",
+                  relay_url: "http://127.0.0.1:9/",
+                  root_pub: world.rootPub,
+                  binding,
+                  published_at: Math.floor(Date.now() / 1000),
+                },
+                snapshot,
+              }),
+            );
+          })().catch((error: unknown) => {
+            discoveryErrors.push(String(error));
+            res.writeHead(403).end("{}");
+          });
+        }),
+    });
+    let target: NodeHostOpenClawIdTarget = {
+      hostname: binding.body.hostname,
+      relayUrl: "http://127.0.0.1:9/",
+      discoveryUrl: `http://127.0.0.1:${discovery.claim.port}`,
+      pin: {
+        claw_id: binding.body.claw_id,
+        root_fp: await fingerprint(world.rootPub),
+        binding_seq: 1,
+      },
+      evidence: { root_pub: world.rootPub, binding },
+    };
     transport = await startNodeTunnelTransport({
       stateDir: dir,
-      target: {
-        hostname: binding.body.hostname,
-        relayUrl: "http://127.0.0.1:9/",
-        pin: {
-          claw_id: binding.body.claw_id,
-          root_fp: await fingerprint(world.rootPub),
-          binding_seq: 1,
-        },
-        evidence: { root_pub: world.rootPub, binding },
+      target,
+      readTarget: async () => target,
+      persistTarget: async (next) => {
+        target = next;
       },
       directAddrs: ready.directAddrs.filter((addr) => addr.startsWith("127.0.0.1:")),
       onTerminal: terminal,
@@ -194,6 +262,9 @@ describe.skipIf(!hasBinding)("native OpenClaw ID node transport", () => {
 
   afterAll(async () => {
     await transport?.close();
+    discovery?.listener.closeAllConnections();
+    await discovery?.releaseListener();
+    await discovery?.claim.release();
     workerServer?.close();
     await supervisor?.stop();
     await ingress?.close();
@@ -260,7 +331,9 @@ describe.skipIf(!hasBinding)("native OpenClaw ID node transport", () => {
     const worker = createWorkerConnection({
       endpoint: { kind: "unix", socketPath: unix.socketPath, path: WORKER_PUBLIC_INGRESS_PATH },
       connectParams: {
-        client: { id: "worker", version: "2026.11.1", platform: "linux", mode: "worker" },
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { id: "openclaw-worker", version: "2026.11.1", platform: "linux", mode: "worker" },
         role: "worker",
         admission,
       },
@@ -316,6 +389,7 @@ describe.skipIf(!hasBinding)("native OpenClaw ID node transport", () => {
       },
     );
     expect(status).toBe(200);
+    expect(discoveryErrors).toEqual([]);
     expect((await fs.stat(path.join(dir, "node-openclaw-id", "endpoint.key"))).mode & 0o777).toBe(
       0o600,
     );
