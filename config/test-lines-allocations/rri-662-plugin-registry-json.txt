@@ -1,2 +1,2 @@
-30
-# PR #192833 (58ac8a385809): 33 test lines for absent, whitespace-only, multi-document, and malformed-name optional registry input, less 3 lines deleted by #194535 and #194504; raises this allocation by 24.
+16
+# PR #192833 (58ac8a385809): 33 regression-test lines for optional registry input, less 17 lines of offsets from #194535, #194504, #193189, and surplus cleanup in #194550; raises this allocation by exactly 10.
