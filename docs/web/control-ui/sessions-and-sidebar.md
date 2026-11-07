@@ -376,6 +376,13 @@ as the Desktop panel. Headless and offline entries remain inspectable instead
 of opening an empty desktop. Pairing, desktop enablement, and access permissions
 still apply; opening Systems does not grant additional access.
 
+The device list loads independently of host measurements. You can select a
+device or open its details while telemetry is pending. Missing measurements
+show a loading state or their read error. Periodic polling failures keep
+last-known measurements visible with a stale indication. Refreshing the device
+list clears previous measurements from a source that fails to refresh, while
+keeping the device list and healthy readings available.
+
 System details use reported facts. A connected device is not necessarily the
 device running a session, and unavailable measurements are not shown as zero.
 The telemetry and backup overview reserves its space while those readings load,
