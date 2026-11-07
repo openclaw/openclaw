@@ -18,11 +18,14 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs \
 `event-load-unloaded` has no active turn. `event-load-0` has the foreground turn
 only. The remaining scenarios add 5, 20 or 100 active background sessions to the
 same inventory. `--event-load-tools` defaults to 200 and
-`--event-load-duration-ms` to 12000. The foreground calls are offered over six
+`--event-load-duration-ms` to 12000. Duration is a safety ceiling, not a trailing
+wait: measurement ends after the last action. Every loaded action must start and
+finish before that ceiling while background work remains active. The foreground calls are offered over six
 seconds after the first live output is verified; extending the background window
 does not reduce that foreground rate. The longer example keeps background work
 active through navigation on slower baselines. A phase starting after the load
-drains fails rather than silently measuring an unloaded action. Chromium throttling is a separate run with
+drains fails rather than silently measuring an unloaded action. Terminal receipts
+and correctness checks follow outside the measured window. Chromium throttling is a separate run with
 `--engines chromium --cpu-throttle 4`. Every browser stays headless.
 
 The background workload uses broad roster receipts, including bodyless durable
@@ -73,8 +76,10 @@ item-boundary events; it models the measured durable, tool and narration paths.
 The mock producer runs inside the measured renderer. Its producer and delivery
 elapsed diagnostics overlap application work and cannot be subtracted as CPU.
 Use a separate `--cpu-profile` Chromium run to attribute this cost. Divide the
-matched foreground-only CPU difference by received background events for an
-incremental CPU/event estimate, not total scenario CPU divided by offered events.
+matched foreground-only idle CPU difference by received background events during
+that same fixed idle interval for an incremental CPU/event estimate. Whole-action
+CPU includes different amounts of background work when an action takes longer;
+do not divide total scenario CPU by offered events or subtract unequal windows.
 
 For a candidate, use the harness's immutable base, candidate and identical-base
 control bundle options. Retain at least 20 rotated pairs plus A/A across the

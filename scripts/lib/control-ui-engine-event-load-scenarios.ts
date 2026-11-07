@@ -129,6 +129,7 @@ function installEventLoadProbe() {
   const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
   let active = false;
   let started = 0;
+  let loadDeadline = 0;
   let delivered = 0;
   let bytes = 0;
   let backgroundEvents = 0;
@@ -280,6 +281,7 @@ function installEventLoadProbe() {
     }) {
       active = true;
       started = performance.now();
+      loadDeadline = started + options.duration;
       observer.observe(document.body, {
         childList: true,
         characterData: true,
@@ -753,8 +755,12 @@ function installEventLoadProbe() {
         applicationMs: phaseCommit && phaseInput ? phaseCommit - phaseInput : undefined,
         backgroundReceived: backgroundEvents - phaseBackgroundEvents,
         backgroundReceiptsAtStart: phaseBackgroundReceipts,
-        backgroundActiveAtStart: phaseBackgroundReceipts < targetBackgroundReceipts,
-        backgroundActiveAtEnd: backgroundReceipts < targetBackgroundReceipts,
+        startedAfterMs: phaseStart - started,
+        backgroundReceiptsAtEnd: backgroundReceipts,
+        backgroundActiveAtStart:
+          phaseStart < loadDeadline && phaseBackgroundReceipts < targetBackgroundReceipts,
+        backgroundActiveAtEnd:
+          performance.now() < loadDeadline && backgroundReceipts < targetBackgroundReceipts,
       };
     },
     ready() {
@@ -884,12 +890,16 @@ export function createEngineEventLoadScenarios(
         result: {
           backgroundReceived: number;
           backgroundReceiptsAtStart: number;
+          startedAfterMs: number;
+          backgroundReceiptsAtEnd: number;
           backgroundActiveAtStart: boolean;
           backgroundActiveAtEnd: boolean;
         },
       ) => {
         evidence[`${name}BackgroundReceived`] = result.backgroundReceived;
         evidence[`${name}BackgroundReceiptsAtStart`] = result.backgroundReceiptsAtStart;
+        evidence[`${name}StartedAfterMs`] = result.startedAfterMs;
+        evidence[`${name}BackgroundReceiptsAtEnd`] = result.backgroundReceiptsAtEnd;
         evidence[`${name}BackgroundActiveAtStart`] = result.backgroundActiveAtStart;
         evidence[`${name}BackgroundActiveAtEnd`] = result.backgroundActiveAtEnd;
         if (count > 0 && (!result.backgroundActiveAtStart || !result.backgroundActiveAtEnd)) {
@@ -1095,27 +1105,16 @@ export function createEngineEventLoadScenarios(
           async () => {
             await navigation(page, "pages");
             await page.locator('.sidebar-pages a[href="/usage"]').click();
-            await page.locator(".usage-query-input").waitFor({ state: "visible" });
+            await page.locator("openclaw-usage-page .usage-page").waitFor({ state: "visible" });
             await frames(page);
           },
-          ".usage-query-input",
+          "openclaw-usage-page .usage-page",
         );
         evidence.routeSwitchActionWallMs = route.actionWallMs;
         recordPhase("routeSwitch", route);
         if (route.applicationMs !== undefined) {
           evidence.routeSwitchApplicationMs = route.applicationMs;
         }
-        await page.waitForFunction(
-          (minimum) => {
-            const current = Reflect.get(window, "__eventLoad").ready();
-            return (
-              current.elapsed >= minimum &&
-              current.backgroundReceipts === current.targetBackgroundReceipts
-            );
-          },
-          duration,
-          { timeout: duration + 30_000 },
-        );
       } finally {
         const result = await page.evaluate(() => Reflect.get(window, "__eventLoad").finish());
         Object.assign(evidence, {
@@ -1131,6 +1130,7 @@ export function createEngineEventLoadScenarios(
           maxBackgroundSchedulerLagMs: result.maxBackgroundSchedulerLagMs,
           achievedBackgroundHz: result.backgroundReceipts / (result.elapsed / 1_000),
           loadElapsedMs: result.elapsed,
+          maximumLoadDurationMs: duration,
           incomingEvents: result.delivered,
           incomingBytes: result.bytes,
           incomingBackgroundEvents: result.backgroundEvents,
@@ -1235,6 +1235,19 @@ export async function verifyEngineEventLoad(page: Page, count: number, toolCount
     )
     .click();
   if (count >= 0) {
+    await page.waitForFunction((key) => {
+      const host = document.querySelector(".chat-pane-cache__pane--active");
+      return (
+        Reflect.get(host ?? {}, "sessionKey") === key &&
+        Reflect.get(host ?? {}, "transcriptReady") === true
+      );
+    }, foreground);
+    await frames(page);
+    // The scroll exercise deliberately leaves the retained pane reading older history.
+    const latest = page.locator(`${pane} .chat-scroll-to-bottom`);
+    if (await latest.isVisible()) {
+      await latest.press("Enter");
+    }
     await page
       .locator(`${pane} .chat-text`)
       .getByText("Event load foreground completed.", { exact: true })

@@ -204,9 +204,6 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
   const sourceActionOwner = source.outcome.kind === "completed" ? source.outcome.actionOwner : null;
   const actionOwner = !fragment || fragment.last ? sourceActionOwner : null;
   const representative = fragment?.representative ?? firstAssistant ?? groups[0];
-  const streamStarts = frame.parts.flatMap((part) =>
-    part.kind === "stream-run" ? part.parts.map((streamPart) => streamPart.startedAt) : [],
-  );
   const streamRun = frame.parts.find((part) => part.kind === "stream-run");
   const shell: MessageGroupData = {
     key: frame.key,
@@ -228,7 +225,13 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     visibleContent: representative?.visibleContent ?? "none",
     timestamp:
       (actionOwner ? rawMessageTimestamp(actionOwner.message) : null) ??
-      Math.min(...groups.map((group) => group.timestamp), ...streamStarts, Date.now()),
+      Math.min(
+        ...groups.map((group) => group.timestamp),
+        ...frame.parts.flatMap((part) =>
+          part.kind === "stream-run" ? part.parts.map((streamPart) => streamPart.startedAt) : [],
+        ),
+        Date.now(),
+      ),
     isStreaming: frame.outcome.kind === "active",
     runId: frame.runId,
   };
@@ -249,21 +252,19 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
   const bodyParts = frame.parts.flatMap<BodyPart>((part) =>
     part.kind === "stream-run" ? part.parts : [part],
   );
-  const firstBubbleKey = fragment
-    ? fragment.firstBubbleKey
-    : (bodyParts
-        .flatMap((part) =>
-          part.kind === "stream"
-            ? part.text.trim()
-              ? [part.key]
-              : []
-            : part.kind === "group" && part.role !== "tool"
-              ? part.messages
-                  .filter((message) => message.hasVisibleContent)
-                  .map((message) => message.key)
-              : [],
-        )
-        .at(0) ?? null);
+  let firstBubbleKey = fragment ? fragment.firstBubbleKey : null;
+  if (!fragment) {
+    for (const part of bodyParts) {
+      if (part.kind === "stream" && part.text.trim()) {
+        firstBubbleKey = part.key;
+      } else if (part.kind === "group" && part.role !== "tool") {
+        firstBubbleKey = part.messages.find((message) => message.hasVisibleContent)?.key ?? null;
+      }
+      if (firstBubbleKey !== null) {
+        break;
+      }
+    }
+  }
   const sourcePreviews = actionOwner
     ? extractChatSourcePreviews({
         // Cited results can sit in an earlier rollup that no visible reply owns.

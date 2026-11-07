@@ -96,9 +96,11 @@ export function inspectTranscriptContext(
     }
   }
   if (pendingSteer) {
-    dependencies.push(
-      ...groups.flatMap((group) => group.messages.map(({ message }) => pendingSteer(message))),
-    );
+    for (const group of groups) {
+      for (const { message } of group.messages) {
+        dependencies.push(pendingSteer(message));
+      }
+    }
   }
   return [groups, hasTools, readsRoster, hasQuestions, dependencies] as const;
 }
