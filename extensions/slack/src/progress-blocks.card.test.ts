@@ -63,20 +63,17 @@ describe("buildSlackProgressCardBlocks", () => {
     const headings = [...(state === "error" ? [plain("Failed")] : []), plain("Implementing")];
     const failure = `${state === "success" ? "Recovered: " : ""}Exec — failed check — exit 1`;
     const attention = [
-      ...(detailed ? [failure] : []),
-      ...(state === "working" ? ["Approval required: Run checks"] : []),
+      ...(detailed ? [plain(failure)] : []),
+      ...(state === "working" ? [section("Approval required: Run checks")] : []),
     ];
     expect(blocks).toEqual([
       ...headings,
       section("_Checking the workspace._"),
       plain("Read *literal*"),
       ...(detailed ? [section("✓ Inspect\n▸ Patch")] : []),
-      section(
-        detailed
-          ? "_Considering the change_\nExec — run tests\nTool output"
-          : "_Considering the change_",
-      ),
-      ...(attention.length ? [section(attention.join("\n"))] : []),
+      section("_Considering the change_"),
+      ...(detailed ? [plain("Exec — run tests\nTool output")] : []),
+      ...attention,
       ...(detailed
         ? [context(state === "working" ? "3 tools · 4 files +2 −1 · 12s" : "4 files +2 −1")]
         : []),
@@ -97,7 +94,7 @@ describe("buildSlackProgressCardBlocks", () => {
         elapsedSeconds: 2,
         diffStat: { files: 0, added: 0, removed: 0 },
       }),
-    ).toEqual([plain("Read *literal* <@U123>"), section("Exec")]);
+    ).toEqual([plain("Read *literal* <@U123>"), plain("Exec")]);
   });
 
   it("keeps plan selection, summary, and truncation budgets without emoji", () => {
@@ -131,37 +128,54 @@ describe("buildSlackProgressCardBlocks", () => {
     });
     expect(blocks).toEqual([
       plain("Working"),
-      section(
-        "Approval required: Approve deploy\nApproval required: Approve restart\nBuild — exit 1\nTest — exit 2",
-      ),
+      section("Approval required: Approve deploy\nApproval required: Approve restart"),
+      plain("Build — exit 1\nTest — exit 2"),
     ]);
   });
 
   const source = "Check **x** _y_ `pnpm test` C:\\path <#C123> <@U123> & <!channel> 🔧";
   const escaped =
     "Check *x* y `pnpm test` C:\\path &lt;#C123&gt; &lt;@U123&gt; &amp; &lt;!channel&gt; 🔧";
-  it.each<[Partial<CardOptions>, string]>([
+  it("retains newest alternating attention and the footer within the block budget", () => {
+    const blocks = card({
+      title: "Working",
+      lines: Array.from({ length: 60 }, (_value, index) =>
+        index % 2 === 0
+          ? approval(`A${index}`)
+          : { ...toolLine(`failed ${index}`), status: "exit 1" },
+      ),
+      toolCalls: 60,
+      elapsedSeconds: 1,
+    });
+    expect(blocks).toHaveLength(50);
+    expect(JSON.stringify(blocks)).toContain("Approval required: A58");
+    expect(JSON.stringify(blocks)).toContain("failed 59");
+    expect(blocks.at(-1)).toEqual(context("60 tools · 1s"));
+  });
+
+  it.each<[Partial<CardOptions>, string, boolean?]>([
     [{ lines: [itemLine(source)] }, `_${escaped}_`],
     [{ narration: [{ text: source }] }, `_${escaped}_`],
     [{ plan: [{ step: source, status: "in_progress" }] }, `▸ ${escaped.replace(" y ", " _y_ ")}`],
     [
       { lines: [{ ...toolLine("`pnpm test` <@U123> & <!channel>"), status: "exit 1" }] },
-      "Exec — `pnpm test` &lt;@U123&gt; &amp; &lt;!channel&gt; — exit 1",
+      "Exec — `pnpm test` <@U123> & <!channel> — exit 1",
+      true,
     ],
-  ])("renders literal progress text: %j", (options, expected) => {
-    expect(card(options)).toEqual([section(expected)]);
+  ])("renders literal progress text: %j", (options, expected, literal) => {
+    expect(card(options)).toEqual([literal ? plain(expected) : section(expected)]);
   });
 
-  it("keeps approval attention and newest activity inside Slack's budgets", () => {
+  it.each([0, 300])("keeps attention and newest mixed activity bounded (padding=%s)", (padding) => {
     const blocks = card({
       title: "Working",
       maxLineChars: 300,
       lines: [
         approval("Run the command"),
-        ...Array.from({ length: 60 }, (_value, index) => ({
-          ...progressLine(index),
-          detail: `run ${index} ${"x".repeat(300)}`,
-        })),
+        ...Array.from({ length: 60 }, (_value, index) => [
+          itemLine(`Update ${index}`),
+          { ...progressLine(index), detail: `run ${index} ${"x".repeat(padding)}` },
+        ]).flat(),
       ],
       elapsedSeconds: 1,
     });
