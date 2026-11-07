@@ -825,7 +825,7 @@ async function phase(page: Page, kind: string, action: () => Promise<unknown>, t
 }
 
 export function createEngineEventLoadScenarios(
-  duration = 12_000,
+  duration = 240_000,
   toolCount = 200,
 ): EngineScenario[] {
   return [-1, 0, 5, 20, 100].map((count) => ({
@@ -917,7 +917,7 @@ export function createEngineEventLoadScenarios(
             .filter({ hasText: "verify-event-load-1" });
           await summary.waitFor({ state: "visible" });
           if ((await summary.getAttribute("aria-expanded")) === "false") {
-            await summary.click();
+            await summary.press("Enter");
           }
           const tool = page
             .locator(`${pane} .chat-tool-msg-collapse`)

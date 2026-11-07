@@ -161,7 +161,7 @@ const { values } = parseArgs({
     "cpu-throttle": { type: "string", default: "1" },
     "idle-warmup-ms": { type: "string" },
     "idle-duration-ms": { type: "string", default: "30000" },
-    "event-load-duration-ms": { type: "string", default: "12000" },
+    "event-load-duration-ms": { type: "string", default: "240000" },
     "event-load-tools": { type: "string", default: "200" },
     "memory-soak-rounds": { type: "string", default: "10" },
   },

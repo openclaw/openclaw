@@ -4,11 +4,13 @@ import { i18n } from "../../../i18n/index.ts";
 import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-avatar.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
 import { createPendingSteerLookup } from "../chat-pending-inputs.ts";
 import { resolveTurnRecap, shouldRenderQueuedSendInThread } from "../chat-progress.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
-import { projectSubagentStatus } from "../chat-subagent-wait.ts";
+import { groupReadsHandoffRoster, projectSubagentStatus } from "../chat-subagent-wait.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import {
   buildCachedChatItems,
@@ -19,6 +21,7 @@ import {
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
 import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
+import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
@@ -48,8 +51,9 @@ import {
 import { projectTranscriptRecovery } from "./chat-transcript-recovery.ts";
 import {
   GuardedTranscriptItem,
+  appendTranscriptContextDependencies,
+  createTranscriptStatusSignature,
   guardChatRenderItems,
-  inspectTranscriptContext,
   trackTranscriptRenderDependencies,
 } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
@@ -200,15 +204,12 @@ export function projectChatTranscript(
     );
   };
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
-  const hasLiveContent = Boolean(
-    subagents.wait || hasTypingActors || realtimeConversation.hasEntries(),
-  );
   // An empty page is not an empty conversation. Keep the transcript mounted
   // while older history exists so the reader can request the next page.
   const isEmpty =
     transcriptItems.length === 0 &&
     !props.loading &&
-    !hasLiveContent &&
+    !(subagents.wait || hasTypingActors || realtimeConversation.hasEntries()) &&
     (!props.historyPagination?.hasMore || search.open);
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(props, chatItems);
   transcript.layout.configureRows(props, avatarPlacement, searchFiltering || recovery.revision > 0);
@@ -398,33 +399,13 @@ export function projectChatTranscript(
     presented,
     bubbleActivityGroupKey,
   ]);
-  const liveStatusSignature = (item: SystemEventRenderItem): string => {
-    if (item.kind === "stream-run") {
-      return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
-    }
-    if (item.kind !== "group" && item.kind !== "agent-run-frame") {
-      return "";
-    }
-    const recap = recapForGroup(item.key);
-    const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
-    const statusKey = `${recapKey}|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
-    if (item.kind === "agent-run-frame") {
-      const hasWorkingIndicator = item.parts.some(
-        (part) =>
-          part.kind === "stream-run" &&
-          part.parts.some((streamPart) => streamPart.kind === "reading-indicator"),
-      );
-      return `${hasWorkingIndicator ? workingUsageKey : ""}|${statusKey}`;
-    }
-    const continuation = continuations.get(item.key);
-    // Part keys stand in for the rest of the continuation: its remaining
-    // options mirror props that already invalidate every row through the
-    // shared render context.
-    const continuationKey = continuation
-      ? `${continuation.map((part) => part.key).join(" ")}${workingUsageKey}`
-      : "";
-    return `${continuationKey}|${statusKey}|${searchFiltering ? "search-result" : ""}`;
-  };
+  const liveStatusSignature = createTranscriptStatusSignature(
+    workingUsageKey,
+    latestAssistantItemKey,
+    recapForGroup,
+    continuations,
+    searchFiltering,
+  );
   // Deferred palettes apply leaf branding after the preference snapshot.
   const appliedBranding = currentThemeBranding();
   const toolExpansionVersion = getExpansionStateVersion(expandedToolCards);
@@ -513,13 +494,20 @@ export function projectChatTranscript(
   const { render: renderItem, dependenciesFor } = guardChatRenderItems(
     state.transcriptRenderDependencies,
     (item) => {
-      const context = inspectTranscriptContext(item, loadedReplySources, props, pendingSteer);
-      const [groups, hasTools, readsRoster, hasQuestions, dependencies] = context;
+      const groups = chatItemGroups(item);
+      const hasTools = groups.some((group) =>
+        group.messages.some(({ message }) => extractToolCardsCached(message).length > 0),
+      );
+      // Launch rows and resume rules read the child roster.
+      const readsRoster = hasTools || groups.some(groupReadsHandoffRoster);
+      const hasQuestions =
+        asyncQuestions &&
+        groups.some((group) => group.messages.some(({ message }) => readAsyncQuestions(message)));
       const readsToolExpansion =
         item.kind !== "group" || hasTools || item.role === "tool" || isSessionActivityGroup(item);
       const ownsActivity =
         !activityGroupKey || groups.some((group) => group.key === activityGroupKey);
-      return [
+      const dependencies: unknown[] = [
         readsToolExpansion ? toolExpansionVersion : undefined,
         ownsActivity ? activityRunId : undefined,
         ownsActivity ? activityGroupKey : undefined,
@@ -527,14 +515,24 @@ export function projectChatTranscript(
         ownsActivity ? bubbleActivityGroupKey : undefined,
         liveStatusSignature(item),
         item.key === liveItem?.key ? resolveLiveStream : undefined,
-        ...dependencies,
+      ];
+      appendTranscriptContextDependencies(
+        dependencies,
+        item,
+        groups,
+        loadedReplySources,
+        props,
+        pendingSteer,
+      );
+      dependencies.push(
         // Durable drafts can restore the same map under a new callback generation.
         hasQuestions ? asyncQuestions?.drafts : undefined,
         hasQuestions ? asyncQuestionGeneration : undefined,
         // Tool plugins own foreground activity.
         hasTools ? presented : undefined,
         readsRoster ? subagents.rowsKey : undefined,
-      ];
+      );
+      return dependencies;
     },
     (item) => {
       if (item.kind === "system-event-group") {

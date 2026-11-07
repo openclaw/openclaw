@@ -1,8 +1,6 @@
-import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
-import { groupReadsHandoffRoster } from "../chat-subagent-wait.ts";
+import type { TurnRecap } from "../chat-progress.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
-import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadProps, ChatThreadState } from "./chat-thread-interactions.ts";
@@ -10,6 +8,42 @@ import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 
 type ChatRenderItem = SystemEventRenderItem;
+
+export function createTranscriptStatusSignature(
+  workingUsageKey: string,
+  latestAssistantItemKey: string | null,
+  recapForGroup: (key: string) => TurnRecap | undefined,
+  continuations: ReadonlyMap<string, readonly { key: string }[]>,
+  searchFiltering: boolean,
+) {
+  return (item: ChatRenderItem): string => {
+    if (item.kind === "stream-run") {
+      return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
+    }
+    if (item.kind !== "group" && item.kind !== "agent-run-frame") {
+      return "";
+    }
+    const recap = recapForGroup(item.key);
+    const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
+    const statusKey = `${recapKey}|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
+    if (item.kind === "agent-run-frame") {
+      const hasWorkingIndicator = item.parts.some(
+        (part) =>
+          part.kind === "stream-run" &&
+          part.parts.some((streamPart) => streamPart.kind === "reading-indicator"),
+      );
+      return `${hasWorkingIndicator ? workingUsageKey : ""}|${statusKey}`;
+    }
+    const continuation = continuations.get(item.key);
+    // Part keys stand in for the rest of the continuation: its remaining
+    // options mirror props that already invalidate every row through the
+    // shared render context.
+    const continuationKey = continuation
+      ? `${continuation.map((part) => part.key).join(" ")}${workingUsageKey}`
+      : "";
+    return `${continuationKey}|${statusKey}|${searchFiltering ? "search-result" : ""}`;
+  };
+}
 
 /** The keyed virtual row owns the dependency memo and its rendered content. */
 export class GuardedTranscriptItem {
@@ -51,37 +85,22 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
   return [item];
 }
 
-export function inspectTranscriptContext(
+export function appendTranscriptContextDependencies(
+  dependencies: unknown[],
   item: ChatRenderItem,
+  groups: ReturnType<typeof chatItemGroups>,
   loadedSources: ReadonlyMap<string, LoadedReplySource>,
-  props: Pick<
-    ChatThreadProps,
-    | "onRetryRun"
-    | "failedMessageEditSource"
-    | "failureActionsRunId"
-    | "modelCatalog"
-    | "asyncQuestions"
-  >,
+  props: ChatThreadProps,
   pendingSteer: NativeMessageGroupOptions["pendingSteer"],
-) {
-  const groups = chatItemGroups(item);
-  const hasTools = groups.some((group) =>
-    group.messages.some(({ message }) => extractToolCardsCached(message).length > 0),
-  );
-  // Launch rows and resume rules read the child roster.
-  const readsRoster = hasTools || groups.some(groupReadsHandoffRoster);
-  const hasQuestions =
-    props.asyncQuestions &&
-    groups.some((group) => group.messages.some(({ message }) => readAsyncQuestions(message)));
-  const dependencies: unknown[] =
-    item.kind === "notice"
-      ? [
-          props.onRetryRun,
-          props.failedMessageEditSource,
-          props.failureActionsRunId,
-          item.modelChange ? props.modelCatalog : undefined,
-        ]
-      : [];
+): void {
+  if (item.kind === "notice") {
+    dependencies.push(
+      props.onRetryRun,
+      props.failedMessageEditSource,
+      props.failureActionsRunId,
+      item.modelChange ? props.modelCatalog : undefined,
+    );
+  }
   // The first fragment presents the final answer's reply attribution above the run.
   const replyGroups =
     item.kind === "agent-run-frame" && item.fragment?.first
@@ -102,7 +121,6 @@ export function inspectTranscriptContext(
       }
     }
   }
-  return [groups, hasTools, readsRoster, hasQuestions, dependencies] as const;
 }
 
 export function trackTranscriptRenderDependencies(

@@ -11,14 +11,14 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs \
   scripts/bench-control-ui-engines.ts \
   --steps event-load-unloaded,event-load-0,event-load-5,event-load-20,event-load-100 \
   --engines chromium,webkit,firefox --viewport both --pairs 10 \
-  --event-load-duration-ms 60000 \
+  --event-load-duration-ms 240000 \
   --output .artifacts/event-load-screen
 ```
 
 `event-load-unloaded` has no active turn. `event-load-0` has the foreground turn
 only. The remaining scenarios add 5, 20 or 100 active background sessions to the
 same inventory. `--event-load-tools` defaults to 200 and
-`--event-load-duration-ms` to 12000. Duration is a safety ceiling, not a trailing
+`--event-load-duration-ms` to 240000. Duration is a safety ceiling, not a trailing
 wait: measurement ends after the last action. Every loaded action must start and
 finish before that ceiling while background work remains active. The foreground calls are offered over six
 seconds after the first live output is verified; extending the background window
