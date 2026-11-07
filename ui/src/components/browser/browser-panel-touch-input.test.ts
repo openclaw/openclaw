@@ -65,14 +65,20 @@ async function settle() {
 
 it.each(["touch", "pen", "mouse"])("handles %s taps and drags", async (pointerType) => {
   const { input, clicks, scrolls } = setup(renderInput);
+  // jsdom has no Web Animations: count the press cues instead of playing them.
+  const animate = vi.fn(() => ({ cancel() {} }));
+  Object.assign(input.closest(".bp-stage")!.querySelector(".bp-press")!, { animate });
   const tap = { kind: "clickCoords", targetId: "tab-a", x: 20, y: 20 };
   const drag = { kind: "clickCoords", targetId: "tab-a", x: 50, y: 40 };
 
   input.dispatchEvent(pointer("pointerdown", 1, 20, 20, pointerType));
+  // A mouse press shows its cue at once; touch and pen wait until the tap becomes a click.
+  expect(animate).toHaveBeenCalledTimes(pointerType === "mouse" ? 1 : 0);
   input.dispatchEvent(pointer("pointerup", 1, 20, 20, pointerType));
   input.dispatchEvent(click(20, 20));
   await settle();
   expect(clicks()).toEqual([tap]);
+  expect(animate).toHaveBeenCalledTimes(1);
 
   input.dispatchEvent(pointer("pointerdown", 2, 50, 70, pointerType));
   input.dispatchEvent(pointer("pointermove", 2, 50, 40, pointerType));
@@ -87,6 +93,8 @@ it.each(["touch", "pen", "mouse"])("handles %s taps and drags", async (pointerTy
   const deltas = pointerType === "mouse" ? [] : ["30", "-20"];
   expect(scrolls()).toEqual(deltas.map((dy) => ["0", dy]));
   expect(clicks()).toEqual(pointerType === "mouse" ? [tap, drag] : [tap]);
+  // Mouse shows one cue per press; touch and pen show none for scroll drags.
+  expect(animate).toHaveBeenCalledTimes(pointerType === "mouse" ? 3 : 1);
 });
 
 it("drops a pending pen scroll when capture state resets", async () => {
