@@ -129,21 +129,69 @@ suite.define(() => {
         } else {
           expect(shimmer.seconds).toBeGreaterThanOrEqual(3);
         }
+        // Sample content handoff after the surface's independent entrance motion.
+        await expect.poll(() => details.evaluate((panel) => panel.getAnimations().length)).toBe(0);
         const before = (await details.boundingBox())!;
-        const firstContentFrame = await details.evaluateHandle((panel) => ({
-          frame: new Promise<number>((resolve) => {
-            const pending = panel.querySelector("openclaw-panel-loading-skeleton")!;
-            const observer = new MutationObserver(() => {
-              if (!pending.isConnected) {
-                observer.disconnect();
-                requestAnimationFrame(() => resolve(panel.getBoundingClientRect().height));
-              }
-            });
-            observer.observe(panel, { childList: true, subtree: true });
-          }),
-        }));
+        const pauseHandoff = cpuRate === 1 && reducedMotion === "no-preference";
+        const firstContentFrame = await details.evaluateHandle((panel, pause) => {
+          const handoff: {
+            animation?: Animation;
+            body?: HTMLElement;
+            beforeClose?: AnimationPlayState;
+          } = {};
+          return {
+            handoff,
+            frame: new Promise<number>((resolve, reject) => {
+              const pending = panel.querySelector("openclaw-panel-loading-skeleton")!;
+              const observer = new MutationObserver(() => {
+                if (!pending.isConnected) {
+                  observer.disconnect();
+                  requestAnimationFrame(() => {
+                    const height = panel.getBoundingClientRect().height;
+                    if (pause) {
+                      handoff.body =
+                        panel.querySelector<HTMLElement>(".chat-details-desktop-body") ?? undefined;
+                      handoff.animation = handoff.body?.getAnimations()[0];
+                      handoff.animation?.pause();
+                      handoff.beforeClose = handoff.animation?.playState;
+                      const toggle = [
+                        ...panel.ownerDocument.querySelectorAll<HTMLButtonElement>(
+                          "button.chat-details-toggle",
+                        ),
+                      ].find((button) => button.checkVisibility());
+                      if (!toggle) {
+                        reject(new Error("Missing native Details toggle"));
+                        return;
+                      }
+                      // Close before a later frame can retarget the captured animation.
+                      toggle.click();
+                    }
+                    resolve(height);
+                  });
+                }
+              });
+              observer.observe(panel, { childList: true, subtree: true });
+            }),
+          };
+        }, pauseHandoff);
         module.release();
         const firstHeight = await firstContentFrame.evaluate((probe) => probe.frame);
+        if (pauseHandoff) {
+          expect(await firstContentFrame.evaluate((probe) => probe.handoff.beforeClose)).toBe(
+            "paused",
+          );
+          await details.waitFor({ state: "hidden" });
+          expect(
+            await firstContentFrame.evaluate((probe) => probe.handoff.animation?.playState),
+          ).toBe("idle");
+          expect(
+            await firstContentFrame.evaluate((probe) => ({
+              animations: probe.handoff.body?.getAnimations().length,
+              height: probe.handoff.body?.style.height,
+            })),
+          ).toEqual({ animations: 0, height: "" });
+          await openChatDetails(page);
+        }
         await firstContentFrame.dispose();
         await details.locator(".chat-environment__branch").waitFor();
         await expect
@@ -176,6 +224,57 @@ suite.define(() => {
         expect(
           await details.locator(".chat-details-desktop-body").evaluate((body) => body.style.height),
         ).toBe("");
+        if (cpuRate === 4) {
+          expect(
+            await details.locator(".chat-details-desktop-body").evaluate(async (body) => {
+              const content = body.querySelector<HTMLElement>(
+                ".chat-details-desktop-body__content",
+              )!;
+              const bodyRect = body.getBoundingClientRect.bind(body);
+              const contentRect = content.getBoundingClientRect.bind(content);
+              const offsetWidth = Object.getOwnPropertyDescriptor(
+                HTMLElement.prototype,
+                "offsetWidth",
+              )!;
+              const clientWidth = Object.getOwnPropertyDescriptor(
+                Element.prototype,
+                "clientWidth",
+              )!;
+              let reads = 0;
+              const read = <T>(value: () => T) => {
+                reads++;
+                return value();
+              };
+              Object.defineProperties(body, {
+                getBoundingClientRect: { configurable: true, value: () => read(bodyRect) },
+                offsetWidth: {
+                  configurable: true,
+                  get: () => read(() => offsetWidth.get!.call(body)),
+                },
+                clientWidth: {
+                  configurable: true,
+                  get: () => read(() => clientWidth.get!.call(body)),
+                },
+              });
+              Object.defineProperty(content, "getBoundingClientRect", {
+                configurable: true,
+                value: () => read(contentRect),
+              });
+              try {
+                body.dispatchEvent(new Event("scroll"));
+                await new Promise<void>((resolve) => {
+                  requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+                });
+                return reads;
+              } finally {
+                for (const key of ["getBoundingClientRect", "offsetWidth", "clientWidth"]) {
+                  Reflect.deleteProperty(body, key);
+                }
+                Reflect.deleteProperty(content, "getBoundingClientRect");
+              }
+            }),
+          ).toBe(0);
+        }
       });
     },
   );

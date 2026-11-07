@@ -3,11 +3,13 @@ import {
   hasProviderBrandIcon,
   providerIdFromModelRef,
 } from "../../components/provider-icon-data.ts";
-import "../../components/modal-dialog.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import "../../components/modal-dialog.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import type { ModelSetupActivationState } from "./state.ts";
 import type { ModelSetupViewProps } from "./view-types.ts";
 
@@ -51,18 +53,18 @@ export function ModelSetupSuccessDialog(
           <div class="oc-dialog__header">
             <h2 class="oc-dialog__title">
               <Show when={providerIconId()}>
-                {(provider) => <ProviderBrandIcon provider={provider()} />}
+                {(provider) => <ModelProviderIcon provider={provider()} />}
               </Show>
               {title()}
             </h2>
-            <button
-              type="button"
+            <IconButton
+              size={28}
               class="oc-dialog__close"
-              aria-label={t("common.close")}
+              icon="x"
+              label={t("common.close")}
+              tooltip={false}
               onClick={() => props.onSuccessClose()}
-            >
-              <Icon name="x" />
-            </button>
+            />
             <Show when={!props.activation.warning}>
               <div class="oc-dialog__description">
                 <p>{description()}</p>
@@ -72,7 +74,9 @@ export function ModelSetupSuccessDialog(
           <div class="oc-dialog__body">
             <Show when={props.activation.warning}>
               {(warning) => (
-                <div class="callout warn model-setup-success__warning">{warning()}</div>
+                <InlineAlert tone="warning" class="model-setup-success__warning">
+                  {warning()}
+                </InlineAlert>
               )}
             </Show>
             <div class="oc-dialog__rows model-setup-success__summary">

@@ -2160,7 +2160,7 @@ class NodeRuntimeAgentSelectionTest {
     withTimeout(2_000) { refreshes.receive().join() }
   }
 
-  // Drives the operator session's own callbacks, as a gateway restart does.
+  // This fixture owns reconnect callbacks; discovery must not start a competing connection.
   private fun reconnectOperator(
     runtime: NodeRuntime,
     disconnectCallbacks: Int = 1,
@@ -2190,7 +2190,7 @@ class NodeRuntimeAgentSelectionTest {
         "openclaw.node.session.selection.test.${UUID.randomUUID()}",
         Context.MODE_PRIVATE,
       )
-    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs)).also { runtime ->
+    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs), initialReconnectSuppressed = true).also { runtime ->
       ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
       ReflectionHelpers.setField(runtime, "operatorConnected", true)
     }

@@ -118,7 +118,10 @@ Oversized cards come back as navigable summaries; read them with
 Both default to active records and accept `kind`, `type`, `tag`, `limit` (1–50,
 default 20), `offset`, and `lifecycle` (`active`, `superseded`, or `all`).
 `index.state: "unavailable"` with `total: null` is a failed retrieval, not zero
-matches. See [Retrieval and dates](/plugins/knowledge/retrieval).
+matches. An active `knowledge_grep` also returns the current replacement of a
+matching superseded record, after direct matches, with `matches: ["superseded"]`
+and `via` naming the earlier record. See
+[Retrieval and dates](/plugins/knowledge/retrieval#superseded-wording).
 
 For bodies over 64 KiB, search previews are opening excerpts rather than located
 matches (`snippet.matchLocated: false`). Open the record to inspect content.
@@ -130,6 +133,11 @@ One call takes a short `attribution`, the supporting conversation `excerpt` (at
 most 16 KiB), and 1–20 `items`. Each item has `text`, a claim `kind`, an
 optional `subject`, an optional `about`, an `origin` of `source` (default) or
 `user_belief`, and optional dates. Agent inference is rejected.
+
+Retry an interrupted remember with the same request ID and identical input. If
+an identical retry reports a payload mismatch after an upgrade, inspect its
+mutation receipt and use `knowledge_resume` for the accepted request's original
+ID. Do not create a replacement request.
 
 `about` is the saver's own description of what the claim concerns, such as
 `"bundled plugin hot reload, PR #180466"`. It needs no lookup and does not have

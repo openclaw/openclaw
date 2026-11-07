@@ -845,6 +845,17 @@ CREATE INDEX IF NOT EXISTS idx_agent_transcript_context_pending
   ON session_transcript_active_events(session_id)
   WHERE context_eligible IS NULL;
 
+CREATE TABLE IF NOT EXISTS session_transcript_active_event_facts (
+  session_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  serialized_bytes INTEGER NOT NULL CHECK (serialized_bytes >= 1),
+  dependency_navigation_json TEXT NOT NULL,
+  PRIMARY KEY (session_id, seq),
+  FOREIGN KEY (session_id, seq)
+    REFERENCES session_transcript_active_events(session_id, event_seq) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+-- END ACTIVE EVENT FACTS
+
 CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts USING fts5(
   text,
   session_id UNINDEXED,

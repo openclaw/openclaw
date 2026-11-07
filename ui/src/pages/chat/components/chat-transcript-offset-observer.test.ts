@@ -119,7 +119,7 @@ it.each([
         state,
         getScrollElement: () => element,
         endAnchor,
-        prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
+        prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
         canFollowEnd: () => false,
         isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
         cancelScroll,
@@ -161,7 +161,7 @@ it.each([
   element.scrollTop = 12;
   element.dispatchEvent(new Event("scroll"));
   onOffset.mockClear();
-  state.scrollCommand = { target: "end", behavior: "smooth" };
+  state.scrollCommand = { target: "end", behavior: "smooth", offset: 20 };
   element.scrollTop = 19;
   expect(isTranscriptProgrammaticScroll(state, element)).toBe(false);
   element.dispatchEvent(new Event("scroll"));
@@ -230,7 +230,7 @@ it.each([
           state,
           getScrollElement: () => element,
           endAnchor,
-          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
+          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
           canFollowEnd: () => canAutoFollowChat(policy),
           isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
           cancelScroll: vi.fn(),
@@ -312,7 +312,7 @@ it.each([
           state,
           getScrollElement: () => element,
           endAnchor: new TranscriptEndAnchor(() => {}),
-          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
+          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
           canFollowEnd: () => false,
           isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
           cancelScroll: vi.fn(),

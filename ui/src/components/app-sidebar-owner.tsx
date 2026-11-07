@@ -9,9 +9,9 @@ import {
   catalogSessionKeyFromSearch,
 } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
+import { SidebarOnlineHeader, SidebarPagesHeader } from "./app-sidebar-panel-headers.tsx";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
-import { SidebarOnlineHeader, SidebarPagesHeader } from "./app-sidebar-panel-headers.tsx";
 import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
 import { renderSidebarRail } from "./app-sidebar-rail.tsx";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
@@ -51,6 +51,7 @@ import {
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
 import { SidebarViewBoundary } from "./sidebar-view-boundary.tsx";
+import { GatewaySidebarSkeleton } from "./solid/gateway-connection-view.tsx";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
@@ -99,6 +100,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   peopleView?: ReturnType<typeof createSidebarPeople>;
   // A connected host retains its pending boot read when Solid recreates the view.
   readonly snapshot = createSidebarSnapshot(this);
+  scroll?: ReturnType<typeof createSidebarScroll>;
 
   override shouldPublishSessionData(): boolean {
     this.snapshot.synchronize();
@@ -546,67 +548,72 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         >
           {rail}
           <div class="sidebar-shell" onMouseDown={beginNativeWindowDragFromTopInset}>
-            <div class="sidebar-shell__content">
-              {/* Every panel header sits above the scroller so it stays pinned, keeps
+            <div
+              class="sidebar-shell__content"
+              aria-busy={this.connectionPending ? "true" : undefined}
+            >
+              <Show when={!this.connectionPending} fallback={<GatewaySidebarSkeleton />}>
+                {/* Every panel header sits above the scroller so it stays pinned, keeps
                   one geometry across views, and the scroll fade starts below it. */}
-              <Show
-                when={this.navigationView === "pages"}
-                fallback={
-                  <Show when={this.navigationView === "online"} fallback={toolbar}>
-                    <SidebarOnlineHeader host={this} />
-                  </Show>
-                }
-              >
-                <SidebarPagesHeader host={this} />
-              </Show>
-              <div
-                ref={scrollRef}
-                class={["sidebar-shell__body", `sidebar-shell__body--scroll-${scroll.state()}`]}
-                onScroll={scroll.onScroll}
-              >
                 <Show
                   when={this.navigationView === "pages"}
                   fallback={
-                    <Show
-                      when={this.navigationView === "online"}
-                      fallback={
-                        <>
-                          <div
-                            ref={scroll.createContentRef()}
-                            class="sidebar-session-content"
-                            hidden={Boolean(this.contextualSidebar)}
-                          >
-                            <SidebarScrollContext value={scroll}>
-                              <Sessions />
-                            </SidebarScrollContext>
-                          </div>
-                          {this.contextualSidebar?.render(
-                            this.contextualSidebar.data,
-                            this.contextualSidebar.loaderPending,
-                            true,
-                          )}
-                        </>
-                      }
-                    >
-                      <SidebarViewBoundary>
-                        <SidebarOnline host={this} />
-                      </SidebarViewBoundary>
+                    <Show when={this.navigationView === "online"} fallback={toolbar}>
+                      <SidebarOnlineHeader host={this} />
                     </Show>
                   }
                 >
-                  <Pages />
+                  <SidebarPagesHeader host={this} />
                 </Show>
-              </div>
-              <Show when={!this.contextualSidebar && this.sessionsStatusFilter !== "archived"}>
-                <PanelRefreshStatus
-                  status={this.sessionData.sessionCatalogRefreshStatus}
-                  {...{ className: "sidebar-session-error sidebar-session-catalog-error" }}
-                />
-              </Show>
-              <Show when={this.gatewayStatus?.kind === "reconnecting"}>
-                <div class="sidebar-shell__connection">
-                  <GatewayStatus {...this.gatewayStatus!} row />
+                <div
+                  ref={scrollRef}
+                  class={["sidebar-shell__body", `sidebar-shell__body--scroll-${scroll.state()}`]}
+                  onScroll={scroll.onScroll}
+                >
+                  <Show
+                    when={this.navigationView === "pages"}
+                    fallback={
+                      <Show
+                        when={this.navigationView === "online"}
+                        fallback={
+                          <>
+                            <div
+                              ref={scroll.createContentRef()}
+                              class="sidebar-session-content"
+                              hidden={Boolean(this.contextualSidebar)}
+                            >
+                              <SidebarScrollContext value={scroll}>
+                                <Sessions />
+                              </SidebarScrollContext>
+                            </div>
+                            {this.contextualSidebar?.render(
+                              this.contextualSidebar.data,
+                              this.contextualSidebar.loaderPending,
+                              true,
+                            )}
+                          </>
+                        }
+                      >
+                        <SidebarViewBoundary>
+                          <SidebarOnline host={this} />
+                        </SidebarViewBoundary>
+                      </Show>
+                    }
+                  >
+                    <Pages />
+                  </Show>
                 </div>
+                <Show when={!this.contextualSidebar && this.sessionsStatusFilter !== "archived"}>
+                  <PanelRefreshStatus
+                    status={this.sessionData.sessionCatalogRefreshStatus}
+                    {...{ className: "sidebar-session-error sidebar-session-catalog-error" }}
+                  />
+                </Show>
+                <Show when={this.gatewayStatus?.kind === "reconnecting"}>
+                  <div class="sidebar-shell__connection">
+                    <GatewayStatus {...this.gatewayStatus!} row />
+                  </div>
+                </Show>
               </Show>
             </div>
             <Show when={this.devGitBranch}>

@@ -63,8 +63,9 @@ import {
   type ExecProcessOutcome,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
-import type { DurableExecOptions, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { DurableExecOptions } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import type { ExecApprovalTransport } from "./exec-approval-transport.js";

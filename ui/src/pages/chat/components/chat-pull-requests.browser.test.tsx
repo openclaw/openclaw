@@ -5,8 +5,7 @@ import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
-import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
 import { ChatPullRequests } from "./chat-pull-requests.tsx";
@@ -168,51 +167,46 @@ it.each([
             data-instant
             style={{ position: "relative", width: `${width}px`, "max-width": "none" }}
           >
-            <ChatDetailsDesktopBody presented>
-              {() => (
-                <>
-                  <ChatDetailsEnvironment
-                    presented
-                    details={{
-                      sessionKey: "agent:main:branch",
-                      currentAgentId: "main",
-                      messages: [],
-                      selectedSession: undefined,
-                      detailsWorkspace: {
-                        root: "/synthetic/project",
-                        label: "project",
-                        branch: branch.branch,
-                      },
-                    }}
-                    work={{
-                      pullRequests: [],
-                      branch,
-                      status: "ready",
-                      onDismiss: () => {},
-                      onDismissBranch,
-                      publication: publication({
-                        onPublish,
-                        onSelect,
-                        options: {
-                          shared,
-                          personal: {
-                            state: "connected",
-                            generation: "personal",
-                            account: { accountId: 2, login: "alice-tools" },
-                            accessExpiresAtMs: null,
-                            refreshState: "available",
-                            pending: null,
-                          },
-                          pendingPersonal: null,
-                          latestShared: null,
-                        },
-                        selection: { source: "shared", expected: shared },
-                      }),
-                    }}
-                  />
-                </>
-              )}
-            </ChatDetailsDesktopBody>
+            <ChatDetailsDesktopContent
+              presented
+              dismissed={false}
+              cachedReady={false}
+              progressMenuRef={() => {}}
+              onHideProgress={() => {}}
+              chat={{
+                sessionKey: "agent:main:branch",
+                currentAgentId: "main",
+                messages: [],
+                selectedSession: undefined,
+                detailsWorkspace: {
+                  root: "/synthetic/project",
+                  label: "project",
+                  branch: branch.branch,
+                },
+                pullRequests: [],
+                pullRequestsBranch: branch,
+                pullRequestsStatus: "ready",
+                onDismissPullRequestsBranch: onDismissBranch,
+                githubPublication: publication({
+                  onPublish,
+                  onSelect,
+                  options: {
+                    shared,
+                    personal: {
+                      state: "connected",
+                      generation: "personal",
+                      account: { accountId: 2, login: "alice-tools" },
+                      accessExpiresAtMs: null,
+                      refreshState: "available",
+                      pending: null,
+                    },
+                    pendingPersonal: null,
+                    latestShared: null,
+                  },
+                  selection: { source: "shared", expected: shared },
+                }),
+              }}
+            />
           </section>
         </>
       ),
