@@ -269,12 +269,28 @@ function targetsLiveStateSqliteDatabase(
   });
 }
 
+function isShellBoundaryWhitespace(charCode: number): boolean {
+  return charCode === 0x20 || charCode === 0x09 || charCode === 0x0a;
+}
+
+function trimShellBoundaryWhitespace(command: string): string {
+  let start = 0;
+  let end = command.length;
+  while (start < end && isShellBoundaryWhitespace(command.charCodeAt(start))) {
+    start += 1;
+  }
+  while (end > start && isShellBoundaryWhitespace(command.charCodeAt(end - 1))) {
+    end -= 1;
+  }
+  return command.slice(start, end);
+}
+
 export async function detectUnsafeExecControlShellCommand(
   command: string,
   context: ExecControlShellCommandContext = {},
 ): Promise<UnsafeExecControlShellCommandKind | null> {
   // Only trim shell whitespace; CR, VT, and FF must reach the parser for rejection.
-  const rawCommand = command.replace(/^[ \t\n]+|[ \t\n]+$/gu, "");
+  const rawCommand = trimShellBoundaryWhitespace(command);
   let explanation: CommandExplanation | null = null;
   try {
     explanation = await explainShellCommand(rawCommand);

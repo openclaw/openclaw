@@ -427,3 +427,32 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
     });
   });
 });
+
+describeNonWin("exec shell control-byte preflight", () => {
+  it("rejects raw and decoded bytes before spawn and permits ordinary whitespace", async () => {
+    await withTempDir("openclaw-exec-control-byte-", async (root) => {
+      const stateDir = path.join(root, "state");
+      const marker = path.join(root, "started");
+      await withEnvAsync(
+        { HOME: root, USERPROFILE: root, OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir },
+        async () => {
+          const tool = createPreflightTool();
+          for (const command of [
+            `echo safe\v#; printf started > ${JSON.stringify(marker)}`,
+            String.raw`bash -c $'echo safe\v#; printf started > ${JSON.stringify(marker)}'`,
+          ]) {
+            await expect(
+              tool.execute("call-control-byte", { command, workdir: root }),
+            ).rejects.toThrow(/unsupported control characters/);
+            await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+          }
+          await tool.execute("call-ordinary-whitespace", {
+            command: `printf started > ${JSON.stringify(marker)}`,
+            workdir: root,
+          });
+          await expect(fs.readFile(marker, "utf8")).resolves.toBe("started");
+        },
+      );
+    });
+  });
+});
