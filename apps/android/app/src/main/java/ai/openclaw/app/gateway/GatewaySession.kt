@@ -252,6 +252,7 @@ data class GatewayHelloSummary(
   val authSessionCap: String? = null,
   val methods: Set<String>? = null,
   val capabilities: Set<String>? = null,
+  val controlUiBasePath: String? = null,
 )
 
 internal data class GatewaySessionRouting(
@@ -1979,6 +1980,7 @@ class GatewaySession(
             authSessionCap = authSessionCap,
             methods = featureSet("methods"),
             capabilities = featureSet("capabilities"),
+            controlUiBasePath = obj["controlUiBasePath"].asStringOrNull(),
           ),
       )
     }

@@ -53,6 +53,7 @@ import ai.openclaw.app.gateway.gatewayNetworkConnectError
 import ai.openclaw.app.gateway.isGatewayTlsSystemTrustCandidate
 import ai.openclaw.app.gateway.isTailscaleGatewayHost
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
+import ai.openclaw.app.gateway.normalizeGatewayContextPath
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.gateway.parseGatewayUpdateAvailableSummary
@@ -1418,6 +1419,7 @@ class NodeRuntime internal constructor(
         refreshGatewayControlPage(
           operatorReady = true,
           browserFocusAvailable = hello.capabilities?.contains("control-ui-browser-focus") == true,
+          controlUiBasePath = hello.controlUiBasePath,
         )
         if (selectedChatAgentId != null) {
           completeOperatorConnection()
@@ -4731,6 +4733,7 @@ class NodeRuntime internal constructor(
     endpoint: GatewayEndpoint? = connectedEndpoint,
     operatorReady: Boolean = false,
     browserFocusAvailable: Boolean = false,
+    controlUiBasePath: String? = null,
   ) {
     if (endpoint == null) {
       _gatewayControlPage.value = null
@@ -4774,7 +4777,7 @@ class NodeRuntime internal constructor(
     }
     page =
       GatewayControlPage(
-        baseUrl = gatewayControlPageBaseUrl(endpoint),
+        baseUrl = gatewayControlPageBaseUrl(endpoint, controlUiBasePath),
         // Reflect the admitted connection's TLS, not merely a saved preference:
         // an active pin must gate embedded auth; a saved-but-inactive pin must not.
         tlsFingerprintSha256 = connection?.tls?.expectedFingerprint,
@@ -8717,10 +8720,18 @@ internal fun gatewayRegistryEntry(
   )
 }
 
-/** HTTP(S) base URL serving the connected gateway's Control UI pages. */
-internal fun gatewayControlPageBaseUrl(endpoint: GatewayEndpoint): String {
+/**
+ * HTTP(S) base URL serving the connected gateway's Control UI pages. A path in the connection URL
+ * (a reverse-proxy mount) wins; otherwise the mount the Gateway advertised in hello-ok applies,
+ * since discovered and host:port connections carry no path.
+ */
+internal fun gatewayControlPageBaseUrl(
+  endpoint: GatewayEndpoint,
+  controlUiBasePath: String? = null,
+): String {
   val scheme = if (endpoint.tlsEnabled) "https" else "http"
-  return "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}${endpoint.contextPath}"
+  val mount = endpoint.contextPath.ifEmpty { normalizeGatewayContextPath(controlUiBasePath) }
+  return "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}$mount"
 }
 
 internal class ProviderModelConfigUnsupported : Exception()

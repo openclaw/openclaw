@@ -592,6 +592,24 @@ class GatewayBootstrapAuthTest {
     }
 
   @Test
+  fun controlPageMountsAtBasePathAdvertisedInHello() =
+    runBlocking {
+      val (_, prefs, runtime) = gatewayFixture()
+      neutralizeColdStartAutoConnect(runtime)
+      prefs.setManualTls(false)
+      installControlPageGateway(authMethod = "device-token", controlUiBasePath = "/gateway")
+      assertTrue(runtime.connectSwitchingGateway(gatewayEndpoint(), auth(token = "setup-shared-secret")))
+      // A manual host:port connection carries no path, so the Gateway's hello is the only source of the mount.
+      val page =
+        withTimeout(5_000) {
+          runtime.gatewayControlPage.first { page ->
+            page?.connectAuth?.let { runCatching { it("browser-challenge", 1700000000123) }.isSuccess } == true
+          }
+        }
+      assertEquals("http://127.0.0.1:${gatewayServer.port}/gateway", page?.baseUrl)
+    }
+
+  @Test
   fun controlPagePreservesAcceptedSharedAuthenticationAndLegacyHello() =
     runBlocking {
       for ((field, configuredAuth) in listOf("token" to auth(token = "accepted-shared-token"), "password" to auth(password = "accepted-password"))) {
@@ -2782,6 +2800,7 @@ class GatewayBootstrapAuthTest {
   private fun installControlPageGateway(
     authMethod: String?,
     rejectSharedToken: Boolean = false,
+    controlUiBasePath: String? = null,
     onOperatorConnect: (JsonObject) -> Unit = {},
   ) {
     gatewayServer.dispatcher =
@@ -2818,7 +2837,8 @@ class GatewayBootstrapAuthTest {
                     if (role == "operator") onOperatorConnect(params)
                     val methodField = authMethod?.let { "\"method\":\"$it\"," }.orEmpty()
                     val scopes = if (role == "operator") "[\"operator.read\"]" else "[]"
-                    """{"auth":{$methodField"deviceToken":"native-$role-token","role":"$role","scopes":$scopes},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}"""
+                    val basePathField = controlUiBasePath?.let { ",\"controlUiBasePath\":\"$it\"" }.orEmpty()
+                    """{"auth":{$methodField"deviceToken":"native-$role-token","role":"$role","scopes":$scopes},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}$basePathField}"""
                   } else if (frame["method"]?.jsonPrimitive?.content == "agents.list") {
                     """{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}"""
                   } else {
