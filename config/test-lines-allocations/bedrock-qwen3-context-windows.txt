@@ -1,0 +1,2 @@
+# Bedrock discovery regression: Qwen3 Coder 480B / Next 80B / 235B 2507 context windows.
+8
