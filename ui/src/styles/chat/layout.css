@@ -2142,16 +2142,6 @@ button.chat-pr__diff {
   color: var(--warn);
 }
 
-.chat-ci__status[data-state="running"] svg {
-  animation: btn-spinner-spin 1.2s linear infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-ci__status[data-state="running"] svg {
-    animation: none;
-  }
-}
-
 .chat-pr__checks-pill {
   display: inline-flex;
   align-items: center;
