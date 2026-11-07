@@ -143,6 +143,7 @@ class Monitor {
   private readonly removeCloseHandler: () => void;
   private readonly retainClient?: () => (() => void) | undefined;
   private readonly retainParentThread?: (threadId: string) => (() => void) | undefined;
+  private readonly canAnnounceToRetainedParent?: (threadId: string) => boolean;
   private readonly claimChildThread?: (threadId: string) => Promise<unknown>;
   private readonly retainChildThread?: (threadId: string) => Promise<unknown>;
   private readonly releaseChildThread?: (threadId: string) => Promise<unknown>;
@@ -167,6 +168,7 @@ class Monitor {
     });
     this.retainClient = options.retainClient;
     this.retainParentThread = options.retainParentThread;
+    this.canAnnounceToRetainedParent = options.canAnnounceToRetainedParent;
     this.claimChildThread = options.claimChildThread;
     this.retainChildThread = options.retainChildThread;
     this.releaseChildThread = options.releaseChildThread;
@@ -193,6 +195,9 @@ class Monitor {
       children: this.childStates,
       parents: this.parentStates,
       retiredParents: this.retiredParentStates,
+      mustWaitForSiblingRelease: (parentThreadId) =>
+        this.parentThreadRetentions.has(parentThreadId) &&
+        this.canAnnounceToRetainedParent?.(parentThreadId) === false,
       unregisterChild: (child) => this.unregisterChild(child),
       abandon: (state, child, assertCurrent) =>
         this.assignments.abandon(state, child, assertCurrent),
@@ -2354,6 +2359,12 @@ class Monitor {
     const releaseParentThread = this.parentThreadRetentions.get(parentThreadId);
     this.parentThreadRetentions.delete(parentThreadId);
     releaseParentThread?.();
+    // Results held back only because the sibling kept this thread protected can
+    // be announced now that the release the announce path needs has happened.
+    const state = this.parentStates.get(parentThreadId);
+    if (state) {
+      this.completionDelivery.deliverDetached(state);
+    }
   }
 
   private hasChildrenForParent(parentThreadId: string): boolean {

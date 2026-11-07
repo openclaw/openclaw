@@ -312,6 +312,12 @@ export type MonitorOptions = {
   interruptModelExecution?: (threadId: string, turnId: string) => void;
   retainClient?: () => (() => void) | undefined;
   retainParentThread?: (threadId: string) => (() => void) | undefined;
+  /**
+   * Whether an announce can still reach this retained parent thread without the
+   * release its retention blocks. Defaults to yes, so a retention never holds a
+   * completion back unless the caller knows the route is gone.
+   */
+  canAnnounceToRetainedParent?: (threadId: string) => boolean;
   hasObservationBacking?: (parentThreadId: string, childThreadId: string) => boolean;
   claimChildThread?: (threadId: string) => Promise<unknown>;
   retainChildThread?: (threadId: string) => Promise<unknown>;

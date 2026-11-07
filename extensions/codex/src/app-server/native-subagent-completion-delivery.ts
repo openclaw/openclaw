@@ -17,6 +17,8 @@ type CompletionDeliveryDependencies = {
   children: ReadonlyMap<string, ChildState>;
   parents: ReadonlyMap<string, ParentState>;
   retiredParents: Pick<WeakSet<ParentState>, "has">;
+  /** The only remaining route to this parent is the release our own retention blocks. */
+  mustWaitForSiblingRelease: (parentThreadId: string) => boolean;
   unregisterChild: (child: ChildState) => void;
   abandon: (state: ParentState, child: ChildState, assertCurrent: () => void) => Promise<void>;
   settleNestedCompletion: (
@@ -63,6 +65,7 @@ export class CodexNativeSubagentCompletionDelivery {
       return;
     }
     let deferredToForeground = false;
+    let deferredToSibling = false;
     try {
       if (childState.cancellationRequested) {
         // Stop settles owned processes before acknowledging cancellation or
@@ -96,6 +99,14 @@ export class CodexNativeSubagentCompletionDelivery {
       // parent after its last owner leaves; native receipts deduplicate both paths.
       if (state.owners.size > 0 || !state.completionScope) {
         deferredToForeground = state.owners.size > 0;
+        return;
+      }
+      // Retention keeps the parent subscription alive; it does not force a
+      // release. Only a parent whose announce has no other route waits for the
+      // release the monitor already schedules, instead of charging the retry
+      // budget for a refusal we can predict.
+      if (this.dependencies.mustWaitForSiblingRelease(state.parentThreadId)) {
+        deferredToSibling = true;
         return;
       }
       const historyOwner = childState.historyOwner;
@@ -161,7 +172,7 @@ export class CodexNativeSubagentCompletionDelivery {
         error: message,
       });
     } finally {
-      if (!deferredToForeground) {
+      if (!deferredToForeground && !deferredToSibling) {
         // Keep the root through the first handoff, including a foreground parent's
         // pending unregister. Once attempted, sleeping retries retain only delivery authority.
         childState.completionCustody?.settleExecution();
