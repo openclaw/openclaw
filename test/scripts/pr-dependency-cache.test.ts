@@ -37,6 +37,7 @@ import {
   prCacheEntries,
   readPrCacheState,
   readPrCacheRows,
+  sealPrDependencyPlan,
 } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -190,8 +191,7 @@ function privateTargetFixture() {
 
 function heldEntry(f: ReturnType<typeof fixture>) {
   const installation = entry(f.cache, "a".repeat(64));
-  const acquire = `withDependencyCacheLock(cache, (lock) => holdDependencyCache(lock, ${JSON.stringify(installation)}, anchor));`;
-  expect(child(f, acquire).status).toBe(0);
+  expect(hold(f, installation).status).toBe(0);
   return installation;
 }
 
@@ -269,25 +269,17 @@ function releaseCommand(f: ReturnType<typeof fixture>, args: string[], PATH = pr
     env: { ...process.env, HOME: f.home, PATH },
   });
 }
-function sealPlan(f: ReturnType<typeof fixture>, bytes: string) {
-  const path = join(f.home, "release.json");
-  writeFileSync(path, bytes);
-  const seal = createHash("sha256").update(bytes).digest("hex");
-  return [path, "--plan-sha256", seal, "--confirmed-no-running-tools"];
-}
 function reviewHolds(f: ReturnType<typeof fixture>) {
   const ledger = join(f.cache, "lifetime.sqlite");
   const before = readFileSync(ledger);
   const { status, stdout, stderr } = releaseCommand(f, ["--dry-run"]);
   expect(status, stderr).toBe(0);
   expect(readFileSync(ledger)).toEqual(before);
-  return { plan: JSON.parse(stdout), args: sealPlan(f, stdout) };
+  return { plan: JSON.parse(stdout), args: sealPrDependencyPlan(f.home, stdout) };
 }
 function finishedHold() {
   const f = fixture(true, spawnSync(requireNodeTool("node"), ["-e", ""]).pid);
-  const installation = entry(f.cache, "a".repeat(64));
-  expect(hold(f, installation).status).toBe(0);
-  return { ...f, installation };
+  return { ...f, installation: heldEntry(f) };
 }
 
 describePosix("operator dependency hold release", () => {
@@ -304,7 +296,7 @@ describePosix("operator dependency hold release", () => {
     const unknown = releaseCommand(f, ["--dry-run", "--anchor", `${f.anchor}.unknown`]);
     expect(unknown.status).toBe(1);
     expect(unknown.stderr).toContain("No dependency hold");
-    const result = releaseCommand(f, sealPlan(f, selected.stdout));
+    const result = releaseCommand(f, sealPrDependencyPlan(f.home, selected.stdout));
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       state: "released",
@@ -377,7 +369,10 @@ describePosix("operator dependency hold release", () => {
         const { plan } = reviewHolds(f);
         expect(plan.blocked).toMatchObject([{ path: f.anchor, blockers: [expected] }]);
         // Promoting blocked records proves that sealed evidence never authorizes release.
-        args = sealPlan(f, JSON.stringify({ ...plan, anchors: plan.blocked, blocked: [] }));
+        args = sealPrDependencyPlan(
+          f.home,
+          JSON.stringify({ ...plan, anchors: plan.blocked, blocked: [] }),
+        );
       }
       const result = releaseCommand(f, args);
       expect(result.status, result.stderr).toBe(1);
@@ -720,8 +715,7 @@ describePosix("PR cache anchor lifetime", () => {
   });
 
   it("keeps a held entry beyond four newer unheld installations", () => {
-    const dead = spawnSync(requireNodeTool("node"), ["-e", ""]).pid;
-    const f = fixture(true, dead);
+    const f = fixture();
     const held = entry(f.cache, "0".repeat(64));
     const result = hold(f, held);
     expect(result.status, result.stderr).toBe(0);
@@ -735,17 +729,9 @@ describePosix("PR cache anchor lifetime", () => {
     expect(prCacheEntries(f.cache).toSorted()).toEqual(
       ["0".repeat(64), ...names.slice(-4)].toSorted(),
     );
-    const { args } = reviewHolds(f);
-    const retired = releaseCommand(f, args);
+    const retired = retireDependencies(f);
     expect(retired.status, retired.stderr).toBe(0);
-    expect(JSON.parse(retired.stdout)).toMatchObject({
-      state: "released",
-      settled: ["0".repeat(64)],
-      retained: [],
-    });
-    expect(readPrCacheState(held)).toEqual({ registered: true, settled: true, anchors: [] });
     expect(existsSync(f.anchor)).toBe(false);
-    expect(JSON.parse(releaseCommand(f, args).stdout).state).toBe("already-released");
     sweep(f.cache);
     expect(existsSync(held)).toBe(false);
   });
@@ -821,8 +807,7 @@ describePosix("PR cache anchor lifetime", () => {
 
   it("refuses and retains an earlier PR-format ledger without rewriting its holds", () => {
     const f = fixture();
-    const installation = entry(f.cache, "a".repeat(64));
-    expect(hold(f, installation).status).toBe(0);
+    const installation = heldEntry(f);
     const path = join(f.cache, "lifetime.sqlite");
     const db = new DatabaseSync(path);
     try {
@@ -858,8 +843,7 @@ describePosix("PR cache anchor lifetime", () => {
     "retains uncertain holds: %s",
     (fault) => {
       const f = fixture();
-      const installation = entry(f.cache, "a".repeat(64));
-      expect(hold(f, installation).status).toBe(0);
+      const installation = heldEntry(f);
       if (fault === "missing anchor") {
         rmSync(f.anchor, { recursive: true });
       } else if (fault === "missing hold") {

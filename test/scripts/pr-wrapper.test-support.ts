@@ -1,5 +1,5 @@
 import { spawnSync, type StdioOptions } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
   cpSync,
@@ -278,4 +278,15 @@ export function readPrCacheRows(db: DatabaseSync) {
     installations: rows("SELECT * FROM installations ORDER BY key"),
     holds: rows("SELECT * FROM holds ORDER BY entry_key, anchor_path, anchor_dev, anchor_ino"),
   };
+}
+
+export function sealPrDependencyPlan(
+  home: string,
+  bytes: string,
+  confirmation = "--confirmed-no-running-tools",
+) {
+  const path = join(home, "release.json");
+  writeFileSync(path, bytes);
+  const seal = createHash("sha256").update(bytes).digest("hex");
+  return [path, "--plan-sha256", seal, confirmation];
 }
