@@ -79,6 +79,11 @@ type RouteMetadata = {
   upstreamModel?: string;
   serviceTiers?: string[];
   hostedWebSearch?: true;
+  ollamaTransport?: {
+    requestUrl: string;
+    bodyMode: "native" | "manifest";
+    modelId: string;
+  };
 };
 
 export function normalizeClawRouterReasoningEfforts(
@@ -264,6 +269,7 @@ function buildRoutedModel(
   let baseUrl: string;
   let upstreamModel: string | undefined;
   let endpoint: string | undefined;
+  let ollamaTransport: RouteMetadata["ollamaTransport"];
 
   if (
     provider.id === "xai" &&
@@ -320,6 +326,32 @@ function buildRoutedModel(
     endpoint = messages.endpoint;
     baseUrl = messages.url.slice(0, -"/v1/messages".length);
     upstreamModel = upstream;
+  } else if (provider.id === "ollama") {
+    const offers = capabilities.includes("llm.chat")
+      ? provider.httpOffers.filter(
+          (offer) =>
+            offer.model?.id === id &&
+            offer.model.upstream === upstream &&
+            offer.path === "/api/chat" &&
+            offer.requestFormat === "ollama.chat" &&
+            offer.responseFormat === "ollama.chat" &&
+            offer.methods.includes("POST") &&
+            (offer.routeKind === "native" || offer.routeKind === "manifest"),
+        )
+      : [];
+    const offer = offers.find((entry) => entry.routeKind === "native") ?? offers[0];
+    if (!offer) {
+      return undefined;
+    }
+    api = "ollama";
+    endpoint = offer.endpoint;
+    upstreamModel = upstream;
+    baseUrl = offer.routeKind === "native" ? offer.url.slice(0, -"/api/chat".length) : rootUrl;
+    ollamaTransport = {
+      requestUrl: offer.url,
+      bodyMode: offer.routeKind === "native" ? "native" : "manifest",
+      modelId: id,
+    };
   } else if (cohereChat) {
     api = "openai-completions";
     baseUrl = cohereChat.url.slice(0, -"/chat/completions".length);
@@ -475,6 +507,7 @@ function buildRoutedModel(
         api,
         baseUrl,
         ...(upstreamModel ? { upstreamModel } : {}),
+        ...(ollamaTransport ? { ollamaTransport } : {}),
         // Support is not a grant: require this key's exact matching route admission.
         ...(provider.id === "openai" &&
         api === "openai-responses" &&
@@ -538,15 +571,51 @@ function readRouteMetadata(params: ProviderRuntimeModel["params"]): RouteMetadat
     (api !== "openai-responses" &&
       api !== "openai-completions" &&
       api !== "anthropic-messages" &&
-      api !== "google-generative-ai")
+      api !== "google-generative-ai" &&
+      api !== "ollama")
   ) {
     return undefined;
   }
   const upstreamModel = normalizeOptionalString(row?.upstreamModel);
+  if (api === "ollama") {
+    const transport = asOptionalRecord(row?.ollamaTransport);
+    const requestUrl = normalizeOptionalString(transport?.requestUrl);
+    const modelId = normalizeOptionalString(transport?.modelId);
+    const bodyMode = transport?.bodyMode;
+    if (
+      !upstreamModel ||
+      !requestUrl ||
+      !modelId ||
+      (bodyMode !== "native" && bodyMode !== "manifest")
+    ) {
+      return undefined;
+    }
+    return { api, baseUrl, upstreamModel, ollamaTransport: { requestUrl, bodyMode, modelId } };
+  }
   return {
     api,
     baseUrl,
     ...(upstreamModel ? { upstreamModel } : {}),
+  };
+}
+
+export function resolveClawRouterOllamaRoute(model: ProviderRuntimeModel) {
+  const route = readRouteMetadata(model.params);
+  if (
+    route?.api !== "ollama" ||
+    !route.ollamaTransport ||
+    route.ollamaTransport.modelId !== model.id ||
+    !route.upstreamModel
+  ) {
+    throw new Error("ClawRouter Ollama requires an eligible catalog offer for the selected model");
+  }
+  return {
+    baseUrl: route.baseUrl,
+    upstreamModel: route.upstreamModel,
+    transport: {
+      requestUrl: route.ollamaTransport.requestUrl,
+      bodyMode: route.ollamaTransport.bodyMode,
+    },
   };
 }
 

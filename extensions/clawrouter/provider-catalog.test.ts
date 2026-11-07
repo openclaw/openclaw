@@ -7,6 +7,7 @@ import {
   buildClawRouterProviderConfig,
   normalizeClawRouterResolvedModel,
   prepareClawRouterRequestModel,
+  resolveClawRouterOllamaRoute,
 } from "./provider-catalog.js";
 
 const PRICING = {
@@ -104,6 +105,117 @@ describe("ClawRouter provider catalog", () => {
     clearLiveCatalogCacheForTests();
   });
   afterEach(() => vi.restoreAllMocks());
+
+  function ollamaCatalog(
+    routeKind: "native" | "manifest",
+    offerChanges: Record<string, unknown> = {},
+  ) {
+    return {
+      version: "clawrouter.client-catalog.v1",
+      providers: [
+        {
+          ...catalogProvider("ollama", "Ollama", "qwen3:8b", ["llm.chat"], [], {
+            pricing: PRICING,
+          }),
+          allowed: true,
+          executable: true,
+          routes: [
+            {
+              endpoint: "chat",
+              path: "/api/chat",
+              methods: ["POST"],
+              requestFormat: "ollama.chat",
+              responseFormat: "ollama.chat",
+            },
+          ],
+          offers: [
+            {
+              endpoint: "chat",
+              modelId: "ollama/qwen3:8b",
+              eligible: true,
+              transport: "http",
+              affordability: "request-dependent",
+              routeKind,
+              route:
+                routeKind === "native" ? "/v1/native/ollama/api/chat" : "/v1/proxy/ollama/chat",
+              ...offerChanges,
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  it.each(["native", "manifest"] as const)(
+    "binds the exact Ollama %s offer without a Chat alias",
+    async (routeKind) => {
+      vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
+        response: Response.json(ollamaCatalog(routeKind)),
+        finalUrl: "https://router.example/prefix/v1/catalog",
+        release: async () => {},
+      });
+      const catalog = await buildClawRouterProviderConfig({
+        apiKey: "synthetic-router-key",
+        discoveryApiKey: "synthetic-router-key",
+        baseUrl: "https://router.example/prefix/v1",
+      });
+      expect(catalog.models).toHaveLength(1);
+      const row = catalog.models[0];
+      if (!row || !row.baseUrl || !row.cost || !row.maxTokens) {
+        throw new Error("Expected the priced fixture model");
+      }
+      expect(row.input).toEqual(["text"]);
+      const model: ProviderRuntimeModel = {
+        ...row,
+        input: ["text"],
+        api: "ollama",
+        provider: "clawrouter",
+        baseUrl: row.baseUrl,
+        cost: row.cost,
+        maxTokens: row.maxTokens,
+      };
+      const route = resolveClawRouterOllamaRoute(model);
+      expect(route).toEqual({
+        baseUrl:
+          routeKind === "native"
+            ? "https://router.example/prefix/v1/native/ollama"
+            : "https://router.example/prefix",
+        upstreamModel: "qwen3:8b",
+        transport: {
+          requestUrl: `https://router.example/prefix${routeKind === "native" ? "/v1/native/ollama/api/chat" : "/v1/proxy/ollama/chat"}`,
+          bodyMode: routeKind,
+        },
+      });
+      expect(model.id).toBe("ollama/qwen3:8b");
+      expect(prepareClawRouterRequestModel(model).id).toBe("qwen3:8b");
+      expect(() => resolveClawRouterOllamaRoute({ ...model, id: "ollama/another-model" })).toThrow(
+        "selected model",
+      );
+    },
+  );
+
+  it.each([
+    { eligible: false },
+    { modelId: "ollama/another-model" },
+    { route: "/v1/native/ollama/api/generate" },
+    { route: "https://foreign.example/api/chat" },
+    { routeKind: "unified", route: "/v1/chat/completions" },
+  ])(
+    "does not resurrect Ollama from an ineligible or mismatched offer %j",
+    async (offerChanges) => {
+      vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
+        response: Response.json(ollamaCatalog("native", offerChanges)),
+        finalUrl: "https://router.example/v1/catalog",
+        release: async () => {},
+      });
+      const catalog = await buildClawRouterProviderConfig({
+        apiKey: "synthetic-router-key",
+        discoveryApiKey: "synthetic-router-key",
+        baseUrl: "https://router.example/v1",
+      });
+      expect(catalog.models).toEqual([]);
+    },
+  );
 
   it("maps every supported catalog protocol to its OpenClaw transport", async () => {
     const fetchGuard = buildFetchGuard();

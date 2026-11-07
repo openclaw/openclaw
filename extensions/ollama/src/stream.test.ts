@@ -189,6 +189,202 @@ describe("buildAssistantMessage", () => {
   });
 });
 
+describe("catalog-selected Ollama transport", () => {
+  const root = "https://router.example/prefix";
+  const nativeBase = `${root}/v1/native/ollama`;
+
+  it("settles only after guarded cleanup, including cleanup failures", async () => {
+    for (const fails of [false, true]) {
+      const entered = Promise.withResolvers<void>();
+      const released = Promise.withResolvers<void>();
+      const release = vi.fn(() => {
+        entered.resolve();
+        return released.promise;
+      });
+      mockResponse([makeOllamaResponse({ content: "ok" })], { release });
+      const stream = await createOllamaStreamFn(nativeBase, undefined, {
+        requestUrl: `${nativeBase}/api/chat`,
+        bodyMode: "native",
+      })(STREAM_MODEL, realContext);
+      let settled = false;
+      const result = stream.result().then((message) => {
+        settled = true;
+        return message;
+      });
+      await entered.promise;
+      expect(settled).toBe(false);
+      if (fails) {
+        released.reject(new Error("guarded cleanup failed"));
+      } else {
+        released.resolve();
+      }
+      expect((await result).stopReason).toBe(fails ? "error" : "stop");
+      expect(release).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("rejects a runtime-invalid body mode without dispatch", () => {
+    const transport = { requestUrl: `${nativeBase}/api/chat`, bodyMode: "native" as const };
+    Object.defineProperty(transport, "bodyMode", { value: "unified" });
+    expect(() => createOllamaStreamFn(nativeBase, undefined, transport)).toThrow(
+      "Invalid catalog-selected Ollama transport",
+    );
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves an abort during the payload hook and sends no POST", async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    const stream = await createOllamaStreamFn(nativeBase, undefined, {
+      requestUrl: `${nativeBase}/api/chat`,
+      bodyMode: "native",
+    })(STREAM_MODEL, realContext, {
+      signal: controller.signal,
+      onPayload: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    const result = stream.result();
+    await entered.promise;
+    controller.abort(new Error("caller stopped during preparation"));
+    release.resolve();
+    expect(await result).toMatchObject({ stopReason: "aborted", content: [] });
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["native", "manifest"] as const)(
+    "sends the finished %s payload once",
+    async (bodyMode) => {
+      const requestUrl =
+        bodyMode === "native" ? `${nativeBase}/api/chat` : `${root}/v1/proxy/ollama/chat`;
+      const signal = new AbortController().signal;
+      const streamFn = createOllamaStreamFn(bodyMode === "native" ? nativeBase : root, undefined, {
+        requestUrl,
+        bodyMode,
+      });
+      mockResponse([makeOllamaResponse({ content: "ok" })]);
+      const result = await (
+        await streamFn(STREAM_MODEL, realContext, {
+          apiKey: "synthetic-router-key",
+          signal,
+          onPayload: (payload) => {
+            if (typeof payload !== "object" || payload === null) {
+              throw new Error("Expected native Ollama payload");
+            }
+            return { ...payload, keep_alive: "3m" };
+          },
+        })
+      ).result();
+      expect(result.stopReason).toBe("stop");
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+      expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).toMatchObject({
+        url: requestUrl,
+        signal,
+        maxRedirects: 0,
+        init: { method: "POST", headers: { Authorization: "Bearer synthetic-router-key" } },
+      });
+      const body = { model: STREAM_MODEL.id, stream: true, keep_alive: "3m" };
+      expect(sentBody()).toMatchObject(bodyMode === "manifest" ? { body } : body);
+      if (bodyMode === "manifest") {
+        expect(Object.keys(sentBody())).toEqual(["body"]);
+      }
+    },
+  );
+
+  it.each([
+    [nativeBase, `${root}/v1/native/ollama/api/chat?override=1`, "native"],
+    [nativeBase, "https://foreign.example/api/chat", "native"],
+    [nativeBase, `${root}/v1/native/ollama/api/generate`, "native"],
+    [root, `${root}/v1/proxy/other/chat`, "manifest"],
+    [root, "https://router.example/v1/proxy/ollama/chat", "manifest"],
+    [root, `${root}/v1/proxy/ollama/chat/again`, "manifest"],
+  ] as const)("denies an unbound destination %s / %s", (base, requestUrl, bodyMode) => {
+    expect(() => createOllamaStreamFn(base, undefined, { requestUrl, bodyMode })).toThrow(
+      "Invalid catalog-selected Ollama transport",
+    );
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("denies payload hooks that replace the selected model before dispatch", async () => {
+    const streamFn = createOllamaStreamFn(nativeBase, undefined, {
+      requestUrl: `${nativeBase}/api/chat`,
+      bodyMode: "native",
+    });
+    const result = await (
+      await streamFn(STREAM_MODEL, realContext, {
+        onPayload: () => ({ model: "another-model", stream: true, messages: [] }),
+      })
+    ).result();
+    expect(result.stopReason).toBe("error");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["native", "manifest"] as const)(
+    "denies in-place mutation of the original %s payload model before dispatch",
+    async (bodyMode) => {
+      const streamFn = createOllamaStreamFn(bodyMode === "native" ? nativeBase : root, undefined, {
+        requestUrl:
+          bodyMode === "native" ? `${nativeBase}/api/chat` : `${root}/v1/proxy/ollama/chat`,
+        bodyMode,
+      });
+      const result = await (
+        await streamFn(STREAM_MODEL, realContext, {
+          onPayload: (payload) => {
+            if (typeof payload !== "object" || payload === null || !("model" in payload)) {
+              throw new Error("Expected the original native Ollama payload");
+            }
+            payload.model = "another-model";
+          },
+        })
+      ).result();
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toContain(
+        "Catalog-selected Ollama model and streaming mode must remain unchanged",
+      );
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not follow a real redirect or forward the proxy credential", async () => {
+    const { fetchWithSsrFGuard } = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/ssrf-runtime")
+    >("openclaw/plugin-sdk/ssrf-runtime");
+    fetchWithSsrFGuardMock.mockImplementation(fetchWithSsrFGuard);
+    let posts = 0;
+    let destinationRequests = 0;
+    await withServer(
+      (_request, response) => {
+        destinationRequests++;
+        response.end();
+      },
+      async (destination) => {
+        await withServer(
+          (_request, response) => {
+            posts++;
+            response.writeHead(307, { location: `${destination}/api/chat` });
+            response.end();
+          },
+          async (router) => {
+            const base = `${router}/v1/native/ollama`;
+            const streamFn = createOllamaStreamFn(base, undefined, {
+              requestUrl: `${base}/api/chat`,
+              bodyMode: "native",
+            });
+            const result = await (
+              await streamFn(STREAM_MODEL, realContext, { apiKey: "synthetic-router-key" })
+            ).result();
+            expect(result.stopReason).toBe("error");
+            expect(posts).toBe(1);
+            expect(destinationRequests).toBe(0);
+          },
+        );
+      },
+    );
+  });
+});
+
 describe("createOllamaStreamFn thinking events", () => {
   it.each([
     [

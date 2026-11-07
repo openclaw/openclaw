@@ -71,6 +71,25 @@ you only need an issued ClawRouter key.
   </Step>
 </Steps>
 
+## Ollama native streaming
+
+An Ollama model needs an eligible, model-specific `POST` offer with
+`ollama.chat` request and response formats. A generic Chat-compatible listing
+does not grant this route. Select the returned `clawrouter/ollama/<model>` ref;
+the upstream model identity is used only when preparing the request.
+
+The native route is `/v1/native/ollama/api/chat`. A manifest offer instead uses
+its exact `/v1/proxy/ollama/<endpoint>` URL and wraps the completed Ollama
+payload in `{ "body": ... }`. Both routes use the original ClawRouter proxy key,
+preserve a configured router URL prefix, and consume Ollama NDJSON through its
+terminal record and EOF. They do not start a local Ollama service or read local
+Ollama credentials. Redirects and alternate POST attempts are not allowed.
+
+Catalog discovery has its own startup budget. A supplied inference timeout and
+caller cancellation cover runtime loading, request preparation, streaming and
+transport cleanup. Token counters describe usage, not a provider tariff;
+catalog grants and router budget policy remain separate requirements.
+
 ## Vercel native Messages
 
 The frozen `vercel-ai-gateway/anthropic/claude-sonnet-4.6` row uses OpenClaw's
