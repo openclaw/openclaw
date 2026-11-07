@@ -34,6 +34,42 @@ export const RELEASE_VALIDATION_WAIVERS = [
 ];
 
 const SUCCESSFUL_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
+
+// A reviewed P-only decision for one immutable failed parent attempt. These
+// grants never change the original manifest or its raw conclusions.
+/** @type {(typeof RELEASE_VALIDATION_WAIVERS[number] & { parentRunId: string, parentRunAttempt: number, targetSha: string })[]} */
+export const RELEASE_VALIDATION_RETROSPECTIVE_WAIVERS = [];
+
+export function retrospectiveReleaseWaivers({ runId, runAttempt, targetSha, targetVersion }) {
+  return RELEASE_VALIDATION_RETROSPECTIVE_WAIVERS.filter(
+    (waiver) =>
+      waiver.parentRunId === String(runId) &&
+      waiver.parentRunAttempt === Number(runAttempt) &&
+      (targetSha === undefined || waiver.targetSha === targetSha) &&
+      (targetVersion === undefined || waiver.targetVersion === targetVersion),
+  ).map((waiver) => {
+    // The historical one-version Kova exception is not a retrospective grant.
+    if (
+      waiver.childRole === "productPerformance" ||
+      !waiver.reason.trim() ||
+      !/^[a-f0-9]{40}$/u.test(waiver.targetSha)
+    ) {
+      throw new Error("Invalid retrospective release waiver");
+    }
+    if (
+      waiver.jobName.startsWith("Run repo/live E2E validation / ") &&
+      !/^Run repo\/live E2E validation \/ (?:validate_release_live_cache|Native live suites \(Native live (?:gateway profiles [^()]+|gateway fresh OpenAI API-key default|gateway OpenAI GPT-5\.6 Ultra|Z\.AI Coding Plan|(?:Moonshot|OpenAI|xAI) plugin)\))$/u.test(
+        waiver.jobName,
+      )
+    ) {
+      throw new Error(
+        "Retrospective release waiver is not a supported provider leaf: " + waiver.jobName,
+      );
+    }
+    aggregateCauses(waiver);
+    return waiver;
+  });
+}
 const RELEASE_CHECK_ROLES = new Set([
   "releaseChecks",
   "releaseChecksIndependent",
@@ -129,8 +165,8 @@ function aggregateCauses(waiver) {
 
 // Raw leaf and workflow conclusions are never rewritten. The caller owns the
 // aggregate validation verdict and must also authenticate failed aggregate logs.
-export function evaluateReleaseChildPolicy({ child, targetVersion }) {
-  const waivers = RELEASE_VALIDATION_WAIVERS.filter(
+export function evaluateReleaseChildPolicy({ child, targetVersion, retrospectiveWaivers = [] }) {
+  const waivers = [...RELEASE_VALIDATION_WAIVERS, ...retrospectiveWaivers].filter(
     (waiver) =>
       waiver.targetVersion === targetVersion &&
       waiver.childRole === child.key &&

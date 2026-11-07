@@ -2924,16 +2924,6 @@ jobs:
           DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
         run: node "$RELEASE_STATE_SCRIPT" select
 
-      - name: Verify exact release state artifacts
-        env:
-          RELEASE_PROFILE: ${{ inputs.release_profile }}
-          RERUN_GROUP: ${{ inputs.rerun_group }}
-          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
-          RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
-          RELEASE_DECISION_PATH: ${{ runner.temp }}/full-release-decision/full-release-decision.json
-          DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
-        run: node "$RELEASE_STATE_SCRIPT" verify
-
       # Exact IDs from the sealed plan prevent verification from drifting to a newer upload.
       # Parent-owned candidate plans are rejected before same-parent continuation.
       - name: Verify sealed release candidate
@@ -2945,6 +2935,63 @@ jobs:
             --plan "$RELEASE_EXECUTION_PLAN_PATH" \
             --consumer-run-id "$GITHUB_RUN_ID" \
             --consumer-run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      # Retain the original completed evidence even when the policy verdict
+      # below is red. A later reviewed P can re-evaluate it without rerunning C/Q.
+      - name: Write release validation manifest
+        if: ${{ success() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
+          TARGET_REF: ${{ startsWith(github.ref, 'refs/heads/release-ci/') && needs.resolve_target.outputs.sha || inputs.ref }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RERUN_GROUP: ${{ inputs.rerun_group }}
+          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
+          PROVIDER: ${{ inputs.provider }}
+          MODE: ${{ inputs.mode }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          LIVE_SUITE_FILTER: ${{ needs.resolve_target.outputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}
+          RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
+          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
+          NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
+          NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
+          NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}
+          TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
+          PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
+          EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.resolve_target.outputs.extension_test_exclude_patterns_json }}
+          QUALIFICATION_BASELINES_JSON: ${{ needs.resolve_target.outputs.qualification_baselines_json }}
+          RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
+          DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
+          QUALIFIED_NPM_BUNDLE_JSON: ${{ needs.qualify_npm_package.outputs.qualified_preflight_bundle_json }}
+          PREPARED_PLUGIN_NPM_JSON: ${{ needs.prepare_plugin_npm.outputs.descriptor_json }}
+          PREPARED_DOCKER_RUN_ID: ${{ needs.prepare_docker_release.outputs.prepared_run_id }}
+          PREPARED_DOCKER_RUN_ATTEMPT: ${{ needs.prepare_docker_release.outputs.prepared_run_attempt }}
+          PREPARED_DOCKER_ARTIFACT_NAME: ${{ needs.prepare_docker_release.outputs.prepared_artifact_name }}
+          PREPARED_DOCKER_MANIFEST_SHA256: ${{ needs.prepare_docker_release.outputs.prepared_manifest_sha256 }}
+        run: node "$RELEASE_STATE_SCRIPT" write-manifest
+
+      - name: Upload release validation manifest
+        if: ${{ success() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: full-release-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/full-release-validation
+          if-no-files-found: error
+
+      - name: Verify exact release state artifacts
+        env:
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RERUN_GROUP: ${{ inputs.rerun_group }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
+          RELEASE_DECISION_PATH: ${{ runner.temp }}/full-release-decision/full-release-decision.json
+          DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
+        run: node "$RELEASE_STATE_SCRIPT" verify
 
       - name: Request release evidence update
         if: ${{ inputs.dispatch_release_evidence }}
@@ -3035,43 +3082,6 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Write release validation manifest
-        if: ${{ success() }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
-          TARGET_REF: ${{ startsWith(github.ref, 'refs/heads/release-ci/') && needs.resolve_target.outputs.sha || inputs.ref }}
-          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
-          RELEASE_PROFILE: ${{ inputs.release_profile }}
-          RERUN_GROUP: ${{ inputs.rerun_group }}
-          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
-          PROVIDER: ${{ inputs.provider }}
-          MODE: ${{ inputs.mode }}
-          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
-          LIVE_SUITE_FILTER: ${{ needs.resolve_target.outputs.live_suite_filter }}
-          CROSS_OS_SUITE_FILTER: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}
-          RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
-          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
-          CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
-          NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
-          NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
-          NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
-          SKIP_PACKAGE_TELEGRAM_E2E: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}
-          TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
-          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
-          PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
-          EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.resolve_target.outputs.extension_test_exclude_patterns_json }}
-          QUALIFICATION_BASELINES_JSON: ${{ needs.resolve_target.outputs.qualification_baselines_json }}
-          RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
-          DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
-          QUALIFIED_NPM_BUNDLE_JSON: ${{ needs.qualify_npm_package.outputs.qualified_preflight_bundle_json }}
-          PREPARED_PLUGIN_NPM_JSON: ${{ needs.prepare_plugin_npm.outputs.descriptor_json }}
-          PREPARED_DOCKER_RUN_ID: ${{ needs.prepare_docker_release.outputs.prepared_run_id }}
-          PREPARED_DOCKER_RUN_ATTEMPT: ${{ needs.prepare_docker_release.outputs.prepared_run_attempt }}
-          PREPARED_DOCKER_ARTIFACT_NAME: ${{ needs.prepare_docker_release.outputs.prepared_artifact_name }}
-          PREPARED_DOCKER_MANIFEST_SHA256: ${{ needs.prepare_docker_release.outputs.prepared_manifest_sha256 }}
-        run: node "$RELEASE_STATE_SCRIPT" write-manifest
-
       - name: Validate release validation manifest
         env:
           RELEASE_PROFILE: ${{ inputs.release_profile }}
@@ -3082,14 +3092,6 @@ jobs:
           DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
           RELEASE_VALIDATION_MANIFEST_PATH: ${{ runner.temp }}/full-release-validation/full-release-validation-manifest.json
         run: node "$RELEASE_STATE_SCRIPT" validate-manifest
-
-      - name: Upload release validation manifest
-        if: ${{ success() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: full-release-validation-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/full-release-validation
-          if-no-files-found: error
 
       - name: Upload legacy release validation manifest alias
         if: ${{ success() }}

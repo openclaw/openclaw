@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Coordinates release-candidate validation runs and emits the publish command
-// only after required local, CI, npm, plugin, and E2E evidence is green.
+// only after required local, CI, npm, plugin, and E2E evidence qualifies under release policy.
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -37,6 +37,7 @@ import { gitIsAncestor, validateCandidateChangelog } from "./lib/release-candida
 import { releaseBranchForTag } from "./lib/release-context.mjs";
 import { ensureReleasePublishToolingTag } from "./lib/release-publish-preflight-evidence.mts";
 import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
+import { retrospectiveReleaseWaivers } from "./lib/release-validation-waivers.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import { sleep as wait } from "./lib/sleep.mjs";
 import { readUpgradeSurvivorScenarioCatalog } from "./lib/upgrade-survivor-policy.mjs";
@@ -1525,6 +1526,7 @@ async function waitForSuccessfulRun(
   runId: string,
   expected: {
     allowShaPinnedWorkflowRef?: boolean;
+    acceptCompletedFailure?: (info: RunInfo) => boolean;
     workflowName: string;
     workflowRef: string;
     validateSource?: (info: RunInfo) => ReturnType<typeof validateNpmPreflightRunSource>;
@@ -1549,7 +1551,10 @@ async function waitForSuccessfulRun(
       lastState = state;
     }
     if (info.status === "completed") {
-      if (info.conclusion !== "success") {
+      if (
+        info.conclusion !== "success" &&
+        !(info.conclusion === "failure" && expected.acceptCompletedFailure?.(info))
+      ) {
         throw new Error(summarizeFailedRun(info));
       }
       if (info.workflowName !== expected.workflowName) {
@@ -2299,6 +2304,14 @@ async function main() {
     workflowName: "Full Release Validation",
     workflowRef: options.workflowRef,
     allowShaPinnedWorkflowRef: true,
+    // This only admits the snapshot for strict authentication below; it does not
+    // qualify any failed job or artifact producer for publication.
+    acceptCompletedFailure: (info) =>
+      retrospectiveReleaseWaivers({
+        runId: options.fullReleaseRunId,
+        runAttempt: info.runAttempt,
+        targetSha,
+      }).length > 0,
   });
   const npmUsesFullRun = options.npmPreflightRunId === options.fullReleaseRunId;
   const { run: selectedNpmRun, source: npmPreflightSource } = npmUsesFullRun

@@ -67,6 +67,7 @@ import {
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   evaluateReleaseChildPolicy,
+  retrospectiveReleaseWaivers,
   validateReleaseWaiverAggregates,
 } from "./lib/release-validation-waivers.mjs";
 import {
@@ -2052,13 +2053,25 @@ function validateManifestArtifactBinding(artifact, manifest, parentRun, runId) {
   }
 }
 
-function validateCompletedParentRun(parentView, parentRest, repository, runId) {
+function validateCompletedParentRun(
+  parentView,
+  parentRest,
+  repository,
+  runId,
+  retrospective = false,
+) {
   validateParentRunBinding(parentView, parentRest, runId);
   if (
     parentView.status !== "completed" ||
-    parentView.conclusion !== "success" ||
+    !(
+      parentView.conclusion === "success" ||
+      (retrospective && parentView.conclusion === "failure")
+    ) ||
     parentRest.status !== "completed" ||
-    parentRest.conclusion !== "success" ||
+    !(
+      parentRest.conclusion === "success" ||
+      (retrospective && parentRest.conclusion === "failure")
+    ) ||
     parentRest.repository?.full_name !== repository
   ) {
     throw new Error(`full release parent run is not completed/success: ${runId}`);
@@ -2189,7 +2202,13 @@ async function loadValidatedParentEvidence({
     `full release parent ${runId} run attempt`,
   );
   consumeExpectedRunAttempt(expectedRunAttempts, runId, parentRunAttempt, "parent");
-  validateCompletedParentRun(parentView, parentRun, repository, runId);
+  validateCompletedParentRun(
+    parentView,
+    parentRun,
+    repository,
+    runId,
+    retrospectiveReleaseWaivers({ runId, runAttempt: parentRunAttempt }).length > 0,
+  );
 
   const manifestEvidence = client.loadManifest(runId, parentRunAttempt, manifestPath);
   if (!manifestEvidence) {
@@ -2243,6 +2262,7 @@ async function validateStrictChildRun({
   parentJobs,
   plannedChild,
   repository,
+  retrospectiveWaivers,
   runId,
   expectedRunAttempts,
 }) {
@@ -2384,11 +2404,15 @@ async function validateStrictChildRun({
     status: run.status,
   };
   const targetVersion = parentEvidence.manifest.validationInputs?.targetVersion;
-  const policy = evaluateReleaseChildPolicy({ child: policyChild, targetVersion });
+  const policy = evaluateReleaseChildPolicy({
+    child: policyChild,
+    targetVersion,
+    retrospectiveWaivers,
+  });
   if (
     run.repository?.full_name !== repository ||
     run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha) ||
-    !terminalPolicyPass(policyChild, targetVersion)
+    !terminalPolicyPass(policyChild, targetVersion, retrospectiveWaivers)
   ) {
     throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
@@ -3043,6 +3067,23 @@ export async function validateReleaseRunEvidence(
   ) {
     throw new Error("release validation manifest composite child set is invalid");
   }
+  const retrospectiveWaivers = retrospectiveReleaseWaivers({
+    runId: rootEvidence.manifest.runId,
+    runAttempt: rootEvidence.manifest.runAttempt,
+    targetSha: rootEvidence.manifest.targetSha,
+    targetVersion: rootEvidence.manifest.validationInputs?.targetVersion ?? "",
+  });
+  if (
+    rootEvidence.parentRun.conclusion !== "success" &&
+    (!qualification ||
+      reuse ||
+      rootEvidence.manifest.rerunGroup !== "all" ||
+      !retrospectiveWaivers.length)
+  ) {
+    throw new Error(
+      "Failed FRV requires exact retrospective policy and direct candidate-owned full evidence",
+    );
+  }
   const dispatchEvidence = rootEvidence;
   const parentJobs = await evidenceClient.getParentJobs(dispatchEvidence.manifest.runId);
   if (qualification) {
@@ -3091,6 +3132,7 @@ export async function validateReleaseRunEvidence(
         parentEvidence: dispatchEvidence,
         parentJobs,
         plannedChild: child.plannedChild,
+        retrospectiveWaivers,
         releaseProfile: rootEvidence.manifest.releaseProfile,
         repository: normalizedRepository,
         runId: childRunId,
@@ -3112,9 +3154,68 @@ export async function validateReleaseRunEvidence(
     })),
   );
   if (
-    !isDeepStrictEqual(rootEvidence.manifestJson.waivers ?? [], sortReleaseJsonValueKeys(waivers))
+    !isDeepStrictEqual(
+      rootEvidence.manifestJson.waivers ?? [],
+      sortReleaseJsonValueKeys(waivers.filter((waiver) => !Object.hasOwn(waiver, "parentRunId"))),
+    )
   ) {
     throw new Error("release manifest waivers differ from checked-in release tooling policy");
+  }
+  if (rootEvidence.parentRun.conclusion === "failure") {
+    if (!waivers.some((waiver) => Object.hasOwn(waiver, "parentRunId"))) {
+      throw new Error("Retrospective waiver did not match a failed leaf");
+    }
+    // Only the original policy-verdict steps may fail, not evidence acquisition,
+    // sealing, package preparation, or diagnostic integrity.
+    const allowed = new Map([
+      ["Release Decision", "Enforce release decision"],
+      ["Verify full validation", "Verify exact release state artifacts"],
+    ]);
+    const currentJobs = await evidenceClient.getRunAttemptJobs(
+      rootEvidence.manifest.runId,
+      rootEvidence.manifest.runAttempt,
+      { requireComplete: true },
+    );
+    for (const name of ["Diagnostic Drain", ...allowed.keys()]) {
+      const job = currentJobs.find((entry) => entry.name === name);
+      if (
+        !job ||
+        job.status !== "completed" ||
+        job.conclusion !== (name === "Diagnostic Drain" ? "success" : "failure")
+      ) {
+        throw new Error(
+          "Retrospective policy requires completed parent verdict and diagnostic evidence: " + name,
+        );
+      }
+    }
+    const candidateVerification = currentJobs
+      .find((job) => job.name === "Verify full validation")
+      ?.steps?.find((step) => step.name === "Verify sealed release candidate");
+    if (candidateVerification?.conclusion !== "success") {
+      throw new Error("Retrospective policy requires successful sealed candidate verification");
+    }
+    for (const job of currentJobs) {
+      if (
+        job.status !== "completed" ||
+        !["success", "skipped", "neutral", "failure"].includes(job.conclusion)
+      ) {
+        throw new Error(
+          "Retrospective policy cannot waive incomplete or cancelled parent evidence",
+        );
+      }
+      if (job.conclusion !== "failure") {
+        continue;
+      }
+      const steps = job.steps?.filter((step) => !["success", "skipped"].includes(step.conclusion));
+      if (
+        !allowed.has(job.name) ||
+        steps?.length !== 1 ||
+        steps[0].name !== allowed.get(job.name) ||
+        steps[0].conclusion !== "failure"
+      ) {
+        throw new Error("Retrospective policy cannot waive parent failure: " + job.name);
+      }
+    }
   }
   if (remainingExpectedRunAttempts?.size) {
     throw new Error(
@@ -3136,6 +3237,18 @@ export async function validateReleaseRunEvidence(
   return sortReleaseJsonValueKeys({
     children,
     waivers,
+    ...(retrospectiveWaivers.length
+      ? {
+          retrospectiveWaivers: {
+            policy: "retrospective-release-waivers-v1",
+            sourceRunId: rootEvidence.manifest.runId,
+            sourceRunAttempt: rootEvidence.manifest.runAttempt,
+            targetSha: rootEvidence.manifest.targetSha,
+            toolingSha: verifier.sourceSha,
+            waivers: waivers.filter((waiver) => Object.hasOwn(waiver, "parentRunId")),
+          },
+        }
+      : {}),
     conclusions: {
       children: childConclusions,
       current: current.conclusion,
@@ -3179,6 +3292,21 @@ export async function validateReleaseRunEvidence(
     validationInputs: rootEvidence.manifest.validationInputs ?? null,
     verifier,
   });
+}
+
+// Consumers call this only on the strict verifier's authenticated output, never
+// on a manifest field supplied by an operator or candidate.
+export function releaseEvidencePolicyPassed(evidence) {
+  return (
+    evidence?.valid === true &&
+    (evidence.current?.conclusion === "success" ||
+      (evidence.current?.conclusion === "failure" &&
+        evidence.retrospectiveWaivers?.policy === "retrospective-release-waivers-v1" &&
+        evidence.retrospectiveWaivers.sourceRunId === evidence.current.runId &&
+        evidence.retrospectiveWaivers.sourceRunAttempt === evidence.current.runAttempt &&
+        evidence.retrospectiveWaivers.targetSha === evidence.current.targetSha &&
+        evidence.retrospectiveWaivers.waivers.length > 0))
+  );
 }
 
 function parseReleaseCiSummaryArgs(argv) {

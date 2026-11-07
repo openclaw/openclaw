@@ -1,0 +1,2 @@
+# Reuse the qualified publication fixture to cover immutable retrospective waiver admission and hard-gate rejections.
+132

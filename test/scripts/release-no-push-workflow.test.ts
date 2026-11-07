@@ -1336,6 +1336,16 @@ describe("release validation no-push transport", () => {
     expect(step(summary, "Upload release validation manifest").with).toMatchObject({
       name: "full-release-validation-${{ github.run_id }}-${{ github.run_attempt }}",
     });
+    const names = (summary.steps ?? []).map((entry) => entry.name);
+    expect(names.indexOf("Verify sealed release candidate")).toBeLessThan(
+      names.indexOf("Write release validation manifest"),
+    );
+    expect(names.indexOf("Write release validation manifest")).toBeLessThan(
+      names.indexOf("Upload release validation manifest"),
+    );
+    expect(names.indexOf("Upload release validation manifest")).toBeLessThan(
+      names.indexOf("Verify exact release state artifacts"),
+    );
     expect(step(summary, "Upload legacy release validation manifest alias").with).toMatchObject({
       name: "full-release-validation-${{ github.run_id }}",
       overwrite: true,

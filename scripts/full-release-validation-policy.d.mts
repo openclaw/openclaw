@@ -135,7 +135,11 @@ export function composeReleaseChildAttemptEvidence(input: {
 }): ReleaseRecord;
 
 export function releaseChildAdvisories(child: ReleaseRecord): ReleaseRecord[];
-export function terminalPolicyPass(child: ReleaseRecord, targetVersion?: string): boolean;
+export function terminalPolicyPass(
+  child: ReleaseRecord,
+  targetVersion?: string,
+  retrospectiveWaivers?: import("./lib/release-validation-waivers.mjs").RetrospectiveReleaseWaiver[],
+): boolean;
 
 export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;
 export function releasePlanGateFailures(gates: ReleaseRecord[]): ReleaseRecord[];

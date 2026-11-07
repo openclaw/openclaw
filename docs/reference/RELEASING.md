@@ -74,8 +74,9 @@ Rerun a flake on the same Release SHA at most twice, file its fix-in-parallel
 issue or PR on `main`, and retain the original failure. Do not re-cut, change
 tooling, or start another Full Release Validation solely to clear a flake.
 An intentional [release-tooling waiver](/reference/full-release-validation/evidence#release-tooling-waivers)
-is a reviewed policy change, not a retry. It requires validation under the new
-pinned tooling; the candidate stays unchanged.
+is a reviewed policy change, not a retry. A prospective grant requires validation under the new pinned tooling. An exact
+retrospective grant re-evaluates retained completed evidence under new trusted P
+without rerunning the tests; the candidate and original results stay unchanged.
 
 Blocking jobs include the CI coverage gate, seal/evidence,
 Build Artifacts, install smoke, survivor lanes, `update-first-hop-compat*`, pack/npm
@@ -83,8 +84,8 @@ qualification, package integrity, and all Linux/Windows/macOS Gateway checks,
 including Windows packaged install/upgrade checks in Release Checks. A cancelled
 run still blocks. The selected `openclaw/ci-gate` must succeed; failed, missing,
 skipped, or cancelled coverage blocks. Only exact failed live-provider or
-Telegram leaves may use the checked-in release-tooling policy. FRV itself must
-conclude **success** before publication; the publisher has no waiver path.
+Telegram leaves may use the checked-in release-tooling policy. FRV must conclude **success**, or its exact completed evidence must pass the
+reviewed retrospective policy. The publisher has no runtime waiver input.
 Validation covers source CI, packages, plugins,
 Gateway installs and upgrades, and selected app, UI, Telegram, QA, and
 live-provider checks. All-group qualification includes all nine Gateway

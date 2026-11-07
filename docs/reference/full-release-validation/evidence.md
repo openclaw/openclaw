@@ -17,7 +17,8 @@ Narrow evidence is not publish authorization by itself.
 
 Decide blocker or flake for every failed test. Every selected failure blocks
 validation unless it matches the checked-in release-tooling policy below.
-Publication always requires a successful Full Release Validation run.
+Publication requires successful Full Release Validation or the exact retrospective
+policy re-evaluation described below. Failed results remain failed evidence.
 
 Linux, Windows, and macOS Gateway cross-OS install and upgrade lanes are
 required for beta, stable, and full validation. The manifest records their
@@ -63,7 +64,7 @@ limit and fail sealing; evidence is not truncated to fit.
 
 Waivers are code in trusted release tooling **P**, not candidate **C** or its
 qualification harness **Q=C**. The grant list is
-`scripts/lib/release-validation-waivers.mjs` and is empty by default. Add a
+`scripts/lib/release-validation-waivers.mjs`. Add a
 reviewed row with an exact target version, child role, job name, and reason.
 For example (illustrative only, not an active grant):
 
@@ -101,12 +102,52 @@ prerelease, dispatch identity, and seal/evidence integrity cannot be waived.
 An aggregate failure is tolerated only when its causes are entirely explained
 by those exact waived leaves.
 
-FRV must itself conclude **success** under that policy before publication can
-accept it. There is no failed-but-publication-eligible verdict, publisher waiver
-input, operator JSON declaration, or runtime approver lookup. Changing P only
-at publication cannot retroactively authorize a failed FRV; produce successful
-validation under the pinned policy first. Beta confidence deferrals remain
-separate and are recorded as **not run**, never as passed or waived failures.
+### Apply a waiver after validation
+
+A completed, failed candidate-owned FRV can be re-evaluated without dispatching
+another validation cycle. Add a reviewed entry to
+`RELEASE_VALIDATION_RETROSPECTIVE_WAIVERS` in the same trusted-P policy module:
+
+```js
+{
+  parentRunId: "12345678901",
+  parentRunAttempt: 1,
+  targetSha: "0123456789abcdef0123456789abcdef01234567",
+  targetVersion: "YYYY.M.PATCH",
+  childRole: "releaseChecksIndependent",
+  jobName: "Run repo/live E2E validation / Native live suites (Native live Z.AI Coding Plan)",
+  reason: "Provider outage; release-manager decision and investigation in the handoff.",
+}
+```
+
+After that policy lands, pin the new trusted P for the normal candidate
+checklist/publication preflight and select the **original** FRV run and attempt.
+The strict evidence reader authenticates its original admission, execution plan,
+manifest, complete child attempts, failed aggregate logs, and publication bytes.
+It re-evaluates the exact failed leaves under P and emits a separate
+`retrospectiveWaivers` record in its verified evidence. That record identifies the
+source run/attempt, candidate SHA, current tooling SHA, and applied reasons.
+The original manifest and GitHub conclusions are not modified or relabeled green.
+The publisher consumes this same strict verdict; there is no runtime waiver input.
+
+This requires a retained manifest from a direct, all-group candidate-owned run.
+FRV now uploads that immutable snapshot before enforcing its final verdict.
+Older failures without this artifact cannot be reconstructed by the publisher;
+run validation with snapshot-capable tooling instead. Evidence-reuse chains,
+missing or expired artifacts, incomplete/cancelled children, and parent failures
+outside the two policy-verdict steps remain blocking. The diagnostic drain and
+all non-waived required results must still pass. Independent npm/Docker artifact
+producer runs retain their successful-parent requirement; a retrospective waiver
+never repairs a failed artifact producer or bypasses package qualification.
+
+Prospective waivers still require FRV success under pinned P. Retrospective
+grants are limited to supported provider-specific native live suites, the live
+cache leaf, and Telegram leaves. Generic Gateway, infrastructure, preparation,
+and Docker jobs are not eligible. These grants cannot
+waive performance, soak, CI, install/upgrade, identity, or integrity. Existing
+publication approvals and current admission authority remain required. Beta
+confidence deferrals remain separate and are recorded as **not run**, never as
+passed or waived failures.
 
 ## Workflow files
 

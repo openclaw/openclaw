@@ -24,7 +24,11 @@ import {
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
-import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./release-ci-summary.mjs";
+import {
+  createReleaseEvidenceClient,
+  releaseEvidencePolicyPassed,
+  validateReleaseRunEvidence,
+} from "./release-ci-summary.mjs";
 import { qualificationAdmissionContract } from "./release-qualification-coverage.mjs";
 
 const FULL_RELEASE_WORKFLOW = "Full Release Validation";
@@ -69,6 +73,7 @@ function displayValue(value) {
  * @typedef {object} StrictReleaseEvidence
  * @property {unknown} [schema]
  * @property {unknown} [valid]
+ * @property {unknown} [retrospectiveWaivers]
  * @property {{ runId?: unknown, targetSha?: unknown, runAttempt?: unknown, manifest?: unknown, workflowRefProof?: unknown, conclusion?: unknown }} [current]
  * @property {{ runId?: unknown, targetSha?: unknown, manifest?: unknown, conclusion?: unknown }} [root]
  * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, rootRunId?: unknown, selectedRunId?: unknown } | null} [evidenceReuse]
@@ -203,7 +208,6 @@ export function validateFullReleaseValidationEvidence({
     ["repository", expectedRepository],
     ["event", "workflow_dispatch"],
     ["status", "completed"],
-    ["conclusion", "success"],
   ];
   for (const [key, expected] of checks) {
     if (run[key] !== expected) {
@@ -335,6 +339,12 @@ export function validateFullReleaseValidationEvidence({
     }
     return strictEvidence;
   };
+  if (
+    run.conclusion !== "success" &&
+    (run.conclusion !== "failure" || !releaseEvidencePolicyPassed(strict()))
+  ) {
+    throw new Error("Referenced full release validation run must pass release policy.");
+  }
   validateReleaseManifestAdvisoryJobs(manifest);
   if (sourceAdmission) {
     // Historical recovery must not acquire a new publication-selection contract.
@@ -398,7 +408,7 @@ export function validateFullReleaseValidationEvidence({
       authenticated.current?.runId !== String(expectedRunId) ||
       authenticated.current?.targetSha !== expectedTargetSha ||
       authenticated.current?.runAttempt !== run.runAttempt ||
-      authenticated.current?.conclusion !== "success" ||
+      !releaseEvidencePolicyPassed(authenticated) ||
       publicationObservationJson(authenticated.current?.manifest) !==
         publicationObservationJson(manifest)
     ) {
@@ -415,7 +425,7 @@ export function validateFullReleaseValidationEvidence({
       authenticated.current?.runAttempt !== run.runAttempt ||
       authenticated.current?.targetSha !== expectedTargetSha ||
       authenticated.current?.workflowRefProof !== "candidate-owned-admission-v1" ||
-      authenticated.current?.conclusion !== "success" ||
+      !releaseEvidencePolicyPassed(authenticated) ||
       publicationObservationJson(authenticated.current?.manifest) !==
         publicationObservationJson(manifest)
     ) {
@@ -526,7 +536,7 @@ export function validateFullReleaseValidationEvidence({
       scalarString(reusedEvidence.evidenceReuse?.rootRunId) !== scalarString(reuse.runId) ||
       scalarString(reusedEvidence.evidenceReuse?.selectedRunId) !==
         scalarString(reuse.selectedRunId) ||
-      reusedEvidence.current?.conclusion !== "success"
+      !releaseEvidencePolicyPassed(reusedEvidence)
     ) {
       throw new Error("SHA-pinned validation evidence reuse failed strict chain validation.");
     }
@@ -569,7 +579,7 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
     },
     { ...evidenceClient, getWorkflowSource },
   );
-  if (evidence.current.conclusion !== "success") {
+  if (!releaseEvidencePolicyPassed(evidence)) {
     throw new Error("Required release validation evidence did not pass.");
   }
   if (evidence.current.runAttempt !== run.runAttempt) {
@@ -659,7 +669,7 @@ export async function authenticateCandidateOwnedArtifact({
     evidence.current.targetSha !== candidateSha ||
     evidence.current.runAttempt !== Number(manifest.runAttempt) ||
     evidence.current.workflowRefProof !== "candidate-owned-admission-v1" ||
-    evidence.current.conclusion !== "success" ||
+    !releaseEvidencePolicyPassed(evidence) ||
     !isDeepStrictEqual(evidence.current.manifest, sortJsonValueKeys(manifest))
   ) {
     throw new Error("Publication artifact is not bound to authenticated candidate qualification");

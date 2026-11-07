@@ -5,6 +5,18 @@ export interface ReleaseValidationWaiver {
   reason: string;
 }
 export const RELEASE_VALIDATION_WAIVERS: ReleaseValidationWaiver[];
+export interface RetrospectiveReleaseWaiver extends ReleaseValidationWaiver {
+  parentRunId: string;
+  parentRunAttempt: number;
+  targetSha: string;
+}
+export const RELEASE_VALIDATION_RETROSPECTIVE_WAIVERS: RetrospectiveReleaseWaiver[];
+export function retrospectiveReleaseWaivers(input: {
+  runId: string;
+  runAttempt: number;
+  targetSha?: string;
+  targetVersion?: string;
+}): RetrospectiveReleaseWaiver[];
 export interface ReleasePolicyJob {
   name: string;
   status: string;
@@ -24,6 +36,7 @@ export function isFailedReleaseJob(job: ReleasePolicyJob): boolean;
 export function evaluateReleaseChildPolicy(input: {
   child: { key: string; jobs: ReleasePolicyJob[] };
   targetVersion?: string;
+  retrospectiveWaivers?: RetrospectiveReleaseWaiver[];
 }): ReleaseChildPolicy;
 export class ReleaseAggregateValidationError extends Error {}
 export function validateReleaseWaiverAggregates(input: {

@@ -52,7 +52,8 @@ later. This is recommended bookkeeping, not another release gate.
 
 ## Shared release boundaries
 
-FRV must conclude **success** under pinned P's
+FRV must conclude **success**, or its exact retained completed evidence must pass
+the reviewed retrospective policy under pinned P's
 [checked-in release-tooling policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
 Only exact failed live-provider or Telegram leaves may be waived, without
 skipping tests or changing C/Q. All other required lanes must succeed: Windows
@@ -77,8 +78,10 @@ blocker is a regression in shipped bytes or behavior, or an update/install/
 publish defect; fix it on the release branch. Rerun a flake on
 the same Release SHA with at most two recorded reruns by default, and file a
 fix-in-parallel issue or PR on `main` with the evidence. Never re-cut for a flake.
-A deliberate tooling-code waiver requires FRV validation under the new pinned P,
-not a publisher override. An unwaived flake that remains red blocks publication.
+A prospective tooling-code waiver requires FRV validation under new pinned P.
+An exact retrospective grant instead re-evaluates the retained failed run/attempt
+with new P; preserve its original conclusions and manifest. Neither is a runtime
+publisher override. An unwaived flake that remains red blocks publication.
 Main-only failures and infrastructure
 failures (runner outages, GitHub ghost jobs, hosted-runner offload) count as
 flakes for the release.
@@ -115,7 +118,8 @@ workflow SHA) and current attempt. The sealed
 manifest supplies the SDK evidence digest and npm publication decisions; it
 never acknowledges SDK API changes, so supply
 `plugin_sdk_api_acknowledgement` whenever the SDK report contains changes. The
-publisher accepts only successful FRV and cannot grant a waiver. Explicit
+publisher accepts successful FRV or an authenticated exact retrospective verdict
+and cannot grant a runtime waiver. Explicit
 publisher inputs select publication scope; the candidate helper still validates its explicit
 SDK acknowledgement when needed.
 

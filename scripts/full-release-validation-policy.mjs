@@ -1556,8 +1556,8 @@ function blockerIndex(issues) {
   return issues.map((issue) => jsonSha256(blockerEvidence(issue))).toSorted();
 }
 
-export function terminalPolicyPass(child, targetVersion) {
-  const policy = evaluateReleaseChildPolicy({ child, targetVersion });
+export function terminalPolicyPass(child, targetVersion, retrospectiveWaivers) {
+  const policy = evaluateReleaseChildPolicy({ child, targetVersion, retrospectiveWaivers });
   return (
     child.status === "completed" &&
     child.jobs.every((job) => job.status === "completed") &&
