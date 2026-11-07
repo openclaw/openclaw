@@ -373,6 +373,20 @@ describe("sessions.files for managed-worktree sessions", () => {
   it("acknowledges and saves a reconciled version via sessions.files.set during conflict", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const entry = await seedWorktreeSession(state.workspaceDir);
+      const { withLocalWorkspaceStore } =
+        await import("../worker-environments/local-workspace-store.js");
+      const { localWorkspaceProjectionFixture, readLocalWorkspaceProjection } =
+        await import("../worker-environments/local-workspace-store.test-support.js");
+      await withLocalWorkspaceStore({ worktreeId: entry.worktree.id }, async (store) => {
+        await store.create({
+          ...localWorkspaceProjectionFixture(entry.worktree.id, state.workspaceDir),
+          pending_ref: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          pending_target: "canonical",
+          checkpoint_json: JSON.stringify({
+            conflicts: { "preview.html": {} },
+          }),
+        });
+      });
       const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
       const source = {
         workspaceId: entry.worktree.id,
@@ -388,6 +402,11 @@ describe("sessions.files for managed-worktree sessions", () => {
       });
       expect(result).toMatchObject([{ ok: true }]);
       expect(readPreview(entry.spawnedCwd)).toBe("reconciled administrator content\n");
+
+      const row = await readLocalWorkspaceProjection(entry.worktree.id);
+      expect(row?.checkpoint_json).toBeTruthy();
+      const checkpoint = JSON.parse(row!.checkpoint_json!);
+      expect(checkpoint.acknowledgedPaths).toContain("preview.html");
     });
   });
 });

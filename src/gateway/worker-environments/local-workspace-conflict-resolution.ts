@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
@@ -5,10 +6,12 @@ import { isPathInside } from "../../infra/path-guards.js";
 import type { LocalWorkspaceSyncTarget as Direction } from "./local-workspace-checkpoint.js";
 import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
 import {
+  parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 
 type LocalWorkspaceConflictRecord = Record<
   string,
@@ -50,7 +53,9 @@ async function synchronizeResolvedCanonicalPaths(params: {
   canonicalRoot: string;
   projectionRoot: string;
   resolvedPaths: string[];
+  conflicts?: LocalWorkspaceConflictRecord;
   assertCurrent?: () => void;
+  divergedPaths?: Set<string>;
 }): Promise<void> {
   const canonicalFs = await openFsSafeRoot(params.canonicalRoot, {
     assertBeforeMutation: params.assertCurrent,
@@ -58,35 +63,81 @@ async function synchronizeResolvedCanonicalPaths(params: {
   const projectionFs = await openFsSafeRoot(params.projectionRoot, {
     assertBeforeMutation: params.assertCurrent,
   });
+  const realProjectionRoot = await fs.realpath(params.projectionRoot);
   for (const resolvedPath of params.resolvedPaths) {
     params.assertCurrent?.();
     const src = path.join(params.canonicalRoot, resolvedPath);
+    const dest = path.join(params.projectionRoot, resolvedPath);
+    const destDir = path.dirname(dest);
+    if (
+      !isPathInside(params.projectionRoot, dest) ||
+      !isPathInside(params.projectionRoot, destDir)
+    ) {
+      throw new Error(`Resolved path escapes projection root: ${resolvedPath}`);
+    }
+    const destDirReal = await fs.realpath(destDir).catch(() => undefined);
+    if (destDirReal && !isPathInside(realProjectionRoot, destDirReal)) {
+      throw new Error(`Resolved path directory escapes projection root: ${resolvedPath}`);
+    }
     const stats = await fs.lstat(src).catch(() => undefined);
     if (!stats) {
-      await projectionFs.remove(resolvedPath).catch(() => undefined);
+      const destStats = await fs.lstat(dest).catch(() => undefined);
+      if (destStats) {
+        params.assertCurrent?.();
+        await projectionFs.remove(resolvedPath);
+        params.assertCurrent?.();
+      }
     } else if (stats.isSymbolicLink()) {
       const targetLink = await fs.readlink(src);
       const targetAbsolute = path.resolve(path.dirname(src), targetLink);
       if (path.isAbsolute(targetLink) || !isPathInside(params.canonicalRoot, targetAbsolute)) {
         throw new Error(`Resolved symlink escapes workspace root: ${resolvedPath}`);
       }
-      await projectionFs.remove(resolvedPath).catch(() => undefined);
-      const dest = path.join(params.projectionRoot, resolvedPath);
-      await fs.mkdir(path.dirname(dest), { recursive: true });
+      params.assertCurrent?.();
+      const destStats = await fs.lstat(dest).catch(() => undefined);
+      if (destStats) {
+        params.assertCurrent?.();
+        await projectionFs.remove(resolvedPath);
+        params.assertCurrent?.();
+      }
+      params.assertCurrent?.();
+      await fs.mkdir(destDir, { recursive: true });
+      params.assertCurrent?.();
+      await fs.rm(dest, { force: true, recursive: true });
       await fs.symlink(targetLink, dest);
+      params.assertCurrent?.();
     } else if (stats.isFile()) {
       const readResult = await canonicalFs.read(resolvedPath);
-      const destStats = await fs
-        .lstat(path.join(params.projectionRoot, resolvedPath))
-        .catch(() => undefined);
-      if (destStats?.isSymbolicLink()) {
-        await projectionFs.remove(resolvedPath).catch(() => undefined);
+      params.assertCurrent?.();
+      const destStats = await fs.lstat(dest).catch(() => undefined);
+      if (destStats?.isFile()) {
+        const destFile = await projectionFs.read(resolvedPath).catch(() => undefined);
+        if (destFile) {
+          const destSha = createHash("sha256").update(destFile.buffer).digest("hex");
+          const canonicalSha = createHash("sha256").update(readResult.buffer).digest("hex");
+          const expectedGuestConflict = params.conflicts?.[resolvedPath];
+          const hasNewerGuestEdits =
+            expectedGuestConflict &&
+            destSha !== canonicalSha &&
+            ((expectedGuestConflict.sha256 && destSha !== expectedGuestConflict.sha256) ||
+              expectedGuestConflict.type === "missing");
+          if (hasNewerGuestEdits) {
+            params.divergedPaths?.add(resolvedPath);
+            continue;
+          }
+        }
+      }
+      if (destStats && !destStats.isFile()) {
+        params.assertCurrent?.();
+        await projectionFs.remove(resolvedPath);
+        params.assertCurrent?.();
       }
       await projectionFs.write(resolvedPath, readResult.buffer, {
         mode: stats.mode & 0o777,
         renameIdentity: "strict",
         assertBeforeMutation: params.assertCurrent,
       });
+      params.assertCurrent?.();
     }
   }
 }
@@ -101,6 +152,8 @@ export async function commitLocalWorkspaceReconciliation(params: {
     current: WorkerWorkspaceManifest;
     currentManifestRaw: string;
     currentManifestRef: string;
+    baseManifestRaw?: string;
+    baseManifestRef?: string;
   };
   refresh?: boolean;
   target: Direction;
@@ -114,23 +167,41 @@ export async function commitLocalWorkspaceReconciliation(params: {
   ) => Promise<void>;
   replaceBaseline: (raw: string, ref: string, patch: Record<string, unknown>) => Promise<void>;
 }): Promise<void> {
+  const divergedPaths = new Set<string>();
   if (params.conflictPaths.length) {
     if (params.resolvedCanonicalPaths?.length) {
       await synchronizeResolvedCanonicalPaths({
         canonicalRoot: params.worktreePath,
         projectionRoot: params.projectionPath,
         resolvedPaths: params.resolvedCanonicalPaths,
+        conflicts: params.checkpoint?.conflicts,
         assertCurrent: params.assertCurrent,
+        divergedPaths,
       });
     }
     const previousResolved = params.checkpoint?.resolvedPaths ?? [];
     const resolvedPaths = [
-      ...new Set([...previousResolved, ...(params.resolvedCanonicalPaths ?? [])]),
+      ...new Set([
+        ...previousResolved,
+        ...(params.resolvedCanonicalPaths?.filter((p) => !divergedPaths.has(p)) ?? []),
+      ]),
     ];
-    const conflicts = buildLocalWorkspaceConflictRecord(
+    const currentConflicts = buildLocalWorkspaceConflictRecord(
       params.conflictPaths,
-      params.resolvedManifest,
+      params.snapshot.current,
     );
+    const conflicts: LocalWorkspaceConflictRecord = {};
+    for (const conflictPath of params.conflictPaths) {
+      const existing = params.checkpoint?.conflicts?.[conflictPath];
+      const current = currentConflicts[conflictPath];
+      if (existing) {
+        conflicts[conflictPath] = existing;
+      } else if (current) {
+        conflicts[conflictPath] = current;
+      } else {
+        conflicts[conflictPath] = { type: "missing" };
+      }
+    }
     const baselineRef = params.checkpoint?.previousRoot ?? params.baselineRef ?? null;
     const checkpointRecord: LocalWorkspaceCheckpointRecord = {
       version: 1,
@@ -138,10 +209,16 @@ export async function commitLocalWorkspaceReconciliation(params: {
       resultingRoot: params.checkpoint?.resultingRoot ?? baselineRef ?? "",
       records: params.checkpoint?.records ?? [],
       removed: params.checkpoint?.removed ?? [],
-      baseManifestRef: params.checkpoint?.baseManifestRef ?? params.snapshot.currentManifestRef,
+      baseManifestRef:
+        params.checkpoint?.baseManifestRef ??
+        params.snapshot.baseManifestRef ??
+        params.snapshot.currentManifestRef,
       currentManifestRef:
         params.checkpoint?.currentManifestRef ?? params.snapshot.currentManifestRef,
-      baseManifestRaw: params.checkpoint?.baseManifestRaw ?? params.snapshot.currentManifestRaw,
+      baseManifestRaw:
+        params.checkpoint?.baseManifestRaw ??
+        params.snapshot.baseManifestRaw ??
+        params.snapshot.currentManifestRaw,
       currentManifestRaw:
         params.checkpoint?.currentManifestRaw ?? params.snapshot.currentManifestRaw,
       buildCacheInputs: params.checkpoint?.buildCacheInputs ?? [],
@@ -172,8 +249,52 @@ export async function commitLocalWorkspaceReconciliation(params: {
       canonicalRoot: params.worktreePath,
       projectionRoot: params.projectionPath,
       resolvedPaths: params.resolvedCanonicalPaths,
+      conflicts: params.checkpoint?.conflicts,
       assertCurrent: params.assertCurrent,
+      divergedPaths,
     });
+  }
+  const baseManifestRaw =
+    params.checkpoint?.baseManifestRaw ??
+    params.snapshot.baseManifestRaw ??
+    params.snapshot.currentManifestRaw;
+  const baseManifestRef =
+    params.checkpoint?.baseManifestRef ??
+    params.snapshot.baseManifestRef ??
+    params.snapshot.currentManifestRef;
+  if (divergedPaths.size > 0) {
+    const conflicts: LocalWorkspaceConflictRecord = {};
+    for (const divergedPath of divergedPaths) {
+      conflicts[divergedPath] = params.checkpoint?.conflicts?.[divergedPath] ?? {
+        type: "diverged",
+      };
+    }
+    const checkpointRecord: LocalWorkspaceCheckpointRecord = {
+      version: 1,
+      kind: "scan",
+      resultingRoot: params.checkpoint?.resultingRoot ?? params.baselineRef ?? "",
+      records: params.checkpoint?.records ?? [],
+      removed: params.checkpoint?.removed ?? [],
+      baseManifestRef,
+      currentManifestRef:
+        params.checkpoint?.currentManifestRef ?? params.snapshot.currentManifestRef,
+      baseManifestRaw,
+      currentManifestRaw:
+        params.checkpoint?.currentManifestRaw ?? params.snapshot.currentManifestRaw,
+      buildCacheInputs: params.checkpoint?.buildCacheInputs ?? [],
+      // SAFETY: Preserve all existing fields from previous checkpoint record when present.
+      ...(params.checkpoint as Record<string, unknown> | undefined),
+      previousRoot: params.checkpoint?.previousRoot ?? params.baselineRef ?? null,
+      conflicts,
+      acknowledgedPaths: params.checkpoint?.acknowledgedPaths?.filter((p) => !divergedPaths.has(p)),
+      resolvedPaths: params.checkpoint?.resolvedPaths?.filter((p) => !divergedPaths.has(p)),
+    };
+    await params.update({
+      journal_json: null,
+      journal_pack: null,
+      checkpoint_json: JSON.stringify(checkpointRecord),
+    });
+    return;
   }
   const patch = {
     ...(params.refresh ? { base_commit: params.snapshot.current.baseCommit! } : {}),
@@ -182,6 +303,51 @@ export async function commitLocalWorkspaceReconciliation(params: {
     journal_pack: null,
   };
   if (
+    params.resolvedCanonicalPaths?.length &&
+    params.resolvedManifest &&
+    baseManifestRaw &&
+    baseManifestRef
+  ) {
+    const base = parseWorkerWorkspaceManifest(
+      baseManifestRaw,
+      baseManifestRef,
+      params.checkpoint?.buildCacheInputs,
+      "stored",
+    );
+    const entriesMap = new Map<string, WorkerWorkspaceManifestEntry>();
+    for (const entry of base.entries) {
+      entriesMap.set(entry.path, entry);
+    }
+    for (const resolvedEntry of params.resolvedManifest.entries) {
+      entriesMap.set(resolvedEntry.path, resolvedEntry);
+    }
+    for (const resolvedPath of params.resolvedCanonicalPaths) {
+      if (!params.resolvedManifest.entries.some((e) => e.path === resolvedPath)) {
+        entriesMap.delete(resolvedPath);
+      }
+    }
+    const directories = new Set<string>(base.directories ?? []);
+    for (const entry of entriesMap.values()) {
+      for (const ancestor of workspacePathAncestors(entry.path)) {
+        directories.add(ancestor);
+      }
+    }
+    for (const entryPath of entriesMap.keys()) {
+      directories.delete(entryPath);
+    }
+    const mergedManifest: WorkerWorkspaceManifest = {
+      version: 1,
+      baseCommit: base.baseCommit,
+      entries: [...entriesMap.values()].toSorted((a, b) =>
+        a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+      ),
+      directories: [...directories].toSorted(),
+      buildCacheInputs: base.buildCacheInputs,
+    };
+    const raw = serializeWorkerWorkspaceManifest(mergedManifest, "stored");
+    const ref = `sha256:${createHash("sha256").update(raw).digest("hex")}`;
+    await params.replaceBaseline(raw, ref, patch);
+  } else if (
     params.resolvedCanonicalPaths?.length &&
     params.resolvedManifest &&
     params.resolvedManifestRef

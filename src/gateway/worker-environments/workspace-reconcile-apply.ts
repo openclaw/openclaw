@@ -173,7 +173,7 @@ export async function applyStagedWorkerWorkspace(params: {
       ]);
       const resolvedCanonicalPaths = [...candidatePaths].filter(
         (p) =>
-          admittedPaths.has(p) &&
+          (admittedPaths.has(p) || params.priorConflicts?.[p] !== undefined) &&
           (params.acknowledgedPaths?.has(p) || params.resolvedPaths?.has(p)) &&
           !conflictPaths.includes(p) &&
           !preflight.applyPaths.has(p),

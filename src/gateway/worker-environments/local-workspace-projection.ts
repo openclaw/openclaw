@@ -41,6 +41,7 @@ type LocalWorkspaceCustody = {
   canonicalPaths?: () => Promise<Set<string>>;
   assertCurrent: () => void;
   workerAuthority: WorktreeWorkerAuthority;
+  conflicts?: Record<string, unknown>;
 };
 
 type PendingWorkspaceOperation<T> = { result: Promise<T>; signal?: AbortSignal };
@@ -299,24 +300,26 @@ async function settleLocalWorkspace<T>(
           await quiescence?.retire();
         }
         const current = state.current();
-        return await operation(
-          current.baseline_ref
+        const checkpoint = current.checkpoint_json
+          ? (JSON.parse(current.checkpoint_json) as { conflicts?: Record<string, unknown> }) // SAFETY: Checkpoint JSON deserializes to a record.
+          : undefined;
+        return await operation({
+          worktreeId: worktree.id,
+          projectionRevision: current.revision,
+          conflicts: checkpoint?.conflicts,
+          ...(current.baseline_ref
             ? {
-                worktreeId: worktree.id,
                 projectionPath: current.projection_path,
-                projectionRevision: current.revision,
                 prepareArchive: state.prepareArchive,
                 canonicalPaths: state.canonicalPaths,
                 assertCurrent: state.current,
                 workerAuthority: state.workerAuthority,
               }
             : {
-                worktreeId: worktree.id,
-                projectionRevision: current.revision,
                 assertCurrent: store.assertCurrent,
                 workerAuthority: store.workerAuthority,
-              },
-        );
+              }),
+        });
       });
     },
   );
@@ -359,15 +362,7 @@ export async function withSettledLocalWorkspacePath<T>(
   const record = await readLiveRegistryWorktreeByPath(context, params.cwd);
   params.assertCurrent?.();
   return record
-    ? await withSettledLocalWorkspace(
-        {
-          worktree: record,
-          env,
-          assertCurrent: params.assertCurrent,
-          allowConflict: params.allowConflict,
-        },
-        operation,
-      )
+    ? await withSettledLocalWorkspace({ worktree: record, env, ...params }, operation)
     : await operation();
 }
 

@@ -108,8 +108,11 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
-    const row = store.get();
+    let row = store.get();
     if (row) {
+      if (row.pending_ref || row.journal_json) {
+        row = await store.update(row, { pending_ref: null, journal_json: null });
+      }
       await store.delete(row);
       await fs.rm(path.dirname(row.projection_path), { recursive: true, force: true });
     }
@@ -272,4 +275,42 @@ it("replaces projection symlinks safely without following destination links (Fin
   expect(projectionSourceStat.isFile()).toBe(true);
   await expectText(projection, "source.txt", "resolved regular file\n");
   await expectText(projection, "target.txt", "target content\n");
+});
+
+it("overlays resolved paths onto complete accepted baseline preserving unmutated baseline entries (Finding 3)", async () => {
+  const projection = await prepare();
+  await writeText(projection, "source.txt", "guest source edit\n");
+  await writeText(canonical, "source.txt", "human source edit\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+
+  // Reconcile and acknowledge source.txt; other.txt was never touched during conflict
+  await writeText(canonical, "source.txt", "reconciled source\n");
+  await acknowledge("source.txt");
+  await settleProjection();
+  expect((await readProjection())?.pending_ref).toBeNull();
+
+  // Subsequent prepare must verify both source.txt and unmutated other.txt exist intact
+  await prepare();
+  await expectText(canonical, "source.txt", "reconciled source\n");
+  await expectText(projection, "source.txt", "reconciled source\n");
+  await expectText(canonical, "other.txt", "original other\n");
+  await expectText(projection, "other.txt", "original other\n");
+});
+
+it("preserves newer guest divergence in projection if edited while conflict is pending (Finding 5)", async () => {
+  const projection = await prepare();
+  await writeText(projection, "source.txt", "guest v1\n");
+  await writeText(canonical, "source.txt", "canonical v1\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+
+  // A background process in the guest projection makes newer edits
+  await writeText(projection, "source.txt", "guest v2 newer divergence\n");
+
+  // Canonical acknowledges resolution to canonical v1
+  await acknowledge("source.txt");
+  await expect(settleProjection()).rejects.toThrow("conflict");
+
+  // Live guest divergence in projection must NOT be overwritten
+  await expectText(projection, "source.txt", "guest v2 newer divergence\n");
+  expect((await readProjection())?.pending_ref).toBeTruthy();
 });

@@ -50,6 +50,7 @@ export async function prepareSessionFileReadPath(
   let runtimeWorkspaceDir: string | undefined = sandbox?.runtimeWorkspaceDir;
   let backingRoot = sandbox?.hostRoot;
   let isWorktreeProjection = false;
+  let projectionConflicts: Record<string, unknown> | undefined;
   if (params.worktreeId && params.root && !params.historical) {
     const { checkpointLocalWorkspacePath, withSettledLocalWorkspacePath } =
       await import("../worker-environments/local-workspace-projection.js");
@@ -59,8 +60,13 @@ export async function prepareSessionFileReadPath(
     if (mapped) {
       runtimeWorkspaceDir = await withSettledLocalWorkspacePath(
         { ...request, allowConflict: true },
-        async (custody) =>
-          custody && custody.worktreeId === params.worktreeId ? custody.projectionPath : undefined,
+        async (custody) => {
+          if (custody && custody.worktreeId === params.worktreeId) {
+            projectionConflicts = custody.conflicts;
+            return custody.projectionPath;
+          }
+          return undefined;
+        },
       );
       backingRoot = runtimeWorkspaceDir;
       isWorktreeProjection = Boolean(runtimeWorkspaceDir);
@@ -80,11 +86,14 @@ export async function prepareSessionFileReadPath(
   }
   let targetReadRoot: string | undefined;
   let targetReadPath = mapped.hostPath;
-  if (isWorktreeProjection && runtimeWorkspaceDir) {
-    const relative = relativePathInsideSandboxRoot(sandbox.containerRoot, absolute);
-    if (!relative) {
-      return { path: null };
-    }
+  const relative = relativePathInsideSandboxRoot(sandbox.containerRoot, absolute);
+  const normalizedRelative = relative?.replaceAll("\\", "/");
+  const isRetainedConflict =
+    isWorktreeProjection &&
+    normalizedRelative &&
+    projectionConflicts &&
+    normalizedRelative in projectionConflicts;
+  if (isRetainedConflict && runtimeWorkspaceDir && relative) {
     const separator = sandbox.containerRoot.startsWith("/") ? "/" : "\\";
     targetReadRoot = runtimeWorkspaceDir;
     targetReadPath = path.resolve(targetReadRoot, ...relative.split(separator));
