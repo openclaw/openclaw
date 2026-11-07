@@ -61,6 +61,7 @@ export function createModelProviders(
     profileOrders: {},
     addProviderId: "",
     addProviderKey: "",
+    addStartChat: null,
     defaultsDraft: null,
     selectedAgentId: "",
     accountUsageRevision: 0,
@@ -256,6 +257,7 @@ export function createModelProviders(
     onApiKey: (provider) => {
       state.addProviderId = provider;
       state.addProviderKey = "";
+      state.addStartChat = null;
       setAddProviderOpen(true);
       setMessage("add", null);
     },
@@ -383,6 +385,8 @@ export function createModelProviders(
     synchronizeRoute(inputs.routeData, inputs.loaderPending ?? false);
     return () => {
       mutations.retire();
+      // A coalesced catalog reload must not fire after the page is gone.
+      core.invalidate();
       projection.dispose();
       connected = false;
       for (const cleanup of cleanups) {
@@ -472,6 +476,7 @@ export function createModelProviders(
     setAddProviderOpen(false);
     state.addProviderId = "";
     state.addProviderKey = "";
+    state.addStartChat = null;
   }
 
   function setSelectedAgent(agentId: string): boolean {
@@ -530,7 +535,7 @@ export function createModelProviders(
   const setMessage = (key: string, message: ModelProviderRowMessage | null) =>
     (state.messages = updateRecordEntry(state.messages, key, message));
 
-  const { closeKeyEditor, mutateApiKey, saveDefaults } = createModelProviderConfigActions({
+  const configActions = createModelProviderConfigActions({
     context,
     gateway,
     state,
@@ -543,6 +548,7 @@ export function createModelProviders(
     setMessage,
     setAddProviderOpen,
   });
+  const { closeKeyEditor, mutateApiKey, saveDefaults } = configActions;
 
   // Page-local snapshots are replaced by their writers; external mutable owners
   // below still invalidate presentation on every notification.
@@ -687,18 +693,8 @@ export function createModelProviders(
       onRequestLogout: (pending: Parameters<typeof profileActions.requestLogout>[0]) =>
         void profileActions.requestLogout(pending),
       onProfileOrderChange: profileActions.setOrder,
-      onAddProviderToggle: () => {
-        setAddProviderOpen((open) => !open);
-        state.addProviderKey = "";
-        setMessage("add", null);
-      },
-      onAddProviderKeyChange: (value: string) => (state.addProviderKey = value),
-      onAddProvider: () => {
-        const provider = state.addProviderId;
-        if (provider) {
-          void mutateApiKey(provider, provider, state.addProviderKey.trim(), "add");
-        }
-      },
+      addStartChat: state.addStartChat,
+      ...configActions.addProviderActions,
       ...modelDefaultsActions(() => state.defaultsDraft ?? configuredDefaults, stageDefaults),
       onCatalogRetry: () => retryCatalog(),
       ...login.providerActions,

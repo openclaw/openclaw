@@ -1,11 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
+import * as transcriptFts from "./session-transcript-fts.js";
 import {
   createSessionTranscriptFtsInserter as createFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction as deleteFtsRows,
@@ -13,6 +14,7 @@ import {
 } from "./session-transcript-fts.js";
 import {
   createTranscriptIndexAppenderInTransaction as createIndexAppender,
+  reconcileSessionTranscriptIndexInTransaction as reconcileIndex,
   deleteSessionTranscriptIndexInTransaction as deleteIndex,
   markSessionTranscriptIndexDirtyInTransaction as markIndexDirty,
   replaceSessionTranscriptIndexSuffixInTransaction as replaceIndexSuffix,
@@ -22,10 +24,16 @@ import {
   claimPreparedSessionTranscriptProjectionInTransaction as claimProjection,
   deletePreparedSessionTranscriptProjectionChunkInTransaction as deleteProjectionChunk,
   finalizePreparedSessionTranscriptProjectionInTransaction as finalizeProjection,
-  prepareSessionTranscriptProjection as prepareProjection,
+  prepareProjectionSource,
+  prepareSessionTranscriptProjection as prepareStreamingProjection,
 } from "./session-transcript-projection-rebuild.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 import { createTranscriptEventInserter } from "./transcript-payload.js";
+
+function prepareProjection(...args: Parameters<typeof prepareStreamingProjection>) {
+  const plan = prepareStreamingProjection(...args);
+  return plan ? { ...plan, ftsRows: [...plan.ftsRows] } : undefined;
+}
 
 const projectionDatabases: DatabaseSync[] = [];
 afterEach(() => {
@@ -136,6 +144,77 @@ function projectionFixture(seed = true) {
   db.exec("COMMIT");
   return db;
 }
+
+// Cost budget: six messages, less than 1 MiB total text, one in-memory production rebuild.
+it("bounds rebuild FTS batches by UTF-8 bytes without dropping oversized rows", () => {
+  const db = projectionFixture(false);
+  const texts = [
+    "界".repeat(64 * 1024),
+    "界".repeat(64 * 1024),
+    "界".repeat(64 * 1024),
+    "x".repeat(300 * 1024),
+    "needle tail",
+    "last",
+  ];
+  const insertEvent = createTranscriptEventInserter(db, "target");
+  runSqliteImmediateTransactionSync(db, () => {
+    texts.forEach((content, seq) => {
+      const event = messageEvent(`target-${seq}`, seq ? `target-${seq - 1}` : null, {
+        role: "user",
+        content,
+      });
+      insertEvent({ seq, eventJson: JSON.stringify(event), createdAt: seq });
+    });
+  });
+  const batches: { bytes: number; rows: number }[] = [];
+  const realCreateInserter = transcriptFts.createSessionTranscriptFtsInserter;
+  const spy = vi
+    .spyOn(transcriptFts, "createSessionTranscriptFtsInserter")
+    .mockImplementation((connection, sessionId) => {
+      const insert = realCreateInserter(connection, sessionId);
+      return (entries) => {
+        if (entries.length) {
+          batches.push({
+            rows: entries.length,
+            bytes: entries.reduce((sum, row) => sum + Buffer.byteLength(row.text ?? ""), 0),
+          });
+        }
+        insert(entries);
+      };
+    });
+  try {
+    expect(runSqliteImmediateTransactionSync(db, () => reconcileIndex(db, "target"))).toBe(true);
+  } finally {
+    spy.mockRestore();
+  }
+  expect(batches.every((batch) => batch.bytes <= 256 * 1024 || batch.rows === 1)).toBe(true);
+  expect(batches.reduce((sum, batch) => sum + batch.rows, 0)).toBe(texts.length);
+  expect(
+    rows(
+      db,
+      "SELECT message_id, text FROM session_transcript_fts WHERE session_id = 'target' ORDER BY rowid",
+    ),
+  ).toEqual(texts.map((text, seq) => ({ message_id: `target-${seq}`, text })));
+  expect(
+    rows(
+      db,
+      "SELECT active_event_count, active_message_count, indexed_seq, needs_rebuild FROM session_transcript_index_state WHERE session_id = 'target'",
+    ),
+  ).toEqual([
+    {
+      active_event_count: texts.length,
+      active_message_count: texts.length,
+      indexed_seq: texts.length - 1,
+      needs_rebuild: 0,
+    },
+  ]);
+  expect(
+    rows(
+      db,
+      "SELECT event_seq FROM session_transcript_active_events WHERE session_id = 'target' ORDER BY active_position",
+    ),
+  ).toEqual(texts.map((_, event_seq) => ({ event_seq })));
+});
 
 function hits(db: DatabaseSync) {
   return rows(
@@ -345,4 +424,38 @@ it.each([
   );
   const result = prepareProjection(db, "target");
   expect(result).toEqual(expect.objectContaining(expected));
+});
+
+it("reads prepared FTS payloads only as the consumer advances", () => {
+  const events = ["first", "second", "third"].map((id, index) => ({
+    seq: index + 1,
+    created_at: index + 10,
+    event_json: JSON.stringify(
+      messageEvent(id, index === 0 ? null : ["first", "second"][index - 1], {
+        role: "user",
+        content: [{ type: "text", text: id.repeat(10_000) }],
+      }),
+    ),
+  }));
+  let pointReads = 0;
+  const plan = prepareProjectionSource({
+    sessionId: "stream",
+    transcriptGeneration: "generation",
+    transcriptUpdatedAt: 1,
+    rows: () => events,
+    row: (seq) => {
+      pointReads += 1;
+      return events.find((event) => event.seq === seq);
+    },
+  });
+  expect(plan).toMatchObject({ activeEventCount: 3, activeMessageCount: 3, sourceIndexedSeq: 3 });
+  const planningReads = pointReads;
+  const iterator = plan!.ftsRows[Symbol.iterator]();
+  expect(pointReads).toBe(planningReads);
+  for (const [index, id] of ["first", "second", "third"].entries()) {
+    expect(iterator.next().value).toMatchObject({ messageId: id, text: id.repeat(10_000) });
+    expect(pointReads).toBe(planningReads + index + 1);
+  }
+  expect(iterator.next().done).toBe(true);
+  expect(pointReads).toBe(planningReads + 3);
 });

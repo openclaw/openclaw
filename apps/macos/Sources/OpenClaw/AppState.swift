@@ -73,6 +73,8 @@ final class AppState {
     private(set) var launchAtLoginError: String?
     private var isInitializing = true
     private var isApplyingGatewayConfig = false
+    /// In-process copy of `primaryGatewayDeferredFingerprintKey`; see `ConnectionModeResolver`.
+    @ObservationIgnored private var primaryGatewayDeferredFingerprint: Data?
     private enum GatewayConfigSyncState: Equatable {
         case current
         case pending
@@ -294,6 +296,7 @@ final class AppState {
             self.persistPreference(self.connectionMode.rawValue, key: connectionModeKey)
             if oldValue != self.connectionMode {
                 self.markGatewayConfigDirty([.mode])
+                self.updatePrimaryGatewayDeferral()
             }
             syncGatewayConfigIfNeeded()
         }
@@ -528,6 +531,14 @@ final class AppState {
         let resolvedConnectionMode = resolvedConnection.mode
         self.remoteTransport = configRemoteTransport
         self.connectionMode = resolvedConnectionMode
+        if let deferred = AppDefaults.standard.data(forKey: primaryGatewayDeferredFingerprintKey) {
+            if ConnectionModeResolver.primaryGatewayIsDeferred(root: configRoot) {
+                self.primaryGatewayDeferredFingerprint = deferred
+            } else if !isPreview {
+                // Another writer changed the gateway section since "Set up later"; the file wins.
+                AppDefaults.standard.removeObject(forKey: primaryGatewayDeferredFingerprintKey)
+            }
+        }
         self.hostsLocalGatewayWithRemotePrimary = AppDefaults.standard
             .bool(forKey: hostsLocalGatewayWithRemotePrimaryKey)
 
@@ -820,12 +831,11 @@ extension AppState {
         // Dirty fields retain the user's pending UI value. A disk value that moved
         // from the last observed baseline is a conflict, never write authorization.
         let persistedFields = Self.gatewayConfigFieldsPersisted(by: draft)
-        let remoteClearPending = draft.clearsPrimaryGateway && (root["gateway"] as? [String: Any])?["remote"] != nil
         var externallyPersistedFields: Set<GatewayConfigField> = []
         for field in persistedFields {
-            if diskSnapshot[field] == desiredSnapshot[field] {
-                // Missing mode alone does not complete a clear while remote settings remain.
-                if field != .mode || !remoteClearPending { externallyPersistedFields.insert(field) }
+            // An unchanged file cannot acknowledge an app-only primary deferral.
+            if !draft.clearsPrimaryGateway, diskSnapshot[field] == desiredSnapshot[field] {
+                externallyPersistedFields.insert(field)
             } else if diskSnapshot[field] != self.lastObservedGatewayConfig[field] {
                 self.conflictedGatewayConfigFields.insert(field)
             }
@@ -858,7 +868,8 @@ extension AppState {
         self.applyGatewayConfigMode(
             desiredMode,
             hasRemoteUrl: hasRemoteUrl,
-            forcing: forcedFields.contains(.mode))
+            forcing: forcedFields.contains(.mode),
+            rootFingerprint: Self.gatewayRoutingFingerprint(root))
 
         let shouldApplyTransport = forcedFields.contains(.remoteTransport) ||
             !self.dirtyGatewayConfigFields.contains(.remoteTransport)
@@ -911,9 +922,20 @@ extension AppState {
     private func applyGatewayConfigMode(
         _ desiredMode: ConnectionMode?,
         hasRemoteUrl: Bool,
-        forcing: Bool)
+        forcing: Bool,
+        rootFingerprint: Data?)
     {
         guard forcing || !self.dirtyGatewayConfigFields.contains(.mode) else { return }
+        if let deferred = self.primaryGatewayDeferredFingerprint {
+            if deferred == rootFingerprint {
+                // "Set up later" holds while the file's gateway section is unchanged.
+                if self.connectionMode != .unconfigured {
+                    self.connectionMode = .unconfigured
+                }
+                return
+            }
+            self.clearPrimaryGatewayDeferral()
+        }
         let nextMode = desiredMode ?? (hasRemoteUrl ? .remote : forcing ? .unconfigured : nil)
         if let nextMode, nextMode != self.connectionMode {
             self.connectionMode = nextMode
@@ -1117,6 +1139,30 @@ extension AppState {
         AppDefaults.standard.set(value, forKey: key)
     }
 
+    /// "Set up later" never edits `openclaw.json` (#187841): a Gateway started outside the app runs
+    /// from that file and refuses to start without `gateway.mode`. The choice lives here instead,
+    /// bound to the file's current gateway section so any other writer's edit retires it.
+    private func updatePrimaryGatewayDeferral() {
+        guard !self.isInitializing, !self.isApplyingGatewayConfig else { return }
+        if self.connectionMode == .unconfigured {
+            let fingerprint = Self.gatewayRoutingFingerprint(OpenClawConfigFile.loadDict())
+            self.primaryGatewayDeferredFingerprint = fingerprint
+            self.ifNotPreview {
+                AppDefaults.standard.set(fingerprint, forKey: primaryGatewayDeferredFingerprintKey)
+            }
+        } else {
+            self.clearPrimaryGatewayDeferral()
+        }
+    }
+
+    private func clearPrimaryGatewayDeferral() {
+        guard self.primaryGatewayDeferredFingerprint != nil else { return }
+        self.primaryGatewayDeferredFingerprint = nil
+        self.ifNotPreview {
+            AppDefaults.standard.removeObject(forKey: primaryGatewayDeferredFingerprintKey)
+        }
+    }
+
     private func ifNotPreview(_ action: () -> Void) {
         guard !self.isPreview else { return }
         action()
@@ -1136,24 +1182,20 @@ extension AppState {
     static func syncedGatewayRoot(
         currentRoot: [String: Any],
         draft: GatewayConfigSyncDraft)
-        -> (root: [String: Any], changed: Bool, removesGatewayMode: Bool)
+        -> (root: [String: Any], changed: Bool)
     {
+        // "Set up later" (an unconfigured primary) is kept in the app's defaults, not in the file:
+        // `gateway.mode` belongs to whichever Gateway runs from it (#187841).
+        if draft.clearsPrimaryGateway { return (currentRoot, false) }
+
         var root = currentRoot
         var gateway = root["gateway"] as? [String: Any] ?? [:]
         var changed = false
-        var removesGatewayMode = false
 
-        let desiredMode = draft.connectionMode == .unconfigured ? nil : draft.connectionMode.rawValue
-
-        if draft.dirtyFields.contains(.mode) {
+        if draft.dirtyFields.contains(.mode), draft.connectionMode != .unconfigured {
             let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let desiredMode {
-                if currentMode != desiredMode {
-                    gateway["mode"] = desiredMode
-                    changed = true
-                }
-            } else if currentMode != nil {
-                removesGatewayMode = gateway.removeValue(forKey: "mode") != nil
+            if currentMode != draft.connectionMode.rawValue {
+                gateway["mode"] = draft.connectionMode.rawValue
                 changed = true
             }
         }
@@ -1184,19 +1226,14 @@ extension AppState {
             changed = true
         }
 
-        // A retained remote URL would infer remote mode again on reload.
-        if draft.clearsPrimaryGateway, gateway.removeValue(forKey: "remote") != nil {
-            changed = true
-        }
-
-        guard changed else { return (currentRoot, false, false) }
+        guard changed else { return (currentRoot, false) }
 
         if gateway.isEmpty {
             root.removeValue(forKey: "gateway")
         } else {
             root["gateway"] = gateway
         }
-        return (root, true, removesGatewayMode)
+        return (root, true)
     }
 
     private func syncGatewayConfigIfNeeded() {
@@ -1267,8 +1304,8 @@ extension AppState {
             gatewayFingerprint: Self.gatewayRoutingFingerprint(root))
     }
 
-    private static func gatewayRoutingFingerprint(_ root: [String: Any]) -> Data? {
-        self.configFingerprint(["gateway": root["gateway"] ?? [:]])
+    static func gatewayRoutingFingerprint(_ root: [String: Any]) -> Data? {
+        ConnectionModeResolver.gatewayRoutingFingerprint(root)
     }
 
     func isCurrentPrimaryGateway(_ snapshot: PrimaryGatewaySnapshot) -> Bool {
@@ -1369,6 +1406,9 @@ extension AppState {
         self.conflictedGatewayConfigFields.removeAll()
         self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(replacement.root)
         self.lastObservedGatewayFingerprint = Self.gatewayRoutingFingerprint(replacement.root)
+        // An explicit primary selection (`primary set` / `primary clear`) retires a deferred
+        // choice even when the file did not change.
+        self.clearPrimaryGatewayDeferral()
         self.applyGatewayConfigView(replacement.root, forcing: Set(GatewayConfigField.allCases))
         if replacement.clearsTargetDefaults {
             self.remoteProjectRoot = ""
@@ -1435,15 +1475,15 @@ extension AppState {
         let synced = Self.syncedGatewayRoot(
             currentRoot: currentRoot,
             draft: draft)
-        guard !synced.changed || self.gatewayConfigSaver(synced.root, synced.removesGatewayMode) else {
+        guard !synced.changed || self.gatewayConfigSaver(synced.root, false) else {
             self.setGatewayConfigSyncState(.failed)
             Self.logger.warning("connection draft sync failed: config saver rejected write; see config log for reason")
             return false
         }
         self.acknowledgeGatewayConfigPersistence(draft, root: synced.root)
         if draft.clearsPrimaryGateway {
-            // Publish the cleared selection only after its config commits.
-            if synced.changed, !self.isPreview {
+            // The cleared selection is recorded in the app's defaults; the file is untouched.
+            if !self.isPreview {
                 WebChatManager.shared.resetPrimaryConnections()
             }
             self.applyGatewayConfigView(synced.root, forcing: Set(GatewayConfigField.allCases))

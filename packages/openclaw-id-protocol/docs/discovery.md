@@ -15,6 +15,7 @@ a signed statement that the consumer verifies against its own state:
 | Data Discovery serves                      | Signed by                          | Verified by                                             | Against                                                     |
 | ------------------------------------------ | ---------------------------------- | ------------------------------------------------------- | ----------------------------------------------------------- |
 | ServerBinding (in the descriptor)          | R only                             | loader / transport hook                                 | the client pin {fp(R), claw_id, binding_seq}                |
+| RootReset (in the descriptor)              | K_gw of the replaced binding       | Discovery on publish, loader                            | the stored binding (Discovery), the client pin (loader)     |
 | MembershipSnapshot                         | K_gw                               | relay admission (Discovery itself), clients for listing | K_gw of the verified binding                                |
 | InviteRedemption (mailbox)                 | invitee's D_I + invite proof       | Gateway                                                 | registered invite (proof key, expiry, audience, single use) |
 | R-signed statements, Revocations (mailbox) | R / owner device                   | Gateway                                                 | pinned root and the claw's current owner devices            |
@@ -26,8 +27,9 @@ always shown as "reported by OpenClaw ID"; refuse relay admission (availability 
 
 What it **cannot** do: add a member, an owner device or an invite; approve a redemption
 (approvals go **directly** to the Gateway over the tunnel or loopback, never through the
-mailbox); change which K_srv a pinned client dials; keep a removed member connected (removal
-takes effect at the Gateway and the tunnel child, G4).
+mailbox); change which K_srv a pinned client dials; replace a claw's root (that needs a
+RootReset signed by the claw's K_gw); keep a removed member connected (removal takes effect at
+the Gateway and the tunnel child, G4).
 
 The API follows from this: every write that matters carries a signed statement; Discovery's
 own checks (signatures, sequence numbers) are hygiene that keeps garbage out of the mirror,
@@ -88,17 +90,48 @@ rollback").
 ```json
 { "v": 1, "claw_id": "<32 hex>", "transport": "iroh", "relay_url": "https://.../",
   "root_pub": "ed25519:<hex>", "binding": <ServerBinding>,
+  "reset"?: { "previous_root_pub": "ed25519:<hex>", "previous_binding": <ServerBinding>,
+              "statement": <RootReset> },
   "published_at": 1793318400 }
 ```
 
 - No `endpointId`: the client dials `binding.body.k_srv` after `verifyBindingForPin`.
-- No `rotations`: a claw's root never changes (owner reset is out of scope, OCF-319).
+- No `rotations`: a root changes only by owner reset, carried in `reset` (below).
 - `relay_url` must be https (http only for localhost testbeds). It is a hint.
+- `v` is checked first: a well-formed version this build does not implement is
+  `unsupported_version`. Descriptor v1 is the stable bootstrap old clients read
+  (versioning.md, "Bootstrap").
 - Unknown fields are rejected. On publish, Discovery runs `checkDescriptorConsistency`
-  (binding verifies under the descriptor's own root) and refuses a lower binding_seq; neither
-  is a security property.
+  (binding verifies under the descriptor's own root, and `reset`, if present, is a valid reset
+  into that binding) and refuses a lower binding_seq; neither is a security property.
 - The owner account is Discovery's own record (from the enrollment code), returned by
   registerClaw and listClaws, never part of the signed data.
+
+### Owner reset
+
+After an owner reset on the machine (enrollment.md), the Gateway publishes the new descriptor
+with `reset`: the root and binding it replaced and the RootReset signed by that binding's K_gw.
+The RootReset travels in the descriptor, not as a separate object, because a client pinned to
+the old root reads only the descriptor before it decides anything, and Discovery stores the
+descriptor as one row. The request is signed by the same K_gw (a reset keeps it).
+
+- **Accepting a new root.** When a republished descriptor's root differs from the stored one,
+  Discovery accepts it only if `checkDescriptorRootReset(stored, next)` passes: `reset` names the
+  stored root and the exact stored binding (`reset_mismatch`), and `verifyRootReset` passes with
+  the stored binding as the current one: signed by the stored K_gw, same claw, binding_seq
+  higher than the stored one, the new binding signed by `new_root_pub` with the same hostname,
+  K_srv and K_gw. A new root without `reset` is `root_mismatch`. Refusals are
+  `invalid_statement`.
+- **Same root.** A republished descriptor with the stored root is checked as before
+  (`verifyBindingForPin` with the stored root as the pin); `reset` is ignored there but still
+  checked by `checkDescriptorConsistency`.
+- **How long `reset` stays.** The Gateway includes `reset` with the binding the reset created and
+  drops it on the next binding change. After the new root's first binding change, a browser
+  that missed the reset sees `root_mismatch` and is set up again; this is accepted.
+- **Rows.** A reset leaves the claw id, hostname, K_srv, K_gw and owner account unchanged. The
+  stored snapshot is for the old binding_seq, so owner and member relay rows drop until the
+  Gateway publishes the snapshot for the new binding (it has no owner devices or members, so
+  this matches the claw).
 
 ### Claw addresses
 

@@ -19,6 +19,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, resolveGatewayErrorDetailCode } from "../../api/gateway.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import {
   DocsLink,
@@ -52,12 +53,12 @@ import {
 import { CloudWorkerMachinePool } from "./cloud-worker-machine-pool.tsx";
 import { readCloudWorkerRepositories } from "./cloud-worker-repositories-config.ts";
 import { CloudWorkerSnapshotPolicy } from "./cloud-worker-snapshot-policy.tsx";
+import "./cloud-worker-environments.css";
 import {
   CloudWorkerBuildRow,
   CloudWorkerEnvironmentSheet,
   CloudWorkerSnapshotRow,
 } from "./cloud-worker-snapshot-rows.tsx";
-import "./cloud-worker-environments.css";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -577,9 +578,9 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
           <Loading on={feedback()}>
             <Errored
               fallback={(err) => (
-                <div class="callout warning" role="alert">
+                <InlineAlert tone="warning" role="alert">
                   {formatUiError(err())}
-                </div>
+                </InlineAlert>
               )}
             >
               {completion()}

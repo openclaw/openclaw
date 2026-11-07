@@ -5,7 +5,7 @@ import type { Stores } from "./stores.js";
 
 type SessionAuthority = Extract<MemoryCallerContext["authority"], { kind: "session" }>;
 /** The before_prompt_build context fields the index reads. */
-type HookContext = {
+export type HookContext = {
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -71,38 +71,48 @@ function callerContext(ctx: HookContext): MemoryCallerContext | undefined {
   };
 }
 
+/** Opens the private partition for a session that reads it (the owner's audience,
+ * or a conversation the owner granted read access), or undefined for any other
+ * session or when the agent has no provisioned store. Shared by the standing
+ * index and the recall gate. */
+export async function openPrivatePartition(stores: Stores, ctx: HookContext) {
+  const context = callerContext(ctx);
+  if (!context || !ctx.agentId) {
+    return undefined;
+  }
+  // Grants live in the registry; the first turn after a restart waits for it.
+  await stores.ensure();
+  const principal = memoryPrincipal(context, ctx.agentId, false, "default", stores.grantFor);
+  // An ungranted conversation gets nothing. A grant made or revoked mid-session
+  // changes the prompt on the next turn: the owner's change is the invalidation.
+  if (!principal().sessionPrivate) {
+    return undefined;
+  }
+  // Reading never provisions: an agent without a store has nothing to read.
+  const opened = await stores.open(principal, { provision: false });
+  if (opened.kind !== "ready") {
+    return undefined;
+  }
+  // A grant revoked while the store opened pins a conversation principal; only
+  // a principal pinned to the private partition may read it here.
+  if (opened.access.scope.visibility !== "private") {
+    return undefined;
+  }
+  return opened;
+}
+
 /** Reads the rendered standing index for a session that reads the private
- * partition (the owner's audience, or a conversation the owner granted read
- * access), or "" for any other session or when the agent has no provisioned
- * store. Conversation partitions have no standing index. */
+ * partition, or "" otherwise. Conversation partitions have no standing index. */
 export async function readMemoryIndex(
   stores: Stores,
   ctx: HookContext,
   asOf: number,
 ): Promise<string> {
-  const context = callerContext(ctx);
-  if (!context || !ctx.agentId) {
-    return "";
-  }
-  // Grants live in the registry; the first turn after a restart waits for it.
-  await stores.ensure();
-  const principal = memoryPrincipal(context, ctx.agentId, false, "default", stores.grantFor);
-  // An ungranted conversation gets no index. A grant made or revoked mid-session
-  // changes the prompt on the next turn: the owner's change is the invalidation.
-  if (!principal().sessionPrivate) {
-    return "";
-  }
-  // Reading never provisions: an agent without a store has nothing to index.
-  const opened = await stores.open(principal, { provision: false });
-  if (opened.kind !== "ready") {
+  const opened = await openPrivatePartition(stores, ctx);
+  if (!opened) {
     return "";
   }
   const { runtime, access, binding } = opened;
-  // A grant revoked while the store opened pins a conversation principal; only
-  // a principal pinned to the private partition may reuse or render the index.
-  if (access.scope.visibility !== "private") {
-    return "";
-  }
   // A binding can move to a different physical store (share, then use own), so the
   // vault identity keys the pin too.
   const key = JSON.stringify([

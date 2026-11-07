@@ -179,7 +179,10 @@ describe("matched standalone support artifacts", () => {
           outfile: path.join(input.outputRoot, "openclaw"),
           aot: true,
           allowCodeFromDisk: true,
-          trim: { allow: ["run", "jit"], locales: ["en"] },
+          trim: {
+            allow: ["run", "jit", "interpreter", "password", "toml", "yaml", "json5", "jsonc"],
+            locales: ["en"],
+          },
           aotDisable: ["flow-results"],
           autoloadPackageJson: true,
           autoloadDotenv: false,

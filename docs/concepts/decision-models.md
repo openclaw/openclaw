@@ -55,6 +55,12 @@ Configure the provider plugin before selecting its model:
   and the OpenAI Platform Decisions API. Configure an OpenAI API key;
   ChatGPT/Codex subscription credentials do not authorize this endpoint.
   Evaluations send the supplied evidence to OpenAI and incur Platform usage charges.
+- [Rerank](/providers/rerank) is bundled and uses any reranker behind a
+  `/rerank` endpoint: vLLM, Hugging Face TEI, Infinity, llama.cpp, Cohere,
+  Jina, or Voyage. List the endpoint and model under `models.providers.rerank`;
+  self-hosted servers need no credential. A reranker answers `boolean`,
+  `choice`, and `sort` questions with relevance scores, which suits matching
+  judgments such as the Knowledge recall gate, not rubric scoring.
 - [SubQ](/plugins/subq) connects to hosted SubQ Snap for text/JSON decisions.
   Configure a protected SubQ credential. This V1 adapter supports text/JSON
   input only; it does not expose the vendor API's image input.
@@ -82,6 +88,9 @@ The current plugins declare these model references:
 | `typesafe/jev-1.13.0`                | Jev 1.13.0             | TypeSafe credential                                    |
 | `typesafe/jev-latest`                | Jev                    | TypeSafe credential; follows the vendor's latest model |
 | `typesafe/kev-latest`                | Kev (local server)     | Running System One server and explicit loopback URL    |
+
+Rerank models have no fixed list: any model you configure under
+`models.providers.rerank` is selectable as `rerank/<model id>`.
 
 The ONNX, SubQ, and TypeSafe AI plugins are currently unpublished candidates. Their setup pages explain
 source-checkout use and the packaged host floor. The table describes the plugins' declared models,
@@ -266,7 +275,10 @@ The host selects the provider and model from the owning agent's configuration.
 `purpose` identifies the consumer operation; `rubricVersion` identifies its rubric
 in result provenance. They do not replace question instructions. Change the
 rubric version when its meaning changes. Omit `agentId` only when intentionally
-using global-default selection.
+using global-default selection. Optional `assertCurrent` is the caller's own
+authority check (for example a revocable data grant); the host re-runs it at every
+provider dispatch and retry, and a throw rejects the evaluation before more data
+leaves.
 
 An `ok` outcome contains `outcome.result.answers`, keyed by the submitted question
 IDs, plus the provider-reported model, optional usage, and provider/rubric/runtime provenance.

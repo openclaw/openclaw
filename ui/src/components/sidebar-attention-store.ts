@@ -133,7 +133,9 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
           }
         } else if (isCronInventoryInvalidation(event, sources.gateway.snapshot)) {
           this.load(false);
-        } else if (modelAuthEventInvalidates(event)) {
+        } else if (
+          modelAuthEventInvalidates(event, sources.agentSelection.state.selectedId ?? undefined)
+        ) {
           this.load(true, false);
         }
       }),
