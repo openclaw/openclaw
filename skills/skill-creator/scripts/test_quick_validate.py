@@ -83,49 +83,24 @@ metadata: |
         finally:
             quick_validate.yaml = previous_yaml
 
-    def test_rejects_empty_name(self):
-        skill_dir = self.temp_dir / "empty-name-skill"
+    def test_rejects_blank_name_or_description(self):
+        skill_dir = self.temp_dir / "blank-field-skill"
         skill_dir.mkdir(parents=True, exist_ok=True)
-        content = '---\nname: ""\ndescription: a valid description\n---\n# Skill\n'
-        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
-
-        valid, message = quick_validate.validate_skill(skill_dir)
-
-        self.assertFalse(valid)
-        self.assertEqual(message, "Name must not be empty")
-
-    def test_rejects_whitespace_only_name(self):
-        skill_dir = self.temp_dir / "ws-name-skill"
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        content = "---\nname: '   '\ndescription: a valid description\n---\n# Skill\n"
-        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
-
-        valid, message = quick_validate.validate_skill(skill_dir)
-
-        self.assertFalse(valid)
-        self.assertEqual(message, "Name must not be empty")
-
-    def test_rejects_empty_description(self):
-        skill_dir = self.temp_dir / "empty-desc-skill"
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        content = '---\nname: valid-skill\ndescription: ""\n---\n# Skill\n'
-        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
-
-        valid, message = quick_validate.validate_skill(skill_dir)
-
-        self.assertFalse(valid)
-        self.assertEqual(message, "Description must not be empty")
-
-    def test_rejects_whitespace_only_description(self):
-        skill_dir = self.temp_dir / "ws-desc-skill"
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        content = "---\nname: valid-skill\ndescription: '   '\n---\n# Skill\n"
-        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
-
-        valid, message = quick_validate.validate_skill(skill_dir)
-
-        self.assertFalse(valid)
-        self.assertEqual(message, "Description must not be empty")
+        cases = [
+            ('""', "a valid description", "Name must not be empty"),
+            ("'   '", "a valid description", "Name must not be empty"),
+            ("valid-skill", '""', "Description must not be empty"),
+            ("valid-skill", "'   '", "Description must not be empty"),
+        ]
+        for name, description, expected in cases:
+            with self.subTest(name=name, description=description):
+                (skill_dir / "SKILL.md").write_text(
+                    f"---\nname: {name}\ndescription: {description}\n---\n# Skill\n",
+                    encoding="utf-8",
+                )
+                valid, message = quick_validate.validate_skill(skill_dir)
+                self.assertFalse(valid)
+                self.assertEqual(message, expected)
 
     def test_accepts_openclaw_invocation_frontmatter(self):
         skill_dir = self.temp_dir / "invocable-skill"
