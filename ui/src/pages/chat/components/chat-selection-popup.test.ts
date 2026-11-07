@@ -37,13 +37,13 @@ function selectRange(node: Text, start: number, end: number) {
 
 async function pointerUp(
   thread: HTMLElement,
-  options: Omit<Parameters<typeof handleChatSelectionPointerUp>[1], "paneId"> = {
-    onAskSideChat: onAskSideChatSpy,
-  },
+  options: Partial<Parameters<typeof handleChatSelectionPointerUp>[1]> = {},
   settle = true,
 ) {
   handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
     paneId: "pane-a",
+    onAskSideChat: onAskSideChatSpy,
+    onAskNewSession: onAskNewSessionSpy,
     ...options,
   });
   if (settle) {
@@ -74,12 +74,14 @@ function key(
 }
 
 const onAskSideChatSpy = vi.fn();
+const onAskNewSessionSpy = vi.fn();
 
 afterEach(() => {
   removeChatSelectionPopup();
   window.getSelection()?.removeAllRanges();
   document.body.innerHTML = "";
   onAskSideChatSpy.mockReset();
+  onAskNewSessionSpy.mockReset();
   vi.useRealTimers();
 });
 
@@ -123,6 +125,28 @@ describe("chat selection popup", () => {
     );
     expect(window.getSelection()?.isCollapsed).toBe(true);
     expect(popup()).toBeNull();
+  });
+
+  it("routes New session to the new-session launcher", async () => {
+    const thread = selection("route this passage", 5);
+    await pointerUp(thread);
+    const buttons = [...popup()!.querySelectorAll("button")];
+    // This fixture has no composer, so Add to chat is not offered.
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "Ask in side chat",
+      "New session",
+    ]);
+    buttons[1].click();
+    expect(onAskNewSessionSpy).toHaveBeenCalledWith({
+      text: "route",
+      start: 0,
+      end: 5,
+      messageId: "assistant-1",
+      entryId: "entry-1",
+    });
+    expect(onAskSideChatSpy).not.toHaveBeenCalled();
+    expect(popup()).toBeNull();
+    expect(window.getSelection()?.isCollapsed).toBe(true);
   });
 
   it.each(["scroll", "collapse"])("dismisses the toolbar on %s", async (action) => {
