@@ -128,6 +128,43 @@ it("stops feeding a blocked destination until it drains", async () => {
   expect(bytes).toBeGreaterThan(16_384);
 });
 
+it("preserves bytes when propagation timers wake out of order", async () => {
+  const pending = new Map<ReturnType<typeof setTimeout>, () => void>();
+  const schedule = globalThis.setTimeout;
+  vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+    const timer = schedule(() => {
+      pending.delete(timer);
+      callback(...args);
+    }, delay);
+    pending.set(timer, () => {
+      clearTimeout(timer);
+      pending.delete(timer);
+      callback(...args);
+    });
+    return timer;
+  });
+  const link = createControlUiWireLink({ latencyMs: 50, megabitsPerSecond: 10_000 });
+  links.push(link);
+  const source = new PassThrough();
+  const chunks: Buffer[] = [];
+  const target = new Writable({
+    write(chunk: Buffer, _encoding, callback) {
+      chunks.push(chunk);
+      callback();
+    },
+  });
+  const body = Buffer.concat([Buffer.alloc(16_384, 1), Buffer.alloc(16_384, 2)]);
+  link.connect(source, target, () => {});
+  source.end(body);
+  await vi.advanceTimersByTimeAsync(2);
+  // Real timer buckets can wake nearby propagation deadlines out of order.
+  vi.setSystemTime(Date.now() + 100);
+  for (const wake of [...pending.values()].toReversed()) {
+    wake();
+  }
+  expect(Buffer.concat(chunks).equals(body)).toBe(true);
+});
+
 it("delivers a real socket response after both peers half-close", async () => {
   vi.useRealTimers();
   const sent = createControlUiWireLink();
