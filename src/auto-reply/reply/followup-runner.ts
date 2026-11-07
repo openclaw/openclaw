@@ -228,11 +228,7 @@ export function createFollowupRunner(
       const initialSessionEntry = turn.session.current();
       const initialGoalId = initialSessionEntry?.goal?.id;
       const runWithGoalReturn = createGoalContinuationReturn(
-        turn.session.kind === "session" &&
-          turn.session.storePath &&
-          initialSessionEntry &&
-          (initialSessionEntry.agentHarnessId === undefined ||
-            initialSessionEntry.agentHarnessId === "openclaw")
+        turn.session.kind === "session" && turn.session.storePath && initialSessionEntry
           ? {
               base: turn.queued,
               initialGoalId:

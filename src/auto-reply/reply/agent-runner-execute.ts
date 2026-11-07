@@ -233,11 +233,7 @@ async function executePreparedReplyAgentRunWithCompletion(
   // Adoption transfers the accepted input into ordinary execution custody.
   await admitFollowupRunLifecycle(followupRun);
   const runWithGoalReturn = createGoalContinuationReturn(
-    sessionKey &&
-      storePath &&
-      activeSessionEntry &&
-      (activeSessionEntry.agentHarnessId === undefined ||
-        activeSessionEntry.agentHarnessId === "openclaw")
+    sessionKey && storePath && activeSessionEntry
       ? {
           base: followupRun,
           initialGoalId:

@@ -249,7 +249,7 @@ export function withGoalContinuationSettlement<T>(
   return owner ? goalSettlements.run({ owner, runId, isCurrent }, run) : run();
 }
 
-/** Command preparation captures current Goal facts without injecting them into a native runtime. */
+/** Command preparation captures the exact Goal facts for the selected runtime to consume. */
 export function prepareGoalContinuationContext(params: {
   runId: string;
   sessionKey?: string;
@@ -266,7 +266,7 @@ export function prepareGoalContinuationContext(params: {
   }
 }
 
-/** Only the actual built-in harness consumes this transient context. */
+/** The selected harness or CLI runner consumes this exact-run context, never independent commands. */
 export function readGoalContinuationContext(params: {
   runId: string;
   sessionKey?: string;

@@ -1,4 +1,3 @@
-import { readGoalContinuationContext } from "../../auto-reply/reply/goal-continuation-return.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runHostPreparedIsolatedCompletion } from "../host-prepared-isolated-completion.js";
@@ -92,14 +91,8 @@ export function createOpenClawAgentHarness(): AgentHarnessV2 {
     ...BUILTIN_AGENT_HARNESS_METADATA,
     supportsTurnScopedToolRestrictions: true,
     runAttempt: async (params) => {
-      const currentInboundContext = readGoalContinuationContext({
-        runId: params.runId,
-        sessionKey: params.sessionKey,
-        currentInboundContext: params.currentInboundContext,
-      });
       const attempt = {
         ...(params as EmbeddedRunAttemptParams),
-        ...(currentInboundContext ? { currentInboundContext } : {}),
         supportsTurnScopedToolRestrictions: harnessSupportsTurnScopedToolRestrictions(harness),
       };
       // Isolated completions never need the full runner. Capture invocation state before loading it.

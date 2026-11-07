@@ -1,3 +1,4 @@
+import { readGoalContinuationContext } from "../../auto-reply/reply/goal-continuation-return.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -78,6 +79,7 @@ export function runWithCliTurn(
       ),
     },
     async (operation, signal) => {
+      const currentInboundContext = readGoalContinuationContext(params);
       const diagnosticOwner =
         params.diagnosticOwner ??
         createDiagnosticEmbeddedRunOwner({
@@ -95,6 +97,7 @@ export function runWithCliTurn(
       const ownedDiagnostics = diagnosticOwner !== params.diagnosticOwner;
       const admittedParams = {
         ...params,
+        ...(currentInboundContext ? { currentInboundContext } : {}),
         diagnosticOwner,
         replyOperation: operation,
         abortSignal: signal,
