@@ -1,6 +1,8 @@
-255
+258
 # First-pane/dock, held Environment, closed-destination loading and independent paint witnesses.
 # Public Details fixtures replace private handoff seams; cancellation shares the cold e2e case.
 # Natural cold-scroll proof uses the fresh e2e document; shared browser modules may already be loaded.
 # Warm priming verifies the selected destination's real docking receipt before reload.
 # Prewarm import counts cover stale viewport receipts and same-window/closed controls.
+# Avatar failure proof follows its accessible identity after the image slot retires.
+# Mobile width proof waits for the working row whose geometry it reads.
