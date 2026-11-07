@@ -1,9 +1,9 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createMemo, createSignal, lazy, onSettled } from "solid-js";
+import { Show, createMemo, createSignal, onSettled } from "solid-js";
 import { DETAILS_SECTION_MOTION } from "../../../components/details-section-motion-options.ts";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
-import { loadChatDetailsDesktopComposition } from "./chat-details-desktop-loader.ts";
+import { ChatDetailsDesktopComposition } from "./chat-details-desktop-loader.ts";
 import { ChatDetailsLoading } from "./chat-details-loading.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
@@ -13,10 +13,6 @@ type ChatDetailsHandoff = {
   onLoading: (loading: boolean) => void;
   onReady: () => void;
 };
-
-const ChatDetailsDesktopComposition = lazy(loadChatDetailsDesktopComposition, {
-  export: "ChatDetailsDesktopComposition",
-});
 
 export function ChatDetailsDesktopContent(props: {
   chat?: ChatDetailsProps;
