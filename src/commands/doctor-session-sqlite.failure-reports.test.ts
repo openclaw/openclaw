@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as sqliteImport from "../config/sessions/session-accessor.sqlite-import.js";
@@ -500,6 +501,59 @@ describe("runDoctorSessionSqlite", () => {
     expect(issue).not.toHaveProperty("url");
     expect(issue?.body).toHaveLength(limit - 1);
     expect(issue?.body.endsWith(marker)).toBe(true);
+  });
+});
+
+describe("failure report sanitizer scale", () => {
+  it("bounds sanitizer work when a recovery records tens of thousands of moves and issues", () => {
+    const store = createLegacyStore();
+    const target = trustedMigrationTarget(store);
+    const sessionsDir = path.dirname(target.storePath);
+    const archiveDir = path.join(path.dirname(sessionsDir), "session-sqlite-import-archive");
+    const moveCount = 4_000;
+    const issueCount = 20_000;
+    const manifest: SessionSqliteMigrationManifest = {
+      failedAt: "2030-01-01T00:00:00.000Z",
+      manifestVersion: 3,
+      openClawVersion: "test",
+      runId: "sanitizer-scale",
+      startedAt: "2030-01-01T00:00:00.000Z",
+      targets: [
+        {
+          ...target,
+          plannedMoves: Array.from({ length: moveCount }, (_, index) => ({
+            kind: "transcript" as const,
+            sourcePath: path.join(sessionsDir, `move-${index}.jsonl`),
+            archivePath: path.join(archiveDir, `move-${index}.jsonl`),
+          })),
+          completedMoves: [],
+          issues: Array.from({ length: issueCount }, (_, index) => ({
+            code: "historical_transcript_deferred",
+            message: `Deferred transcript ${path.join(sessionsDir, `session-${index}.jsonl`)} for later recovery`,
+            sessionKey: `agent:main:session-${index}`,
+          })),
+          validationBeforeArchive: "failed",
+        },
+      ],
+    };
+    const runsDir = path.join(store.stateDir, "session-sqlite-migration-runs");
+    fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
+    const manifestPath = path.join(runsDir, "sanitizer-scale.json");
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+
+    const startedAt = performance.now();
+    const issue = createSessionSqliteMigrationFailureIssue(manifestPath);
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(issue).toBeDefined();
+    // Output correctness at scale: the first issue survives with its code,
+    // a per-report pseudonym, and the shortened store path.
+    expect(issue?.body).toContain("[historical_transcript_deferred]");
+    // Paths outside $HOME are preserved verbatim in the report.
+    expect(issue?.body).toContain(path.join(path.dirname(target.storePath), "session-0.jsonl"));
+    // The pre-fix sanitizer re-split every message against every recorded
+    // path (issueCount x moveCount string scans) and took minutes here.
+    expect(elapsedMs).toBeLessThan(60_000);
   });
 });
 

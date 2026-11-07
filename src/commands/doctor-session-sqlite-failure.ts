@@ -75,10 +75,11 @@ function collectFailureReportIssues(
   for (const issue of [...target.issues, ...(recoveryTarget?.issues ?? [])]) {
     issues.set(JSON.stringify([issue.code, issue.message, issue.sessionKey]), issue);
   }
+  const { sanitizeMessage, redactKey } = createFailureIssueMessageSanitizer(target);
   const sanitize = (issue: DoctorSessionSqliteIssue): DoctorSessionSqliteIssue => ({
     code: issue.code,
-    message: sanitizeFailureIssueMessage(issue, target),
-    sessionKey: issue.sessionKey ? redactSessionKey(issue.sessionKey) : undefined,
+    message: sanitizeMessage(issue),
+    sessionKey: issue.sessionKey ? redactKey(issue.sessionKey) : undefined,
   });
   return {
     issues: [...issues.values()].map(sanitize),
@@ -114,14 +115,15 @@ export function createSessionSqliteMigrationFailureIssue(
         manifestPath,
         manifest,
         "session SQLite migration failed",
-        targets.map((target) =>
-          createFailureReportTarget(target, {
+        targets.map((target) => {
+          const { sanitizeMessage } = createFailureIssueMessageSanitizer(target);
+          return createFailureReportTarget(target, {
             issues: target.issues.map((issue) => ({
               code: issue.code,
-              message: sanitizeFailureIssueMessage(issue, target),
+              message: sanitizeMessage(issue),
             })),
-          }),
-        ),
+          });
+        }),
       ),
     );
   const body = [
@@ -314,32 +316,72 @@ function shortenFailureReportPath(filePath: string): string {
   return filePath;
 }
 
-function sanitizeFailureIssueMessage(
-  issue: DoctorSessionSqliteIssue,
-  target: SessionSqliteMigrationTargetManifest,
-): string {
-  let message = issue.message;
+/**
+ * Builds a per-target message sanitizer. Recovery manifests can carry tens of
+ * thousands of recorded moves and issues (one per historical transcript), so
+ * the path table is shortened once and matched with a single pass per message,
+ * and identical messages reuse their sanitized result instead of re-running
+ * every replacement.
+ */
+function createFailureIssueMessageSanitizer(target: SessionSqliteMigrationTargetManifest) {
+  const shortened = new Map<string, string>();
   for (const filePath of [
     target.storePath,
     target.sqlitePath,
     ...target.plannedMoves.flatMap((move) => [move.sourcePath, move.archivePath]),
     ...target.completedMoves.flatMap((move) => [move.sourcePath, move.archivePath]),
   ]) {
-    message = message.split(filePath).join(shortenFailureReportPath(filePath));
+    // First occurrence wins, matching the sequential replacement order.
+    if (!shortened.has(filePath)) {
+      shortened.set(filePath, shortenFailureReportPath(filePath));
+    }
   }
-  if (issue.sessionKey) {
-    message = message.split(issue.sessionKey).join(redactSessionKey(issue.sessionKey));
+  // One alternation per chunk: whole-table patterns exceed the engine's regex
+  // size limit at recovery scale.
+  const pathPatterns: RegExp[] = [];
+  const pathKeys = [...shortened.keys()];
+  for (let start = 0; start < pathKeys.length; start += 500) {
+    pathPatterns.push(
+      new RegExp(
+        pathKeys
+          .slice(start, start + 500)
+          .map((filePath) => filePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+          .join("|"),
+        "g",
+      ),
+    );
   }
-  message = redactAbsoluteHomePaths(message);
-  return sanitizeFailureReportText(message);
-}
-
-function redactSessionKey(sessionKey: string): string {
-  const normalized = sessionKey.trim();
-  if (!normalized) {
-    return "[redacted-session-key]";
-  }
-  return `[redacted-session-key:${randomUUID().slice(0, 8)}]`;
+  const messageCache = new Map<string, string>();
+  // One pseudonym per session key within a report, so an issue's field and its
+  // message token agree without making the token guessable across reports.
+  const sessionKeyTokens = new Map<string, string>();
+  const redactKey = (sessionKey: string): string => {
+    let token = sessionKeyTokens.get(sessionKey);
+    if (token === undefined) {
+      token = `[redacted-session-key:${randomUUID().slice(0, 8)}]`;
+      sessionKeyTokens.set(sessionKey, token);
+    }
+    return token;
+  };
+  const sanitizeMessage = (issue: DoctorSessionSqliteIssue): string => {
+    const cacheKey = JSON.stringify([issue.sessionKey, issue.message]);
+    const cached = messageCache.get(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+    let message = issue.message;
+    for (const pathPattern of pathPatterns) {
+      message = message.replace(pathPattern, (match) => shortened.get(match) ?? match);
+    }
+    if (issue.sessionKey) {
+      message = message.split(issue.sessionKey).join(redactKey(issue.sessionKey));
+    }
+    message = redactAbsoluteHomePaths(message);
+    const result = sanitizeFailureReportText(message);
+    messageCache.set(cacheKey, result);
+    return result;
+  };
+  return { sanitizeMessage, redactKey };
 }
 
 function redactAbsoluteHomePaths(value: string): string {
