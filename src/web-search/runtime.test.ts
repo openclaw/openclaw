@@ -587,6 +587,44 @@ describe("web search runtime", () => {
     expect(execute).toHaveBeenCalledWith(expect.any(Object), { signal: undefined, modelSelection });
   });
 
+  it("matches an explicit caller provider id case-insensitively", async () => {
+    const payload = { error: "missing_brave_api_key", message: "set BRAVE_API_KEY" };
+    useProviders(
+      searchProvider("brave", { createTool: () => tool(async () => payload) }),
+      searchProvider("duckduckgo"),
+    );
+    await expect(search({ providerId: "Brave" })).resolves.toEqual({
+      provider: "brave",
+      result: payload,
+    });
+  });
+
+  it("keeps an exact mixed-case registered provider id working verbatim", async () => {
+    const payload = { error: "missing_acme_api_key", message: "set ACME_API_KEY" };
+    useProviders(
+      searchProvider("AcmeSearch", { createTool: () => tool(async () => payload) }),
+      searchProvider("duckduckgo"),
+    );
+    await expect(search({ providerId: "AcmeSearch" })).resolves.toEqual({
+      provider: "AcmeSearch",
+      result: payload,
+    });
+  });
+
+  it("resolves a case-only mismatch to the exact registered provider id", async () => {
+    useProviders(searchProvider("AcmeSearch"));
+    await expect(search({ providerId: "acmesearch" })).resolves.toMatchObject({
+      provider: "AcmeSearch",
+    });
+  });
+
+  it("keeps the caller's casing in the unknown explicit provider error", async () => {
+    useProviders(searchProvider("google"), searchProvider("duckduckgo"));
+    await expect(search({ providerId: "Brave" })).rejects.toThrow(
+      'Unknown web_search provider "Brave".',
+    );
+  });
+
   it("honors preferRuntimeProviders during execution", async () => {
     ownerMock.mockImplementation(({ value }) => (value === "google" ? "google" : undefined));
     const configuredProvider = searchProvider("google");
