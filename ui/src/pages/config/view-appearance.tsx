@@ -276,7 +276,7 @@ export function AppearanceSection(props: ConfigProps) {
             return (
               <Errored
                 fallback={(error) => (
-                  <p class="settings-status settings-status--error" role="alert">
+                  <p class="settings-status settings-status--danger" role="alert">
                     {formatThemeValidationError(error())}{" "}
                     <button
                       type="button"

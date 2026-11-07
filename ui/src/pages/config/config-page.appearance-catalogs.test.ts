@@ -73,7 +73,7 @@ describe("ConfigPage model catalog lifecycle", () => {
         expect(view.page.textContent).toContain("Theme catalog unavailable"),
       );
       const retryButton = expectDefined(
-        view.page.querySelector<HTMLButtonElement>(".settings-status--error button"),
+        view.page.querySelector<HTMLButtonElement>(".settings-status--danger button"),
         "theme catalog retry",
       );
       retryButton.click();
