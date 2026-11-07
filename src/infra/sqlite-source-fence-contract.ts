@@ -1,22 +1,23 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "./sql-connection.js";
 import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
 
 /** Captured by the physical owner; an incarnation is never reused after closure. */
 export type SqliteSourceFenceIdentity = {
   physical: DatabasePathIdentity;
   incarnation: string;
+  postgres?: { namespace: string; storeId: string };
 };
 
 export type SqliteSourceFenceDatabase = {
   readonly identity: SqliteSourceFenceIdentity;
-  readonly database: DatabaseSync;
+  readonly database: EngineConnection;
 };
 
 /** Worker-local kernels only. Host closures never execute inside the reservation interval. */
 export type SqliteSourceFence = {
   destination: SqliteSourceFenceDatabase;
   sources: readonly SqliteSourceFenceDatabase[];
-  validate(resolve: (source: SqliteSourceFenceDatabase) => DatabaseSync): void;
+  validate(resolve: (source: SqliteSourceFenceDatabase) => EngineConnection): void;
 };
 
 export const SQLITE_WORKER_SOURCE_FENCE = Symbol.for("openclaw.sqliteWorkerSourceFence");
