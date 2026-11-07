@@ -349,9 +349,19 @@ final class DashboardEmbedCompatibility {
     @ObservationIgnored private var deadlineTask: Task<Void, Never>?
     @ObservationIgnored private var markerTask: Task<Void, Never>?
     @ObservationIgnored private weak var loadedWebView: WKWebView?
+    /// A Gateway HTTP error that replaced the document; the host shows a native page with Reload.
+    private(set) var httpErrorStatus: Int?
 
     var needsGatewayUpgrade: Bool {
         self.deadlineReached && !(self.receivedStatus && self.hasEmbedMarker)
+    }
+
+    func didReceiveHTTPError(statusCode: Int) {
+        self.httpErrorStatus = statusCode
+    }
+
+    func reload() {
+        self.httpErrorStatus = nil
     }
 
     func beginDocument() -> UUID {
@@ -620,8 +630,12 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
     {
+        // Access admission decides first; a response it admits may still be a Gateway error page.
+        let httpErrorStatus = self.mainFrameHTTPErrorStatus(
+            navigationResponse.response,
+            isMainFrame: navigationResponse.isForMainFrame)
         guard self.accessCookie != nil else {
-            decisionHandler(.allow)
+            self.allowResponse(httpErrorStatus: httpErrorStatus, decisionHandler: decisionHandler)
             return
         }
         guard self.isAccessAdmissionCurrent() else {
@@ -634,7 +648,7 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
               let responseURL = response.url,
               GatewayTLSAuthority(url: responseURL) == self.expectedOrigin
         else {
-            decisionHandler(.allow)
+            self.allowResponse(httpErrorStatus: httpErrorStatus, decisionHandler: decisionHandler)
             return
         }
         Task {
@@ -645,12 +659,36 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
                     decisionHandler(.cancel)
                     return
                 }
-                decisionHandler(.allow)
+                self.allowResponse(httpErrorStatus: httpErrorStatus, decisionHandler: decisionHandler)
             } catch {
                 self.retireAccess(in: webView)
                 decisionHandler(.cancel)
             }
         }
+    }
+
+    private func allowResponse(
+        httpErrorStatus: Int?,
+        decisionHandler: @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
+    {
+        guard let embedCompatibility, let httpErrorStatus else {
+            decisionHandler(.allow)
+            return
+        }
+        decisionHandler(.cancel)
+        embedCompatibility.didReceiveHTTPError(statusCode: httpErrorStatus)
+    }
+
+    /// Gateway errors such as a disabled Control UI or assets still being prepared arrive as
+    /// plain text; HTML error pages (for example a proxy's sign-in page) stay in the web view.
+    /// The navigation action policy already keeps the main frame on the Gateway's origin.
+    private func mainFrameHTTPErrorStatus(_ response: URLResponse, isMainFrame: Bool) -> Int? {
+        guard isMainFrame,
+              let response = response as? HTTPURLResponse,
+              response.statusCode >= 400
+        else { return nil }
+        let mimeType = response.mimeType?.lowercased()
+        return mimeType == "text/html" || mimeType == "application/xhtml+xml" ? nil : response.statusCode
     }
 
     func webView(
