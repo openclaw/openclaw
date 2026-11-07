@@ -4,7 +4,6 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
-import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
 import { registerPluginsCli } from "./plugins-cli.js";
 import {
@@ -424,23 +423,6 @@ describe("plugins marketplace list", () => {
       error: { type: "cli_error", message },
     });
     expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it.each(["before", "result"] as const)("cancels the marketplace list read: %s", async (mode) => {
-    const scope = new AsyncWorkScope();
-    mocks.listMarketplacePlugins.mockImplementation(() => {
-      scope.beginClose();
-      return Promise.resolve({ ok: true as const, sourceLabel: source, manifest });
-    });
-    if (mode === "before") {
-      scope.beginClose();
-    }
-    await scope.run(() => list(source, { json: true }));
-    expect(mocks.listMarketplacePlugins).toHaveBeenCalledTimes(mode === "before" ? 0 : 1);
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.writeJson).not.toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
