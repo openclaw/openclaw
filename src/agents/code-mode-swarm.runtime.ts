@@ -13,6 +13,7 @@ import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { isSubagentRunQueued } from "./subagents/registry/subagent-registry-read.js";
 import { getSwarmRunByLaunchReplayKey } from "./subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
+import { prepareBoundedLaunch } from "./subagents/swarm/bounded-launch/bounded-launch.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
@@ -74,7 +75,7 @@ function readOptionalStringOption(
 }
 
 async function runAgentSpawnBridge(params: {
-  runtime: ToolSearchRuntime;
+  runtime: Pick<ToolSearchRuntime, "callExactId">;
   parentToolCallId: string;
   request: PendingBridgeRequest;
   codeModeRunId: string;
@@ -130,16 +131,25 @@ async function runAgentSpawnBridge(params: {
     runAgentToolSourceExecutionGuard(spawnTool);
   });
   assertCurrent();
-  const spawnInput: Record<PropertyKey, unknown> = {
+  const groupId = resolveCodeModeSwarmGroupId(params.ctx);
+  const preparedBoundedLaunch = prepareBoundedLaunch({
     task: prompt.trim(),
+    boundedLaunch: options.boundedLaunch,
+    sourceRunId: groupId,
+    targetLaunchId: `${params.codeModeRunId}:${params.request.id}`,
+  });
+  const spawnInput: Record<PropertyKey, unknown> = {
     collect: true,
-    groupId: resolveCodeModeSwarmGroupId(params.ctx),
+    groupId,
     ...(label ? { label } : {}),
     ...(model ? { model } : {}),
     ...(thinking ? { thinking } : {}),
     ...(agentId ? { agentId } : {}),
     ...(fastMode !== undefined ? { fastMode } : {}),
     ...(schema ? { outputSchema: schema } : {}),
+    // Apply the bounded launch contract before replay fingerprinting so exact
+    // candidate identity and stricter admission are persisted with the request.
+    ...preparedBoundedLaunch,
   };
   const requestFingerprint = `sha256:${sha256Hex(stableStringify(spawnInput))}`;
   // The registry persists this exact tuple and payload hash before launch.
