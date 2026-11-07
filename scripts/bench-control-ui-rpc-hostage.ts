@@ -437,7 +437,8 @@ async function settledBoot(page: Page, slot: Server, workboard: boolean) {
         return state?.routeReady && state.route?.matches[0]?.routeId === "new-session";
       }
       const state = window.rpcHostageProbe.read();
-      return state.first.composer !== null && state.first.transcript !== null && state.rosterReady;
+      // Read-only route fixtures can navigate even when their composer cannot send.
+      return state.composerPresent && state.first.transcript !== null && state.rosterReady;
     },
     workboard,
     { timeout: 30_000 },
@@ -606,7 +607,8 @@ async function sample(
         } else {
           // Dashboard needs a fresh session surface; reusing the active Chat pane
           // would measure the already-mounted transcript instead of opening its board.
-          await settledBoot(page, slot, workboard || flow === "dashboard");
+          // Activity replaces the roster, so its fixture has no Chat origin session.
+          await settledBoot(page, slot, workboard || flow === "dashboard" || flow === "activity");
           if (flow === "warm") {
             // Replace init script behavior for this reload without installing a second mock socket.
             await page.evaluate(() => sessionStorage.setItem("rpc-hostage-warm", "1"));

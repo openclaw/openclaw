@@ -31,9 +31,11 @@ it("returns inventory while shared configuration is still pending", async () => 
   vi.spyOn(runtimeConfig, "refreshDisplay").mockReturnValue(policy.promise);
   const context = { gateway: harness.gateway, runtimeConfig } as ApplicationContext;
   let inventory: unknown;
-  void page.loader!(
-    context,
-    createRouteLoaderOptions({ pathname: "/settings/devices", search: "", hash: "" }),
+  void Promise.resolve(
+    page.loader!(
+      context,
+      createRouteLoaderOptions({ pathname: "/settings/devices", search: "", hash: "" }),
+    ),
   ).then((data) => {
     inventory = data;
   });

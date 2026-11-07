@@ -43,6 +43,10 @@ contains 1,000 saved report widgets across four tabs, Usage has 12,000 source
 sessions with at most 50 response rows, and Logs starts with a 500-line tail.
 Dashboard starts from New conversation so its session surface opens fresh,
 instead of reusing an already-mounted Chat pane for the same session.
+Activity also starts from New conversation: its 1,000-session fixture replaces
+the ordinary roster and does not contain the Chat origin session.
+For Chat-origin preparation the composer must be present, but need not be
+editable: the Portals fixture deliberately grants read-only access.
 A baseline page error or rendered lazy-panel failure is a setup gap and
 prevents that flow's delayed-method sweep. `--methods` limits the census;
 otherwise it exercises every discovered method. `--rpc-rtt-ms 100` adds mock
