@@ -313,6 +313,36 @@ function replayDom(input: {
   window.addEventListener("pagehide", report, { once: true });
 }
 
+function installSnapshotWitness() {
+  const observer = new MutationObserver(() => {
+    const overlay = [...(document.documentElement?.children ?? [])].find(
+      (element): element is HTMLElement =>
+        element instanceof HTMLElement &&
+        element.inert &&
+        element.getAttribute("aria-hidden") === "true" &&
+        element.style.zIndex === "2147483647",
+    );
+    if (!overlay) return;
+    observer.disconnect();
+    const marker = document.createElement("div");
+    marker.inert = true;
+    marker.setAttribute("aria-hidden", "true");
+    marker.style.cssText =
+      "position:fixed;inset:0;z-index:2147483647;border:2px solid rgb(255,0,255);box-sizing:border-box;pointer-events:none";
+    const follow = new MutationObserver(() => {
+      if (!overlay.isConnected) {
+        marker.remove();
+        follow.disconnect();
+      } else marker.style.visibility = overlay.style.visibility;
+    });
+    marker.style.visibility = overlay.style.visibility;
+    document.documentElement.append(marker);
+    follow.observe(overlay, { attributes: true, attributeFilter: ["style"] });
+    follow.observe(document.documentElement, { childList: true });
+  });
+  observer.observe(document, { childList: true, subtree: true });
+}
+
 async function instrument(page: Page) {
   let armed = false;
   const context = page.context();
@@ -449,7 +479,7 @@ async function instrument(page: Page) {
       await session.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: script });
     script = (
       await session.send("Page.addScriptToEvaluateOnNewDocument", {
-        source: `const __name=(fn)=>fn;(${replayDom.toString()})(${JSON.stringify({ snapshot, replay, sequence: index, url, hold: process.env.L303_HOLD === "1" })})`,
+        source: `const __name=(fn)=>fn;(${replayDom.toString()})(${JSON.stringify({ snapshot, replay, sequence: index, url, hold: process.env.L303_HOLD === "1" })});${collectImages && replay ? `(${installSnapshotWitness.toString()})()` : ""}`,
       })
     ).identifier;
   };

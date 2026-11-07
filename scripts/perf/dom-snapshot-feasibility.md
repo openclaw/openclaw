@@ -47,7 +47,10 @@ For a separate pixel-attribution pass, set `L303_HOLD=1` and use only two reload
 The rig captures a synthetic snapshot PNG after the live complete marker, removes
 the overlay, and captures the app PNG and region boxes. This adds screenshot work
 and holds the overlay: exclude this mode from all timing comparisons. Timed mode
-has neither capture. Required Details/board surfaces come from the captured old
+has neither capture nor visual witness. Held mode adds a two-pixel magenta
+viewport border following overlay visibility; mask it in pixel comparisons. Its compositor
+pixels distinguish the new-document snapshot from an identical held old page.
+Required Details/board surfaces come from the captured old
 page, so a late mounting surface cannot be mistaken for a closed one. Image
 metadata records completion and intrinsic size in the first replay animation
 frame; actual image paint and font parity still require inspecting compositor
