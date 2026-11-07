@@ -386,6 +386,35 @@ translation wave cannot disappear behind an early English render. Use
 One-pair screens only identify candidates: confirm deviations over 20% with ten
 rotated pairs plus `control`, and fixes with twenty pairs within the same configuration.
 
+Chromium accessibility is an explicit axis, excluded from `all` so the default
+cross-engine census stays supported. Use `accessibility` for forced renderer
+accessibility and `accessibility-off` for a disabled-accessibility baseline;
+`accessibility-control` and `accessibility-off-control` provide matching A/A
+samples. `default` and `control` leave the browser's accessibility behavior unchanged.
+For an on/off screen with an off/off control:
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --bundle-dir dist/control-ui --engines chromium --pairs 10 --viewport both \
+  --configurations accessibility-off,accessibility-off-control,accessibility
+```
+
+Each accessibility mode uses an isolated browser process. On mode enables CDP's
+Accessibility domain before navigation, reads the full tree before warm actions
+and after the timed interval, and records `nodesUpdated`/`loadComplete` events.
+Tree serialization stays outside timing; off mode never queries the tree.
+Explicit modes are skipped for WebKit, Firefox, and idle scenarios. AX tree
+evidence proves exposed roles, names, and live-region state; it cannot prove what
+a real screen reader announces or when it speaks.
+
+Use `--live-region-audit --steps streaming-645-deltas` in a separate diagnostic
+run to record text/addition deliveries, raw and inherited ARIA metadata, and
+bounded text samples. This observer adds work and does not model a screen
+reader's announcement queue. Pair `--native-audit` with the explicit on/off
+configurations to retain Chromium accessibility trace events. The
+`transcript-fast-scroll` and `large-transcript-fast-scroll` scenarios exercise
+the same scrolling workload with 400 and 2,000 messages respectively.
+
 Full observations, including skipped cells and memory samples, append to
 `observations.jsonl` as each cell completes; complete newline-terminated records
 are available for live progress or after interruption. Per-cell JSON files remain
