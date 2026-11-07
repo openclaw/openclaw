@@ -18,6 +18,7 @@ it("verifies TLS and sends only the relay capability; refuses redirects and boun
   let received = 0;
   const requests: Promise<void>[] = [];
   let mode = "ok";
+  const hangingRequestAbort = new AbortController();
   const server = createServer({ key, cert }, (req, res) => {
     const request = (async () => {
       received++;
@@ -30,6 +31,8 @@ it("verifies TLS and sends only the relay capability; refuses redirects and boun
         relayId: "relay",
       });
       if (mode === "hang") {
+        // Abort only after credential loading and request admission, not on a file-I/O timer.
+        hangingRequestAbort.abort();
         return;
       }
       res.writeHead(mode === "redirect" ? 302 : 200, {
@@ -69,7 +72,10 @@ it("verifies TLS and sends only the relay capability; refuses redirects and boun
     mode = "large";
     await expect(invoke()).rejects.toThrow("response too large");
     mode = "hang";
-    await expect(invoke(AbortSignal.timeout(30))).rejects.toThrow("connection failed");
+    await expect(
+      invoke(AbortSignal.any([hangingRequestAbort.signal, AbortSignal.timeout(5_000)])),
+    ).rejects.toThrow("connection failed");
+    expect(hangingRequestAbort.signal.aborted).toBe(true);
     await save(url.replace("https:", "http:"));
     await expect(invoke()).rejects.toThrow("requires an HTTPS URL");
     await save(url + "?token=untrusted");

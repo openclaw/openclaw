@@ -1,0 +1,3 @@
+# Exact +6 LF lines: synchronize existing in-flight HTTPS abort coverage with
+# server admission and assert that trigger ran; retain the 5s operation bound.
+6
