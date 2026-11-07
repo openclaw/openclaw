@@ -538,7 +538,7 @@ async function main() {
   }
   const ignoredPaths = await initializeBuildCacheInputs();
   assertManifestCurrent();
-  if (eligibleOnly) {
+  if (eligibleOnly || requestedBaseCommit) {
     for (const relative of await eligiblePaths(ignoredPaths)) addWithParents(relative);
   } else {
     walk("");

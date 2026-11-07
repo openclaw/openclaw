@@ -85,8 +85,11 @@ paths are admitted before guest execution and retained in the projection binding
 Later host-created paths enter an existing projection only after the host stages
 them in the host Git index (`git add`); changing an ignore rule alone does
 not admit host files, including newly provisioned files. Existing admitted source
-edits and guest-created files continue to reconcile, including guest-created
-ignored files. Source filenames must be valid UTF-8; rename invalid Git paths
+edits and eligible guest-created files continue to reconcile. New ignored files
+stay in the sandbox: result capture honors its `.gitignore` files and the trusted
+host repository's `.git/info/exclude` and global excludes. Tracked files and exact
+previously admitted or accepted paths remain protected when ignore rules change.
+Source filenames must be valid UTF-8; rename invalid Git paths
 before retrying preparation. Publication uses the same admission boundary.
 
 A newly created filename containing a literal backslash cannot pass workspace
@@ -130,9 +133,10 @@ synchronized or restored onto another runtime. Save durable outputs outside it;
 other `.openclaw/` content and nested project fixtures still reconcile.
 Synchronization and recovery of older pending results exclude these exact paths,
 so dependency and test-tool downloads do not count as authored workspace results.
-Other guest-created files under `.cache/`, `.local/`, and `.artifacts/` still
-reconcile, including nested paths and explicit staged inputs; an ignore
-rule alone does not make a file disposable. Source changes cannot remove a
+Other eligible guest-created files under `.cache/`, `.local/`, and `.artifacts/`
+still reconcile, including nested paths and explicit staged inputs. Ignored build
+outputs are excluded before hashing and result-size accounting; their local bytes
+remain available to the sandbox. Source changes cannot remove a
 runtime-owned lock subtree by replacing its parent directory.
 
 pnpm can select `.openclaw/.pnpm-store/` when installing beneath a protected

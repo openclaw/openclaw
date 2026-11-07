@@ -234,7 +234,9 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
     ".local/share/user-data.json": "user data\n",
   };
   if (copied) {
-    await writeWorkspaceFiles(projection, projectFiles);
+    await writeWorkspaceFiles(projection, { ...projectFiles, ".gitignore": ".env.local\n" });
+    await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+    await writeWorkspaceFiles(projection, { ".gitignore": projectFiles[".gitignore"] });
     await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
   }
   const row = (await readLocalWorkspaceProjection(owner.worktree.id))!;

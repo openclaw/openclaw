@@ -44,6 +44,7 @@ import {
   prepareLocalWorkspaceArchiveFixture,
   prepareSandboxCheckpointFixture,
   proveAbsentProjectionCheckpoints,
+  proveGitIgnoredWorkspaceOutputs,
   proveHostAdmittedBuildInputs,
   proveInterruptedWorkspaceCheckpoint,
   proveIncrementalWorkspaceEdits,
@@ -424,6 +425,9 @@ it.each([false, true])(
     await proveAcceptedInventoryRecovery(owner, retainedMembership);
   },
 );
+
+it("checkpoints Git changes without ignored build outputs or guest Git metadata", () =>
+  proveGitIgnoredWorkspaceOutputs(owner, root));
 
 it("never admits nested host secrets after guest de-ignore", async () => {
   const prefix = "nested/";
@@ -905,6 +909,9 @@ it.each(["legacy decoder", "failed restore retry", "retention", "legacy retentio
     if (process.platform !== "win32") {
       await fs.symlink("../source.txt", path.join(projection, "guest-ignored/link"));
     }
+    await writeText(projection, ".gitignore", ".env.local\n.env.allowed\n");
+    await synchronize();
+    await writeText(projection, ".gitignore", ".env.local\n.env.allowed\nguest-ignored/\n");
     await synchronize();
     expect(await fs.readFile(path.join(canonical, "guest-ignored/data"))).toEqual(bytes);
     const removed = await service.remove({

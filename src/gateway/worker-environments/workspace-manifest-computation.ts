@@ -43,6 +43,7 @@ export type WorkspaceManifestValueInputs = {
     preserveDirectories?: readonly string[];
     includePaths?: readonly string[];
     buildCacheInputs?: string[];
+    gitIgnore?: { root: string; retainedPaths: string[] };
     hashes?: WorkspaceComputationHashes;
   };
   "workspace.manifest.snapshot": WorkspaceManifestValueInputs["workspace.manifest.capture"];

@@ -13,6 +13,7 @@ import {
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { readLocalWorkspaceIgnoredPaths } from "./local-workspace-inventory.js";
 import {
   activeWorkspaceHashContext,
   workspaceCtimeIsReusable,
@@ -29,6 +30,7 @@ import {
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
 type WorkspaceFileSnapshot =
@@ -187,6 +189,7 @@ type ActualWorkspaceManifestOptions = {
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
   buildCacheInputs?: ReadonlySet<string>;
+  gitIgnore?: { root: string; retainedPaths: ReadonlySet<string> };
   signal?: AbortSignal;
 };
 
@@ -216,6 +219,53 @@ export async function scanActualWorkspaceManifest(
     throw error;
   }
   const retained = buildCacheInputPaths(params.buildCacheInputs);
+  const ignored = params.gitIgnore
+    ? await readLocalWorkspaceIgnoredPaths(params.gitIgnore.root, root)
+    : undefined;
+  const inputParents = new Set<string>();
+  if (ignored?.size) {
+    const { readWorkspaceStagedInputDirectoriesImpl } =
+      await import("./workspace-inventory-computation.runtime.js");
+    for (const directory of await readWorkspaceStagedInputDirectoriesImpl(root)) {
+      for (const parent of workspacePathAncestors(directory)) {
+        inputParents.add(parent);
+      }
+    }
+  }
+  const isExcluded = async (relative: string): Promise<boolean> => {
+    const retainedInput = retained.has(relative) || (await isStagedInput(relative));
+    if (
+      isDerivedWorkspacePath(
+        relative,
+        retainedInput,
+        params.buildCacheInputs !== undefined,
+        params.includeLegacyPnpmStore,
+      )
+    ) {
+      return true;
+    }
+    if (
+      !ignored?.size ||
+      retainedInput ||
+      inputParents.has(relative) ||
+      params.gitIgnore?.retainedPaths.has(relative)
+    ) {
+      return false;
+    }
+    if (ignored.has(relative)) {
+      return true;
+    }
+    // Git collapses ignored directories so generated trees are never traversed.
+    for (let parent = relative; parent; parent = path.posix.dirname(parent)) {
+      if (ignored.has(`${parent}/`)) {
+        return true;
+      }
+      if (!parent.includes("/")) {
+        break;
+      }
+    }
+    return false;
+  };
   let entryCount = 0;
   let totalBytes = 0;
   let manifestPathBytes = 0;
@@ -365,14 +415,7 @@ export async function scanActualWorkspaceManifest(
     includedParents: ReadonlySet<string>,
     derivedOnlyDirectories: ReadonlySet<string>,
   ): Promise<"included" | "derived-only" | "absent"> => {
-    if (
-      isDerivedWorkspacePath(
-        relative,
-        retained.has(relative) || (await isStagedInput(relative)),
-        params.buildCacheInputs !== undefined,
-        params.includeLegacyPnpmStore,
-      )
-    ) {
+    if (await isExcluded(relative)) {
       return "derived-only";
     }
     checkTraversal(relative);
@@ -394,15 +437,7 @@ export async function scanActualWorkspaceManifest(
       for await (const entry of await fs.opendir(absolute)) {
         scanSignal.throwIfAborted();
         const child = `${relative}/${entry.name}`;
-        if (
-          isDerivedWorkspacePath(
-            child,
-            retained.has(child) || (await isStagedInput(child)),
-            params.buildCacheInputs !== undefined,
-            params.includeLegacyPnpmStore,
-          ) ||
-          derivedOnlyDirectories.has(child)
-        ) {
+        if ((await isExcluded(child)) || derivedOnlyDirectories.has(child)) {
           return "derived-only";
         }
       }
@@ -422,14 +457,7 @@ export async function scanActualWorkspaceManifest(
       const directories: Array<string | undefined> = [];
       await runScans(0, batch.length, async (index) => {
         const relative = batch[index]!;
-        if (
-          isDerivedWorkspacePath(
-            relative,
-            retained.has(relative) || (await isStagedInput(relative)),
-            params.buildCacheInputs !== undefined,
-            params.includeLegacyPnpmStore,
-          )
-        ) {
+        if (await isExcluded(relative)) {
           hasDerivedEntry = true;
           return;
         }

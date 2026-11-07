@@ -56,6 +56,9 @@ export async function proveAcceptedDirectoryRetention(
     await fs.mkdir(path.join(projection, directory));
   }
   await writeText(projection, "authored/.env.local", "authored ignored bytes\n");
+  await writeText(projection, ".gitignore", ".env.local\n!authored/.env.local\n");
+  await synchronize(owner);
+  await writeText(projection, ".gitignore", ".env.local\n");
   await synchronize(owner);
   for (const directory of retained) {
     expect((await fs.stat(path.join(canonical, directory))).isDirectory()).toBe(true);

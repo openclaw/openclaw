@@ -206,12 +206,19 @@ it("captures eligible files outside the Gateway thread and returns the canonical
   const root = await fs.realpath(tempDirs.make("workspace-worker-capture-"));
   const content = "worker computation";
   await fs.writeFile(path.join(root, "input.txt"), content);
+  const initialized = await runCommandWithTimeout(["git", "init", "--quiet", root], {
+    timeoutMs: 10_000,
+  });
+  expect(initialized.code, initialized.stderr).toBe(0);
+  await fs.writeFile(path.join(root, ".git/info/exclude"), "ignored.txt\n");
+  await fs.writeFile(path.join(root, "ignored.txt"), "generated output");
   await fs.mkdir(path.join(root, "preserved", "node_modules"), { recursive: true });
   const selection = {
     root,
     baseCommit: null,
-    includePaths: new Set(["input.txt", "preserved"]),
+    includePaths: new Set(["input.txt", "preserved", "ignored.txt"]),
     preserveDirectories: new Set(["preserved"]),
+    gitIgnore: { root, retainedPaths: new Set(["input.txt", "preserved"]) },
   };
   const lstat = fs.lstat.bind(fs);
   vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {

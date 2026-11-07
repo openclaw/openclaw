@@ -353,3 +353,24 @@ it("retains plain-workspace inputs when staging has created Git metadata", async
   expect(manifest.baseCommit).toBeNull();
   expect(manifest.entries.map((entry) => entry.path)).toContain(input);
 });
+
+it("omits new ignored build outputs from complete Git worker results", async () => {
+  const fixture = await makeWorkspace({ "source.txt": "base\n", "dist/tracked.txt": "base\n" });
+  const base = await initializeScriptGitWorkspace(fixture.workspace, ".");
+  await writeWorkspaceFiles(fixture.workspace, { ".gitignore": "dist/\n.cache/\n" });
+  const initial = await fixture.runManifest([base, "eligible"]);
+  expect(initial.code, initial.stderr).toBe(0);
+  await writeWorkspaceFiles(fixture.workspace, {
+    "source.txt": "edit\n",
+    "dist/tracked.txt": "tracked edit\n",
+    "dist/worker/sqlite-store.worker.mjs": "generated\n",
+    ".cache/openclaw-bun/runtime": "cached runtime\n",
+    "new.txt": "new source\n",
+  });
+  const result = await fixture.runManifest([base, "all", initial.stdout.trim().slice(7)]);
+  expect(result.code, result.stderr).toBe(0);
+  const manifest = await fixture.readManifest(result.stdout.trim());
+  expect(
+    manifest.entries.filter((entry) => entry.type === "file").map((entry) => entry.path),
+  ).toEqual([".gitignore", "dist/tracked.txt", "new.txt", "source.txt"]);
+});
