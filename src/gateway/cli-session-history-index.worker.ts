@@ -78,7 +78,7 @@ export class CliSessionHistoryIndex {
     // Only imported bodies live here; local rows retain their canonical sequence.
     const columns = `id INTEGER PRIMARY KEY, local_seq INTEGER, import_ref INTEGER, message_id TEXT, payload TEXT, bytes INTEGER NOT NULL, role TEXT,
       text TEXT, drift_text TEXT, timestamp REAL, external_key TEXT, image_key TEXT,
-      image_mentions INTEGER NOT NULL, metadata TEXT, consumed INTEGER NOT NULL,
+      image_mentions INTEGER NOT NULL, document_key TEXT, metadata TEXT, consumed INTEGER NOT NULL,
       ordinal INTEGER`;
     // sqlite-allow-raw -- Reconstructible temporary schema; no canonical writes or durability.
     this.database
@@ -90,6 +90,7 @@ export class CliSessionHistoryIndex {
       CREATE INDEX match_timed_text ON messages(role, text, consumed, id) WHERE timestamp IS NOT NULL;
       CREATE INDEX match_undated_text ON messages(role, text, consumed, id) WHERE timestamp IS NULL;
       CREATE INDEX match_image ON messages(image_key, consumed, id);
+      CREATE INDEX match_document ON messages(document_key, consumed, id);
       CREATE INDEX message_identity ON messages(message_id);
       CREATE INDEX local_sequence ON messages(local_seq);
       CREATE UNIQUE INDEX history_ordinal ON messages(ordinal);
@@ -187,6 +188,7 @@ export class CliSessionHistoryIndex {
         external_key: parameter((row) => row.external_key),
         image_key: parameter((row) => row.image_key),
         image_mentions: parameter((row) => row.image_mentions),
+        document_key: parameter((row) => row.document_key),
         metadata: parameter((row) => row.metadata),
         consumed: parameter((row) => row.consumed),
         ordinal: parameter((row) => row.ordinal),
@@ -341,6 +343,20 @@ export class CliSessionHistoryIndex {
           .orderBy("id")
           .limit(1),
     );
+    const matchDocument = prepareSqliteQueryTakeFirstSync<string, HistoryMatch>(
+      this.database,
+      (parameter) =>
+        candidates()
+          .where(
+            "document_key",
+            "=",
+            parameter((key) => key),
+          )
+          .where("local_seq", "is not", null)
+          .where("consumed", "=", 0)
+          .orderBy("id")
+          .limit(1),
+    );
     const textMatchers = (external: boolean) => {
       const create = (time: "any" | "window" | "missing") =>
         prepareSqliteQueryTakeFirstSync<HistoryTextMatch, HistoryMatch>(
@@ -408,6 +424,7 @@ export class CliSessionHistoryIndex {
     const store: CliHistoryMergeStore = {
       matchExternal,
       matchImage,
+      matchDocument,
       matchers,
       consume,
       onMatch: this.hasAggregates
@@ -438,6 +455,7 @@ export class CliSessionHistoryIndex {
             "external_key",
             "image_key",
             "image_mentions",
+            "document_key",
             "metadata",
             "consumed",
             "ordinal",
