@@ -97,6 +97,8 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "qwen.qwen3-coder-30b-a3b-v1:0": 256_000,
   "qwen.qwen3-32b-v1:0": 128_000,
   "qwen.qwen3-vl-235b-a22b": 128_000,
+  // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3.html
+  "moonshotai.kimi-k3": 1_000_000,
   // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-6.html
   "xai.grok-4.6": 500_000,
 };
