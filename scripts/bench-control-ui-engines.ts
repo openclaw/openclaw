@@ -898,6 +898,7 @@ try {
                     page,
                     { ...fixture, awaitInitialRoster: false },
                     {
+                      nativeAssetLatencyMs: networkProfile.httpLatencyMs,
                       requestHandlers: {
                         ...defaults,
                         ...scenario.createRequestHandlers?.(defaults),
