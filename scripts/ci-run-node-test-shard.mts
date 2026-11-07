@@ -23,6 +23,7 @@ import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
+import { ciFilesystemCounters, collectCiOwnedFootprint } from "./lib/ci-owned-footprint.mts";
 import type { CiTestRuntimePolicy, CiTestRuntimeSelection } from "./lib/ci-test-runtime.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { isConstrainedCiCheckHost, isExclusiveCiTestConfig } from "./lib/local-check-runtime.mts";
@@ -460,6 +461,7 @@ async function runChild(
   label: string,
   timingKey: string,
   context?: Awaited<ReturnType<typeof createWorkerContext>>,
+  onCapacityRefusal?: () => void,
 ) {
   const spawnEnv =
     args[0] === "--native-bun" && context
@@ -477,9 +479,15 @@ async function runChild(
   let completion: Promise<number>;
   let teardown: (() => void) | undefined;
   let terminationSignal: NodeJS.Signals | null = null;
+  let observedExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+  let capacityRecorded = false;
   let outputTail = "";
   const recordLine = (line: string) => {
     outputTail = `${outputTail}${line}\n`.slice(-16_384);
+    if (!capacityRecorded && line.includes("Insufficient disk space near ")) {
+      capacityRecorded = true;
+      onCapacityRefusal?.();
+    }
   };
   const reportFailure = (reason: string) => {
     process.stdout.write(`[shard-failure:${label}] FAILED (${reason})\n`);
@@ -535,6 +543,46 @@ async function runChild(
       });
     });
   }
+  child.once("exit", (code, signal) => {
+    observedExit = { code, signal };
+  });
+  const reportTermination = (error?: unknown) => {
+    const causes: Array<{ name?: string; code?: string; processTreeState?: string }> = [];
+    let cause = error;
+    while (isRecord(cause) && causes.length < 4) {
+      causes.push({
+        name:
+          typeof cause.name === "string"
+            ? /^[A-Za-z]{1,48}Error$|^Error$/u.test(cause.name)
+              ? cause.name
+              : undefined
+            : undefined,
+        code:
+          typeof cause.code === "string"
+            ? /^(?:E[A-Z0-9_]{1,60}|ABORT_ERR)$/u.test(cause.code)
+              ? cause.code
+              : undefined
+            : undefined,
+        processTreeState:
+          cause.processTreeState === "terminated" ||
+          cause.processTreeState === "signaled" ||
+          cause.processTreeState === "indeterminate"
+            ? cause.processTreeState
+            : undefined,
+      });
+      cause = cause.cause;
+    }
+    console.error(
+      `[shard:termination] ${JSON.stringify({
+        label,
+        parentPid: process.pid,
+        childPid: child.pid,
+        observedExit,
+        terminationSignal,
+        causes,
+      })}`,
+    );
+  };
   // Stream with a per-line label instead of buffering: children can run
   // whole suites for hours and verbose output must not accumulate on the
   // wrapper heap. Backpressure pauses the child stream while stdout drains,
@@ -556,10 +604,12 @@ async function runChild(
     }
   } catch (error) {
     reportFailure(`error: ${String(error)}`);
+    reportTermination(error);
     throw error;
   }
   process.stdout.write(`[shard:${timingKey}] end (exit ${code})\n`);
   if (code !== 0) {
+    reportTermination();
     reportFailure(
       `exit ${code}${terminationSignal ? `, signal ${String(terminationSignal)}` : ""}`,
     );
@@ -794,7 +844,52 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     invocations: 0,
     failedInvocations: 0,
   };
+  const diagnostics =
+    process.platform === "linux" &&
+    baseEnv.GITHUB_ACTIONS === "true" &&
+    baseEnv.RUNNER_ENVIRONMENT === "github-hosted" &&
+    baseEnv.CI_RESOURCE_DIAGNOSTICS === "1" &&
+    baseEnv.GITHUB_WORKSPACE === process.cwd() &&
+    concurrency === 1 &&
+    !options.runChild;
+  const diskRoots = {
+    compiledWorkers: join(process.cwd(), ".artifacts/vitest-workers"),
+    compiledWorkerSeed: join(process.cwd(), ".artifacts/vitest-worker-cache"),
+    shardScratch: scratchDir,
+    transforms: "/var/tmp/openclaw-vitest-fs-cache",
+    nodeCompile: "/var/tmp/openclaw-node-compile-cache",
+    nodeModules: join(process.cwd(), "node_modules"),
+    pnpmStore: join(process.cwd(), ".cache/openclaw-pnpm-store"),
+  };
+  const footprint = async (phase: string) => {
+    if (diagnostics && !interrupted) {
+      // Between invocations only: never block active assertions or child output on a tree scan.
+      try {
+        const measurement = await collectCiOwnedFootprint(diskRoots, () => Boolean(interrupted));
+        console.log(
+          `[shard:owned-disk] ${JSON.stringify({
+            phase,
+            ...measurement,
+            filesystem: ciFilesystemCounters(scratchDir),
+          })}`,
+        );
+      } catch {
+        console.warn(`[shard:owned-disk] ${JSON.stringify({ phase, unavailable: true })}`);
+      }
+    }
+  };
   const onSignal = (signal: NodeJS.Signals) => {
+    if (!interrupted) {
+      console.error(
+        `[shard:parent-signal] ${JSON.stringify({
+          pid: process.pid,
+          ppid: process.ppid,
+          signal,
+          completed: completion.completed,
+          invocations: completion.invocations,
+        })}`,
+      );
+    }
     interrupted ??= signal;
   };
   try {
@@ -815,9 +910,20 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       process.on("SIGINT", onSignal);
       process.on("SIGTERM", onSignal);
     }
+    await footprint("before-tests");
     const runner: typeof runChild =
       options.runChild ??
-      ((args, childEnv, label, timingKey) => runChild(args, childEnv, label, timingKey, context));
+      ((args, childEnv, label, timingKey) =>
+        runChild(args, childEnv, label, timingKey, context, () => {
+          if (diagnostics) {
+            console.log(
+              `[shard:capacity-refusal] ${JSON.stringify({
+                label,
+                filesystem: ciFilesystemCounters(scratchDir),
+              })}`,
+            );
+          }
+        }));
     await runVitestPlans(admittedPlans, {
       concurrency,
       isExclusive: exclusive,
@@ -972,6 +1078,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             `${timingPrefix}${entry.name}`,
             `${timingPrefix}${timingKey}`,
           );
+          await footprint(`after-invocation:${completion.invocations}`);
           // A dual-runtime envelope always completes both ordinary test runs;
           // CI and explicit local reruns also drain later envelopes after exit 1.
           if (code !== 0) {
@@ -1015,6 +1122,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   } finally {
     try {
       await context?.workerRun.dispose();
+      await footprint("after-worker-disposal");
       if (scratchCleanupPending && !unverifiedChild) {
         // Disposal proves compiler, borrower, and nested-resource settlement.
         // Portable close-only launches cannot authorize deleting shared scratch.

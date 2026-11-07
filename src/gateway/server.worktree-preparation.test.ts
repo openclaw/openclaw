@@ -380,7 +380,10 @@ async function prepareBinding(state: OpenClawTestState, shared: boolean) {
     withSource: selection.withCurrent,
     withRollback: selection.withRollback,
   });
-  assert(prepared.ok && prepared.value.withCommit, "Expected source-owned workspace preparation");
+  assert(
+    prepared.ok && prepared.value.withCommit,
+    `Expected source-owned workspace preparation: ${JSON.stringify(prepared.ok ? { ok: true, withCommit: Boolean(prepared.value.withCommit) } : prepared)}`,
+  );
   const bind = () =>
     commitPreparedSessionWorkspace({
       prepared: prepared.value,
