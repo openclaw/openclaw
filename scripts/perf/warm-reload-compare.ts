@@ -22,6 +22,11 @@ type ComparisonRun = {
     finalRowsDomMs: number | null;
     loafBlockingMs: number;
     cls: number;
+    boardWidgetSkeletonMs?: number | null;
+    allBoardWidgetsVisibleMs?: number | null;
+    cachedBoardLayoutMs?: number | null;
+    firstTranscriptDomMs?: number | null;
+    firstDashboardContentDomMs?: number | null;
   };
   auditedPaint?: { main: { atMs: number }; dashboard: { atMs: number } | null };
   visual: Census & { unmasked: Census; visibleChangeCensus?: Census };
@@ -150,6 +155,11 @@ function metrics(run: ComparisonRun): Record<string, number | null> {
     unmaskedPixelStateOccurrences: run.visual.unmasked.timeline.length,
     lastVisibleChangeMs: run.visual.visibleChangeCensus?.lastVisualChangeMs ?? null,
     lastPixelChangeMs: run.visual.lastVisualChangeMs,
+    boardWidgetSkeletonMs: run.probe.boardWidgetSkeletonMs ?? null,
+    allBoardWidgetsVisibleMs: run.probe.allBoardWidgetsVisibleMs ?? null,
+    cachedBoardLayoutMs: run.probe.cachedBoardLayoutMs ?? null,
+    visibleTranscriptMs: run.probe.firstTranscriptDomMs ?? null,
+    widgetContentReadyMs: run.probe.firstDashboardContentDomMs ?? null,
     helloHandledMs: run.probe.helloHandledMs,
     fcpMs: run.probe.fcpMs,
     auditedMainPaintMs: run.auditedPaint?.main.atMs ?? null,

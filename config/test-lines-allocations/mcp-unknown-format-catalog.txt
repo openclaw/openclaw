@@ -1,0 +1,2 @@
+# Catalog warning regression and the startup fixture preserving real logger exports.
+32

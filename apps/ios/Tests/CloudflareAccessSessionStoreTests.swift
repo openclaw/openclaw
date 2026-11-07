@@ -195,6 +195,47 @@ struct CloudflareAccessSessionStoreTests {
         #expect(memory.values.isEmpty)
     }
 
+    @Test func `dashboard cookie is a current host-scoped HTTP-only Access app grant`() throws {
+        let tokens = try CloudflareAccessTestTokens()
+        let application = try CloudflareAccessTestTokens.application(port: 443)
+        let now = Date()
+        let expiry = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970) + 3600)
+        let session = try tokens.session(expires: expiry, application: application)
+        let dashboardURL = try #require(URL(string: "https://gateway.example.test/settings"))
+        let cookie = try #require(session.dashboardCookie(
+            for: dashboardURL,
+            now: expiry.addingTimeInterval(-1)))
+
+        #expect(cookie.name == "CF_Authorization")
+        #expect(cookie.domain == "gateway.example.test")
+        #expect(cookie.path == "/")
+        #expect(cookie.isSecure)
+        #expect(cookie.isHTTPOnly)
+        #expect(cookie.expiresDate.map { $0 <= expiry && $0 > expiry.addingTimeInterval(-1) } == true)
+        #expect(try session.dashboardCookie(
+            for: #require(URL(string: "https://other.example.test/settings")),
+            now: expiry.addingTimeInterval(-1)) == nil)
+        #expect(try session.dashboardCookie(
+            for: #require(URL(string: "https://gateway.example.test:8443/settings")),
+            now: expiry.addingTimeInterval(-1)) == nil)
+        #expect(session.dashboardCookie(for: dashboardURL, now: expiry) == nil)
+
+        let nonstandard = try CloudflareAccessTestTokens.application(port: 8443)
+        let nonstandardSession = try tokens.session(expires: expiry, application: nonstandard)
+        let nonstandardURL = try #require(URL(string: "https://gateway.example.test:8443/settings"))
+        let nonstandardCookie = try #require(nonstandardSession.dashboardCookie(
+            for: nonstandardURL,
+            now: expiry.addingTimeInterval(-1)))
+        #expect(nonstandardCookie.domain == "gateway.example.test")
+        #expect(nonstandardCookie.isSecure)
+        #expect(nonstandardCookie.isHTTPOnly)
+        #expect(try nonstandardSession.dashboardCookie(
+            for: #require(URL(string: "https://gateway.example.test:8443/settings")),
+            now: expiry.addingTimeInterval(-1))?.value == nonstandardCookie.value)
+        #expect(try nonstandardSession.dashboardCookie(
+            for: #require(URL(string: "https://gateway.example.test:9443/settings")),
+            now: expiry.addingTimeInterval(-1)) == nil)
+    }
     @Test func `reauthentication revokes completed shared grants before retirement can suspend`() async throws {
         let memory = MemoryStore()
         let application = try CloudflareAccessTestTokens.application()
@@ -388,7 +429,6 @@ struct CloudflareAccessSessionStoreTests {
         try await afterRenewal.task.value
         #expect(memory.values[application.origin] == nil)
     }
-
     @Test func `expiry while teardown is suspended cannot publish or persist authentication`() async throws {
         let memory = MemoryStore()
         let retirement = LoginGate()
@@ -440,7 +480,7 @@ struct CloudflareAccessSessionStoreTests {
         defer {
             // Only these unique rows belong to this test. No service-wide cleanup.
             for (rowService, account) in ownedRows {
-                #expect(GenericPasswordKeychainStore.delete(service: rowService, account: account))
+                _ = GenericPasswordKeychainStore.delete(service: rowService, account: account)
                 let absent = GenericPasswordKeychainStore.loadString(service: rowService, account: account) == nil
                 #expect(absent)
             }

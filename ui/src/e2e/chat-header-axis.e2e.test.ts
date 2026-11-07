@@ -148,8 +148,9 @@ suite.define(() => {
       expect(bounds.shellBottom).toBeCloseTo(viewport.height - 34, 0);
       expect(bounds.draftBottom - bounds.bottom).toBeCloseTo(10, 0);
       expect(bounds.bottom).toBeLessThanOrEqual(bounds.shellBottom);
-      expect(bounds.left).toBeGreaterThanOrEqual(20);
-      expect(bounds.right).toBeLessThanOrEqual(viewport.width - 20);
+      // The same edges as the chat composer it becomes.
+      expect(bounds.left).toBeGreaterThanOrEqual(16);
+      expect(bounds.right).toBeLessThanOrEqual(viewport.width - 16);
       expect(bounds.left).toBeCloseTo(viewport.width - bounds.right, 0);
     });
   }

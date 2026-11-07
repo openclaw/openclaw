@@ -19,6 +19,7 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
+import { resolveCyberAccessProgramForProvider } from "../../agents/model-catalog-access-programs.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -42,6 +43,11 @@ import {
 } from "./agent-runner-run-params.js";
 import { buildReplyRouteThreadingToolContext } from "./agent-runner-utils.js";
 import { prepareCliReplyPayload } from "./cli-reply-payload.js";
+import {
+  createCompactionNoticePayload,
+  deliverCompactionNoticePayload,
+  shouldNotifyUserAboutCompaction,
+} from "./compaction-notice.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -55,10 +61,11 @@ export async function runCliFallbackCandidate(
     onCompactionAccounting: (fact: CompactionAccountingFact) => void;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
-  if (
-    params.candidateRun.cyberAccessProgram !== undefined &&
-    params.candidateRun.cyberAccessProgram !== "standard"
-  ) {
+  const accessProgram = resolveCyberAccessProgramForProvider(
+    params.candidateRun.cyberAccessProgram,
+    params.provider,
+  ).program;
+  if (accessProgram !== undefined && accessProgram !== "standard") {
     throw new Error(
       "Daybreak access is unsupported by this CLI runtime. Select Standard or use the OpenClaw or native Codex runtime.",
     );
@@ -71,6 +78,20 @@ export async function runCliFallbackCandidate(
     (onPreparedBlockReply
       ? (payload, context) => deliverPreparedBlockReply({ onPreparedBlockReply }, payload, context)
       : undefined);
+  const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
+    if (!shouldNotifyUserAboutCompaction(params.runtimeConfig)) {
+      return;
+    }
+    await deliverCompactionNoticePayload(
+      createCompactionNoticePayload({
+        phase,
+        currentMessageId: turn.sessionCtx.MessageSidFull ?? turn.sessionCtx.MessageSid,
+        applyReplyToMode: turn.applyReplyToMode,
+      }),
+      turn.opts?.onBlockReply ?? turn.onCompactionNoticePayload,
+      phase,
+    );
+  };
   const expectedLifecycleRevision = turn.getActiveSessionEntry()?.lifecycleRevision;
   const selectedModelEntry = findModelInCatalog(
     params.candidateRun.thinkingCatalog ?? [],
@@ -316,8 +337,14 @@ export async function runCliFallbackCandidate(
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
           onPlanUpdate: turn.opts?.onPlanUpdate,
           onReasoningProgress: (payload) => turn.opts?.onReasoningProgress?.(payload),
-          onCompactionStart: turn.opts?.onCompactionStart,
-          onCompactionEnd: turn.opts?.onCompactionEnd,
+          onCompactionStart: async () => {
+            await turn.opts?.onCompactionStart?.();
+            await sendCompactionNotice("start");
+          },
+          onCompactionEnd: async (event) => {
+            await turn.opts?.onCompactionEnd?.(event);
+            await sendCompactionNotice(event?.completed === true ? "end" : "incomplete");
+          },
           onToolEvent: async (payload) => {
             const summaryPromise = cliToolSummaryTracker.noteToolEvent(payload);
             if (payload.phase === "result") {

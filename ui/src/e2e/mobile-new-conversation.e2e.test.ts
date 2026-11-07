@@ -13,9 +13,10 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installNativeEmbed, installNativeWebChrome } from "./native-nav.test-support.ts";
 import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Mobile New conversation" });
+const suite = createControlUiE2eSuite({ name: "Mobile New session" });
 const mobile = {
   viewport: { width: 390, height: 844 },
   hasTouch: true,
@@ -102,9 +103,7 @@ suite.define(() => {
           page,
           page.locator(".shell"),
           [identity, triggers, surface],
-          {
-            animations: "disabled",
-          },
+          { animations: "disabled" },
         );
         if (dir) {
           await writeFile(path.join(dir, state.name + ".png"), frame.png);
@@ -116,13 +115,14 @@ suite.define(() => {
         expect(targetBox).not.toBeNull();
         expect(composerBox).not.toBeNull();
         expect(targetBox!.y - heroBox!.y - heroBox!.height).toBeGreaterThanOrEqual(0);
-        expect(heroBox!.y).toBeGreaterThanOrEqual(58);
+        expect(heroBox!.y).toBeGreaterThanOrEqual(54);
         expect(
           Math.abs((await bottomGap(".new-session-page__composer")) - chatGap),
           state.name,
         ).toBeLessThanOrEqual(1);
-        const local = page.locator("#new-session-where-trigger");
-        expect((await local.boundingBox())!.width).toBeLessThanOrEqual(100);
+        // #192044 renamed Local to This computer; keep the picker within half a row.
+        const device = page.locator("#new-session-where-trigger");
+        expect((await device.boundingBox())!.width).toBeLessThanOrEqual(targetBox!.width / 2);
         expect(
           await page.locator(".new-session-page__select--agent .agent-select__label").isVisible(),
         ).toBe(true);
@@ -185,7 +185,7 @@ suite.define(() => {
       if (route === "new") {
         await page.goto(suite.server.baseUrl + "sessions");
         await waitForControlUiRoute(page, { routeId: "sessions" });
-        const create = page.getByRole("link", { name: "New conversation", exact: true });
+        const create = page.getByRole("link", { name: "New session", exact: true });
         expect(await page.locator(".topbar .header-new-session").isVisible()).toBe(true);
         expect(await create.count()).toBe(1);
         expect(await create.getAttribute("href")).toBe("/new?agent=research");
@@ -219,15 +219,18 @@ suite.define(() => {
         await writeFile(path.join(dir, name + ".png"), frame.png);
       };
       await capture("closed");
-      const action = page.getByRole("link", { name: "New conversation", exact: true });
+      const action = page.getByRole("link", { name: "New session", exact: true });
       expect(await action.count()).toBe(0);
       // Mouse hover can reveal the sliding drawer's tooltip, which owns the first Escape.
       await navigationDrawerToggle(page).tap();
       await waitForMobileSidebarDrawerOpen(page);
       expect(await page.locator(".header-new-session:visible").count()).toBe(0);
-      expect(await action.count()).toBe(1);
-      expect(await action.getAttribute("href")).toBe("/new?agent=research");
-      const box = await action.boundingBox();
+      const drawerAction = page
+        .locator(".shell-nav")
+        .getByRole("link", { name: "New session", exact: true });
+      expect(await drawerAction.count()).toBe(1);
+      expect(await drawerAction.getAttribute("href")).toBe("/new?agent=research");
+      const box = await drawerAction.boundingBox();
       expect(box).not.toBeNull();
       expect(box!.x).toBeGreaterThanOrEqual(0);
       expect(box!.x + box!.width).toBeLessThanOrEqual(390);
@@ -246,8 +249,8 @@ suite.define(() => {
       await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=research" });
       const composer = page.locator(".new-session-page__message");
       await composer.waitFor();
-      // New Session is the action's destination, so its topbar omits the action.
-      expect(await page.locator(".topbar .header-new-session").count()).toBe(0);
+      // New Session is the action's destination, so its header omits the action.
+      expect(await page.locator(".new-session-page .mobile-header__capsule a").count()).toBe(0);
       if (route === "chat") {
         await expect
           .poll(() => composer.evaluate((element) => element === document.activeElement))
@@ -265,6 +268,84 @@ suite.define(() => {
     });
   });
 
+  it("gives the draft chat's header and keeps the top bar's actions", async () => {
+    await suite.withPage(mobile, async ({ page }) => {
+      const gateway = await installScenario(page);
+      await page.goto(suite.server.baseUrl + "new?agent=research");
+      const header = page.locator(".new-session-page .agent-chat__header--mobile");
+      await header.waitFor();
+      expect(await page.locator(".topbar").isVisible()).toBe(false);
+      // The draft bar carries no visible title; it stays named for assistive tech.
+      expect(await header.locator(".mobile-header__title").isVisible()).toBe(false);
+      expect(await header.getAttribute("aria-label")).toBe("New session");
+
+      // Everything the top bar offered stays one tap away.
+      await header.locator(".mobile-header__search").tap();
+      await page.locator("openclaw-command-palette [role='dialog']").first().waitFor();
+      await page.keyboard.press("Escape");
+      await navigationDrawerToggle(page).tap();
+      await waitForMobileSidebarDrawerOpen(page);
+      await page.locator(".shell-nav:focus, .shell-nav :focus").waitFor();
+      await page.keyboard.press("Escape");
+      await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+
+      // Draft and incognito live in the capsule; toggling never moves its edge.
+      expect(await page.locator(".new-session-page__incognito-rail").count()).toBe(0);
+      const capsule = header.locator(".mobile-header__capsule");
+      const incognito = capsule.locator(".new-session-page__incognito-toggle");
+      const capsuleBox = await capsule.boundingBox();
+      await incognito.tap();
+      expect(await incognito.getAttribute("aria-checked")).toBe("true");
+      expect(await header.locator(".mobile-header__incognito").count()).toBe(0);
+      expect(await incognito.textContent()).toBe("");
+      expect(await capsule.boundingBox()).toEqual(capsuleBox);
+      const note = page.locator(".new-session-page__incognito-note");
+      await note.waitFor();
+      await note.locator("p").first().tap();
+      await note.waitFor({ state: "hidden" });
+      expect(await incognito.getAttribute("aria-checked")).toBe("true");
+      await incognito.tap();
+      await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("false");
+      await page
+        .locator(".new-session-page__incognito-notice--visible")
+        .waitFor({ state: "detached" });
+      const composerPlace = await page.locator(".new-session-page__composer").boundingBox();
+
+      await gateway.setOnline(false);
+      const notice = header.locator(".mobile-header__notices");
+      await notice.waitFor();
+      expect(await capsule.boundingBox()).toEqual(capsuleBox);
+      expect(await page.locator(".new-session-page__composer").boundingBox()).toEqual(
+        composerPlace,
+      );
+      await gateway.setOnline(true);
+      await expect.poll(() => notice.count()).toBe(0);
+    });
+  });
+
+  it("keeps the top bar above phone width and on native hosts", async () => {
+    await suite.withPage({ ...mobile, viewport: { width: 700, height: 900 } }, async ({ page }) => {
+      await installScenario(page);
+      await page.goto(suite.server.baseUrl + "new?agent=research");
+      await page.locator(".new-session-page__message").waitFor();
+      expect(await page.locator(".topbar").isVisible()).toBe(true);
+      expect(await page.locator(".new-session-page .agent-chat__header--mobile").count()).toBe(0);
+    });
+    for (const install of [
+      installNativeWebChrome,
+      (page: Page) => installNativeEmbed(page, { platform: "ios", formFactor: "phone" }),
+    ]) {
+      await suite.withPage(mobile, async ({ page }) => {
+        await install(page);
+        await installScenario(page);
+        await page.goto(suite.server.baseUrl + "new?agent=research");
+        await page.locator(".new-session-page__message").waitFor();
+        expect(await page.locator(".shell--merged-chat-chrome").count()).toBe(0);
+        expect(await page.locator(".new-session-page .agent-chat__header--mobile").count()).toBe(0);
+      });
+    }
+  });
+
   it("shows the chat header while creating a session", async () => {
     await suite.withPage(mobile, async ({ page }) => {
       const gateway = await installScenario(page);
@@ -277,16 +358,24 @@ suite.define(() => {
           return [width, border, backgroundColor, element.querySelector("path")?.getAttribute("d")];
         });
       const draft = await appearance();
+      const capsule = page.locator(".mobile-header__capsule").filter({ visible: true });
+      const place = async () => {
+        const box = (await capsule.boundingBox())!;
+        return [await toggle.boundingBox(), box.y, box.height, box.x + box.width];
+      };
+      const draftPlace = await place();
       await gateway.deferNext("sessions.create");
       await page.locator(".new-session-page__start-submit").tap();
       const pending = page.locator("openclaw-pending-session-create");
       await pending.locator(".agent-chat__header--mobile").waitFor();
       expect(await pending.locator(".chat-pane__header").count()).toBe(0);
       const pendingAppearance = await appearance();
+      const pendingPlace = await place();
       await gateway.resolveDeferred("sessions.create");
       await pending.waitFor({ state: "detached" });
-      // Draft topbar, pending header and admitted chat header present one control.
+      // Draft, pending and admitted headers present one control, and nothing moves between them.
       expect([draft, pendingAppearance]).toEqual(Array(2).fill(await appearance()));
+      expect([draftPlace, pendingPlace]).toEqual(Array(2).fill(await place()));
     });
   });
 

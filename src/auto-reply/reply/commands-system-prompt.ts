@@ -185,7 +185,7 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     agentId: sessionAgentId,
     workspaceDir,
   });
-  const systemPrompt = buildConfiguredAgentSystemPrompt({
+  const systemPrompt = await buildConfiguredAgentSystemPrompt({
     preparedTtsPreferences: params.opts?.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     config: params.cfg,
     preparedModelRuntime,

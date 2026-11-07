@@ -4,11 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readSessionArchiveText } from "../../test/helpers/session-archive.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import {
-  readSessionArchiveContentSync,
-  SESSION_ARCHIVE_ZSTD_SUFFIX,
-} from "../config/sessions/archive-compression.js";
+import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "../config/sessions/archive-compression.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
@@ -296,7 +294,7 @@ describe("historical transcript directive migration", () => {
       });
       expect(migratedArchiveContent).toContain(archivedCodeJson);
       expect(migratedArchiveContent).toContain(archivedUserJson);
-      expect(readSessionArchiveContentSync(archivePath)).toBe(migratedArchiveContent);
+      expect(readSessionArchiveText(archivePath)).toBe(migratedArchiveContent);
 
       const generationsAfterFirstRun = {
         tagged: readGeneration(databasePath, "tagged-session"),
@@ -443,7 +441,7 @@ describe("historical transcript directive migration", () => {
   it("surfaces lease inspection failures from preflight", async () => {
     const { env, databasePath } = fixture();
     closeOpenClawAgentDatabasesForTest();
-    const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
+    const agentDatabaseLease = await import("../state/openclaw-agent-db-lease-inspection.js");
     vi.spyOn(agentDatabaseLease, "assertNoOpenClawAgentDatabaseLeasesReadOnly").mockImplementation(
       () => {
         throw new Error("shared-state lease inspection failed");
@@ -876,7 +874,7 @@ it.each(["identity", "zstd"])(
     expect(readGeneration(databasePath, "multi-session")).not.toBe("multi-before");
     expect(readGeneration(databasePath, "ambiguous-session")).toBe("ambiguous-before");
     const restoredArchive = `${restored(archived)}\n${JSON.stringify(archivedUser)}\n`;
-    expect(readSessionArchiveContentSync(archivePath)).toBe(restoredArchive);
+    expect(readSessionArchiveText(archivePath)).toBe(restoredArchive);
     expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete", version: 2 });
     const recorded = readDatabaseRow(
       databasePath,

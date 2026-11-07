@@ -61,7 +61,7 @@ export function createDiscordBeforePayloadDelivery(params: {
       );
       return null;
     }
-    if (payload.isReasoning || payload.isCommentary) {
+    if (payload.isReasoning || payload.isCommentary || payload.isCompactionNotice) {
       return payload;
     }
     if (

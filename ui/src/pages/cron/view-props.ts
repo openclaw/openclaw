@@ -2,6 +2,7 @@ import {
   normalizeSortedUniqueTrimmedStringList,
   normalizeTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
+import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
@@ -97,7 +98,9 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   const profiles = directory.result?.profiles.filter((profile) => !profile.mergedInto) ?? [];
   const ownerOptions = profiles.map((profile) => ({
     value: profile.id,
-    label: profile.displayName || profile.id,
+    label:
+      userProfileDisplayName(profile.id, profile.displayName, profile.githubIdentity?.login) ||
+      profile.id,
   }));
   if (!selectedOwner || !profiles.some((profile) => profile.id === selectedOwner)) {
     ownerOptions.unshift({

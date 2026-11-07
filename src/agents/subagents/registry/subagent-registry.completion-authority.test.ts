@@ -42,6 +42,7 @@ import {
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "../announce/subagent-announce-overrides.test-support.js";
@@ -791,7 +792,9 @@ describe("registered completion source custody", () => {
     "cancelled-with-requester-custody",
     "cancelled-with-missing-custody",
     "cancelled-with-distinct-custody",
+    "cancelled-with-independent-invocation",
     "mixed-cancellation-source",
+    "mixed-cancellation-independent-invocation",
     "mixed-cancellation-same-source",
     "stale-batch-member",
   ] as const)("outlives execution and closes on %s", async (ending) => {
@@ -800,6 +803,15 @@ describe("registered completion source custody", () => {
       const { context, resolveGatewayContext, client, revoked, source } =
         await retainedOperatorFixture("completion-owner");
       try {
+        const independentInvocation = () => ({
+          ...client,
+          internal: {
+            operatorRunAuthority: createAdmittedRunOperatorAuthority({
+              ...source.authority,
+              invocation: {},
+            }),
+          },
+        });
         const register = (runId = "child", actor = client) =>
           inGateway({ client: actor, context, resolveGatewayContext: () => context }, () =>
             registerSubagentRun(
@@ -861,9 +873,13 @@ describe("registered completion source custody", () => {
           await releaseSubagentRun(entry.runId);
         } else if (
           ending === "cancelled-with-missing-custody" ||
-          ending === "cancelled-with-distinct-custody"
+          ending === "cancelled-with-distinct-custody" ||
+          ending === "cancelled-with-independent-invocation"
         ) {
-          const other = operatorFixture("other-requester");
+          const other =
+            ending === "cancelled-with-independent-invocation"
+              ? { client: independentInvocation(), revoked: new AbortController() }
+              : operatorFixture("other-requester");
           await register("other", other.client);
           await markCancelled(entry.runId);
           await markCancelled("other");
@@ -896,11 +912,14 @@ describe("registered completion source custody", () => {
           await releaseSubagentRun(entry.runId);
         } else if (ending.startsWith("mixed-cancellation") || ending === "stale-batch-member") {
           const differentSource = ending === "mixed-cancellation-source";
+          const differentInvocation = ending === "mixed-cancellation-independent-invocation";
           await register(
             "other",
             differentSource
               ? createOperatorClient({ profileName: "other-owner", scopes: ["operator.write"] })
-              : client,
+              : differentInvocation
+                ? independentInvocation()
+                : client,
           );
           const other = subagentRuns.get("other")!;
           if (ending === "stale-batch-member") {
@@ -910,7 +929,7 @@ describe("registered completion source custody", () => {
             ).toThrow(/authority/);
           } else {
             await markCancelled(other.runId);
-            if (differentSource) {
+            if (differentSource || differentInvocation) {
               expect(() =>
                 subagentRuns.runWithCompletionBatchAuthority([entry, other], () => "wrong caller"),
               ).toThrow(/incompatible operator authority/);

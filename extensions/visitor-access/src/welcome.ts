@@ -65,7 +65,7 @@ export class VisitorWelcome {
     }
     this.inFlight.add(invitation.grantId);
     try {
-      return await this.setUp(invitation, guest);
+      return await this.setUp(invitation, guest, client.preparedSessionProfile?.githubLogin);
     } finally {
       this.inFlight.delete(invitation.grantId);
     }
@@ -92,6 +92,7 @@ export class VisitorWelcome {
   private async setUp(
     invitation: ActiveVisitorInvitation,
     guest: GuestProfile,
+    githubLogin: string | null | undefined,
   ): Promise<WelcomeEnsureResult> {
     const { grantId, onboarding: recorded } = invitation;
     const advance = (
@@ -118,12 +119,13 @@ export class VisitorWelcome {
       }
       reservation = reserved.onboarding;
       const name = guest.displayName?.replace(/\s+/gu, " ").trim() || undefined;
+      const titleName = name || githubLogin?.trim();
       // Create as the guest: the caller-bound request makes the guest the session owner.
       // A retry adopts the reserved key, so it never creates a second session.
       await this.gateway.request("sessions.create", {
         key: sessionKey,
         agentId,
-        displayName: name ? `Welcome, ${name}` : "Welcome",
+        displayName: titleName ? `Welcome ${titleName}` : "Welcome",
       });
       // Legacy grants have no inviter; nobody can mention themselves.
       const inviter =

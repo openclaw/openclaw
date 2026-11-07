@@ -100,7 +100,7 @@ suite.define(() => {
       });
       await updateIssue.locator(".sidebar-update-card__actions").tap();
       await expect.poll(() => tooltipHost.getAttribute("data-e2e-after-show")).not.toBeNull();
-      expect(await tooltip.textContent()).toContain("Administrator access is required");
+      expect(await tooltip.textContent()).toContain("You need admin access");
       expect(await gateway.getRequests("update.run")).toHaveLength(0);
     });
   });
@@ -161,7 +161,10 @@ suite.define(() => {
       await startUpdate(page);
       await button(page, "Updating…").waitFor();
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
-      await button(page, "Close").click();
+      await page
+        .locator("openclaw-modal-dialog openclaw-modal-actions")
+        .getByRole("button", { name: "Close", exact: true })
+        .click();
       const updateIssue = await openUpdateIssue(page);
       await text(updateIssue, restartingText).first().waitFor();
       await updateIssue.locator(".sidebar-update-card__action").click();
@@ -285,7 +288,7 @@ suite.define(() => {
           await button(page, "Retry update").click();
         }
         expect(await page.locator("openclaw-modal-dialog").getAttribute("label")).toBe(
-          "Update Mac app + Gateway",
+          "Update Mac app and restart?",
         );
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
         await button(page, "Update Mac app and restart").click();

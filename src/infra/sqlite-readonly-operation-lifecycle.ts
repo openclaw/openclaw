@@ -4,6 +4,7 @@ const sqliteReadOnlyOperationProcessLifecycle = {
   // This read can borrow host-side schema maintenance. The pooled child transport
   // has process-lifetime admission, so its native exit is the release boundary.
   "startupMetadata.readCurrent": "retire-after-result",
+  "startupMetadata.rollbackRecoveryRequired": "retire-after-result",
 } as const satisfies Partial<Record<keyof SqliteReadOnlyOperations, "retire-after-result">>;
 
 export function sqliteReadOnlyOperationRequiresProcessRetirement(type: string): boolean {

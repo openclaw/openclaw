@@ -1,11 +1,15 @@
 import fs from "node:fs";
+import { constants, zstdCompressSync } from "node:zlib";
 import { describe, expect, test } from "vitest";
+import { realisticTranscriptText } from "../../test/helpers/session-archive.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { resolveSessionArchiveReadPath } from "../config/sessions/archive-compression.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
+import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
 import {
   transcriptMessage as event,
   useTranscriptFixture,
@@ -416,6 +420,55 @@ describe("session transcript reader facade", () => {
       readPage(scope, { offset: 0, maxMessages: 1, allowResetArchiveFallback: true }),
     ).resolves.toMatchObject({ messages: [{ content: "retained archive" }] });
   });
+
+  // #190690 refused both: a ~10x production transcript and its own 2 MiB repeated-byte frame.
+  // History's own per-message payload cap still applies once the archive is readable.
+  test.each([
+    [
+      "production-like",
+      (index: number) => realisticTranscriptText(64 * 1024, index + 1),
+      realisticTranscriptText(64 * 1024, 24),
+    ],
+    [
+      "repeated-byte bomb",
+      (index: number) => (index === 23 ? "x".repeat(2 * 1024 * 1024) : "m"),
+      [{ type: "text", text: "[chat.history omitted: message too large]" }],
+    ],
+  ] as const)(
+    "reads %s archives during discovery and exact reads",
+    async (_shape, content, latest) => {
+      const sessionId = "reader-expanding-archive";
+      const sessionFile = fixture.path("custom.jsonl");
+      const scope = { ...scopeFor(sessionId), sessionFile };
+      const archivePath = `${sessionFile}.reset.2026-07-12T18-00-00.000Z.zst`;
+      const body = chain(24, "m", content).map((entry) => JSON.stringify(entry));
+      const plaintext = `${JSON.stringify({ type: "session", id: sessionId })}\n${body.join("\n")}\n`;
+      const stored = zstdCompressSync(Buffer.from(plaintext));
+      // Stored size plus 1 MiB was #190690's refusal threshold.
+      expect(Buffer.byteLength(plaintext)).toBeGreaterThan(stored.length + 1024 * 1024);
+      fs.writeFileSync(archivePath, stored);
+      const damaged = zstdCompressSync(Buffer.from("corrupt suffix"), {
+        params: { [constants.ZSTD_c_checksumFlag]: 1 },
+      });
+      damaged[damaged.length - 1] = damaged.readUInt8(damaged.length - 1) ^ 1;
+      const newerPath = archivePath.replace("T18-", "T19-");
+      fs.writeFileSync(newerPath, Buffer.concat([stored, damaged]));
+
+      await expect(
+        new ArchivedTranscriptReader(scope).readRecentWithStats({ maxMessages: 1 }),
+      ).resolves.toMatchObject({ messages: [{ content: latest }], transcriptPath: archivePath });
+      await expect(
+        new ArchivedTranscriptReader({ ...scope, exactArchivePath: archivePath }).readAroundId({
+          messageId: "m-10",
+          maxMessages: 1,
+          maxBytes: 256 * 1024,
+        }),
+      ).resolves.toMatchObject({ found: true });
+      expect(
+        fs.existsSync(resolveSessionArchiveReadPath(archivePath, fs.statSync(archivePath))),
+      ).toBe(false);
+    },
+  );
 
   test.each(["artifact", "sqlite"] as const)(
     "reads usage from %s storage with a placeholder store path",

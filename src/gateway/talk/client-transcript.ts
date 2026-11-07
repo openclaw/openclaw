@@ -13,6 +13,7 @@ export async function appendTalkClientTranscript(
   },
   context: GatewayRequestContext,
   writer?: Parameters<typeof appendClientVoiceTranscript>[1],
+  append: typeof appendClientVoiceTranscript = appendClientVoiceTranscript,
 ): Promise<void> {
   const scope = { ...params.sessionTarget, agentId: params.agentId };
   const entry =
@@ -23,7 +24,7 @@ export async function appendTalkClientTranscript(
           return undefined;
         })
       : undefined;
-  await appendClientVoiceTranscript(params, writer);
+  await append(params, writer);
   if (entry) {
     // Bind before persistence, but start inference only after the user transcript commits.
     scheduleChatDashboardSessionTitle({

@@ -33,7 +33,9 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   settingsNavigationLabelForRoute,
   settingsNavigationOwnerRoute,
+  settingsParentRoute,
   settingsSearchTextMatches,
+  settingsSearchTitleRank,
 } from "../lib/settings-navigation.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
 import {
@@ -74,6 +76,8 @@ export type SettingsSidebarProps = {
     typeof import("../pages/config/settings-search.ts").findSettingsSearchBlocks
   >[0];
   onExit: () => void;
+  /** Escape from an empty search; a subpage goes up a level instead of leaving. */
+  onEscape?: () => void;
   onRetryConnect: () => void;
   onNavigate: (routeId: RouteId, options?: ApplicationNavigationOptions) => void;
   onSearchQueryChange: (query: string) => void;
@@ -89,6 +93,8 @@ type SettingsNavigationGroupView = {
 
 type SettingsNavigationItemView = {
   routeId: RouteId;
+  /** False when only this page's sections matched; their rows name the page. */
+  showPage: boolean;
   blocks: readonly SettingsSearchBlock[];
 };
 
@@ -170,6 +176,11 @@ function SettingsNavigationItem(props: {
 }
 
 function SettingsBlockItem(props: { sidebar: SettingsSidebarProps; block: SettingsSearchBlock }) {
+  const pageLabel = () =>
+    settingsNavigationLabelForRoute(
+      props.block.routeId,
+      props.sidebar.nativeDeviceSettings?.snapshot,
+    );
   const pathname = () =>
     props.block.pathname ?? pathForRoute(props.block.routeId, props.sidebar.basePath);
   const active = () =>
@@ -180,7 +191,10 @@ function SettingsBlockItem(props: { sidebar: SettingsSidebarProps; block: Settin
   return (
     <a
       href={pathname() + (props.block.search ?? "") + props.block.hash}
-      class={["settings-sidebar__subitem", { "settings-sidebar__subitem--active": active() }]}
+      class={[
+        "settings-sidebar__item settings-sidebar__subitem",
+        { "settings-sidebar__subitem--active": active() },
+      ]}
       aria-current={active() ? "location" : undefined}
       onClick={(event) =>
         handleNavigationClick(event, () => {
@@ -192,7 +206,20 @@ function SettingsBlockItem(props: { sidebar: SettingsSidebarProps; block: Settin
         })
       }
     >
-      <span class="settings-sidebar__subitem-label">{props.block.label}</span>
+      <span class="settings-sidebar__item-icon" aria-hidden="true">
+        <Icon name={navigationIconForRoute(props.block.routeId)} />
+      </span>
+      <span class="settings-sidebar__subitem-text">
+        <span class="settings-sidebar__subitem-label">{props.block.label}</span>
+        <Show when={pageLabel() !== props.block.label}>
+          <span class="settings-sidebar__subitem-page">{pageLabel()}</span>
+        </Show>
+      </span>
+      <Show when={props.sidebar.presentation === "embed-list"}>
+        <span class="settings-row__chevron" aria-hidden="true">
+          <Icon name="chevronRight" />
+        </span>
+      </Show>
     </a>
   );
 }
@@ -307,6 +334,52 @@ function EmbeddedSettingsHeader(props: SettingsSidebarProps) {
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const query = createMemo(() => props.searchQuery);
   let searchInput: HTMLInputElement | undefined;
+  const clearSearch = () => {
+    props.onSearchQueryChange("");
+    searchInput?.focus();
+  };
+  function SettingsSearch() {
+    return (
+      <div class="settings-sidebar__search" role="search">
+        <span class="settings-sidebar__search-icon" aria-hidden="true">
+          <Icon name="search" />
+        </span>
+        <input
+          class="settings-sidebar__search-input"
+          type="search"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label={t("nav.settingsSearchLabel")}
+          placeholder={t("nav.settingsSearchPlaceholder")}
+          ref={[(element) => (searchInput = element), liveValue(query)]}
+          onInput={(event) => props.onSearchQueryChange(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape" || isComposingKeyboardEvent(event)) {
+              return;
+            }
+            event.preventDefault();
+            // Native input can be newer than the committed query projection.
+            if (event.currentTarget.value) {
+              event.currentTarget.value = "";
+              props.onSearchQueryChange("");
+            } else {
+              (props.onEscape ?? props.onExit)();
+            }
+          }}
+        />
+        <Show when={props.searchQuery}>
+          <button
+            type="button"
+            class="settings-sidebar__search-clear"
+            aria-label={t("nav.settingsSearchClear")}
+            onClick={clearSearch}
+          >
+            <Icon name="x" />
+          </button>
+        </Show>
+      </div>
+    );
+  }
   function SettingsNavigation() {
     const branding = themeBrandingProjection;
     const blockMatches = createMemo(() => {
@@ -335,7 +408,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       if (!normalizedQuery) {
         return navigationGroups.map((group) => ({
           labelKey: group.labelKey,
-          items: group.routes.map((routeId) => ({ routeId, blocks: [] })),
+          items: group.routes.map((routeId) => ({ routeId, showPage: true, blocks: [] })),
         }));
       }
       const visibleBlockMatches = blockMatches().filter((block) =>
@@ -351,64 +424,77 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           ...visibleBlockMatches.map((block) => block.routeId),
         ]),
       ];
-      const directRoutes = searchableRoutes.filter((routeId) =>
-        [
-          settingsNavigationLabelForRoute(routeId),
-          titleForRoute(routeId),
-          subtitleForRoute(routeId),
-        ].some((value) => settingsSearchTextMatches(value, normalizedQuery)),
-      );
-      const includedRoutes = new Set<RouteId>(directRoutes);
-      const groupRoutes = navigationGroups.flatMap((group) => {
-        const groupMatches =
-          group.labelKey && settingsSearchTextMatches(t(group.labelKey), normalizedQuery);
-        if (!groupMatches) {
-          return [];
-        }
-        return group.routes.filter((routeId) => {
-          if (includedRoutes.has(routeId)) {
-            return false;
-          }
-          includedRoutes.add(routeId);
-          return true;
-        });
-      });
-      const blocksByRoute = new Map<RouteId, SettingsSearchBlock[]>();
+      const matches = (value: string) => settingsSearchTextMatches(value, normalizedQuery);
+      const titlesForRoute = (routeId: RouteId) => [
+        settingsNavigationLabelForRoute(routeId, nativeDeviceSettings?.snapshot),
+        titleForRoute(routeId),
+      ];
       const seenBlocks = new Set<string>();
-      for (const block of visibleBlockMatches) {
+      const blocks = visibleBlockMatches.filter((block) => {
         const blockKey = `${block.routeId}\u0000${block.pathname ?? ""}\u0000${block.search ?? ""}\u0000${block.hash}`;
         if (seenBlocks.has(blockKey)) {
-          continue;
+          return false;
         }
         seenBlocks.add(blockKey);
-        const routeBlocks = blocksByRoute.get(block.routeId) ?? [];
-        routeBlocks.push(block);
-        blocksByRoute.set(block.routeId, routeBlocks);
+        return true;
+      });
+      // A name match answers the query, so weaker matches only appear without one:
+      // page and section names, then a group's name, then descriptions and keywords.
+      let pageRoutes: readonly RouteId[] = searchableRoutes
+        .filter((routeId) => titlesForRoute(routeId).some(matches))
+        .toSorted(
+          (a, b) =>
+            settingsSearchTitleRank(titlesForRoute(a), normalizedQuery) -
+            settingsSearchTitleRank(titlesForRoute(b), normalizedQuery),
+        );
+      let resultBlocks = blocks.filter((block) => matches(block.label));
+      if (pageRoutes.length === 0 && resultBlocks.length === 0) {
+        const groupRoutes = navigationGroups.flatMap((group) =>
+          group.labelKey && matches(t(group.labelKey)) ? group.routes : [],
+        );
+        pageRoutes =
+          groupRoutes.length > 0
+            ? [...new Set(groupRoutes)]
+            : searchableRoutes.filter((routeId) => matches(subtitleForRoute(routeId)));
+        resultBlocks = groupRoutes.length > 0 ? [] : blocks;
       }
-      const pageRoutes = [...directRoutes, ...groupRoutes];
-      return [
-        {
-          labelKey: null,
-          items: pageRoutes.map((routeId) => ({
-            routeId,
-            blocks: (blocksByRoute.get(routeId) ?? []).filter((block) => {
-              if (block.pathname) {
-                return true;
-              }
-              const blockLabel = normalizeLowercaseStringOrEmpty(block.label);
-              return ![settingsNavigationLabelForRoute(routeId), titleForRoute(routeId)].some(
-                (label) => normalizeLowercaseStringOrEmpty(label) === blockLabel,
-              );
-            }),
-          })),
-        },
-        ...searchableRoutes
-          .filter((routeId) => !includedRoutes.has(routeId) && blocksByRoute.has(routeId))
-          .map((routeId) => ({
-            labelKey: null,
-            items: [{ routeId, blocks: blocksByRoute.get(routeId) ?? [] }],
-          })),
-      ].filter((group) => group.items.length > 0);
+      // A group's exact name also lists its pages, after any name matches.
+      const exactGroupRoutes = navigationGroups
+        .flatMap((group) =>
+          group.labelKey && settingsSearchTitleRank([t(group.labelKey)], normalizedQuery) === 0
+            ? group.routes
+            : [],
+        )
+        .filter((routeId) => !pageRoutes.includes(routeId));
+      const listedTitles = new Set(
+        [...pageRoutes, ...exactGroupRoutes]
+          .flatMap(titlesForRoute)
+          .map(normalizeLowercaseStringOrEmpty),
+      );
+      const blocksByRoute = new Map<RouteId, SettingsSearchBlock[]>();
+      for (const block of resultBlocks) {
+        if (!listedTitles.has(normalizeLowercaseStringOrEmpty(block.label))) {
+          blocksByRoute.set(block.routeId, [...(blocksByRoute.get(block.routeId) ?? []), block]);
+        }
+      }
+      const items = [
+        ...pageRoutes.map((routeId) => ({
+          routeId,
+          showPage: true,
+          blocks: blocksByRoute.get(routeId) ?? [],
+        })),
+        ...[...blocksByRoute]
+          .filter(
+            ([routeId]) => !pageRoutes.includes(routeId) && !exactGroupRoutes.includes(routeId),
+          )
+          .map(([routeId, routeBlocks]) => ({ routeId, showPage: false, blocks: routeBlocks })),
+        ...exactGroupRoutes.map((routeId) => ({
+          routeId,
+          showPage: true,
+          blocks: blocksByRoute.get(routeId) ?? [],
+        })),
+      ];
+      return items.length > 0 ? [{ labelKey: null, items }] : [];
     });
     return (
       <nav
@@ -441,9 +527,12 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
             <Show
               when={groups().length > 0}
               fallback={
-                <p class="settings-sidebar__empty" role="status">
-                  {t("nav.settingsSearchNoResults")}
-                </p>
+                <div class="settings-sidebar__empty settings-sidebar__empty--search">
+                  <p role="status">{t("nav.settingsSearchNoResults")}</p>
+                  <button type="button" class="btn btn--sm" onClick={clearSearch}>
+                    {t("nav.settingsSearchClear")}
+                  </button>
+                </div>
               }
             >
               <For each={groups()} keyed={false}>
@@ -455,11 +544,13 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                     <For each={group().items} keyed={false}>
                       {(item) => (
                         <>
-                          <SettingsNavigationItem
-                            sidebar={props}
-                            routeId={item().routeId}
-                            branding={branding.read()}
-                          />
+                          <Show when={item().showPage}>
+                            <SettingsNavigationItem
+                              sidebar={props}
+                              routeId={item().routeId}
+                              branding={branding.read()}
+                            />
+                          </Show>
                           <For each={item().blocks} keyed={false}>
                             {(block) => <SettingsBlockItem sidebar={props} block={block()} />}
                           </For>
@@ -491,6 +582,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           <section class="settings-embed-list">
             <EmbeddedSettingsHeader {...props} />
             <SettingsAgentSelector {...props} />
+            <SettingsSearch />
             <SettingsNavigation />
           </section>
         }
@@ -502,52 +594,19 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                 <Icon name="arrowLeft" />
               </span>
               {t("nav.exitSettings")}
-              <Kbd keys="esc" class="settings-sidebar__esc" ariaHidden />
+              {/* On a subpage Escape goes up a level, so it does not mean this button. */}
+              <Show
+                when={
+                  !settingsParentRoute(props.activeRouteId, props.activePathname, props.basePath)
+                }
+              >
+                <Kbd keys="esc" class="settings-sidebar__esc" ariaHidden />
+              </Show>
             </button>
             <h1 class="settings-sidebar__title">{t("nav.settings")}</h1>
           </header>
           <SettingsAgentSelector {...props} />
-          <div class="settings-sidebar__search" role="search">
-            <span class="settings-sidebar__search-icon" aria-hidden="true">
-              <Icon name="search" />
-            </span>
-            <input
-              class="settings-sidebar__search-input"
-              type="search"
-              autocomplete="off"
-              spellcheck="false"
-              aria-label={t("nav.settingsSearchLabel")}
-              placeholder={t("nav.settingsSearchPlaceholder")}
-              ref={[(element) => (searchInput = element), liveValue(query)]}
-              onInput={(event) => props.onSearchQueryChange(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Escape" || isComposingKeyboardEvent(event)) {
-                  return;
-                }
-                event.preventDefault();
-                // Native input can be newer than the committed query projection.
-                if (event.currentTarget.value) {
-                  event.currentTarget.value = "";
-                  props.onSearchQueryChange("");
-                } else {
-                  props.onExit();
-                }
-              }}
-            />
-            <Show when={props.searchQuery}>
-              <button
-                type="button"
-                class="settings-sidebar__search-clear"
-                aria-label={t("nav.settingsSearchClear")}
-                onClick={() => {
-                  props.onSearchQueryChange("");
-                  searchInput?.focus();
-                }}
-              >
-                <Icon name="x" />
-              </button>
-            </Show>
-          </div>
+          <SettingsSearch />
           <SettingsNavigation />
           <footer class="settings-sidebar__footer">
             <Show when={props.footerStatus}>
@@ -557,9 +616,6 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                 </div>
               )}
             </Show>
-            <div class="settings-sidebar__connection">
-              <SettingsSaveIndicator {...props.saveIndicator} />
-            </div>
             <SidebarBuildChip
               basePath={props.basePath}
               gatewayVersion={props.gatewayVersion || null}

@@ -193,6 +193,7 @@ export function createOpenClawStateLeaseWorkerStorage(
     startTimer(
       owner: LeaseWorkerOwner,
       params: {
+        identity: { scope: string; key: string };
         observation: BigInt64Array<SharedArrayBuffer>;
         leaseMs: number;
         heartbeatMs: number;
@@ -207,7 +208,9 @@ export function createOpenClawStateLeaseWorkerStorage(
       const renew = () =>
         storage.renew(owner, params.leaseMs, params.operationLabel, params.signal);
       const timer = startOpenClawStateLeaseTimer({
+        identity: params.identity,
         observation: params.observation,
+        leaseMs: params.leaseMs,
         heartbeatMs: params.heartbeatMs,
         renew,
         onRenewError(error) {

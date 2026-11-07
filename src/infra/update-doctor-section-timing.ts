@@ -2,7 +2,7 @@
 import { StringDecoder } from "node:string_decoder";
 import type { CommandOutputStream } from "../process/exec-output.js";
 import type { CommandOptions } from "../process/exec.js";
-import { parseDoctorProgressLine } from "./doctor-progress.js";
+import { parseDoctorProgressLine, parseDoctorRetirementWideningLine } from "./doctor-progress.js";
 import { isTruthyEnvValue } from "./env.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -43,8 +43,10 @@ export function createUpdateDoctorSectionTiming(
   const decoder = new StringDecoder("utf8");
   let pending = "";
   let droppingLine = false;
+  let retirementWidening: string | undefined;
 
   const observeLine = (line: string) => {
+    retirementWidening ??= parseDoctorRetirementWideningLine(line);
     const match = DOCTOR_TRACE.exec(line);
     if (!match) {
       return;
@@ -152,8 +154,9 @@ export function createUpdateDoctorSectionTiming(
     stripTrace,
     annotate: (step) => {
       const line = diagnostic();
-      if (line) {
-        step.diagnostics = [line, ...(step.diagnostics ?? [])];
+      const diagnostics = [line, retirementWidening].filter((value) => value !== undefined);
+      if (diagnostics.length) {
+        step.diagnostics = [...diagnostics, ...(step.diagnostics ?? [])];
       }
       return step;
     },

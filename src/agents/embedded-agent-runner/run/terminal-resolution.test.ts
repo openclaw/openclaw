@@ -17,6 +17,7 @@ import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixt
 import { transformTransportMessages } from "../../transport-message-transform.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "../result-fallback-classifier.js";
+import { captureAgentTerminalSnapshot } from "./attempt-terminal-snapshot.js";
 import {
   markEmbeddedRunAuthProfileSuccess,
   reportEmbeddedRunSuccessfulAuthBinding,
@@ -41,7 +42,7 @@ vi.mock("./auth-profile-success.js", () => ({
 }));
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
-  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+  "Your turn ended without a final reply. Continue from the current conversation and answer the user's request now. Do not repeat completed actions or restart the task. Do not restate your reasoning.";
 
 function reasoningAssistant(id: string, thinking: string) {
   const thinkingSignature = JSON.stringify({ id, type: "reasoning" });
@@ -66,6 +67,39 @@ describe("terminal resolution", () => {
     vi.clearAllMocks();
     resetGeneratedMediaTaskActivityForTests();
   });
+
+  it.each(["failed", "recovered", "cancelled"] as const)(
+    "retains observations only for the selected failed attempt (%s)",
+    async (selection) => {
+      const failed = selection === "failed";
+      const assistant = failed
+        ? emptyAssistant({ stopReason: "error", errorMessage: "synthetic failure" })
+        : textAssistant("Recovered answer");
+      const agentTerminal = captureAgentTerminalSnapshot({
+        terminalMessage: assistant,
+        reachedPromptBoundary: true,
+        success: !failed,
+        hasHookError: failed,
+      });
+      const resolved = await resolveTerminal({
+        assistant,
+        finalAssistantRawText: failed ? "" : "Recovered answer",
+        finalAssistantVisibleText: failed ? "" : "Recovered answer",
+        payloadsWithToolMedia: failed ? [] : [{ text: "Recovered answer" }],
+        attemptOverrides: {
+          agentTerminal,
+          terminal: failed
+            ? { kind: "failed", source: "prompt", error: new Error("synthetic failure") }
+            : selection === "cancelled"
+              ? { kind: "aborted", source: "external" }
+              : { kind: "ok" },
+          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        },
+      });
+      expectComplete(resolved);
+      expect(resolved.result.meta.agentTerminal).toBe(failed ? agentTerminal : undefined);
+    },
+  );
 
   it("acknowledges an already-delivered input without empty-response recovery", async () => {
     const resolved = await resolveTerminal({

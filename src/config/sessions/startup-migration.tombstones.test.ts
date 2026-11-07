@@ -278,8 +278,10 @@ it.each(["startup", "doctor"] as const)(
         );
         const backupName = fs
           .readdirSync(path.dirname(database.path))
-          .find((name) =>
-            name.startsWith(`${path.basename(database.path)}.pre-startup-migration-`),
+          .find(
+            (name) =>
+              name.startsWith(`${path.basename(database.path)}.pre-startup-migration-`) &&
+              name.endsWith(".bak"),
           );
         expect(backupName).toBeDefined();
         using backup = new DatabaseSync(path.join(path.dirname(database.path), backupName!), {

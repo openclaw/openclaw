@@ -39,6 +39,7 @@ async function loadTemplateCreator(context: ApplicationContext, owner: CreatorOw
   } catch (error) {
     if (isCurrent()) {
       showToast({
+        severity: "error",
         message: formatUiError(error),
         actionLabel: t("common.retry"),
         onAction: () => startTemplateCreator(context, agentId),

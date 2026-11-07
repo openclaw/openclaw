@@ -252,7 +252,7 @@
 
 .chat-workspace-rail__row-action:hover,
 .chat-workspace-rail__row-action:focus-visible,
-.chat-workspace-rail__row-actions :where(.chat-copy-btn:hover, .chat-copy-btn:focus-visible) {
+.chat-workspace-rail__row-actions :where(.chat-copy-btn:is(:hover, :focus-visible)) {
   border-color: color-mix(in srgb, var(--border-strong) 72%, transparent);
   background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
   color: var(--text);
@@ -650,6 +650,12 @@ button.sidebar-image-view__image {
 
 .sidebar-file-view__edit-actions .btn:last-child:not(:disabled):hover {
   background: var(--primary-hover);
+  color: var(--primary-foreground);
+}
+
+.sidebar-file-view__edit-actions .btn:last-child:not(:disabled):active {
+  background: var(--primary-active);
+  color: var(--primary-foreground);
 }
 
 .sidebar-file-view__compact-action {
@@ -682,7 +688,7 @@ button.sidebar-image-view__image {
   height: 28px;
   border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg-elevated) 50%, transparent);
+  background: var(--bg-elevated);
   box-shadow: none;
 }
 

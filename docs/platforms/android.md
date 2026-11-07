@@ -343,7 +343,7 @@ Details and example CoreDNS config: [Bonjour](/gateway/bonjour).
 
 ### 3. Connect from Android
 
-Create a setup code in the [Control UI](/web/control-ui) (**Devices → Pair device**) or with `openclaw qr`.
+Create a setup code in the [Control UI](/web/control-ui) (**Devices → Connect a device**) or with `openclaw qr`.
 
 That mobile **setup code** (and its QR) is what Android **Scan QR or setup code** / **Enter setup code** accept. It is a different artifact from the gateway **join URL** minted by [`openclaw devices join-code`](/cli/devices#openclaw-devices-join-code) (`https://…/j/<code>`), which enrolls a headless node host via [`openclaw connect`](/cli/connect). Pasting a join URL or bare join code into Android setup is rejected — generate a fresh mobile QR/setup code with [`openclaw qr`](/cli/qr).
 
@@ -579,8 +579,8 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 - Gateway config changes refresh Android's cached Talk settings on the next use, without reconnecting or interrupting an active capture.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
 - Phone relay Talk preserves accepted agent work when Talk fails, the app leaves the foreground, or the voice mode changes. The answer still appears in chat; explicit Stop cancels it. This requires a Gateway advertising `talk-session-close-disposition`; older Gateways and Wear Talk retain the aborting close behavior.
-- Enable **Settings → Voice → Listen for wake words** for foreground on-device
-  Voice Wake. Android advertises `voiceWake` only when enabled, on-device
+- Enable **Settings → Voice → Listen for wake words** for on-device Voice Wake,
+  including background listening while the node foreground service holds microphone access. Android advertises `voiceWake` only when enabled, on-device
   recognition and microphone permission are available, and wake words are
   synchronized with the current Gateway.
 - Additional Android command families (availability depends on device, permissions, and user settings):

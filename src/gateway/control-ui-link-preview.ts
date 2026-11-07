@@ -11,6 +11,7 @@ import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "../infra/net/fet
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { createImageProcessor, readImageMetadataFromHeader } from "../media/image-ops.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import type { ControlUiLinkPreview } from "./control-ui-contract.js";
 
 const HTML_MAX_BYTES = 64 * 1024;
@@ -130,7 +131,12 @@ function createPreviewExtraction(): PreviewExtractionState {
   return state;
 }
 
-async function readPageMetadata(response: Response, finalUrl: string, signal: AbortSignal) {
+async function readPageMetadata(
+  response: Response,
+  finalUrl: string,
+  signal: AbortSignal,
+  allowSvgIcons: boolean,
+) {
   let state = createPreviewExtraction();
   const reader = response.body?.getReader();
   if (reader) {
@@ -219,8 +225,8 @@ async function readPageMetadata(response: Response, finalUrl: string, signal: Ab
       continue;
     }
     const url = parseControlUiLinkPreviewUrl(attrs.href, baseUrl)?.href;
-    // The presentation contract carries raster/ICO only; unsupported vectors fall back to /favicon.ico.
-    if (url && attrs.type !== "image/svg+xml" && !icons.includes(url)) {
+    // Link previews carry raster/ICO only; the favicon proxy also sanitizes SVG icons.
+    if (url && (allowSvgIcons || attrs.type !== "image/svg+xml") && !icons.includes(url)) {
       icons.push(url);
       if (icons.length === 2) {
         break;
@@ -243,6 +249,7 @@ async function fetchPreviewResource<T>(
   signal: AbortSignal,
   isEnabled: () => boolean,
   read: (response: Response, finalUrl: string) => Promise<T>,
+  requireHttps = false,
 ): Promise<T | undefined> {
   try {
     const { response, finalUrl, release } = await fetchWithSsrFGuard(
@@ -261,7 +268,10 @@ async function fetchPreviewResource<T>(
         },
         // Preserve the anonymous public URL contract on redirects as well as initial requests.
         resolveDispatcherPolicy: (target) => {
-          if (!parseControlUiLinkPreviewUrl(target.href)) {
+          if (
+            !parseControlUiLinkPreviewUrl(target.href) ||
+            (requireHttps && target.protocol !== "https:")
+          ) {
             throw new Error("Not a public preview URL");
           }
           return undefined;
@@ -314,15 +324,13 @@ async function loadImage(bytes: Buffer | undefined, icon: boolean, signal: Abort
   }
 }
 
-async function loadPreview(
+export function loadControlUiLinkMetadata(
   url: URL,
   isEnabled: () => boolean,
   signal: AbortSignal,
-): Promise<ControlUiLinkPreview> {
-  if (signal.aborted || !isEnabled()) {
-    return {};
-  }
-  const page = await fetchPreviewResource(
+  options: { requireHttps?: boolean; allowSvgIcons?: boolean } = {},
+) {
+  return fetchPreviewResource(
     url.href,
     "text/html,application/xhtml+xml",
     signal,
@@ -332,9 +340,24 @@ async function loadPreview(
       if (type !== "text/html" && type !== "application/xhtml+xml") {
         return undefined;
       }
-      return { ...(await readPageMetadata(response, finalUrl, signal)), finalUrl };
+      return {
+        ...(await readPageMetadata(response, finalUrl, signal, options.allowSvgIcons === true)),
+        finalUrl,
+      };
     },
+    options.requireHttps,
   );
+}
+
+async function loadPreview(
+  url: URL,
+  isEnabled: () => boolean,
+  signal: AbortSignal,
+): Promise<ControlUiLinkPreview> {
+  if (signal.aborted || !isEnabled()) {
+    return {};
+  }
+  const page = await loadControlUiLinkMetadata(url, isEnabled, signal);
   const iconUrls = new Set([
     ...(page?.icons ?? []),
     new URL("/favicon.ico", page?.finalUrl ?? url.href).href,
@@ -393,7 +416,7 @@ export async function loadControlUiLinkPreview(
     principals.set(scope.principal, principal);
   }
   const key = JSON.stringify([principal, scope.revision, url.href]);
-  const now = Date.now();
+  const now = monotonicNow();
   const existing = cache.get(key);
   if (existing && existing.expiresAt > now) {
     const result = await existing.promise;
@@ -415,6 +438,6 @@ export async function loadControlUiLinkPreview(
   cache.set(key, entry);
   pruneMapToMaxSize(cache, CACHE_MAX_ENTRIES);
   const result = await entry.promise;
-  entry.expiresAt = Date.now() + (Object.keys(result).length ? SUCCESS_TTL_MS : FAILURE_TTL_MS);
+  entry.expiresAt = monotonicNow() + (Object.keys(result).length ? SUCCESS_TTL_MS : FAILURE_TTL_MS);
   return isEnabled() ? result : {};
 }

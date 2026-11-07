@@ -1,12 +1,11 @@
 import { expect, it } from "vitest";
 import type { AgentToolModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { VideoGenerationProvider, VideoGenerationRequest } from "./provider-types.js";
 import { generateVideo, type GenerateVideoParams } from "./runtime.js";
 import type {
   GeneratedVideoAsset,
-  VideoGenerationProvider,
   VideoGenerationProviderCapabilities as Capabilities,
-  VideoGenerationRequest,
 } from "./types.js";
 type Rejection = [Partial<GenerateVideoParams>, Capabilities, RegExp | string, Capabilities?];
 

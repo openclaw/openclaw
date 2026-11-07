@@ -12,11 +12,7 @@ import {
   UpdateRecoveryRequiredError,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
-import {
-  inspectPluginCohortRecoveryRows,
-  inspectRecoveryRows,
-  readRecovery,
-} from "./update-run-recovery-store.js";
+import { readRecovery, readUpdateRecoveryAdmissionFacts } from "./update-run-recovery-store.js";
 import type { PluginCohortRecoveryContinuation } from "./update-run-recovery-types.js";
 export type { UpdateRecoveryFence, UpdateRecoveryHandoff } from "./update-run-recovery-types.js";
 export { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
@@ -72,32 +68,37 @@ export function assertPluginCohortRecoveryContinuation(
 export function assertNoPendingUpdateRecovery(
   options: UpdateRecoveryAdmissionOptions = {},
 ): PluginCohortRecoveryPair | undefined {
-  let admittedCohort: PluginCohortRecoveryPair | undefined;
   // Candidate children can migrate the ledger after this updater admitted its original format.
-  const pending = withUpdateRunRead(
-    ({ db }) => {
-      // Validate companions too: an orphan must not disappear merely because its reservation is absent.
-      const cohorts = inspectPluginCohortRecoveryRows(db);
-      return inspectRecoveryRows(db).find((entry) => {
-        if (!isUpdateRecoveryPending(entry.record)) {
-          return false;
-        }
-        const continuation = options.pluginCohort;
-        const pair =
-          continuation?.runId === entry.record.runId
-            ? cohorts.find(({ cohort }) => cohort.runId === entry.record.runId)
-            : undefined;
-        if (!continuation || !pair) {
-          return true;
-        }
-        assertPluginCohortRecoveryContinuation(pair, continuation, options);
-        admittedCohort = pair;
-        return false;
-      });
-    },
+  const facts = withUpdateRunRead(
+    ({ db }) => readUpdateRecoveryAdmissionFacts(db),
     options,
     openDoctorStateSchemaReadAdmission,
   );
+  return assertUpdateRecoveryAdmissionFacts(facts, options);
+}
+
+/** Workers return coherent rows, never executor authority or a pre-admitted continuation. */
+export function assertUpdateRecoveryAdmissionFacts(
+  facts: ReturnType<typeof readUpdateRecoveryAdmissionFacts> | undefined,
+  options: UpdateRecoveryAdmissionOptions,
+): PluginCohortRecoveryPair | undefined {
+  let admittedCohort: PluginCohortRecoveryPair | undefined;
+  const pending = facts?.recoveries.find((entry) => {
+    if (!isUpdateRecoveryPending(entry.record)) {
+      return false;
+    }
+    const continuation = options.pluginCohort;
+    const pair =
+      continuation?.runId === entry.record.runId
+        ? facts.cohorts.find(({ cohort }) => cohort.runId === entry.record.runId)
+        : undefined;
+    if (!continuation || !pair) {
+      return true;
+    }
+    assertPluginCohortRecoveryContinuation(pair, continuation, options);
+    admittedCohort = pair;
+    return false;
+  });
   if (pending) {
     // Historical completion does not grant current execution authority. An
     // unfinished legacy operation still requires explicit compatible recovery.

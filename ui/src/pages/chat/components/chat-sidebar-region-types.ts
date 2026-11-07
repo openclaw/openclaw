@@ -17,6 +17,7 @@ export type SidebarPanelDefinition = {
   slot: SidebarSlotId;
   label: string;
   icon: IconName;
+  iconSvg?: string;
   shortcut?: KeyboardShortcutCombo;
   available: boolean;
   unavailableReason?: string;

@@ -55,7 +55,7 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
     async ({ scenario, mode, allowed }) => {
       // These cases test service transitions, not host I/O against the readiness deadline.
       vi.spyOn(performance, "now").mockReturnValue(0);
-      const { root, run, mocks } = getFixture();
+      const { root, run, mocks, serviceNodeRunner } = getFixture();
       const replacementCli = scenario === "CLI already uses replacement install";
       const unresolved = scenario === "retained unresolved launcher";
       const stale = scenario === "same-version stale launcher after refresh";
@@ -161,7 +161,7 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
           if (!stale) {
             mocks.command.mockResolvedValue({
               ...command,
-              programArguments: [process.execPath, replacementEntry, "gateway", "--port", "19305"],
+              programArguments: [serviceNodeRunner, replacementEntry, "gateway", "--port", "19305"],
             });
           }
           if (scenario === "Git already serves target build") {

@@ -68,6 +68,7 @@ async function shellState(page: Page) {
       regionHeight: region.height,
       regionBottom: region.bottom,
       easing: style.transitionTimingFunction,
+      releaseEasing: shell.parentElement!.style.getPropertyValue("--motion-sheet"),
     };
   });
 }
@@ -78,20 +79,27 @@ async function sampleSheetTransition(
   time: number,
   action: () => Promise<void>,
   inspect: (
-    state: Awaited<ReturnType<typeof shellState>> & { launcherVisible: boolean },
+    state: Awaited<ReturnType<typeof shellState>> & {
+      launcherVisible: boolean;
+      contentVisible: boolean;
+    },
   ) => void | Promise<void>,
+  options: { property?: string; content?: string } = {},
 ) {
   const sample = await page.locator(".chat-mobile-host").evaluateHandle(
-    (shell, sampleTime) => ({
+    (shell, { sampleTime, property, content }) => ({
       started: new Promise<{
         animations: CSSTransition[];
-        state: Awaited<ReturnType<typeof shellState>> & { launcherVisible: boolean };
+        state: Awaited<ReturnType<typeof shellState>> & {
+          launcherVisible: boolean;
+          contentVisible: boolean;
+        };
       }>((resolve, reject) => {
         const onTransition = (event: Event) => {
           if (
             !(event instanceof TransitionEvent) ||
             event.target !== shell ||
-            event.propertyName !== "transform"
+            event.propertyName !== property
           ) {
             return;
           }
@@ -99,8 +107,8 @@ async function sampleSheetTransition(
           const animations = shell
             .getAnimations()
             .filter((entry): entry is CSSTransition => entry instanceof CSSTransition);
-          if (!animations.some((entry) => entry.transitionProperty === "transform")) {
-            reject(new Error("Missing sheet transform transition"));
+          if (!animations.some((entry) => entry.transitionProperty === property)) {
+            reject(new Error(`Missing sheet ${property} transition`));
             return;
           }
           for (const animation of animations) {
@@ -122,16 +130,21 @@ async function sampleSheetTransition(
               regionHeight: region.height,
               regionBottom: region.bottom,
               easing: style.transitionTimingFunction,
+              releaseEasing: shell.parentElement!.style.getPropertyValue("--motion-sheet"),
               launcherVisible:
                 (shell.querySelector(".chat-panel-launcher-mobile")?.getClientRects().length ?? 0) >
                 0,
+              contentVisible: Boolean(
+                content &&
+                shell.querySelector(content)?.checkVisibility({ visibilityProperty: true }),
+              ),
             },
           });
         };
         shell.addEventListener("transitionrun", onTransition);
       }),
     }),
-    time,
+    { sampleTime: time, property: options.property ?? "transform", content: options.content },
   );
   await action();
   const state = await sample.evaluate(({ started }) => started.then((value) => value.state));
@@ -241,12 +254,13 @@ suite.define(() => {
       const dock = await shellState(page);
       expect(dock.mode).toBe("dock");
 
-      await dragGrabber(page, -150);
-      expect(
-        await page
-          .locator(".sidebar-region")
-          .evaluate((region) => region.style.getPropertyValue("--motion-sheet")),
-      ).toContain("linear(");
+      await sampleSheetTransition(
+        page,
+        40,
+        () => dragGrabber(page, -150),
+        (releasing) => expect(releasing.releaseEasing).toContain("linear("),
+        { property: "height" },
+      );
       await settle(page);
       const expanded = await shellState(page);
       expect(expanded.mode).toBe("expanded");
@@ -424,11 +438,17 @@ suite.define(() => {
       await files.waitFor();
       await settle(page);
 
-      await close.click();
-      await page.waitForTimeout(60);
-      expect((await shellState(page)).hidden).toBe(true);
-      // Closed for focus and accessibility, but the panel slides out with the sheet.
-      expect(await files.isVisible()).toBe(true);
+      await sampleSheetTransition(
+        page,
+        60,
+        () => close.click(),
+        (leaving) => {
+          expect(leaving.hidden).toBe(true);
+          // Closed for focus and accessibility, but the panel slides out with the sheet.
+          expect(leaving.contentVisible).toBe(true);
+        },
+        { content: '[data-panel-slot="workspace"]' },
+      );
       await settle(page);
       expect(await files.isVisible()).toBe(false);
 
@@ -438,9 +458,13 @@ suite.define(() => {
       const outputs = shell.locator('.chat-mobile-details-page[data-details-page="outputs"]');
       await outputs.waitFor();
       await settle(page);
-      await close.click();
-      await page.waitForTimeout(60);
-      expect(await outputs.isVisible()).toBe(true);
+      await sampleSheetTransition(
+        page,
+        60,
+        () => close.click(),
+        (leaving) => expect(leaving.contentVisible).toBe(true),
+        { content: '.chat-mobile-details-page[data-details-page="outputs"]' },
+      );
       await settle(page);
       expect(await outputs.isVisible()).toBe(false);
 
