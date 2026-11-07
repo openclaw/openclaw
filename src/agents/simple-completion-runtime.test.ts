@@ -89,7 +89,8 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal)
   getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshotMock,
 }));
 
-vi.mock("./model-auth.js", () => ({
+vi.mock("./model-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth.js")>()),
   applySecretRefHeaderSentinels: (model: unknown) => model,
   formatMissingAuthError: vi.fn(
     (auth: { source: string; mode: string }, provider: string) =>
@@ -254,6 +255,45 @@ describe("prepareSimpleCompletionModel", () => {
       expect(hoisted.getApiKeyForModelMock).not.toHaveBeenCalled();
     },
   );
+
+  it("applies the authHeader Bearer override to helper models", async () => {
+    const credential = {
+      type: "api_key" as const,
+      provider: "anthropic",
+      key: "sk-p2",
+    };
+    const store = { version: 1, profiles: { "anthropic:p2": credential } };
+    hoisted.ensureAuthProfileStoreMock.mockReturnValueOnce(store);
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "sk-p2",
+      profileId: "anthropic:p2",
+      source: "profile:anthropic:p2",
+      mode: "api-key",
+    });
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [{ id: "claude-opus-4-6" }],
+            authHeader: true,
+          },
+        },
+      },
+    };
+
+    const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
+      cfg,
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      profileId: "anthropic:p2",
+      bindAuthOwner: true,
+    });
+
+    expectPreparedModelResult(result);
+    expect(result.model.headers).toMatchObject({ Authorization: "Bearer sk-p2" });
+  });
 
   it("captures the exact locked auth owner used by a bound completion", async () => {
     const credential = {
