@@ -194,6 +194,11 @@ gate their own consumers.
 
 A default or system agent database with pending startup inspection/preparation or a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending`. The HTTP listener, Control UI, and admitted agents remain available while readiness is false; pending optional agents do not hold readiness. Readiness does not wait for transcript maintenance or resumed agent work to finish. Agent-scoped `sessions.list`, plus `sessions.resolve`, `sessions.describe`, and `models.list`, wait up to 20 seconds for their selected agents to finish startup preparation, then recheck request authorization before reading. Requests targeting healthy agents proceed independently. Unscoped session lists continue returning admitted agents while other stores prepare. Writes still require completed admission. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
 
+Agents whose admission is closed by deletion appear separately in `agentDeletions`
+with code `agent-deletion`. Pending or completed deletion does not fail `ready` or
+`coreReady`, including after the agent is removed from configuration. Ordinary
+requests remain refused; pending cleanup follows the deletion journal.
+
 If a newer model-runtime publication supersedes deferred agent preparation, admission
 waits for that publication once, then retries preparation against current configuration
 and secrets. Recovery uses the existing four-attempt startup publication budget without
