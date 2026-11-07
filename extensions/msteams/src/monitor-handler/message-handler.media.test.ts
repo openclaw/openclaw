@@ -35,7 +35,7 @@ import {
   createTurnContext,
 } from "./message-handler.test-support.js";
 
-const dispatch = getRuntimeApiMockState().dispatchReplyWithBufferedBlockDispatcher;
+const dispatch = getRuntimeApiMockState().dispatchReplyFromConfig;
 type Activity = Partial<MSTeamsTurnContext["activity"]>;
 const html = (content: string) => [{ contentType: "text/html", content }];
 const dmConfig: MSTeamsConfig = { dmPolicy: "open", allowFrom: ["*"] };

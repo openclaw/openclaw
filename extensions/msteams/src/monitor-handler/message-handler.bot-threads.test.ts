@@ -23,7 +23,7 @@ import {
   createTurnContext,
 } from "./message-handler.test-support.js";
 
-const dispatch = getRuntimeApiMockState().dispatchReplyWithBufferedBlockDispatcher;
+const dispatch = getRuntimeApiMockState().dispatchReplyFromConfig;
 let sequence = 0;
 
 vi.mock("../graph-thread.js", () => ({
