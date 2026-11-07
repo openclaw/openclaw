@@ -303,7 +303,6 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
         }),
         useViewport(390),
       ]);
-      await settleAnimations(host);
       const narrowBounds = rect(toast);
       action.focus();
       expect(document.activeElement).toBe(action);
