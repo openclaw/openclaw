@@ -10,6 +10,8 @@ scenario:
       - agent-runtime.tool-safety-controls
   objective: Verify default session visibility and agent-to-agent policy dispatch a real sessions_send to another configured agent and create its main session.
   gatewayConfigPatch:
+    tools:
+      toolSearch: false
     agents:
       ownership: explicit
       entries:
