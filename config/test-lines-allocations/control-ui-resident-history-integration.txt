@@ -1,3 +1,6 @@
 # Remaining M3 history admission, source retirement, and native reader regression coverage.
-# Together with the existing 6461 allocation, covers this PR's exact 13389 net test LF lines.
-6928
+# Existing 6461 + this 7055 = exactly 13516 net test LF against fixed
+# ed40c476f3df4e535c649c38585d8c0b0279b91e.
+# Includes native provenance/cancel/reconnect and measured bookmark/resize regressions,
+# net of 115 LF removed by fixture consolidation.
+7055

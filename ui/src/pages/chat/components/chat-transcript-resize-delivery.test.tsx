@@ -223,7 +223,16 @@ it.each([
     });
     const bubble = rows[2]!;
     bubble.dataset.messageId = "reader";
-    const prepend = new TranscriptPrependAnchor(new Map([["reader", bubble]]), () => {});
+    const afterCommit = new Set<() => void>();
+    const separateRow = kind === "mixed" || kind === "footprint";
+    const measure = () =>
+      readConnectedTranscriptRows(
+        scroller,
+        virtualizer,
+        separateRow ? rows.slice(0, 1) : rows,
+        reader.recordOwnedMeasurement,
+      )?.() ?? false;
+    const prepend = new TranscriptPrependAnchor(new Map([["reader", bubble]]), () => {}, measure);
     const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
       count: rows.length,
       initialOffset: 250,
@@ -241,17 +250,26 @@ it.each([
       },
       onChange: () => reader.flush(),
     });
-    const reader = new TranscriptReaderAnchor({
-      virtualizer,
-      layout: new TranscriptLayoutOwner(() => {}),
-      offsetState,
-      renderer: { columnElement: column },
-      initialRange: { pending: false },
-      prependAnchor: prepend,
-      headerHeight: 0,
-      scrollElement: scroller,
-      contentElement: null,
-    });
+    const reconcile = (): void => {
+      prepend.update(virtualizer, reader.rowsMeasured);
+    };
+    const reader = new TranscriptReaderAnchor(
+      {
+        virtualizer,
+        layout: new TranscriptLayoutOwner(() => {}),
+        offsetState,
+        renderer: {
+          columnElement: column,
+          queueAfterCommit: (effect) => void afterCommit.add(effect),
+        },
+        initialRange: { pending: false },
+        prependAnchor: prepend,
+        headerHeight: 0,
+        scrollElement: scroller,
+        contentElement: null,
+      },
+      reconcile,
+    );
     virtualizer.shouldAdjustScrollPositionOnItemSizeChange = reader.landSize;
     const { _didMount: mount, _willUpdate: update } = virtualizer;
     const dispose = mount();
@@ -266,25 +284,31 @@ it.each([
       }
       frame();
       const before = bubble.getBoundingClientRect().top;
+      prepend.messageKeys = new Set(["reader"]);
+      prepend.capture(scroller, false);
       prepend.restoreBookmark(
         { messageKey: "reader", rowKey: "row:2", offset: before - 100 },
         scroller,
       );
+      // The saved target becomes a real prefix handoff, not a warm replacement.
+      prepend.messageKeys = new Set(["older", "reader"]);
+      prepend.capture(scroller, false);
       rows[0]!.style.height = "120px";
-      const separateRow = kind === "mixed" || kind === "footprint";
       // Persisted widget minima can reach the virtual cache before the DOM applies them.
       if (kind === "footprint") {
         virtualizer.resizeItem(1, 140);
       }
-      const measure = () =>
-        readConnectedTranscriptRows(
-          scroller,
-          virtualizer,
-          separateRow ? rows.slice(0, 1) : rows,
-          reader.recordOwnedMeasurement,
-        )?.() ?? false;
-      prepend.update(scroller, virtualizer, measure);
-      prepend.update(scroller, virtualizer, measure);
+      // An unchanged native receipt schedules the stable after-commit pass without
+      // acknowledging row 0 before foreground measurement owns its current height.
+      emitTranscriptResize(bubble, 800, 100);
+      reconcile();
+      if (kind === "footprint") {
+        expect(reader.rowsMeasured()).toBe(false);
+      }
+      for (const effect of [...afterCommit]) {
+        afterCommit.delete(effect);
+        effect();
+      }
       expect(prepend.messageKey).toBeNull();
       expect(bubble.getBoundingClientRect().top).toBe(before);
 

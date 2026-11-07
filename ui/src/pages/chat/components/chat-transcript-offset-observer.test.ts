@@ -32,6 +32,20 @@ import {
   resizeObservers,
 } from "./chat-transcript.test-support.ts";
 
+function readerScroll(
+  scrollTop: number,
+  delta: number,
+  clientHeight = 200,
+  scrollHeight = 1000,
+): TranscriptNativeScroll {
+  return {
+    viewport: { scrollTop, clientHeight, scrollHeight },
+    delta,
+    programmatic: false,
+    maintenance: false,
+  };
+}
+
 function offsetOwner(
   state: TranscriptOffsetState,
   element: HTMLDivElement,
@@ -184,12 +198,7 @@ it.each([
   element.scrollTop = 20;
   element.dispatchEvent(new Event("scroll"));
   expect(order).toEqual(["composer", "pane", "virtualizer"]);
-  expect(onNativeScroll).toHaveBeenCalledExactlyOnceWith({
-    viewport: { scrollTop: 20, clientHeight: 100, scrollHeight: 120 },
-    delta: 20,
-    programmatic: false,
-    maintenance: false,
-  });
+  expect(onNativeScroll).toHaveBeenCalledExactlyOnceWith(readerScroll(20, 20, 100, 120));
   expect(deliver).toHaveBeenCalledWith(20, true);
   expect(onOffset).toHaveBeenCalledOnce();
   expect(recordedEnd).toEqual([true]);
@@ -491,12 +500,7 @@ it.each(["none", "before capture", "after capture"] as const)(
       observed.owner.onComposerLayout.mockImplementationOnce(synchronize);
     }
     observed.native();
-    expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
-      viewport: { scrollTop: 160, clientHeight: 200, scrollHeight: 1_000 },
-      delta: -640,
-      programmatic: false,
-      maintenance: false,
-    });
+    expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith(readerScroll(160, -640));
     observed.native();
     expect(observed.owner.onNativeScroll.mock.calls.map(([scroll]) => scroll.delta)).toEqual([
       -640, 0,
@@ -553,12 +557,7 @@ it("keeps genuine reader movement when an unrelated composer write follows it", 
   observed.owner.onNativeScroll.mockClear();
   observed.owner.onComposerLayout.mockImplementationOnce(() => observed.write(300));
   observed.native(200);
-  expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
-    viewport: { scrollTop: 200, clientHeight: 200, scrollHeight: 1000 },
-    delta: 100,
-    programmatic: false,
-    maintenance: false,
-  });
+  expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith(readerScroll(200, 100));
   expect(observed.element.scrollTop).toBe(300);
   expect(observed.owner.onOffset).toHaveBeenCalledExactlyOnceWith(0);
 });
@@ -571,12 +570,7 @@ it("accepts a newer nested root delivery without replaying the outer movement", 
   observed.deliveries.length = 0;
   observed.owner.onComposerLayout.mockImplementationOnce(() => observed.native(300));
   observed.native(200);
-  expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
-    viewport: { scrollTop: 300, clientHeight: 200, scrollHeight: 1000 },
-    delta: 200,
-    programmatic: false,
-    maintenance: false,
-  });
+  expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith(readerScroll(300, 200));
   expect(observed.owner.onOffset).toHaveBeenCalledExactlyOnceWith(200);
   expect(observed.deliveries).toEqual([{ offset: 300, scrolling: true, programmatic: false }]);
 });
@@ -592,12 +586,7 @@ it("keeps the root viewport through child scrolling and synchronous composer rem
     observed.resize(1000);
   });
   observed.native(200);
-  expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
-    viewport: { scrollTop: 200, clientHeight: 200, scrollHeight: 1000 },
-    delta: 100,
-    programmatic: false,
-    maintenance: false,
-  });
+  expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith(readerScroll(200, 100));
   expect(observed.owner.onComposerLayout).toHaveBeenCalledTimes(3);
   expect(observed.deliveries.at(-1)?.offset).toBe(300);
 });
@@ -713,44 +702,32 @@ it("publishes preceding native movement before marking a new correction", () => 
   expect(observed.programmatic()).toBe(true);
 });
 
-it.each([
-  {
-    name: "owned clamp",
-    retired: false,
-    maximum: 20,
-    before: 20,
-    after: 5,
-    delta: -20,
-    owned: true,
-  },
-  {
-    name: "late owned clamp",
-    retired: true,
-    maximum: 20,
-    before: 20,
-    after: 5,
-    delta: -20,
-    owned: true,
-  },
-  {
-    name: "reader returning to old target",
-    retired: false,
-    maximum: 800,
-    before: 60,
-    after: 40,
-    delta: 20,
-    owned: false,
-  },
-  {
-    name: "late reader returning to old target",
-    retired: true,
-    maximum: 800,
-    before: 60,
-    after: 40,
-    delta: 20,
-    owned: false,
-  },
-])("classifies preceding movement at its pre-write coordinate: $name", (testCase) => {
+it.each(
+  [
+    {
+      name: "owned clamp",
+      maximum: 20,
+      before: 20,
+      after: 5,
+      delta: -20,
+      owned: true,
+    },
+    {
+      name: "reader returning to old target",
+      maximum: 800,
+      before: 60,
+      after: 40,
+      delta: 20,
+      owned: false,
+    },
+  ].flatMap((testCase) =>
+    [false, true].map((retired) => ({
+      ...testCase,
+      name: retired ? "late " + testCase.name : testCase.name,
+      retired,
+    })),
+  ),
+)("classifies preceding movement at its pre-write coordinate: $name", (testCase) => {
   const observed = observedMaintenance();
   observed.write(40);
   observed.native();
@@ -840,12 +817,7 @@ it("delivers policy only for native events, preserving generic write, sync and i
   expect(observed.owner.onNativeScroll).not.toHaveBeenCalled();
   observed.native(80);
   // Synchronizing at 60 must not discard movement after the actual write to 40.
-  expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
-    viewport: { scrollTop: 80, clientHeight: 200, scrollHeight: 1_000 },
-    delta: 40,
-    programmatic: false,
-    maintenance: false,
-  });
+  expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith(readerScroll(80, 40));
   vi.runAllTimers();
   expect(events.at(-1)?.scrolling).toBe(false);
   expect(observed.owner.onNativeScroll).toHaveBeenCalledOnce();
@@ -922,12 +894,9 @@ it.each(
     }
     observed.native();
     expect(observed.owner.cancelScroll).toHaveBeenCalledExactlyOnceWith();
-    expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
-      viewport: { scrollTop: direction < 0 ? 100 : 700, clientHeight: 200, scrollHeight: 1000 },
-      delta: direction * 300,
-      programmatic: false,
-      maintenance: false,
-    });
+    expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith(
+      readerScroll(direction < 0 ? 100 : 700, direction * 300),
+    );
     expect(armOlder).toHaveBeenCalledTimes(direction < 0 ? 1 : 0);
     expect(loadNewer).toHaveBeenCalledTimes(direction > 0 ? 1 : 0);
   },
@@ -949,12 +918,7 @@ it.each(["no write", "new target", "inverse write", "post-cancel clamp"] as cons
       }
     });
     observed.native(200);
-    expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
-      viewport: { scrollTop: 200, clientHeight: 200, scrollHeight: 1000 },
-      delta: -200,
-      programmatic: false,
-      maintenance: false,
-    });
+    expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith(readerScroll(200, -200));
     observed.native();
     const written = change === "new target" || change === "inverse write";
     expect(observed.owner.onNativeScroll.mock.calls.at(-1)?.[0]).toMatchObject({

@@ -10,7 +10,6 @@ import { admitChatHistoryPages, type ChatHistoryResult } from "./chat-history-sn
 import {
   createStagedPrefetchPane,
   nativeHistoryMessage,
-  nativeHistorySeq,
   expectNativeHistoryRange,
 } from "./chat-pane-history.test-support.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
@@ -32,6 +31,18 @@ function page(first: number, last: number): ChatHistoryResult {
     ...(first > 1 ? { olderCursor: `older-${first - 1}` } : {}),
     ...(last < 900 ? { newerCursor: `newer-${last + 1}` } : {}),
   };
+}
+
+function hydrateResidentWindow(state: Parameters<typeof admitChatHistoryPages>[0], start: number) {
+  // Build the resident window from ordinary compliant packets, not an oversized startup reply.
+  for (let first = start; first < start + 383; first += 59) {
+    const result = page(first, Math.min(start + 382, first + 58));
+    expect(result.messages!.length).toBeLessThanOrEqual(80);
+    expect(new TextEncoder().encode(JSON.stringify(result.messages)).length).toBeLessThanOrEqual(
+      256 * 1024,
+    );
+    admitChatHistoryPages(state, [result], first === start ? "around" : "newer");
+  }
 }
 
 function holdCapacityReply(direction: Direction, initialReader: number | null = null) {
@@ -67,14 +78,7 @@ function holdCapacityReply(direction: Direction, initialReader: number | null = 
   const { pane, state } = createStagedPrefetchPane(request);
   readChatInputRunIds(state);
   const start = direction === "older" ? 518 : 1;
-  for (let first = start; first < start + 383; first += 59) {
-    const result = page(first, Math.min(start + 382, first + 58));
-    expect(result.messages!.length).toBeLessThanOrEqual(80);
-    expect(new TextEncoder().encode(JSON.stringify(result.messages)).length).toBeLessThanOrEqual(
-      256 * 1024,
-    );
-    admitChatHistoryPages(state, [result], first === start ? "around" : "newer");
-  }
+  hydrateResidentWindow(state, start);
   let reader = initialReader;
   state.readTranscriptReaderSnapshot = () =>
     reader === null
@@ -83,10 +87,16 @@ function holdCapacityReply(direction: Direction, initialReader: number | null = 
           anchor: `id:source-${reader}`,
           visibleSources: [`id:source-${reader}`],
         };
+  const before = state.chatMessages;
+  const coverage = state.chatHistoryPagination;
+  const projection = getChatSessionProjection(state);
   const loading = direction === "older" ? pane.loadOlderMessages() : pane.loadNewerMessages();
   return {
     pane,
     state,
+    before,
+    coverage,
+    projection,
     request,
     broad,
     wire,
@@ -105,70 +115,16 @@ function holdCapacityReply(direction: Direction, initialReader: number | null = 
 it.each(["older", "newer"] as const)(
   "reissues a strictly smaller adaptive budget when a reader mounts during a %s reply",
   async (direction) => {
-    const broad = createDeferred<ChatHistoryResult>();
-    const narrowed = createDeferred<ChatHistoryResult>();
-    const wire = (params: Request): ChatHistoryResult => {
-      const edge = Number(params.cursor.split("-")[1]);
-      const older = params.cursor.startsWith("older-");
-      let first = older ? Math.max(1, edge - params.limit + 1) : edge;
-      let last = older ? edge : Math.min(900, edge + params.limit - 1);
-      const result = () => ({
-        ...page(first, last),
-        ...(last < 900 ? { newerCursor: "newer-" + (last + 1) } : {}),
-      });
-      while (new TextEncoder().encode(JSON.stringify(result().messages)).length > params.maxBytes) {
-        if (older) {
-          first++;
-        } else {
-          last--;
-        }
-      }
-      return result();
-    };
-    let second: Request | undefined;
-    const request = vi.fn(async (_method: string, params: Request) => {
-      if (request.mock.calls.length === 1) {
-        return broad.promise;
-      }
-      if (request.mock.calls.length === 2) {
-        second = params;
-        return narrowed.promise;
-      }
-      return wire(params);
-    });
-    const { pane, state } = createStagedPrefetchPane(request);
-    readChatInputRunIds(state);
-    const start = direction === "older" ? 518 : 1;
-    // Build the resident window from ordinary compliant packets, not an oversized startup reply.
-    for (let first = start; first < start + 383; first += 59) {
-      const last = Math.min(start + 382, first + 58);
-      const result = {
-        ...page(first, last),
-        ...(last < 900 ? { newerCursor: "newer-" + (last + 1) } : {}),
-      };
-      expect(result.messages!.length).toBeLessThanOrEqual(80);
-      expect(new TextEncoder().encode(JSON.stringify(result.messages)).length).toBeLessThanOrEqual(
-        256 * 1024,
-      );
-      admitChatHistoryPages(state, [result], first === start ? "around" : "newer");
-    }
-    let reader: number | null = null;
-    state.readTranscriptReaderSnapshot = () =>
-      reader === null
-        ? null
-        : { anchor: "id:source-" + reader, visibleSources: ["id:source-" + reader] };
-    const before = state.chatMessages;
-    const coverage = state.chatHistoryPagination;
-    const projection = getChatSessionProjection(state);
-    const loading = direction === "older" ? pane.loadOlderMessages() : pane.loadNewerMessages();
+    const fixture = holdCapacityReply(direction);
+    const { pane, state, request, broad, before, coverage, projection } = fixture;
     try {
       await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
       expect(request.mock.calls[0]![1]).toMatchObject({
         limit: 400,
         maxBytes: 3 * 1024 * 1024 - 1,
       });
-      reader = direction === "older" ? 563 : 338;
-      broad.resolve(wire(request.mock.calls[0]![1]));
+      fixture.mount(direction === "older" ? 563 : 338);
+      broad.resolve(fixture.wire(request.mock.calls[0]![1]));
       await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
       expect(state.chatMessages).toBe(before);
       expect(state.chatHistoryPagination).toBe(coverage);
@@ -181,14 +137,9 @@ it.each(["older", "newer"] as const)(
       expect(request.mock.calls[1]![1].maxBytes).toBeLessThan(request.mock.calls[0]![1].maxBytes);
       expect(request.mock.calls[1]![1].maxBytes).toBeGreaterThan(256 * 1024);
     } finally {
-      broad.resolve({ messages: [], hasMore: false });
-      narrowed.resolve(second ? wire(second) : { messages: [], hasMore: false });
-      await loading;
+      await fixture.finish();
     }
-    const retained = state.chatMessages.map(nativeHistorySeq);
-    expect(retained).toEqual(
-      Array.from({ length: 400 }, (_, index) => (direction === "older" ? 164 : 338) + index),
-    );
+    expectNativeHistoryRange(state.chatMessages, direction === "older" ? 164 : 338, 400);
     expect(request).toHaveBeenCalledTimes(2);
     expect(pane.stagedHistory.page).toBeNull();
     expect(pane.stagedHistory.load).toBeNull();
@@ -246,8 +197,10 @@ it("reserves a new canonical local reply before retrying the pending broad page"
     await fixture.finish();
   }
   expect(state.chatMessages.filter((message) => message === local)).toHaveLength(1);
-  expect(state.chatMessages.filter((message) => message !== local).map(nativeHistorySeq)).toEqual(
-    Array.from({ length: 399 }, (_, index) => 384 + index),
+  expectNativeHistoryRange(
+    state.chatMessages.filter((message) => message !== local),
+    384,
+    399,
   );
   expect(state.chatMessages).toHaveLength(400);
 });
@@ -326,13 +279,7 @@ it("reports capacity when eight strictly smaller adaptive replies still cannot c
   );
   const { pane, state } = createStagedPrefetchPane(request);
   readChatInputRunIds(state);
-  for (let first = 1; first <= 383; first += 59) {
-    admitChatHistoryPages(
-      state,
-      [page(first, Math.min(383, first + 58))],
-      first === 1 ? "around" : "newer",
-    );
-  }
+  hydrateResidentWindow(state, 1);
   let reader = 383;
   state.readTranscriptReaderSnapshot = () => ({
     anchor: `id:source-${reader}`,
@@ -406,8 +353,10 @@ it("charges an uncovered streaming pin arriving during the broad reply without i
     await fixture.finish();
   }
   expect(state.chatMessages.filter((message) => message === pinned)).toHaveLength(1);
-  expect(state.chatMessages.filter((message) => message !== pinned).map(nativeHistorySeq)).toEqual(
-    Array.from({ length: 399 }, (_, index) => 384 + index),
+  expectNativeHistoryRange(
+    state.chatMessages.filter((message) => message !== pinned),
+    384,
+    399,
   );
   expect(state.chatMessages).toHaveLength(400);
 });
@@ -430,13 +379,7 @@ it("releases rejected broad bodies while the smaller adaptive reply is pending",
   });
   const { pane, state } = createStagedPrefetchPane(request);
   readChatInputRunIds(state);
-  for (let first = 1; first <= 383; first += 59) {
-    admitChatHistoryPages(
-      state,
-      [page(first, Math.min(383, first + 58))],
-      first === 1 ? "around" : "newer",
-    );
-  }
+  hydrateResidentWindow(state, 1);
   state.readTranscriptReaderSnapshot = () =>
     reader === null
       ? null

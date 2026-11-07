@@ -47,6 +47,7 @@ export class TranscriptPrependAnchor {
       ...bookmark,
       top: element.getBoundingClientRect().top + bookmark.offset,
       measured: false,
+      prepended: false,
     };
   }
 

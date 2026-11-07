@@ -28,6 +28,16 @@ import {
 
 const CHAT_RESIDENT_WEIGHT_TARGET = 3 * 1024 * 1024;
 
+function packetPage(messages: unknown[], olderCursor: string, newerCursor: string) {
+  const pagination = { hasMore: true as const, olderCursor };
+  return {
+    messages,
+    ...pagination,
+    newerCursor,
+    packet: prepareChatHistoryPacket(messages, pagination, newerCursor),
+  };
+}
+
 it("revokes around packet provenance when canonical pairing media enriches its body", () => {
   const host = makeChatHost();
   const plain = {
@@ -863,11 +873,8 @@ it.each(
       content: `fragment-${index}`,
       __openclaw: { seq: index < 200 ? 100 : 101 },
     }));
-    const packet = prepareChatHistoryPacket(
-      readerRows,
-      { hasMore: true, olderCursor: "opaque-before-reader" },
-      "opaque-after-reader",
-    );
+    const readerPage = packetPage(readerRows, "opaque-before-reader", "opaque-after-reader");
+    const { packet } = readerPage;
     expect(packet.boundedPacket).toBe(true);
     const host = makeChatHost({
       readTranscriptReaderSnapshot: () => ({
@@ -875,21 +882,7 @@ it.each(
         visibleSources: ["seq:100", "seq:101"],
       }),
     });
-    expect(
-      admitChatHistoryPages(
-        host,
-        [
-          {
-            messages: readerRows,
-            hasMore: true,
-            olderCursor: "opaque-before-reader",
-            newerCursor: "opaque-after-reader",
-            packet,
-          },
-        ],
-        "around",
-      ),
-    ).toBe("messages");
+    expect(admitChatHistoryPages(host, [readerPage], "around")).toBe("messages");
     expect(host.chatMessages).toEqual(readerRows);
     expect(host.chatMessages.every((message, index) => message === readerRows[index])).toBe(true);
     expect(host.chatHistoryPagination.segments).toEqual([packet]);
@@ -970,25 +963,10 @@ it.each(["older", "newer"] as const)(
   "reopens only the %s navigation edge without rewriting a held packet",
   (direction) => {
     const rows = [durable(100), durable(101)];
-    const packet = prepareChatHistoryPacket(
-      rows,
-      { hasMore: true, olderCursor: "original-older" },
-      "original-newer",
-    );
+    const readerPage = packetPage(rows, "original-older", "original-newer");
+    const { packet } = readerPage;
     const host = makeChatHost();
-    admitChatHistoryPages(
-      host,
-      [
-        {
-          messages: rows,
-          hasMore: true,
-          olderCursor: "original-older",
-          newerCursor: "original-newer",
-          packet,
-        },
-      ],
-      "around",
-    );
+    admitChatHistoryPages(host, [readerPage], "around");
     reopenChatHistoryBoundary(
       host,
       direction === "older" ? "id:source-100" : "id:source-101",

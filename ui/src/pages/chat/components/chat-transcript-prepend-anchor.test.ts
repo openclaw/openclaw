@@ -298,17 +298,23 @@ it("restores the same message offset after its cached window and row geometry ch
   let contentTop = 275;
   bubble.getBoundingClientRect = () => rect(contentTop - scroller.scrollTop, 180);
   scroller.scrollTop = 200;
-  const original = new TranscriptPrependAnchor(messageElements, vi.fn());
+  const original = new TranscriptPrependAnchor(messageElements, vi.fn(), measureRows);
   original.messageKeys = messages("visible");
   const bookmark = original.bookmark(scroller)!;
   expect(bookmark.offset).toBe(-25);
   // A fresh owner sees a trimmed/reloaded window with different preceding height.
   contentTop = 900;
   scroller.scrollTop = 420;
-  const restored = new TranscriptPrependAnchor(messageElements, vi.fn());
+  const restored = new TranscriptPrependAnchor(messageElements, vi.fn(), measureRows);
   restored.messageKeys = messages("visible");
   restored.restoreBookmark(bookmark, scroller);
-  restored.update(scroller, instance, measureRows);
+  expect(restored.update(instance, unmeasuredRows)).toBe(false);
+  expect(restored.messageKey).toBe("visible");
+  expect(scroller.scrollTop).toBe(420);
+  expect(restored.update(instance, measuredRows)).toBe(true);
+  expect(restored.update(instance, measuredRows)).toBe(true);
+  expect(restored.messageKey).toBeNull();
+  expect(measureRows).not.toHaveBeenCalled();
   expect(scroller.scrollTop).toBe(825);
   expect(bubble.getBoundingClientRect().top - scroller.getBoundingClientRect().top).toBe(-25);
 });
