@@ -138,7 +138,6 @@ it.each([1280, 390])(
     const draft = view.container.querySelector<HTMLInputElement>(".session-overrides-grid input")!;
     scroller.style.height = "200px";
     draft.value = "Retained draft";
-    draft.focus();
     await vi.waitFor(async () => {
       const field = draft.getBoundingClientRect();
       const scroll = [scroller.scrollTop, scroller.scrollHeight];
@@ -147,6 +146,10 @@ it.each([1280, 390])(
       });
       expect([scroller.scrollTop, scroller.scrollHeight]).toEqual(scroll);
       expect(draft.getBoundingClientRect().top).toBe(field.top);
+    });
+    draft.focus();
+    await vi.waitFor(() => {
+      const field = draft.getBoundingClientRect();
       const viewport = scroller.getBoundingClientRect();
       expect(field.top).toBeGreaterThanOrEqual(viewport.top);
       expect(field.bottom).toBeLessThanOrEqual(viewport.bottom);
