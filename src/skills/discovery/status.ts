@@ -67,14 +67,16 @@ export function resolveSkillStatusEntry<T extends Pick<SkillStatusEntry, "name" 
     return null;
   }
 
-  const lower = raw.toLowerCase();
+  const lower = raw.toLowerCase().normalize("NFC");
   const normalized = normalizeSkillIndexName(raw);
   // Names outrank metadata aliases. A tie at the strongest matching level
   // must not redirect inspection or Workshop updates to the first loaded skill.
   const matchers: Array<(skill: T) => boolean> = [
     (skill) => skill.name === raw,
     (skill) => skill.skillKey === raw,
-    (skill) => skill.name.toLowerCase() === lower || skill.skillKey.toLowerCase() === lower,
+    (skill) =>
+      skill.name.toLowerCase().normalize("NFC") === lower ||
+      skill.skillKey.toLowerCase().normalize("NFC") === lower,
     (skill) =>
       Boolean(normalized) &&
       (normalizeSkillIndexName(skill.name) === normalized ||

@@ -63,12 +63,16 @@ describe("skills formatting", () => {
     }
   });
 
-  it("resolves an unambiguous skill key", () => {
-    const entry = skill("Excel XLSX", {
-      skillKey: "Excel-XLSX",
+  it.each([
+    ["excel-xlsx", "Excel-XLSX"],
+    ["Cafe\u0301", "Café"],
+    ["Résumé", "Re\u0301sume\u0301"],
+  ])("resolves an unambiguous skill key %s", (query, skillKey) => {
+    const entry = skill("spreadsheet", {
+      skillKey,
       description: "Spreadsheet helpers",
     });
-    expect(info([entry], "excel-xlsx")).toContain("Spreadsheet helpers");
+    expect(info([entry], query)).toContain("Spreadsheet helpers");
   });
 
   it.each([
@@ -84,6 +88,16 @@ describe("skills formatting", () => {
       "shared-key",
       [skill("first", { skillKey: "shared-key" }), skill("second", { skillKey: "shared-key" })],
       { ok: false, skill: "shared-key" },
+    ],
+    [
+      "CAFÉ",
+      [skill("first", { skillKey: "Café" }), skill("second", { skillKey: "Cafe\u0301" })],
+      { ok: false, skill: "CAFÉ" },
+    ],
+    [
+      "Café",
+      [skill("first", { skillKey: "Café" }), skill("second", { skillKey: "Cafe\u0301" })],
+      { name: "first" },
     ],
   ])("resolves %s consistently in either discovery order", (query, skills, expected) => {
     for (const entries of [skills, skills.toReversed()]) {
