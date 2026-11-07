@@ -1,2 +1,0 @@
-25
-# Reconcile #194417 (39fc48d7c16e): default native catalog prewarm tests protect route and runtime selection after Gateway readiness.

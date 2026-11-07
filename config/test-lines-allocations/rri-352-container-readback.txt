@@ -1,1 +1,2 @@
-225
+250
+# PR #193089 (3ab7d3b257ca): 252 test lines for registry readback, credential realm, descriptor drift, and publish wiring, less 2 lines of prior slack from #194525; raises this allocation by 25.

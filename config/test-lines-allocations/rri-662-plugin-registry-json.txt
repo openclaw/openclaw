@@ -1,2 +1,2 @@
-# Fail-closed regressions for whitespace-only and multi-document optional registry input.
-6
+30
+# PR #192833 (58ac8a385809): 33 test lines for absent, whitespace-only, multi-document, and malformed-name optional registry input, less 3 lines deleted by #194535 and #194504; raises this allocation by 24.
