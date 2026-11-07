@@ -346,8 +346,8 @@ describe("openrouter provider hooks", () => {
     await provider.prepareDynamicModel?.(context);
     const model = provider.resolveDynamicModel?.(context);
 
-    expect(loadCapabilities).toHaveBeenCalledWith("anthropic/claude-sonnet-4.6");
-    expect(loadedCapabilities).toHaveBeenCalledWith("anthropic/claude-sonnet-4.6");
+    expect(loadCapabilities).toHaveBeenCalledWith("anthropic/claude-sonnet-4.6", undefined);
+    expect(loadedCapabilities).toHaveBeenCalledWith("anthropic/claude-sonnet-4.6", undefined);
     expect(model).toMatchObject({
       id: modelId,
       name: "Claude Sonnet 4.6",
@@ -386,8 +386,8 @@ describe("openrouter provider hooks", () => {
     await provider.prepareDynamicModel?.(context);
     provider.resolveDynamicModel?.(context);
 
-    expect(loadCapabilities).toHaveBeenCalledWith("openrouter/auto");
-    expect(loadedCapabilities).toHaveBeenCalledWith("openrouter/auto");
+    expect(loadCapabilities).toHaveBeenCalledWith("openrouter/auto", undefined);
+    expect(loadedCapabilities).toHaveBeenCalledWith("openrouter/auto", undefined);
   });
 
   it("does not include retired stealth models in the bundled catalog", () => {

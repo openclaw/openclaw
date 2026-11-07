@@ -661,3 +661,13 @@ does **not** inject those OpenRouter-specific headers or prompt-cache markers.
     Shared music tool parameters and provider selection.
   </Card>
 </CardGroup>
+
+## Routing variants
+
+On the canonical OpenRouter endpoint, routing suffixes `:nitro`, `:floor`,
+`:exacto`, and `:online` reuse the underlying catalog entry’s capabilities while
+OpenClaw sends the requested model ID unchanged. Combined routing suffixes are
+supported. Catalog variants such as `:free`, `:batch`, `:thinking`, and `:extended`
+remain distinct; unknown suffixes are not stripped. Exact catalog rows and
+operator-authored model fields remain authoritative. Custom endpoints do not
+use this routing fallback. See [OpenRouter model variants](https://openrouter.ai/docs/guides/routing/model-variants/overview).

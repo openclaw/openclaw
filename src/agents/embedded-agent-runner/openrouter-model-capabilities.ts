@@ -247,13 +247,18 @@ function ensureOpenRouterModelCache(): void {
 /**
  * Ensure capabilities for a specific model are available before first use.
  *
+ * Exact entries win over an optional caller-supplied catalog fallback. The
+ * provider owns whether that fallback applies to the selected endpoint.
  * Known cached entries return immediately. Unknown entries wait for at most
  * one catalog fetch, then leave sync resolution to read from the populated
  * cache on the same request.
  *
  * @deprecated OpenRouter provider-owned catalog helper; do not use from third-party plugins.
  */
-export async function loadOpenRouterModelCapabilities(modelId: string): Promise<void> {
+export async function loadOpenRouterModelCapabilities(
+  modelId: string,
+  fallbackModelId?: string,
+): Promise<void> {
   let store: PreparedCacheStore | null | undefined;
   if (!cache) {
     cacheReadInFlight ??= trackCatalogWork(async () => {
@@ -272,12 +277,12 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
     });
     store = await cacheReadInFlight;
   }
-  if (cache?.has(modelId)) {
+  if (cache?.has(modelId) || (fallbackModelId !== undefined && cache?.has(fallbackModelId))) {
     return;
   }
   triggerFetch(store);
   await fetchInFlight;
-  if (!cache?.has(modelId)) {
+  if (!(cache?.has(modelId) || (fallbackModelId !== undefined && cache?.has(fallbackModelId)))) {
     skipNextMissRefresh.add(modelId);
   }
 }
@@ -326,7 +331,10 @@ export function getOpenRouterModelCapabilities(
  */
 export function getLoadedOpenRouterModelCapabilities(
   modelId: string,
+  fallbackModelId?: string,
 ): OpenRouterModelCapabilities | undefined {
   skipNextMissRefresh.delete(modelId);
-  return cache?.get(modelId);
+  return (
+    cache?.get(modelId) ?? (fallbackModelId !== undefined ? cache?.get(fallbackModelId) : undefined)
+  );
 }

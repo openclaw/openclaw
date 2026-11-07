@@ -42,7 +42,11 @@ import { isOpenRouterDecisionModel } from "./decision-codec.js";
 import { buildOpenRouterDecisionProvider } from "./decision-provider.js";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { isOpenRouterMistralModelId, normalizeOpenRouterApiModelId } from "./models.js";
+import {
+  isOpenRouterMistralModelId,
+  normalizeOpenRouterApiModelId,
+  resolveOpenRouterRoutingCapabilityFallback,
+} from "./models.js";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -230,6 +234,23 @@ function isOpenRouterCatalogRoute(route: {
   );
 }
 
+function resolveOpenRouterCapabilityFallback(
+  ctx: ProviderResolveDynamicModelContext,
+): string | undefined {
+  const configuredProvider = ctx.config?.models?.providers?.openrouter;
+  if (
+    !isOpenRouterCatalogRoute({
+      api: ctx.providerConfig?.api ?? configuredProvider?.api,
+      baseUrl: ctx.providerConfig?.baseUrl ?? configuredProvider?.baseUrl,
+    })
+  ) {
+    return undefined;
+  }
+  return resolveOpenRouterRoutingCapabilityFallback(
+    normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
+  );
+}
+
 function withOpenRouterCatalogThinking(
   ctx: ProviderDefaultThinkingPolicyContext,
 ): ProviderDefaultThinkingPolicyContext {
@@ -352,7 +373,10 @@ export default defineSingleProviderPluginEntry({
       ctx: ProviderResolveDynamicModelContext,
     ): ProviderRuntimeModel {
       const apiModelId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
-      const capabilities = getLoadedOpenRouterModelCapabilities(apiModelId);
+      const capabilities = getLoadedOpenRouterModelCapabilities(
+        apiModelId,
+        resolveOpenRouterCapabilityFallback(ctx),
+      );
       return {
         id: ctx.modelId,
         name: capabilities?.name ?? ctx.modelId,
@@ -454,6 +478,7 @@ export default defineSingleProviderPluginEntry({
         }
         await loadOpenRouterModelCapabilities(
           normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
+          resolveOpenRouterCapabilityFallback(ctx),
         );
       },
       normalizeConfig: ({ providerConfig }) => normalizeRouterBaseUrl(providerConfig),
