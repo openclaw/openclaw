@@ -1160,7 +1160,10 @@ upload_release_evidence_assets() {
   evidence_path="${POSTPUBLISH_EVIDENCE_DIR}/release-postpublish-evidence.json"
   evidence_asset="openclaw-${release_version}-postpublish-evidence.json"
 
-  if [[ "${RELEASE_EVIDENCE_MODE}" == "authorized-beta-focused-v1" ]]; then
+  if [[ "${RELEASE_EVIDENCE_MODE}" == "emergency-patch-v1" ]]; then
+    manifest_path="${RUNNER_TEMP}/emergency-patch-evidence.json"
+    manifest_asset="openclaw-${release_version}-emergency-patch-evidence.json"
+  elif [[ "${RELEASE_EVIDENCE_MODE}" == "authorized-beta-focused-v1" ]]; then
     manifest_path="${FOCUSED_RELEASE_EVIDENCE_DIR}/evidence.json"
     manifest_asset="openclaw-${release_version}-authorized-focused-evidence.json"
   else
@@ -1339,7 +1342,15 @@ verify_published_release() {
       "${verify_args[@]}"
 
   record_postpublish_diagnostics binding-start
-  if [[ "${RELEASE_EVIDENCE_MODE}" == "authorized-beta-focused-v1" ]]; then
+  if [[ "${RELEASE_EVIDENCE_MODE}" == "emergency-patch-v1" ]]; then
+    run_id="${GITHUB_RUN_ID}"
+    run_attempt="${GITHUB_RUN_ATTEMPT}"
+    workflow_ref="${GITHUB_REF_NAME}"
+    target_sha="${TARGET_SHA}"
+    expected_id="${GITHUB_RUN_ID}"
+    expected_attempt="${GITHUB_RUN_ATTEMPT}"
+    run_label="Emergency patch admission (full validation skipped)"
+  elif [[ "${RELEASE_EVIDENCE_MODE}" == "authorized-beta-focused-v1" ]]; then
     validation_file="${FOCUSED_RELEASE_EVIDENCE_DIR}/evidence.json"
     run_id="$(jq -er '.producer.runId | select(type == "string" and test("^[1-9][0-9]*$"))' "${validation_file}")"
     run_attempt="$(jq -er '.producer.runAttempt | select(type == "number" and . >= 1) | tostring' "${validation_file}")"
@@ -1421,7 +1432,10 @@ append_release_proof_to_github_release() {
   android_line="${android_release_note}"
   proof_label="full release validation"
   proof_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}"
-  if [[ "${RELEASE_EVIDENCE_MODE}" == "authorized-beta-focused-v1" ]]; then
+  if [[ "${RELEASE_EVIDENCE_MODE}" == "emergency-patch-v1" ]]; then
+    proof_label="emergency patch admission (full validation skipped)"
+    proof_run_id="${GITHUB_RUN_ID}"
+  elif [[ "${RELEASE_EVIDENCE_MODE}" == "authorized-beta-focused-v1" ]]; then
     proof_label="authorized beta focused validation"
     proof_run_id="${FOCUSED_RELEASE_EVIDENCE_RUN_ID}"
   fi
@@ -1459,7 +1473,9 @@ const section = [
   `- registry tarball: ${process.env.RELEASE_TARBALL}`,
   `- integrity: \`${process.env.RELEASE_INTEGRITY}\``,
   `- release SHA: \`${process.env.RELEASE_SHA}\``,
-  `- full release CI report: https://github.com/openclaw/releases/blob/main/evidence/${process.env.RELEASE_VERSION}/release-evidence.md`,
+  ...(process.env.RELEASE_EVIDENCE_MODE === "emergency-patch-v1"
+    ? []
+    : [`- full release CI report: https://github.com/openclaw/releases/blob/main/evidence/${process.env.RELEASE_VERSION}/release-evidence.md`]),
   `- release publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_PUBLISH_RUN_ID}`,
   `- npm preflight: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PREFLIGHT_ARTIFACT_RUN_ID}`,
   `- ${process.env.RELEASE_VALIDATION_LABEL}: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_VALIDATION_RUN_ID}`,

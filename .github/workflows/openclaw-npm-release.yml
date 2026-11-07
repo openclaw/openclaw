@@ -38,6 +38,7 @@ on:
         options:
           - full-release-validation
           - authorized-beta-focused-v1
+          - emergency-patch-v1
       focused_release_evidence_run_id:
         description: Successful Authorized Beta Focused Validation run id
         required: false
@@ -242,6 +243,11 @@ jobs:
               echo "authorized-beta-focused-v1 requires the exact focused evidence run id and attempt." >&2
               exit 1
             fi
+          elif [[ "${RELEASE_EVIDENCE_MODE}" == "emergency-patch-v1" ]]; then
+            if [[ "${RELEASE_NPM_DIST_TAG}" != "latest" || -z "${RELEASE_PUBLISH_RUN_ID}" || -n "${FULL_RELEASE_VALIDATION_RUN_ID}${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}${FOCUSED_RELEASE_EVIDENCE_RUN_ID}${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" ]]; then
+              echo "Emergency patch publication requires latest, its approved parent, and no full/focused validation inputs." >&2
+              exit 1
+            fi
           elif [[ "${RELEASE_EVIDENCE_MODE}" == "full-release-validation" ]]; then
             if [[ -n "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" || -n "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" ]]; then
               echo "Full release validation evidence mode must not include focused evidence inputs." >&2
@@ -397,7 +403,7 @@ jobs:
           ref: refs/tags/${{ inputs.tag }}
           # Frozen preflight evidence already binds the exact release SHA and
           # tarball, so real publishes do not need the repository's full history.
-          fetch-depth: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && 0 || (inputs.preflight_run_id != '' && 1 || 0) }}
+          fetch-depth: ${{ inputs.release_evidence_mode != 'full-release-validation' && '0' || (inputs.preflight_run_id != '' && 1 || 0) }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -611,6 +617,16 @@ jobs:
             --producer-run-attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
             --producer-workflow-full-ref "${WORKFLOW_FULL_REF}" \
             --producer-workflow-sha "${WORKFLOW_SHA}"
+
+      - name: Verify emergency patch authorization
+        if: ${{ inputs.release_evidence_mode == 'emergency-patch-v1' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+        run: |
+          set -euo pipefail
+          node trusted-workflow/scripts/release-emergency-patch.mjs --root . --tag "${RELEASE_TAG}" --npm-dist-tag "${RELEASE_NPM_DIST_TAG}" --expected-sha "$(git rev-parse HEAD)"
 
       - name: Verify plugin npm release run metadata
         if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
@@ -946,6 +962,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           OPENCLAW_PREPACK_PREPARED: "1"
           OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_EVIDENCE_MODE: ${{ inputs.release_evidence_mode }}
+          RELEASE_TAG: ${{ inputs.tag }}
           PUBLISH_TARBALL_PATH: ${{ steps.preflight_provenance.outputs.tarball_path }}
           PREFLIGHT_WORKFLOW_SHA: ${{ steps.preflight_run.outputs.head_sha }}
           PREFLIGHT_WORKFLOW_BRANCH: ${{ steps.preflight_run.outputs.head_branch }}
@@ -965,6 +983,9 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
+          if [[ "${RELEASE_EVIDENCE_MODE}" == "emergency-patch-v1" ]]; then
+            node trusted-workflow/scripts/release-emergency-patch.mjs --root . --tag "${RELEASE_TAG}" --npm-dist-tag "${OPENCLAW_NPM_PUBLISH_TAG}" --expected-sha "$(git rev-parse HEAD)"
+          fi
           publish_target="${PUBLISH_TARBALL_PATH}"
           if [[ -n "${publish_target}" ]]; then
             publish_target="./${publish_target}"

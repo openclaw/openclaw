@@ -52,6 +52,12 @@ later. This is recommended bookkeeping, not another release gate.
 
 ## Shared release boundaries
 
+The exceptional [emergency patch fast track](../../../docs/reference/RELEASING.md#emergency-patch-fast-track)
+is available only for a release-manager-reviewed, exact small delta and a new
+explicit npm-release approval. It skips validation cycles rather than claiming
+success. The default boundaries below remain unchanged for ordinary releases;
+this exception never authorizes a release merely because it is urgent.
+
 FRV must conclude **success** under pinned P's
 [checked-in release-tooling policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
 Only exact failed live-provider or Telegram leaves may be waived, without

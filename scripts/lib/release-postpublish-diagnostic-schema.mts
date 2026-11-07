@@ -116,7 +116,9 @@ export const diagnosticSchema = z.object({
     parentRunId: diagnosticId,
     parentRunAttempt: diagnosticId,
     validationEvidence: z.object({
-      mode: z.enum(["full-release-validation", "authorized-beta-focused-v1"]).nullable(),
+      mode: z
+        .enum(["full-release-validation", "authorized-beta-focused-v1", "emergency-patch-v1"])
+        .nullable(),
       runId: diagnosticId,
       runAttempt: diagnosticId,
     }),
