@@ -15,9 +15,8 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Deep research native bundle" });
 
-// Idle sessions show no chip; the panel opens from the session's sidebar actions menu.
+// The session header stays plugin-free; the panel opens from the session's sidebar actions menu.
 async function openResearchFromSessionMenu(page: Page) {
-  await pw(page.locator(".deep-research-chip")).toHaveCount(0);
   const row = page.locator(`[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`);
   await row.first().focus();
   await page.keyboard.press("Shift+F10");
@@ -31,6 +30,27 @@ const sessionList = sessionsListResponse([
 const method = (action: string) => `deep-research.view.v1.${action}`;
 const timestamp = Date.parse("2026-01-01T12:00:00Z");
 const id = "a".repeat(64);
+// A saved deep_research start result carrying the plugin's transcript card descriptor.
+const inlineView = { id: "research-job", label: "Deep research", version: 1 };
+const researchToolResult = {
+  role: "toolResult",
+  toolName: "deep_research",
+  toolCallId: "research-call",
+  content: [{ type: "text", text: "Deep research running: Gathering evidence (round 1)" }],
+  details: {
+    pluginView: {
+      type: "plugin_view",
+      pluginId: "deep-research",
+      viewId: inlineView.id,
+      version: inlineView.version,
+      toolName: "deep_research",
+      toolCallId: "research-call",
+      summary: "Deep research running: Gathering evidence (round 1)",
+      payload: { jobId: id },
+    },
+  },
+  timestamp,
+};
 const question = "How do urban trees reduce summer heat?";
 const running = {
   version: 1,
@@ -239,8 +259,10 @@ suite.define(() => {
               pluginId: "deep-research",
               rootDir: resolve("extensions/deep-research"),
               source: "./browser/index.tsx",
+              inlineViews: [inlineView],
             },
           ],
+          historyMessages: [researchToolResult],
           communityInvite: false,
           assistantAgentId: "main",
           defaultAgentId: "main",
@@ -305,7 +327,9 @@ suite.define(() => {
         };
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await openResearchFromSessionMenu(page);
-        const open = page.locator(".deep-research-chip");
+        const card = page.locator('[data-plugin-inline-view="research-call"] .deep-research-card');
+        const open = card.getByRole("button", { name: /^(Open details|Read report)$/ });
+        await pw(card).toBeVisible();
         const pane = page.locator(".deep-research-pane");
         await pw(pane).toBeVisible();
         try {
@@ -383,12 +407,15 @@ suite.define(() => {
         });
         expect(startKeys[1]).toBe(startKeys[2]);
         expect(startKeys[0]).not.toBe(startKeys[1]);
-        await pw(open).toContainText("Researching · gathering · 1 source");
+        // The Gateway announces job changes; every view, including the card, refreshes from them.
+        await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
+        await pw(card).toContainText("Deep research · Researching · gathering");
+        await pw(card.locator(".deep-research-card__meta")).toHaveText("1 source");
         const progressed = { ...running, counts: { ...running.counts, sources: 2 } };
         await gateway.setMethodResponse(method("list"), list(progressed));
         await gateway.setMethodResponse(method("read"), read(progressed));
         await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
-        await pw(open).toContainText("2 sources");
+        await pw(card.locator(".deep-research-card__meta")).toHaveText("2 sources");
         await capture("desktop-running", pane, [pane.getByText("Gathering evidence (round 1)")]);
         await pane.getByRole("button", { name: "Cancel research", exact: true }).click();
         await gateway.waitForRequest(method("cancel"), {
@@ -409,8 +436,13 @@ suite.define(() => {
         const cite = pane.getByRole("button", { name: "Source S1", exact: true });
         await pw(cite).toBeVisible();
         await pw(pane.getByRole("heading", { name: question, exact: true })).toBeVisible();
-        await pw(open).toContainText("Partial research report · 1 source");
-        await pw(open).not.toContainText("1 sources");
+        await pw(card).toContainText("Deep research · Partial report");
+        await pw(card.locator(".deep-research-card__meta")).toHaveText(
+          "1 source · 1 finding · 1 open gap",
+        );
+        await pw(open).toHaveText("Read report");
+        await capture("desktop-inline-card", card);
+        await capture("desktop-after", page.locator("openclaw-app"), [card]);
         await capture("desktop-report", pane, [cite]);
         await cite.click();
         await pw(pane.getByRole("region", { name: "Research sources" })).toBeVisible();
