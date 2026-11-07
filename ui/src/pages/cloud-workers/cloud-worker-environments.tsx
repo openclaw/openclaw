@@ -568,8 +568,14 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   const current = createMemo(
     () => environments().find((environment) => environment.key === selected()) ?? environments()[0],
   );
+  // Reveal both sections together so loading copy cannot move the Advanced controls.
+  const initialPending = () =>
+    canCall("environments.list") && !view.inventory && (!loadRequest() || loading());
   return (
-    <>
+    <Show
+      when={!initialPending()}
+      fallback={<SettingsPage children={<SettingsEmpty message={t("common.loading")} />} />}
+    >
       <SettingsPage>
         <Show
           when={canCall("environments.list") || view.inventory !== null}
@@ -594,20 +600,18 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
           <Show
             when={environments().length}
             fallback={
-              <SettingsEmpty
-                message={
-                  loading() ? (
-                    t("common.loading")
-                  ) : (
+              view.inventory && (
+                <SettingsEmpty
+                  message={
                     <>
                       {t("cloudWorkersPage.environments.empty")}{" "}
                       <DocsLink url="https://docs.openclaw.ai/gateway/cloud-workers">
                         {t("cloudWorkersPage.environments.docs")}
                       </DocsLink>
                     </>
-                  )
-                }
-              />
+                  }
+                />
+              )
             }
           >
             <div class="cloud-environments">
@@ -722,6 +726,6 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
           </Show>
         </SettingsDisclosure>
       </SettingsPage>
-    </>
+    </Show>
   );
 }
