@@ -52,6 +52,8 @@ function color(value: string) {
 }
 
 function expectWithinViewport(element: HTMLElement) {
+  // Measure settled geometry, not WebKit's in-flight entry scale.
+  finishElementAnimations(element);
   const box = element.getBoundingClientRect();
   expect(box.width).toBeGreaterThan(0);
   expect(box.height).toBeGreaterThan(0);
@@ -156,8 +158,6 @@ describe("native overlay presentation", () => {
       });
       positionTrigger({ left: "200px", top: "50px" });
       await openMenu();
-      // Measure the consumer budget, not WebKit's in-flight entry scale.
-      finishElementAnimations(surface());
       expect(expectWithinViewport(surface()).height).toBe(500);
       await userEvent.keyboard("{End}");
       expect(document.activeElement).toBe(item("Action 24"));

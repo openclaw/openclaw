@@ -7,11 +7,11 @@ import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import { createPendingSteerLookup } from "../chat-pending-inputs.ts";
 import { resolveTurnRecap, shouldRenderQueuedSendInThread } from "../chat-progress.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
 import { groupReadsHandoffRoster, projectSubagentStatus } from "../chat-subagent-wait.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
-import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import {
   buildCachedChatItems,
   getExpansionStateVersion,
@@ -27,7 +27,11 @@ import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
 import { projectRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
-import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
+import {
+  getTranscriptState,
+  transcriptRewindOptions,
+  type ChatThreadProps,
+} from "./chat-thread-interactions.ts";
 import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
@@ -297,7 +301,7 @@ export function projectChatTranscript(
     connectionEpoch: props.connectionEpoch,
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
     resolveArtifactDownload: props.resolveArtifactDownload,
-    getTurnMediaMessages: (key) => state.transcriptRenderContext.turnMediaMessages?.get(key),
+    getThreadMediaMessages: (key) => state.transcriptRenderContext.threadMediaMessages?.get(key),
     onRequestOpenImage: props.onRequestOpenImage,
     onOpenImage: props.onOpenImage,
     onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
@@ -333,14 +337,13 @@ export function projectChatTranscript(
     runOutputTokens,
     questionPrompts,
   } satisfies StreamGroupOptions;
+  const pendingSteerForMessage = createPendingSteerLookup(props.pendingInputs);
   const renderGroupOptions = (item: MessageGroup) => {
     const continuation = continuations.get(item.key);
-    const rewindEntryId =
-      item.role.toLowerCase() === "user"
-        ? persistedMessageEntryId(item.messages.at(-1)?.message)
-        : null;
     return {
       ...sharedMessageRenderOptions,
+      pendingSteer: pendingSteerForMessage,
+      onSteerNow: props.onSteerNow,
       messageReactions: props.messageReactions,
       onReact: props.onReact,
       latestBrowserTabs: props.latestBrowserTabs,
@@ -380,17 +383,7 @@ export function projectChatTranscript(
       personActivity: props.personActivity,
       avatarPlacement,
       contextWindow: threadContextWindow,
-      onRewind:
-        rewindEntryId && props.onRewindMessage
-          ? () => {
-              void Promise.resolve(props.onRewindMessage?.(rewindEntryId)).then((rewound) => {
-                if (rewound) {
-                  props.onFocusComposer?.();
-                }
-              });
-            }
-          : undefined,
-      rewindDisabled: Boolean(props.runActive || props.runWorking),
+      ...transcriptRewindOptions(item, props),
       activeContinuation: continuation
         ? { parts: continuation, options: streamGroupOptions }
         : undefined,
@@ -510,6 +503,7 @@ export function projectChatTranscript(
     Boolean(props.onReact),
     Boolean(props.asyncQuestions?.submit),
     Boolean(props.onRetryQueuedMessage),
+    Boolean(props.onSteerNow),
     props.connected,
     Boolean(props.onDiscardQueuedMessage),
     props.queuedMessageAction?.id,
@@ -536,6 +530,11 @@ export function projectChatTranscript(
         liveStatusSignature(item),
         item.key === liveItem?.key ? resolveLiveStream : undefined,
         ...transcriptContextDependencies(item, loadedReplySources, props),
+        ...(pendingSteerForMessage
+          ? groups.flatMap((group) =>
+              group.messages.map(({ message }) => pendingSteerForMessage(message)),
+            )
+          : []),
         // Durable drafts can restore the same map under a new callback generation.
         hasQuestions ? asyncQuestions.drafts : undefined,
         hasQuestions ? asyncQuestionGeneration : undefined,
@@ -652,7 +651,7 @@ export function projectChatTranscript(
     });
   }
   const transcriptRows = projectTranscriptRows(rows, workPreviews, contentRows);
-  state.transcriptRenderContext.turnMediaMessages = snapshot.turnMediaMessages;
+  state.transcriptRenderContext.threadMediaMessages = snapshot.threadMediaMessages;
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
     // Search removes rows from the index, not from loaded history. Resolve the

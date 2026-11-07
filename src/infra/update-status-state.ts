@@ -67,8 +67,3 @@ export function setUpdateAvailableCache(params: {
   updateAvailableCache = params.next;
   params.onUpdateAvailableChange?.(params.next);
 }
-
-export function resetUpdateStatusState(): void {
-  updateAvailableCache = null;
-  updateScheduleCache = null;
-}

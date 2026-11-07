@@ -25,6 +25,50 @@ export function createEngineStyleScenarios(): readonly EngineScenario[] {
     },
     {
       ...typing,
+      id: "native-composer-keystroke",
+      explicitOnly: true,
+      expected: "One prefocused keystroke changes the draft without sending it.",
+      prepare: async (page, gateway) => {
+        await typing.prepare(page, gateway);
+        await page
+          .locator(".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea")
+          .focus();
+        await frames(page);
+      },
+      run: async (page, gateway) => {
+        const input = page.locator(
+          ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+        );
+        const sends = (await gateway.getRequests("chat.send")).length;
+        await input.press("x");
+        await frames(page);
+        if (
+          (await input.inputValue()) !== "x" ||
+          (await gateway.getRequests("chat.send")).length !== sends
+        ) {
+          throw new Error("Keystroke must update the draft without sending");
+        }
+      },
+    },
+    {
+      ...typing,
+      id: "native-composer-hover",
+      explicitOnly: true,
+      viewports: ["desktop"],
+      expected: "Hover leaves the composer draft unchanged.",
+      run: async (page) => {
+        const input = page.locator(
+          ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+        );
+        await input.hover();
+        await frames(page);
+        if ((await input.inputValue()) !== "") {
+          throw new Error("Hover changed the draft");
+        }
+      },
+    },
+    {
+      ...typing,
       id: "menu-spacing-submenu",
       explicitOnly: true,
       viewports: ["desktop"],

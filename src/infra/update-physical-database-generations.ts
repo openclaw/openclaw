@@ -5,6 +5,7 @@ import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor
 import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.types.js";
 import {
+  readUnchangedUpdateDatabaseGeneration,
   readUpdateDatabaseGeneration,
   readUpdateDatabaseGenerationPair,
   type SqliteDatabaseGenerationReceipt,
@@ -16,6 +17,7 @@ export function readUpdatePhysicalDatabaseObservation(
 ): {
   engine?: BackupEngine;
   generation: Result<string | null, unknown>;
+  emptyReaderAlternate?: string;
   preparedSource?: PreparedSqliteSnapshotSource;
   sqliteReceipt?: SqliteDatabaseGenerationReceipt;
 } {
@@ -25,6 +27,7 @@ export function readUpdatePhysicalDatabaseObservation(
     const observation = readUpdateDatabaseGeneration(
       pathname,
       (imagePath, sourcePath) => {
+        classificationFailed = false;
         try {
           engine = readBackupEngineImage(imagePath, sourcePath);
         } catch (error) {
@@ -37,6 +40,7 @@ export function readUpdatePhysicalDatabaseObservation(
     return {
       engine,
       generation: ok(observation.generation),
+      emptyReaderAlternate: observation.emptyReaderAlternate,
       preparedSource: observation.preparedSource,
       ...(engine?.engine === "sqlite" && observation.generation && observation.physical
         ? {
@@ -86,6 +90,7 @@ export async function readUpdatePostgresDatabaseGenerations(
 export async function readUpdatePhysicalDatabaseGenerations(
   paths: readonly string[],
   pluginOwners?: DatabasePortPluginOwners,
+  emptyReaderAlternates?: Record<string, string>,
 ) {
   const result: Record<string, string | null> = {};
   const postgres: string[] = [];
@@ -97,23 +102,49 @@ export async function readUpdatePhysicalDatabaseGenerations(
     result[pathname] = observation.generation.value;
     if (observation.engine?.engine === "postgres") {
       postgres.push(pathname);
+    } else if (emptyReaderAlternates && observation.emptyReaderAlternate) {
+      emptyReaderAlternates[pathname] = observation.emptyReaderAlternate;
     }
   }
   return Object.assign(result, await readUpdatePostgresDatabaseGenerations(postgres, pluginOwners));
+}
+
+/** Re-reads after capture; a matching receipt avoids a private image. */
+export async function rereadUpdatePhysicalDatabaseGeneration(
+  pathname: string,
+  receipt?: SqliteDatabaseGenerationReceipt,
+  pluginOwners?: DatabasePortPluginOwners,
+): Promise<{ generation?: string; emptyReaderAlternate?: string }> {
+  // A failed reuse propagates: the caller keeps manual recovery instead of copying again.
+  const unchanged = receipt && readUnchangedUpdateDatabaseGeneration(pathname, receipt);
+  if (unchanged) {
+    return { generation: unchanged };
+  }
+  const alternates: Record<string, string> = {};
+  const generations = await readUpdatePhysicalDatabaseGenerations(
+    [pathname],
+    pluginOwners,
+    alternates,
+  );
+  return {
+    generation: generations[pathname] ?? undefined,
+    emptyReaderAlternate: alternates[pathname],
+  };
 }
 
 export async function readUpdatePhysicalDatabaseGenerationPair(
   paths: readonly string[],
   pluginOwners?: DatabasePortPluginOwners,
 ) {
-  const postgres: string[] = [];
+  // A drained source's failed observation classifies again from its private copy.
+  const postgres = new Set<string>();
   // Classify the captured image without reacquiring the live source family.
   const result = readUpdateDatabaseGenerationPair(paths, (imagePath, sourcePath) => {
     if (readBackupEngineImage(imagePath, sourcePath).engine === "postgres") {
-      postgres.push(sourcePath);
+      postgres.add(sourcePath);
     }
   });
-  const fingerprints = await readUpdatePostgresDatabaseGenerations(postgres, pluginOwners);
+  const fingerprints = await readUpdatePostgresDatabaseGenerations([...postgres], pluginOwners);
   Object.assign(result.committed, fingerprints);
   Object.assign(result.physical, fingerprints);
   return result;

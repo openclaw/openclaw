@@ -108,9 +108,16 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
 
 /** Controlled Details content. The parent owns section chrome and navigation. */
 export function ChatDetailsSubagents(props: ChatDetailsSubagentsProps) {
-  const presentation = createMemo(
-    () => props.presentation ?? projectDetailsSubagents(props.rows, props.mobile),
-  );
+  const presentation = createMemo(() => {
+    const value = props.presentation ?? projectDetailsSubagents(props.rows, props.mobile);
+    return {
+      total:
+        value.total -
+        value.counts.reduce((sum, entry) => sum + (entry.listed === false ? entry.count : 0), 0),
+      rows: value.rows.filter((row) => row.listed !== false),
+      counts: value.counts.filter((entry) => entry.listed !== false).slice(0, 2),
+    };
+  });
   const workingCount = () =>
     presentation().counts.reduce((sum, row) => sum + (isWorking(row) ? row.count : 0), 0);
   const countLabel = (status: Subagent["status"]) =>

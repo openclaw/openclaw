@@ -53,6 +53,26 @@ backup.
 
 ## Update implementation contract
 
+Git-source and immutable updates probe support before passing `--no-lazy-fetch`.
+Older Git runs the same inspection commands without that option; partial clones
+may fetch promised objects. This fix must be present in the installed updater;
+a downloaded candidate cannot repair an older updater's preflight.
+
+Interactive failed-update triage preserves the invoking operator's `PATH`, home,
+and authentication environment before candidate admission enters the managed
+Gateway environment. Repair agents still receive the latest target installation's
+state, config, and workspace selectors and require launch confirmation. The
+installed updater must contain this fix; a downloaded candidate cannot repair
+the older updater's already-captured environment. No schema or config migration
+is required.
+
+SQLite header-probe timeouts report the discovery path count and link to the
+manual package-manager hop. A probe batch that misses its 10-second deadline now
+splits and retries, so slow or cold storage gets an answer; a path that cannot
+answer alone still refuses the backup. Backup refusal and rollback safety are
+unchanged. These changes require the updater performing discovery to contain the
+fix; a candidate cannot change an older installed updater's probe.
+
 Candidate Doctor prepares plugin setup sources asynchronously before resolving
 legacy session migrations. Configured external channels can then finish
 post-plugin Doctor without an unprepared-source refusal blocking later state
@@ -1514,9 +1534,13 @@ installation records, and matching settings until candidate activation is verifi
 If activation fails, rollback restores that cohort before restarting the previous
 Gateway. Backups precede plugin maintenance. After an interrupted update,
 `openclaw update repair` resumes the recorded plugin settlement under current
-ownership. It preserves later independent changes; conflicting records, settings,
-or artifacts leave recovery unfinished instead of overwriting those changes or
-reporting the old Gateway ready. The updater performing the operation must contain
+ownership. It preserves later independent changes. When a plugin's install
+record, data/settings upgrade obligation, package files, source snapshot, or a
+config file the update wrote changed after the update, rollback keeps that later
+change, restores everything that still matches, and completes. It records the
+kept items in an update warning that repair prints and `openclaw doctor` shows.
+Recovery still stops for a config file whose path was replaced, for config that
+fails validation or secret resolution, and for a corrupt recovery journal. The updater performing the operation must contain
 this support; installing a newer candidate does not add it to an older parent.
 When recovery stays pending, the update prints the first failure below the
 unfinished-recovery refusal and names `openclaw update repair` when it can settle
@@ -1880,6 +1904,11 @@ upstream source, respecting the repository's ref mappings and exclusions. It doe
 not download unrelated branches or change the repository's shallow boundary.
 Stable and beta target inspection fetches release tags only, without refreshing
 remote branches.
+An implicit dev-channel switch from a detached release-tag checkout can use the
+fetched `main` commit even when the configured fetch refspecs only map tags. The
+updater leaves those mappings unchanged and still honors explicit branch exclusions.
+When it creates `main`, it records the selected remote and merge source so later
+dev updates remain managed. It does not take over an existing unmanaged `main`.
 
 On source installs, Doctor and plugin updates keep plugins built with the host.
 A registry plugin with the same version string can target a different SDK, so

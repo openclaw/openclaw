@@ -3,7 +3,7 @@ import path from "node:path";
 import { sha256Hex } from "./crypto-digest.js";
 import { ignoreMissingPath } from "./errno.js";
 import { hashFileDescriptorSync } from "./file-descriptor.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "./node-sqlite.js";
 import {
   createSqliteFileGenerationReader,
   readStableSqliteFileGeneration,
@@ -17,7 +17,9 @@ import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-lo
 import type {
   PreparedSqliteReadOnlyLocation,
   PreparedSqliteSnapshotSource,
+  SqlitePrivateSnapshotFamily,
 } from "./sqlite-readonly-location.types.js";
+import { readSqliteSchemaObjects } from "./sqlite-schema-admission.js";
 import {
   assertPublishedFileIdentitySync,
   sameFileStatFingerprint,
@@ -78,6 +80,22 @@ function readCommittedContent(
     () => hashFileDescriptorSync(descriptor).sha256,
   );
   return { sha256, family };
+}
+
+/** Native admission of a family with no sidecar bytes to interpret, in place of its copy. */
+function inspectDrainedSource(
+  pathname: string,
+  inspectImage: ((imagePath: string, sourcePath: string) => void) | undefined,
+) {
+  const location = resolveImmutableSqliteFileUri(pathname);
+  if (inspectImage) {
+    inspectImage(location, pathname);
+    return;
+  }
+  const database = openNodeSqliteDatabase(location, { readOnly: true });
+  runWithSqliteCleanup({ release: () => database.close() }, "Database generation admission", () =>
+    readSqliteSchemaObjects(database),
+  );
 }
 
 function readWalIndexHeader(pathname: string): Buffer | null {
@@ -217,7 +235,18 @@ export function readUnchangedUpdateDatabaseGeneration(
   ) {
     throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
   }
-  return serializePhysicalGeneration(current, after) === receipt.physical
+  if (serializePhysicalGeneration(current, after) === receipt.physical) {
+    return receipt.generation;
+  }
+  // A non-writing open since a closed receipt adds only a zero-commit index (iChange and
+  // checksum zero); the receipt's generation is that index's empty-reader alternate.
+  const openedWithoutCommit =
+    after !== null &&
+    !current.journal &&
+    (current.wal?.size ?? 0n) === 0n &&
+    after.readUInt32LE(8) === 0 &&
+    after.readBigUInt64LE(24) === 0n;
+  return openedWithoutCommit && serializePhysicalGeneration(current, null) === receipt.physical
     ? receipt.generation
     : undefined;
 }
@@ -238,11 +267,84 @@ export function readUpdateDatabaseGeneration(
   // below verifies the whole family before its generation can be published.
   const readGeneration = createSqliteFileGenerationReader();
   const generation = readGeneration(pathname);
+  const observe = (
+    content: { sha256: string; family?: SqlitePrivateSnapshotFamily },
+    prepared?: PreparedSqliteReadOnlyLocation,
+  ): { observation: DatabaseGenerationObservation; retained: boolean } => {
+    // Without a digest-verified copy, only fresh bytes prove the digest named this content.
+    const current = readStableSqliteFileGeneration(pathname, prepared ? readGeneration : undefined);
+    const after = readWalIndexHeader(pathname);
+    verifyGenerationFamily(pathname, entries, current);
+    if (
+      !sameSqliteFileGeneration(generation, current) ||
+      !sameWalCommitPublication(before, after, current) ||
+      (generation.wal && generation.wal.size > 0n && after?.[12] !== 1)
+    ) {
+      throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
+    }
+    const identity = [
+      generation.database.dev.toString(),
+      generation.database.ino.toString(),
+      readDatabaseIdentityBirthtime(entry),
+      content.sha256,
+    ];
+    const change = after?.subarray(8, 12).toString("hex") ?? null;
+    const checksum = after?.subarray(24, 32).toString("hex") ?? null;
+    // Checkpoints, including TRUNCATE, preserve iChange and the last commit
+    // checksum. Keep that write evidence in the shipped fingerprint.
+    const fingerprint = (writeChange: string | null, writeChecksum: string | null) =>
+      sha256Hex(JSON.stringify([...identity, writeChange, writeChecksum]));
+    const emptyReader =
+      !generation.journal &&
+      (generation.wal?.size ?? 0n) === 0n &&
+      (after === null || (change === "00000000" && checksum === "0000000000000000"));
+    let preparedSource: PreparedSqliteSnapshotSource | undefined;
+    if (content.family && prepared) {
+      const family = captureSqlitePrivateSnapshotFamily(
+        prepared.location,
+        prepared.cleanupRoot ?? path.dirname(prepared.location),
+      );
+      if (family?.main !== content.family.main || family?.wal !== content.family.wal) {
+        throw new Error("Database generation private image changed before retention");
+      }
+      preparedSource = { sourcePath: pathname, prepared, family: content.family };
+    }
+    return {
+      retained: preparedSource !== undefined,
+      observation: {
+        generation: fingerprint(change, checksum),
+        physical: serializePhysicalGeneration(current, after),
+        // The first read-only native open can create this zero-write WAL index;
+        // closing the last writer can remove it. Neither changes committed content.
+        ...(emptyReader
+          ? {
+              emptyReaderAlternate:
+                after === null
+                  ? fingerprint("00000000", "0000000000000000")
+                  : fingerprint(null, null),
+            }
+          : {}),
+        ...(preparedSource ? { preparedSource } : {}),
+      },
+    };
+  };
+  const drained = !generation.journal && (generation.wal?.size ?? 0n) === 0n;
+  if (drained && !retain) {
+    // No journal or WAL frames to apply: the file's digest is its committed content, so a
+    // private copy adds nothing. An immutable open adds no lock, WAL, or index to the source,
+    // and the observation re-hashes it, so a write racing this read cannot publish.
+    try {
+      inspectDrainedSource(pathname, inspectImage);
+      return observe({ sha256: generation.database.sha256 }).observation;
+    } catch {
+      // Refusals stay with the private copy below, which owns retries and their causes.
+    }
+  }
   const prepared = prepareSqliteReadOnlyLocationSyncInProcess(
     pathname,
     retain?.stagingRoot,
     { key: `file:${databaseFileIdentityKey(generation.database)}` },
-    !generation.journal && (generation.wal?.size ?? 0n) === 0n
+    drained
       ? { sha256: generation.database.sha256, sizeBytes: Number(generation.database.size) }
       : undefined,
   );
@@ -271,59 +373,9 @@ export function readUpdateDatabaseGeneration(
     "Database generation snapshot",
     () => {
       const content = readCommittedContent(pathname, prepared, inspectImage, retain?.accept);
-      const current = readStableSqliteFileGeneration(pathname, readGeneration);
-      const after = readWalIndexHeader(pathname);
-      verifyGenerationFamily(pathname, entries, current);
-      if (
-        !sameSqliteFileGeneration(generation, current) ||
-        !sameWalCommitPublication(before, after, current) ||
-        (generation.wal && generation.wal.size > 0n && after?.[12] !== 1)
-      ) {
-        throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
-      }
-      const identity = [
-        generation.database.dev.toString(),
-        generation.database.ino.toString(),
-        readDatabaseIdentityBirthtime(entry),
-        content.sha256,
-      ];
-      const change = after?.subarray(8, 12).toString("hex") ?? null;
-      const checksum = after?.subarray(24, 32).toString("hex") ?? null;
-      // Checkpoints, including TRUNCATE, preserve iChange and the last commit
-      // checksum. Keep that write evidence in the shipped fingerprint.
-      const fingerprint = (writeChange: string | null, writeChecksum: string | null) =>
-        sha256Hex(JSON.stringify([...identity, writeChange, writeChecksum]));
-      const emptyReader =
-        !generation.journal &&
-        (generation.wal?.size ?? 0n) === 0n &&
-        (after === null || (change === "00000000" && checksum === "0000000000000000"));
-      let preparedSource: PreparedSqliteSnapshotSource | undefined;
-      if (content.family) {
-        const family = captureSqlitePrivateSnapshotFamily(
-          prepared.location,
-          prepared.cleanupRoot ?? path.dirname(prepared.location),
-        );
-        if (family?.main !== content.family.main || family?.wal !== content.family.wal) {
-          throw new Error("Database generation private image changed before retention");
-        }
-        preparedSource = { sourcePath: pathname, prepared, family: content.family };
-        retained = true;
-      }
-      return {
-        generation: fingerprint(change, checksum),
-        physical: serializePhysicalGeneration(current, after),
-        // The first read-only native open can create this zero-write WAL index;
-        // closing the last writer can remove it. Neither changes committed content.
-        ...(emptyReader
-          ? {
-              emptyReaderAlternate:
-                after === null
-                  ? fingerprint("00000000", "0000000000000000")
-                  : fingerprint(null, null),
-            }
-          : {}),
-        ...(preparedSource ? { preparedSource } : {}),
-      };
+      const result = observe(content, prepared);
+      retained = result.retained;
+      return result.observation;
     },
   );
 }
