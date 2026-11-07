@@ -34,9 +34,13 @@ export function resolveSessionTitleSource(
       // Registered skill command: its arguments carry the task text; a bare
       // command has no title source.
       source = invocation.args?.trim() ?? "";
-    } else if (!options?.isControlCommand || options.isControlCommand(text)) {
-      // Without the canonical control detector, or for an actual control
-      // command, slash text has no title source.
+    } else if (
+      skillCommands === undefined ||
+      !options?.isControlCommand ||
+      options.isControlCommand(text)
+    ) {
+      // Without the skill registry, without the canonical control detector, or
+      // for an actual control command, slash text has no title source.
       source = "";
     } else {
       // The detector ruled out a control command and a registry was

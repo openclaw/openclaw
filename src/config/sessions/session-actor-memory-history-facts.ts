@@ -1,7 +1,6 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
-import { isControlCommandMessage } from "../../auto-reply/command-detection.js";
 import {
   buildSessionPreviewItems,
   projectSessionDisplayMessage,
