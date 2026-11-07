@@ -281,10 +281,19 @@ struct ChatProTab: View {
         return session
     }
 
+    private var resolvedMainSessionKey: String {
+        ChatSessionSidebarModel.selectedSessionKey(
+            sessions: self.viewModel?.sessions ?? [],
+            currentSessionKey: "main",
+            mainSessionKey: self.appModel.mainSessionKey,
+            activeAgentID: self.appModel.chatAgentId,
+            sessionRoutingContract: self.appModel.chatSessionRoutingContract)
+    }
+
     private func headerSessionTitle(_ session: OpenClawChatSessionEntry) -> some View {
         HStack(spacing: 5) {
             OpenClawSessionColorDot(color: session.color)
-            Text(verbatim: CommandCenterTab.sessionTitle(session))
+            Text(verbatim: CommandCenterTab.sessionTitle(session, mainSessionKey: self.resolvedMainSessionKey))
                 .font(OpenClawType.captionMedium)
                 .lineLimit(1)
         }
@@ -298,8 +307,9 @@ struct ChatProTab: View {
 
     private var headerAgentAccessibilityLabel: String {
         let identity = "\(voiceAvatarAccessibilityLabel). \(gatewayAccessibilityLabel)"
-        guard let session = coloredHeaderSession else { return identity }
-        return "\(identity). \(CommandCenterTab.sessionTitle(session))"
+        guard let session = self.viewModel?.currentSessionEntry() else { return identity }
+        let title = CommandCenterTab.sessionTitle(session, mainSessionKey: self.resolvedMainSessionKey)
+        return "\(identity). \(title)"
     }
 
     private func handleHeaderAgentIdentityTap() {

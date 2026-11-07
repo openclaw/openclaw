@@ -194,6 +194,7 @@ public enum ChatSessionSidebarModel {
         excludesMainSession: Bool = false,
         query: String,
         rankedSearch: Bool = false,
+        additionalSearchText: [String: String] = [:],
         sessionRoutingContract: String? = nil,
         viewOptions: ViewOptions? = nil,
         observedOrder: ObservedOrder = .init(),
@@ -238,7 +239,8 @@ public enum ChatSessionSidebarModel {
         } else {
             ordered = OpenClawChatSessionListOrganizer.organize(entries)
         }
-        let visible = OpenClawChatSessionListOrganizer.filter(ordered, search: query)
+        let visible = OpenClawChatSessionListOrganizer.filter(
+            ordered, search: query, additionalSearchText: additionalSearchText)
         if let viewOptions {
             #if os(macOS)
             var mainKeys: Set<String> = [mainSessionKey, resolvedMainSessionKey]

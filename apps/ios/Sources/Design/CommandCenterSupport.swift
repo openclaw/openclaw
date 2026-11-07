@@ -127,8 +127,10 @@ struct CommandSessionActionsModifier: ViewModifier {
                     {
                         self.patch(unread: self.session.unread != true)
                     }
-                    self.actionButton("Rename…", systemImage: "pencil") {
-                        self.beginRename()
+                    if !CommandCenterTab.isMainSession(self.session.key, mainSessionKey: self.mainSessionKey) {
+                        self.actionButton("Rename…", systemImage: "pencil") {
+                            self.beginRename()
+                        }
                     }
                     self.actionButton(
                         self.session.hasActiveRun == true

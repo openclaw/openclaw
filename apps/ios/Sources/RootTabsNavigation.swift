@@ -278,11 +278,11 @@ extension RootTabs {
         .docs,
     ]
 
-    /// Home (chat) is a fixed first row like the web sidebar; only these can be
+    /// Main Session is a fixed first row; only these pages can be
     /// pinned/unpinned by the user.
     static let pinnableSidebarPages: [SidebarDestination] = sidebarDestinations.filter { $0 != .chat }
 
-    /// Echoes the web first-run Pages zone (Home, Usage, Automations, …):
+    /// First-run Pages zone after the fixed Main Session shortcut:
     /// compact by default so sessions stay above the fold. The Sessions page is
     /// intentionally unpinned — the sessions section + "All Sessions…" own it.
     static let defaultPinnedSidebarPages: [SidebarDestination] = [.overview, .usage, .cron]
