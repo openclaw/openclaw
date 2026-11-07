@@ -23,7 +23,6 @@ import { waitForControlUiInitialRoster } from "../ui/src/test-helpers/control-ui
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
-  installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { installNativePluginMockGateway } from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
@@ -892,12 +891,9 @@ try {
                   return sessions.list(params).result;
                 },
               };
-              const installGateway = scenario.fixture?.workboardResources
-                ? installNativePluginMockGateway
-                : installMockGateway;
               const gateway = idleControl
                 ? undefined
-                : await installGateway(
+                : await installNativePluginMockGateway(
                     page,
                     { ...fixture, awaitInitialRoster: false },
                     {
