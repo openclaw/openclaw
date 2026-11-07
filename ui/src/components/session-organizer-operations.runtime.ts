@@ -394,6 +394,8 @@ export async function assignSessionOwner(
   }
 }
 
+export { createSessionGroupDialog } from "./session-organizer-group-dialogs.runtime.ts";
+
 export async function createSessionGroup(
   deps: SessionOrganizerDependencies,
   name: string,

@@ -110,12 +110,11 @@ export function countSidebarSessionFilters(host: Pick<SessionListHost, "sessions
 }
 
 export function renderSessionListToolbar(host: SessionListHost & { onToggleSidebar?: () => void }) {
-  const groupAccess = createMemo(() =>
+  const groupAccess = () =>
     host.readSessionMutationAccess({
       method: "sessions.groups.put",
       requiredScope: "operator.write",
-    }),
-  );
+    });
   const statusLabel = () =>
     host.sessionsStatusFilter === "active"
       ? t("common.active")
@@ -132,7 +131,7 @@ export function renderSessionListToolbar(host: SessionListHost & { onToggleSideb
             return access.allowed ? t("sessionsView.newGroupTitle") : access.reason;
           })()}
           aria-label={t("sessionsView.newGroupTitle")}
-          disabled={!host.connected || Boolean(host.sidebarSnapshot) || !groupAccess().allowed}
+          disabled={!groupAccess().allowed}
           onClick={() => void host.sessionOrganizer.createSessionGroup()}
         >
           <Icon name="folder" />

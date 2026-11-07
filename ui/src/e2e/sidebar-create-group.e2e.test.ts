@@ -44,7 +44,7 @@ suite.define(() => {
           });
           await writeFile(
             path.join(suite.artifactDir, `${grouping}-entry.png`),
-            entry.elements[0].png,
+            entry.elements[0]!.png,
           );
           const create = toolbar.getByRole("button", { name: "New group", exact: true });
           expect(await create.count()).toBe(1);
@@ -64,7 +64,7 @@ suite.define(() => {
           });
           await writeFile(
             path.join(suite.artifactDir, `${grouping}-created.png`),
-            created.elements[0].png,
+            created.elements[0]!.png,
           );
           await group.locator(".sidebar-recent-sessions__head").hover();
           await group
@@ -75,6 +75,19 @@ suite.define(() => {
         },
       ),
   );
+  it("offers no enabled creation before connection admission, then follows the admitted access", () =>
+    suite.withPage({ locale: "en-US" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, { heldMethods: ["connect"] });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("connect");
+      expect(await page.locator(".sidebar-session-toolbar__new-group:enabled").count()).toBe(0);
+      await gateway.resolveDeferred("connect");
+      const create = page.locator(".sidebar-session-toolbar__new-group");
+      await create.waitFor();
+      await expect.poll(() => create.isDisabled()).toBe(false);
+      expect(await gateway.getRequests("sessions.groups.put")).toHaveLength(0);
+    }));
+
   it("disables creation when the connection has no write scope", () =>
     suite.withPage({ locale: "en-US" }, async ({ page }) => {
       const gateway = await installMockGateway(page, { operatorScopes: ["operator.read"] });
