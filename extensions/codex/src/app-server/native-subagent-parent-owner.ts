@@ -25,6 +25,22 @@ import { matchesNativeAssignmentLifecycle } from "./native-subagent-pending-assi
 import type { CodexNativeSubagentSubmissionOwner } from "./native-subagent-submission-owner.js";
 import { isJsonObject, type CodexServerNotification } from "./protocol.js";
 
+export function hasNativeChildrenForParent(
+  children: Iterable<ChildState>,
+  parentThreadId: string,
+  unsettledOnly = false,
+): boolean {
+  for (const child of children) {
+    if (
+      child.parentThreadId === parentThreadId &&
+      (!unsettledOnly || (!child.terminal && !child.settledWithoutCompletion))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export type NativeParentRegistration = Pick<
   ParentState,
   | "parentThreadId"

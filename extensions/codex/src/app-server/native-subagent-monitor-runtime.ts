@@ -39,6 +39,7 @@ import type { NativeParentRegistration } from "./native-subagent-parent-owner.js
 
 type NativeMonitor = {
   readNativeSubagents(request: NativeSubagentsReadRequest): NativeSubagentsSnapshot;
+  hasPendingChildRetention(parentThreadId: string): boolean;
   withDescendantCancellation<T>(
     params: NativeDescendantCancellation,
     run: (cancel: () => Promise<NativeDescendantCancellationResult>) => Promise<T>,
@@ -274,6 +275,8 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
     }: NativeSubagentsReadRequest & {
       client: CodexAppServerClient;
     }) => monitors.get(client)?.readNativeSubagents(request),
+    hasPendingChildRetention: (client: CodexAppServerClient, parentThreadId: string): boolean =>
+      monitors.get(client)?.hasPendingChildRetention(parentThreadId) ?? false,
     captureModelSource: ({
       client,
       ...request

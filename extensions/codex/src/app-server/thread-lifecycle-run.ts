@@ -182,6 +182,7 @@ export async function startOrResumeThread(
         signal: params.signal,
         onExitWaitCancelled: afterThreadWrite ? undefined : params.onPrewriteHandoffCancelled,
         waitForBackgroundCleanup,
+        afterThreadWrite,
       });
     if (binding?.pendingSupervisionBranch) {
       if (params.params.providerReviewAcknowledgment) {

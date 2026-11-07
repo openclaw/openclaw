@@ -152,8 +152,8 @@ export async function startCodexAttemptThread(params: {
   };
   const startupAbandonController = new AbortController();
   // Set during abort dispatch, before either retirement below runs, when the
-  // abandoned work was a wait for another client's exit: this client has written
-  // no thread state, so peers may keep using it. Timeouts still retire it in onTimeout.
+  // abandoned work was waiting for native children or another client's exit:
+  // no thread state was written, so peers may keep using it after cancellation.
   let startupAbandonedBeforeThreadWrite = false;
   const abandonStartupAcquire = () => startupAbandonController.abort();
   params.signal.addEventListener("abort", abandonStartupAcquire, { once: true });
@@ -185,7 +185,9 @@ export async function startCodexAttemptThread(params: {
         await releaseStartupResourcesOnTimeout?.();
         releaseSharedClientLease?.();
         releaseSharedClientLease = undefined;
-        await closeCodexStartupClientBestEffort(startupClientForAbandonedRequestCleanup);
+        if (!startupAbandonedBeforeThreadWrite) {
+          await closeCodexStartupClientBestEffort(startupClientForAbandonedRequestCleanup);
+        }
         startupClientForAbandonedRequestCleanup = undefined;
       },
       operation: async () => {

@@ -18,6 +18,7 @@ import {
   isCodexAppServerLiveThreadBackgroundOnly,
   isCodexAppServerLiveThreadProtected,
   releaseCodexAppServerLiveThread,
+  countCodexAppServerLiveThreadProtections,
   readCodexLiveThreadEphemeralPolicy,
   waitForCodexAppServerThreadBackgroundCleanup,
 } from "./client-runtime.js";
@@ -28,6 +29,7 @@ import {
   getCodexInferenceThread,
   getCodexInferenceThreadQualification,
 } from "./inference-routing.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { attestCodexThreadToolSurface } from "./plugin-thread-attestation.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
@@ -40,7 +42,10 @@ import {
   fingerprintCodexThreadConfig,
   fingerprintRestrictedThreadConfig,
 } from "./thread-fingerprints.js";
-import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
+import {
+  CodexThreadBindingConflictError,
+  CodexNativeChildSettlementRequired,
+} from "./thread-lifecycle-errors.js";
 import {
   buildCodexThreadRequestConfig,
   prepareCodexThreadFinalConfigPatch,
@@ -172,7 +177,8 @@ export async function releaseCodexBoundLiveThread(
     ownerClientId?: string;
     /** Cold resume may join asynchronous Stop cleanup, never force its release. */
     waitForBackgroundCleanup?: boolean;
-    /** Runs synchronously when `signal` ends a wait for the previous owner's exit. */
+    afterThreadWrite?: boolean;
+    /** Runs synchronously when `signal` ends a prewrite ownership wait. */
     onExitWaitCancelled?: () => void;
   },
 ): Promise<boolean> {
@@ -218,6 +224,39 @@ export async function releaseCodexBoundLiveThread(
     }
   }
   try {
+    if (
+      !changedClient &&
+      !options.afterThreadWrite &&
+      options.signal &&
+      !isCodexAppServerLiveThreadClaimed(client, options.threadId) &&
+      isCodexAppServerLiveThreadBackgroundOnly(client, options.threadId) &&
+      countCodexAppServerLiveThreadProtections(client, options.threadId) === 1 &&
+      codexNativeSubagentMonitorRuntime.hasPendingChildRetention(client, options.threadId)
+    ) {
+      // The child releases its pin before announcing completion through this
+      // session's lane. Additional pins may belong to startup's own discovery;
+      // only wait for the monitor's single pin, never unrelated protection.
+      const signal = options.signal;
+      throw new CodexNativeChildSettlementRequired(async () => {
+        const cancelled = () => options.onExitWaitCancelled?.();
+        signal.addEventListener("abort", cancelled, { once: true });
+        try {
+          if (signal.aborted) {
+            cancelled();
+          }
+          await options.lifecycleTiming.measure("native-child-settlement", () =>
+            waitForCodexAppServerThreadBackgroundCleanup(client, options.threadId, signal),
+          );
+          throwIfCodexThreadLifecycleAborted(signal);
+          const closed = client.getCloseError();
+          if (closed) {
+            throw closed;
+          }
+        } finally {
+          signal.removeEventListener("abort", cancelled);
+        }
+      });
+    }
     if (
       options.waitForBackgroundCleanup &&
       !isCodexAppServerLiveThreadClaimed(client, options.threadId) &&
