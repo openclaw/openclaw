@@ -112,7 +112,7 @@ function decodeIrcIngressPayload(
 
 function legacyDirectLaneKey(projection: ReturnType<typeof inspectRawPrivmsg>): string | undefined {
   // Only + and ! targets were classified as direct before channel-prefix support.
-  const prefix = projection.message.rawTarget.charAt(0);
+  const prefix = projection.message.rawTarget?.charAt(0);
   if (prefix !== "+" && prefix !== "!") {
     return undefined;
   }
@@ -129,8 +129,9 @@ function inspectIrcIngress(
       raw.claimedProjection = projection;
       // A row queued before +/! channels were recognized stored the old direct lane key.
       // Accept that admission identity so the message is still delivered, now as a group.
-      if (context.claimedLaneKey === legacyDirectLaneKey(projection)) {
-        return { eventId: raw.body.eventId, laneKey: context.claimedLaneKey };
+      const legacyLaneKey = legacyDirectLaneKey(projection);
+      if (legacyLaneKey !== undefined && context.claimedLaneKey === legacyLaneKey) {
+        return { eventId: raw.body.eventId, laneKey: legacyLaneKey };
       }
     }
     return { eventId: raw.body.eventId, laneKey: projection.laneKey };

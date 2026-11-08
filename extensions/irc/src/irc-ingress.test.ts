@@ -163,6 +163,29 @@ describe("IRC durable ingress", () => {
     });
   });
 
+  it("does not accept a row without a stored lane key", async () => {
+    await withQueue(async (queue, start) => {
+      const dispatch = vi.fn<IrcIngressDispatch>(async (_message, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      await queue.enqueue("legacy:null-lane:1", {
+        version: 1,
+        eventId: "legacy:null-lane:1",
+        receivedAt: Date.now(),
+        connectionEpoch: "connection-legacy",
+        connectedNick: "bot",
+        rawLine: ":alice!ident@example.org PRIVMSG +modeless :hello",
+      });
+      const ingress = start(queue, dispatch);
+      try {
+        await ingress.waitForIdle();
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
   it("classifies an RFC 2812 +modeless channel PRIVMSG as a group conversation", async () => {
     await withQueue(async (queue, start) => {
       const dispatch = vi.fn<IrcIngressDispatch>(async (_message, lifecycle) => {
