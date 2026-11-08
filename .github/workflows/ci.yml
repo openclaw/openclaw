@@ -4706,6 +4706,13 @@ jobs:
           fetch-ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && format('refs/pull/{0}/merge', inputs.pull_request_number) || github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
       - *semantic_node_setup_step
 
+      - name: Setup pinned Bun parity runtime
+        id: bun_setup
+        if: matrix.group == 'boundaries'
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: *cache_mode
+
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
         if: matrix.group == 'extension-package-boundary'
@@ -4869,8 +4876,15 @@ jobs:
       - *linux_node_checkout_step
       - *linux_node_setup_step
 
+      - name: Setup pinned Bun parity runtime
+        id: bun_setup
+        if: needs.preflight.outputs.run_format_check == 'true'
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: *cache_mode
+
       - name: Check formatting
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_format_check == 'true' }}
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && steps.bun_setup.outcome == 'success' && needs.preflight.outputs.run_format_check == 'true' }}
         run: pnpm format:check
 
       - name: Check AGENTS.md bootstrap size
