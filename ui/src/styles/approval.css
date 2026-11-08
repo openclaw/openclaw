@@ -13,17 +13,8 @@
 }
 
 .approval-page__status-brand {
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 14.5px 12px 0;
+  padding-top: 14.5px;
   color: var(--text-strong);
-}
-
-.approval-page__status-wordmark {
-  display: block;
-  width: 105px;
-  height: 32px;
 }
 
 .approval-page__backdrop {

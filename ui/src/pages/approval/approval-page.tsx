@@ -635,7 +635,7 @@ export const ApprovalPage = defineSolidBridge<ApprovalPageProps>(
             aria-busy={props.loading || page.resolvingDecision() !== null ? "true" : "false"}
           >
             {unavailable() ? (
-              <header class="approval-page__status-brand">
+              <header class="topbar-connection-brand approval-page__status-brand">
                 <GatewayWordmarkText
                   class="approval-page__status-wordmark"
                   fill="currentColor"
