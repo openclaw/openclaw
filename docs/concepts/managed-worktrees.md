@@ -1009,6 +1009,16 @@ take minutes while holding the project checkout lifecycle lease. Ordinary
 preparation never starts that repair. Operator-registered repositories keep
 their own history policy.
 
+Doctor fetches the registry's recorded repository URL through the same isolated
+transport as managed refresh, ignoring checkout `origin`, URL rewrites, and
+credential helpers. It has no admitted Control UI/Gateway credential context and
+does not borrow tokens from configuration or the environment. Authentication
+failure leaves history shallow and reports that the operator must use an approved
+authenticated unshallow under the checkout lifecycle lease. Git cannot prompt;
+the explicit maintenance fetch has a 30-minute timeout. The shallow boundary is
+removed only after complete history arrives, with Git's shallow lock held for
+the maintenance operation. A shallow upstream leaves the original boundary intact.
+
 Linked worktrees share the base's shallow boundary. Do not run `git fetch` or
 `git pull` with `--depth`, `--shallow-since`, or `--shallow-exclude` in a managed
 base or its linked worktrees. Fetch the required ref without a depth limit;

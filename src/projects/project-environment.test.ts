@@ -110,8 +110,8 @@ vi.mock("./project-checkout.js", () => ({
   resolveProjectDirectory: async (directory: string) => directory,
 }));
 // mock-isolation: history preparation uses synthetic checkout paths in environment-only proof.
-vi.mock("./project-clone-preparation.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./project-clone-preparation.js")>()),
+vi.mock("./project-clone-preparation.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./project-clone-preparation.runtime.js")>()),
   warnIfProjectCloneShallow: mocks.history,
 }));
 // mock-isolation: registration reads only the synthetic checkout's origin.

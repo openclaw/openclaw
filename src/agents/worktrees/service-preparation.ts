@@ -5,7 +5,6 @@ import { setImmediate as yieldTurn } from "node:timers/promises";
 import { resolveStateDir } from "../../config/paths.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { ProjectCheckoutBusyError } from "../../projects/project-checkout.js";
-import { warnIfProjectCloneShallow } from "../../projects/project-clone-preparation.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { createCrustaceanSlug } from "../session-slug.js";
 import {
@@ -75,6 +74,8 @@ export async function prepareWorktreeRepository(
 ): Promise<ResolvedRepository> {
   params.signal?.throwIfAborted();
   const repository = await resolveRepository(params.repoRoot);
+  const { warnIfProjectCloneShallow } =
+    await import("../../projects/project-clone-preparation.runtime.js");
   await warnIfProjectCloneShallow(repository.repoRoot, { env, commonDir: repository.commonDir });
   return repository;
 }

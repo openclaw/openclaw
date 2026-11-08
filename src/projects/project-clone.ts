@@ -15,7 +15,7 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveProjectDirectory, withProjectCheckoutLifecycle } from "./project-checkout.js";
-import { warnIfProjectCloneShallow } from "./project-clone-preparation.js";
+import { warnIfProjectCloneShallow } from "./project-clone-preparation.runtime.js";
 import {
   cloneProjectCheckout,
   configureProjectCheckoutMaintenance,

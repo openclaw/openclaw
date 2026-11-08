@@ -1,9 +1,14 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
@@ -34,7 +39,7 @@ async function git(root: string, ...args: string[]): Promise<string> {
 }
 
 describe("doctor project clone shape", () => {
-  it.each(["full", "partial", "shallow", "both", "missing"])(
+  it.each(["full", "partial", "shallow", "both", "missing", "private"])(
     "inspects only registry clones and reports %s clone repair",
     async (shape) => {
       await withOpenClawTestState({ prefix: "openclaw-doctor-clones-" }, async (state) => {
@@ -56,7 +61,7 @@ describe("doctor project clone shape", () => {
         const cfg = { agents: { defaults: { workspace: ignored } } };
         const clone = state.path("project's clone");
         const partial = shape === "partial" || shape === "both";
-        const shallow = shape === "shallow" || shape === "both";
+        const shallow = shape === "shallow" || shape === "both" || shape === "private";
         await git(
           state.root,
           "clone",
@@ -65,10 +70,25 @@ describe("doctor project clone shape", () => {
           originUrl,
           clone,
         );
+        let recordedUrl = originUrl;
+        const authorization: (string | undefined)[] = [];
+        if (shape === "private") {
+          const server = createServer((request, response) => {
+            authorization.push(request.headers.authorization);
+            response.writeHead(401, { "WWW-Authenticate": 'Basic realm="synthetic"' });
+            response.end();
+          });
+          recordedUrl = `${await listenLoopback(server)}/private.git`;
+          onTestFinished(() => closeHttpServer(server));
+        }
+        if (shape === "both" || shape === "private") {
+          await git(clone, "remote", "set-url", "origin", state.path("wrong.git"));
+          await git(clone, "config", `url.${state.path("rewritten.git")}.insteadOf`, recordedUrl);
+        }
         const project = await registerClonedProjectRegistry({
           path: clone,
           name: "Stored project",
-          originUrl,
+          originUrl: recordedUrl,
         });
         await registerProjectRegistry({ path: ignored, name: "User checkout" });
         const configBefore = await fs.readFile(path.join(clone, ".git", "config"), "utf8");
@@ -107,18 +127,38 @@ describe("doctor project clone shape", () => {
         expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("true");
 
         const repair = () => collectProjectCloneShapeHealthFindings(cfg, { repair: true });
+        if (shape === "private") {
+          const result = await collectProjectCloneShapeHealthFindings(cfg, {
+            repair: true,
+            env: { ...state.env, GH_TOKEN: "synthetic-not-admitted" },
+          });
+          expect(result[0]?.message).toContain(
+            "Doctor has no admitted Control UI/Gateway credential",
+          );
+          expect(authorization).toEqual([undefined]);
+          expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("true");
+          expect(await fs.readFile(path.join(clone, ".git", "config"), "utf8")).toBe(configBefore);
+          return;
+        }
         if (shape === "shallow") {
           await withProjectCheckoutLifecycle(clone, {}, async () => {
             expect((await repair())[0]?.message).toContain("busy; skipped");
             expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("true");
           });
+          const foreignLock = path.join(clone, ".git", "shallow.lock");
+          await fs.writeFile(foreignLock, "another fetch");
+          expect((await repair())[0]?.message).toContain("unshallow failed");
+          expect(await fs.readFile(foreignLock, "utf8")).toBe("another fetch");
+          await fs.unlink(foreignLock);
           // A failed origin must remain retryable without losing local history.
-          await git(clone, "remote", "set-url", "origin", state.path("absent.git"));
+          const savedOrigin = state.path("saved-origin.git");
+          await fs.rename(origin, savedOrigin);
           expect((await repair())[0]?.message).toContain("unshallow failed");
           expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("true");
-          await git(clone, "remote", "set-url", "origin", pathToFileURL(ignored).href);
+          await git(state.root, "clone", "--bare", ignored, origin);
           expect((await repair())[0]?.message).toContain("still shallow");
-          await git(clone, "remote", "set-url", "origin", originUrl);
+          await fs.rm(origin, { recursive: true, force: true });
+          await fs.rename(savedOrigin, origin);
         }
         const head = await git(clone, "rev-parse", "HEAD");
         const reflog = await fs.readFile(path.join(clone, ".git", "logs", "HEAD"), "utf8");
@@ -144,6 +184,9 @@ describe("doctor project clone shape", () => {
         expect(await git(ignored, "rev-parse", "--is-shallow-repository")).toBe("true");
         expect(await git(ignored, "config", "remote.origin.partialclonefilter")).toBe("blob:none");
         if (shape === "both") {
+          expect(await fs.readFile(path.join(clone, ".git", "config"), "utf8")).toBe(configBefore);
+          await git(clone, "remote", "set-url", "origin", originUrl);
+          await git(clone, "config", "--unset", `url.${state.path("rewritten.git")}.insteadOf`);
           const fresh = state.path("fresh");
           await cloneProjectCheckout({ url: originUrl, target: fresh });
           expect(await git(fresh, "rev-list", "--count", "HEAD")).toBe("2");

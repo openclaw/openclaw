@@ -7,7 +7,7 @@ import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { warnIfProjectCloneShallow } from "../../src/projects/project-clone-preparation.js";
+import { warnIfProjectCloneShallow } from "../../src/projects/project-clone-preparation.runtime.js";
 import { configureProjectCheckoutMaintenance } from "../../src/projects/project-clone-runtime.js";
 
 assert(process.argv[2], "Supply a disposable scratch parent");
