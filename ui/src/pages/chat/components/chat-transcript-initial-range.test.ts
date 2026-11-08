@@ -66,7 +66,7 @@ it("yields between destination-size corrections and waits for a stable end befor
       events.push("measure");
       return remainingCorrections-- > 0;
     },
-    () => false,
+    (indexes) => indexes.length === 0,
   );
   onTestFinished(() => range.disconnect());
   const settleCommits = async () => {
@@ -133,7 +133,7 @@ it("mounts the expanded destination after a manual jump measures a shorter tail"
       virtualizer.resizeItem(19, 10);
       return true;
     },
-    () => false,
+    (indexes) => indexes.every((index) => mounted.includes(index)),
   );
   onTestFinished(() => range.disconnect());
   const rows = Array.from({ length: 20 }, (_, index) => ({
@@ -165,4 +165,128 @@ it("mounts the expanded destination after a manual jump measures a shorter tail"
   }
   await Promise.resolve();
   expect(destination).toEqual(expect.arrayContaining([16, 17, 18, 19]));
+});
+
+it("waits for a deferred destination commit and resumes it after parking", () => {
+  let nextFrame = 0;
+  const frames = new Map<number, FrameRequestCallback>();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.set(++nextFrame, callback);
+    return nextFrame;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+  let renderPending = false;
+  const invalidate = () => {
+    renderPending = true;
+  };
+  const afterCommit: Array<() => void> = [];
+  const heights = Array.from({ length: 20 }, (_, index) => (index === 19 ? 1000 : 100));
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: heights.length,
+    initialRect: { width: 800, height: 300 },
+    initialOffset: 0,
+    getScrollElement: () => null,
+    estimateSize: (index) => (index === 19 ? 1000 : 100),
+    scrollToFn: () => {},
+    observeElementRect: () => () => {},
+    observeElementOffset: () => () => {},
+    onChange: invalidate,
+  });
+  let mounted: number[] = [];
+  let presented = true;
+  const measurements = new Map<number, number>();
+  const measureRows = () => {
+    let changed = false;
+    for (const index of mounted) {
+      const key = virtualizer.options.getItemKey(index);
+      const previous = virtualizer.itemSizeCache.get(key);
+      measurements.set(index, heights[index]!);
+      virtualizer.resizeItem(index, heights[index]!);
+      changed ||= virtualizer.itemSizeCache.get(key) !== previous;
+    }
+    return changed;
+  };
+  const range = new TranscriptInitialRange(
+    0,
+    () => virtualizer,
+    defaultRangeExtractor,
+    invalidate,
+    () => 0,
+    () => presented,
+    () => 100,
+    (effect) => afterCommit.push(effect),
+    measureRows,
+    (indexes) =>
+      indexes.every(
+        (index) => mounted.includes(index) && measurements.get(index) === heights[index],
+      ),
+  );
+  onTestFinished(() => range.disconnect());
+  const rows = heights.map((_height, index) => ({
+    kind: "item" as const,
+    key: String(index),
+    item: index,
+  }));
+  range.updateRows(rows);
+  range.finish(true);
+  virtualizer.setOptions({
+    ...virtualizer.options,
+    rangeExtractor: (value) => range.extract(value),
+  });
+  range.presentation(rows);
+  const commitRows = () => {
+    if (renderPending) {
+      renderPending = false;
+      mounted = virtualizer.getVirtualIndexes();
+    }
+  };
+  const runAfterCommit = () => {
+    for (const effect of afterCommit.splice(0)) {
+      effect();
+    }
+  };
+  const paint = () => {
+    const callbacks = [...frames.values()];
+    frames.clear();
+    callbacks.forEach((callback) => callback(nextFrame * 16));
+  };
+  commitRows();
+  measureRows();
+  let destination: number[] | undefined;
+  range.prepareEnd(
+    () => {
+      destination = [...mounted];
+    },
+    () => true,
+    false,
+  );
+  commitRows();
+  expect(mounted).toContain(19);
+  expect(mounted).not.toContain(16);
+  // A native size receipt invalidates the range after its DOM commit. The
+  // queued preparation callback can run before that next render commits.
+  heights[19] = 10;
+  measurements.set(19, 10);
+  virtualizer.resizeItem(19, 10);
+  runAfterCommit();
+  expect(destination).toBeUndefined();
+  expect(range.preparingEnd).toBe(true);
+  commitRows();
+  expect(mounted).toEqual(expect.arrayContaining([16, 17, 18, 19]));
+  runAfterCommit();
+  presented = false;
+  paint();
+  expect(destination).toBeUndefined();
+  presented = true;
+  for (let turn = 0; turn < 10; turn++) {
+    if (!renderPending && !afterCommit.length && !frames.size) {
+      break;
+    }
+    commitRows();
+    runAfterCommit();
+    paint();
+  }
+  expect(destination).toEqual(expect.arrayContaining([16, 17, 18, 19]));
+  expect(range.preparingEnd).toBe(false);
+  expect(frames.size).toBe(0);
 });

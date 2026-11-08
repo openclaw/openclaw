@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
@@ -9,6 +10,7 @@ import {
   emitTranscriptResize,
   setTranscriptViewport,
 } from "./chat-transcript-fixture.test-support.tsx";
+import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -74,6 +76,81 @@ it("remeasures skipped rows when automatic follow replaces smooth scrolling", as
   flushFrames();
   renderRows(rows);
   expect(transcriptSize(container)).toBe(before + 60);
+});
+
+it("finishes smooth end preparation after the destination moves beyond the old target", async () => {
+  const frame = stubAnimationFrames();
+  transcriptDomState.measuredRowHeight = 120;
+  const view = await mountFollow("follow-split-destination");
+  const { container, transcript, renderRows, rows } = view;
+  const host = view.session;
+  if (!(host instanceof ChatSessionVirtualizerHost)) {
+    throw new Error("Expected the mounted transcript's virtualizer owner");
+  }
+  const settle = async () => {
+    for (let turn = 0; turn < 6; turn++) {
+      await Promise.resolve();
+      flush();
+    }
+  };
+  const paint = async () => {
+    frame();
+    await settle();
+  };
+  const measureMounted = () => {
+    for (const row of container.querySelectorAll<HTMLElement>(
+      ".chat-virtual-row:not([data-prepared-row])",
+    )) {
+      emitTranscriptResize(row, 800, 120);
+    }
+  };
+  transcript.scrollToEnd({ behavior: "instant" });
+  await settle();
+  measureMounted();
+  await paint();
+  scrollReader(container, 2400);
+  renderRows(rows);
+  await settle();
+
+  // Native smooth motion can still be travelling when completion splits its row.
+  let travelling = true;
+  const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
+    if (typeof options === "object" && !(travelling && options.behavior === "smooth")) {
+      container.scrollTop = Math.max(
+        0,
+        Math.min(options.top ?? container.scrollTop, container.scrollHeight - 600),
+      );
+    }
+  });
+  container.scrollTo = scrollTo;
+  transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
+  await settle();
+  measureMounted();
+  await paint();
+  await paint();
+  expect(scrollTo).toHaveBeenCalledWith({ top: 4200, behavior: "smooth" });
+
+  const splitRows = [...rows.slice(0, -1), ...contentRows(20, "split:"), rows.at(-1)!];
+  renderRows(splitRows);
+  transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
+  await settle();
+  const destination = requireElement(container, '[data-virtual-row-key="row:39"]');
+  destination.style.height = "180px";
+  Object.defineProperty(destination, "offsetHeight", { configurable: true, value: 180 });
+  // Deliver once: a skipped observer receipt must not need a later external resize.
+  for (const row of container.querySelectorAll<HTMLElement>(
+    ".chat-virtual-row:not([data-prepared-row])",
+  )) {
+    emitTranscriptResize(row, 800, row === destination ? 180 : 120);
+  }
+  travelling = false;
+  for (let turn = 0; turn < 6; turn++) {
+    await paint();
+  }
+
+  expect(transcriptSize(container)).toBe(7260);
+  expect(container.scrollTop).toBe(6660);
+  expect(host.initialRange.preparingEnd).toBe(false);
 });
 
 it.each([

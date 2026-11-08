@@ -311,6 +311,9 @@ export class ChatTranscriptRenderer {
           release();
           if (this.isPresented()) {
             effect();
+          } else {
+            // Parking can happen after the commit but before this microtask.
+            this.queueAfterCommit(effect, yieldToBrowser);
           }
         });
         return undefined;

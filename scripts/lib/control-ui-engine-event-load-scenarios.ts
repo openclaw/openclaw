@@ -1038,215 +1038,331 @@ export function createEngineEventLoadScenarios(
 /** Correctness runs after the profiler stops, so it cannot inflate event CPU. */
 export async function verifyEngineEventLoad(page: Page, count: number, toolCount = 200) {
   const evidence: Record<string, boolean> = {};
-  await page.evaluate(() => Reflect.get(window, "__eventLoad").settle());
-  await navigation(page, "sessions");
-  if (count > 0) {
-    const context = await getControlUiContextHandle(page);
-    try {
-      await page
-        .waitForFunction(
-          ({ context: appContext, count: sessionCount }) => {
-            const rows = appContext.sessions.state.result?.sessions;
-            return Array.from({ length: sessionCount }, (_, index) =>
-              index === 0 ? "agent:main:interaction-b" : `agent:main:interaction-${index + 1}`,
-            ).every((key) => {
-              const row = rows?.find((candidate) => candidate.key === key);
-              return (
-                row?.status === "done" &&
-                row.hasActiveRun === false &&
-                row.activeRunIds?.length === 0
-              );
-            });
-          },
-          { context, count },
-        )
-        .catch(async (error: unknown) => {
-          const diagnostic = await page.evaluate(
-            ({ context: appContext, count: sessionCount }) => {
-              const rows = appContext.sessions.state.result?.sessions;
-              const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
-              return {
-                socketCount: gateway.socketCount(),
-                sockets: gateway
-                  .socketStates()
-                  .map(({ readyState, state }) => ({ readyState, state })),
-                socketCloses: Reflect.get(window, "__eventLoad").ready().socketCloses,
-                unsettled: Array.from({ length: sessionCount }, (_, index) =>
-                  index === 0 ? "agent:main:interaction-b" : `agent:main:interaction-${index + 1}`,
-                ).flatMap((key) => {
-                  const row = rows?.find((candidate) => candidate.key === key);
-                  return row?.status === "done" &&
-                    row.hasActiveRun === false &&
-                    row.activeRunIds?.length === 0
-                    ? []
-                    : [{ key, status: row?.status, active: row?.hasActiveRun }];
-                }),
-              };
-            },
-            { context, count },
+  const publishVerification = async (stage: string, failed = false) => {
+    await page.evaluate(
+      ({
+        stage: verificationStage,
+        flags,
+        failed: verificationFailed,
+        paneSelector,
+        endThreshold,
+      }) => {
+        const partial = Reflect.get(window, "__eventLoadEvidence") ?? {};
+        const next = { ...partial, ...flags, verificationStage };
+        if (verificationFailed) {
+          const host = document.querySelector<HTMLElement>(paneSelector);
+          const thread = host?.querySelector<HTMLElement>(".chat-thread");
+          const latest = host?.querySelector<HTMLButtonElement>(".chat-scroll-to-bottom");
+          const final = [...(thread?.querySelectorAll(".chat-text") ?? [])].find(
+            (element) => element.textContent?.trim() === "Event load foreground completed.",
           );
-          throw new Error(`Background sessions did not settle: ${JSON.stringify(diagnostic)}`, {
-            cause: error,
+          const rect = (element: Element | null | undefined) => {
+            if (!element) {
+              return null;
+            }
+            const { x, y, width, height, top, right, bottom, left } =
+              element.getBoundingClientRect();
+            return { x, y, width, height, top, right, bottom, left };
+          };
+          const latestStyle = latest && getComputedStyle(latest);
+          const distance = thread
+            ? thread.scrollHeight - thread.clientHeight - thread.scrollTop
+            : null;
+          Reflect.set(next, "verificationFailureSnapshot", {
+            stage: verificationStage,
+            pane: {
+              count: document.querySelectorAll(paneSelector).length,
+              sessionKey: host ? Reflect.get(host, "sessionKey") : null,
+              transcriptReady: host ? Reflect.get(host, "transcriptReady") : null,
+              conversationPresented: host ? Reflect.get(host, "conversationPresented") : null,
+            },
+            latest: {
+              present: Boolean(latest),
+              visible: latest?.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
+              inert: latest?.inert,
+              dataVisible: latest?.dataset.visible,
+              ariaHidden: latest?.getAttribute("aria-hidden"),
+              display: latestStyle?.display,
+              visibility: latestStyle?.visibility,
+              opacity: latestStyle?.opacity,
+              rect: rect(latest),
+            },
+            viewport: {
+              scrollTop: thread?.scrollTop,
+              scrollHeight: thread?.scrollHeight,
+              clientHeight: thread?.clientHeight,
+              distanceFromEnd: distance,
+              atEnd: distance !== null && Math.abs(distance) <= endThreshold,
+              inlineVisibility: thread?.style.visibility,
+              rect: rect(thread),
+            },
+            final: {
+              present: Boolean(final),
+              visible: final?.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
+              rect: rect(final),
+            },
+            activeElement: {
+              tag: document.activeElement?.tagName,
+              className: document.activeElement?.getAttribute("class"),
+            },
           });
-        });
-    } finally {
-      await context.dispose();
-    }
-    evidence.allBackgroundSessionsSettled = true;
-    const selector = `.sidebar-recent-session[data-session-key="${background}"]`;
-    await page.waitForFunction((rowSelector) => {
-      const row = document.querySelector(rowSelector);
-      return (
-        row &&
-        !row.classList.contains("session-row-host--running") &&
-        row.querySelector('[aria-label="Unread"]')
-      );
-    }, selector);
-    evidence.terminalStatusVisible = true;
-    evidence.terminalUnreadVisible = true;
-    const expected = await page.evaluate(
-      () => Reflect.get(window, "__eventLoad").ready().latestText,
-    );
-    await page.locator(`${selector} .sidebar-recent-session__link`).click();
-    await page.waitForFunction(
-      (text) =>
-        [...document.querySelectorAll(".chat-pane-cache__pane--active .chat-text")].some(
-          (element) => element.textContent?.includes(text),
-        ),
-      expected,
-    );
-    evidence.finalSwitchHistoryCurrent = true;
-    await navigation(page, "sessions");
-  }
-  await page
-    .locator(
-      `.sidebar-recent-session[data-session-key="${foreground}"] .sidebar-recent-session__link`,
-    )
-    .click();
-  if (count >= 0) {
-    await page.waitForFunction((key) => {
-      const host = document.querySelector(".chat-pane-cache__pane--active");
-      return (
-        Reflect.get(host ?? {}, "sessionKey") === key &&
-        Reflect.get(host ?? {}, "transcriptReady") === true
-      );
-    }, foreground);
-    await frames(page);
-    // The scroll exercise deliberately leaves the retained pane reading older history.
-    const latest = page.locator(`${pane} .chat-scroll-to-bottom`);
-    if (await latest.isVisible()) {
-      await latest.press("Enter");
-    }
-    // Tail preparation can mount the final row before the latest command moves.
-    // Require visible final text and settled end geometry across three layout updates.
-    await page.waitForFunction(
-      ({ paneSelector, finalText, endThreshold, state }) => {
-        const host = document.querySelector(paneSelector);
-        const thread = host?.querySelector<HTMLElement>(".chat-thread");
-        const target = [...(thread?.querySelectorAll(".chat-text") ?? [])].find(
-          (element) => element.textContent?.trim() === finalText,
-        );
-        const rect = target?.getBoundingClientRect();
-        const viewport = thread?.getBoundingClientRect();
-        const visible = Boolean(
-          target?.isConnected &&
-          target.checkVisibility({ checkOpacity: true, visibilityProperty: true }) &&
-          rect &&
-          viewport &&
-          thread &&
-          Math.min(rect.right, viewport.left + thread.clientLeft + thread.clientWidth, innerWidth) >
-            Math.max(rect.left, viewport.left + thread.clientLeft, 0) &&
-          Math.min(
-            rect.bottom,
-            viewport.top + thread.clientTop + thread.clientHeight,
-            innerHeight,
-          ) > Math.max(rect.top, viewport.top + thread.clientTop, 0) &&
-          Math.abs(thread.scrollHeight - thread.clientHeight - thread.scrollTop) <= endThreshold,
-        );
-        const geometry = JSON.stringify([
-          thread?.scrollTop,
-          thread?.scrollHeight,
-          thread?.clientHeight,
-          viewport?.x,
-          viewport?.y,
-          viewport?.width,
-          viewport?.height,
-          rect?.x,
-          rect?.y,
-          rect?.width,
-          rect?.height,
-        ]);
-        state.stableFrames = visible && geometry === state.geometry ? state.stableFrames + 1 : 0;
-        state.geometry = geometry;
-        return state.stableFrames >= 3;
+        }
+        Reflect.set(window, "__eventLoadEvidence", next);
       },
       {
+        stage,
+        flags: evidence,
+        failed,
         paneSelector: pane,
-        finalText: "Event load foreground completed.",
         endThreshold: CHAT_TRANSCRIPT_END_THRESHOLD_PX,
-        state: { geometry: "", stableFrames: 0 },
       },
-      { polling: "raf" },
     );
-    evidence.foregroundFinalVisible = true;
-    const context = await getControlUiContextHandle(page);
-    try {
+  };
+  let stage = "settle";
+  try {
+    await page.evaluate(() => Reflect.get(window, "__eventLoad").settle());
+    stage = "navigate-sessions";
+    await navigation(page, "sessions");
+    if (count > 0) {
+      stage = "background-context";
+      const context = await getControlUiContextHandle(page);
+      try {
+        stage = "background-settled";
+        await page
+          .waitForFunction(
+            ({ context: appContext, count: sessionCount }) => {
+              const rows = appContext.sessions.state.result?.sessions;
+              return Array.from({ length: sessionCount }, (_, index) =>
+                index === 0 ? "agent:main:interaction-b" : `agent:main:interaction-${index + 1}`,
+              ).every((key) => {
+                const row = rows?.find((candidate) => candidate.key === key);
+                return (
+                  row?.status === "done" &&
+                  row.hasActiveRun === false &&
+                  row.activeRunIds?.length === 0
+                );
+              });
+            },
+            { context, count },
+          )
+          .catch(async (error: unknown) => {
+            const diagnostic = await page.evaluate(
+              ({ context: appContext, count: sessionCount }) => {
+                const rows = appContext.sessions.state.result?.sessions;
+                const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+                return {
+                  socketCount: gateway.socketCount(),
+                  sockets: gateway
+                    .socketStates()
+                    .map(({ readyState, state }) => ({ readyState, state })),
+                  socketCloses: Reflect.get(window, "__eventLoad").ready().socketCloses,
+                  unsettled: Array.from({ length: sessionCount }, (_, index) =>
+                    index === 0
+                      ? "agent:main:interaction-b"
+                      : `agent:main:interaction-${index + 1}`,
+                  ).flatMap((key) => {
+                    const row = rows?.find((candidate) => candidate.key === key);
+                    return row?.status === "done" &&
+                      row.hasActiveRun === false &&
+                      row.activeRunIds?.length === 0
+                      ? []
+                      : [{ key, status: row?.status, active: row?.hasActiveRun }];
+                  }),
+                };
+              },
+              { context, count },
+            );
+            throw new Error(`Background sessions did not settle: ${JSON.stringify(diagnostic)}`, {
+              cause: error,
+            });
+          });
+      } finally {
+        await context.dispose();
+      }
+      evidence.allBackgroundSessionsSettled = true;
+      const selector = `.sidebar-recent-session[data-session-key="${background}"]`;
+      stage = "background-status";
+      await page.waitForFunction((rowSelector) => {
+        const row = document.querySelector(rowSelector);
+        return (
+          row &&
+          !row.classList.contains("session-row-host--running") &&
+          row.querySelector('[aria-label="Unread"]')
+        );
+      }, selector);
+      evidence.terminalStatusVisible = true;
+      evidence.terminalUnreadVisible = true;
+      stage = "background-latest-text";
+      const expected = await page.evaluate(
+        () => Reflect.get(window, "__eventLoad").ready().latestText,
+      );
+      stage = "select-background";
+      await page.locator(`${selector} .sidebar-recent-session__link`).click();
+      stage = "background-history";
       await page.waitForFunction(
-        ({ context: appContext, key }) => {
-          const host = document.querySelector(".chat-pane-cache__pane--active");
-          const row = appContext.sessions.state.result?.sessions.find(
-            (candidate) => candidate.key === key,
+        (text) =>
+          [...document.querySelectorAll(".chat-pane-cache__pane--active .chat-text")].some(
+            (element) => element.textContent?.includes(text),
+          ),
+        expected,
+      );
+      evidence.finalSwitchHistoryCurrent = true;
+      stage = "navigate-sessions";
+      await navigation(page, "sessions");
+    }
+    stage = "select-foreground";
+    await page
+      .locator(
+        `.sidebar-recent-session[data-session-key="${foreground}"] .sidebar-recent-session__link`,
+      )
+      .click();
+    if (count >= 0) {
+      stage = "foreground-ready";
+      await page.waitForFunction((key) => {
+        const host = document.querySelector(".chat-pane-cache__pane--active");
+        return (
+          Reflect.get(host ?? {}, "sessionKey") === key &&
+          Reflect.get(host ?? {}, "transcriptReady") === true
+        );
+      }, foreground);
+      stage = "foreground-frames";
+      await frames(page);
+      // The scroll exercise deliberately leaves the retained pane reading older history.
+      const latest = page.locator(`${pane} .chat-scroll-to-bottom`);
+      stage = "latest-visible";
+      if (await latest.isVisible()) {
+        evidence.verificationLatestVisible = true;
+        evidence.verificationLatestPressStarted = true;
+        stage = "latest-enter";
+        await latest.press("Enter");
+        evidence.verificationLatestPressCompleted = true;
+      } else {
+        evidence.verificationLatestVisible = false;
+      }
+      // Tail preparation can mount the final row before the latest command moves.
+      // Require visible final text and settled end geometry across three layout updates.
+      stage = "foreground-visible-end";
+      await page.waitForFunction(
+        ({ paneSelector, finalText, endThreshold, state }) => {
+          const host = document.querySelector(paneSelector);
+          const thread = host?.querySelector<HTMLElement>(".chat-thread");
+          const target = [...(thread?.querySelectorAll(".chat-text") ?? [])].find(
+            (element) => element.textContent?.trim() === finalText,
           );
+          const rect = target?.getBoundingClientRect();
+          const viewport = thread?.getBoundingClientRect();
+          const visible = Boolean(
+            target?.isConnected &&
+            target.checkVisibility({ checkOpacity: true, visibilityProperty: true }) &&
+            rect &&
+            viewport &&
+            thread &&
+            Math.min(
+              rect.right,
+              viewport.left + thread.clientLeft + thread.clientWidth,
+              innerWidth,
+            ) > Math.max(rect.left, viewport.left + thread.clientLeft, 0) &&
+            Math.min(
+              rect.bottom,
+              viewport.top + thread.clientTop + thread.clientHeight,
+              innerHeight,
+            ) > Math.max(rect.top, viewport.top + thread.clientTop, 0) &&
+            Math.abs(thread.scrollHeight - thread.clientHeight - thread.scrollTop) <= endThreshold,
+          );
+          const geometry = JSON.stringify([
+            thread?.scrollTop,
+            thread?.scrollHeight,
+            thread?.clientHeight,
+            viewport?.x,
+            viewport?.y,
+            viewport?.width,
+            viewport?.height,
+            rect?.x,
+            rect?.y,
+            rect?.width,
+            rect?.height,
+          ]);
+          state.stableFrames = visible && geometry === state.geometry ? state.stableFrames + 1 : 0;
+          state.geometry = geometry;
+          return state.stableFrames >= 3;
+        },
+        {
+          paneSelector: pane,
+          finalText: "Event load foreground completed.",
+          endThreshold: CHAT_TRANSCRIPT_END_THRESHOLD_PX,
+          state: { geometry: "", stableFrames: 0 },
+        },
+        { polling: "raf" },
+      );
+      evidence.foregroundFinalVisible = true;
+      stage = "foreground-context";
+      const context = await getControlUiContextHandle(page);
+      try {
+        stage = "foreground-settled";
+        await page.waitForFunction(
+          ({ context: appContext, key }) => {
+            const host = document.querySelector(".chat-pane-cache__pane--active");
+            const row = appContext.sessions.state.result?.sessions.find(
+              (candidate) => candidate.key === key,
+            );
+            return (
+              Reflect.get(host ?? {}, "sessionKey") === key &&
+              row?.hasActiveRun === false &&
+              row.activeRunIds?.length === 0 &&
+              !host?.querySelector(".chat-send-btn--stop")
+            );
+          },
+          { context, key: foreground },
+        );
+      } finally {
+        await context.dispose();
+      }
+      evidence.foregroundRunSettled = true;
+      stage = "foreground-results";
+      await page.waitForFunction(
+        ({ key, count: resultCount }) => {
+          const host = document.querySelector(".chat-pane-cache__pane--active");
+          const snapshots:
+            | Map<
+                string,
+                {
+                  snapshot: {
+                    messages: Array<{
+                      role?: string;
+                      toolCallId?: string;
+                      content?: Array<{ type?: string; text?: string }>;
+                    }>;
+                  };
+                }
+              >
+            | undefined = host ? Reflect.get(host, "chatMessagesBySession") : undefined;
+          const messages =
+            snapshots &&
+            [...snapshots].find(([stored]) => stored.endsWith(`\u0000${key}`))?.[1].snapshot
+              .messages;
+          const results = messages?.filter((message) => message.role === "toolResult");
           return (
-            Reflect.get(host ?? {}, "sessionKey") === key &&
-            row?.hasActiveRun === false &&
-            row.activeRunIds?.length === 0 &&
-            !host?.querySelector(".chat-send-btn--stop")
+            results?.length === resultCount &&
+            results.every(
+              (message, index) =>
+                message.toolCallId === `event-load-tool-${index + 1}` &&
+                message.content?.length === 1 &&
+                message.content[0]?.type === "text" &&
+                message.content[0].text === `Tool ${index + 1} complete.`,
+            )
           );
         },
-        { context, key: foreground },
+        { key: foreground, count: toolCount },
       );
-    } finally {
-      await context.dispose();
+      evidence.allToolResultsRetained = true;
+      evidence.allToolResultsOrdered = true;
+      evidence.allToolResultsExact = true;
     }
-    evidence.foregroundRunSettled = true;
-    await page.waitForFunction(
-      ({ key, count: resultCount }) => {
-        const host = document.querySelector(".chat-pane-cache__pane--active");
-        const snapshots:
-          | Map<
-              string,
-              {
-                snapshot: {
-                  messages: Array<{
-                    role?: string;
-                    toolCallId?: string;
-                    content?: Array<{ type?: string; text?: string }>;
-                  }>;
-                };
-              }
-            >
-          | undefined = host ? Reflect.get(host, "chatMessagesBySession") : undefined;
-        const messages =
-          snapshots &&
-          [...snapshots].find(([stored]) => stored.endsWith(`\u0000${key}`))?.[1].snapshot.messages;
-        const results = messages?.filter((message) => message.role === "toolResult");
-        return (
-          results?.length === resultCount &&
-          results.every(
-            (message, index) =>
-              message.toolCallId === `event-load-tool-${index + 1}` &&
-              message.content?.length === 1 &&
-              message.content[0]?.type === "text" &&
-              message.content[0].text === `Tool ${index + 1} complete.`,
-          )
-        );
-      },
-      { key: foreground, count: toolCount },
-    );
-    evidence.allToolResultsRetained = true;
-    evidence.allToolResultsOrdered = true;
-    evidence.allToolResultsExact = true;
+  } catch (error) {
+    // A closed page cannot supply a snapshot; retain the original assertion error.
+    await publishVerification(stage, true).catch(() => {});
+    throw error;
   }
+  await publishVerification("complete");
   return evidence;
 }

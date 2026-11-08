@@ -222,24 +222,24 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
   if (projections.length === 0) {
     return items;
   }
-  const runs = new Map<string, Set<string>>();
-  // Resolve missing-run ownership from the entire turn, not the prefix seen
-  // so far: a later sibling with a reused id makes unscoped history ambiguous.
-  for (const item of items) {
-    if (item.kind !== "message") {
-      continue;
-    }
-    for (const ref of extractToolMessageRefs(item.message)) {
-      if (ref.runId) {
-        const owners = runs.get(ref.id) ?? new Set<string>();
-        owners.add(ref.runId);
-        runs.set(ref.id, owners);
+  const runs = new Map<string, string | null>();
+  if (projections.some((projection) => !projection.runId)) {
+    // Resolve missing-run ownership from the entire turn, not the prefix seen
+    // so far: a later sibling with a reused id makes unscoped history ambiguous.
+    for (const item of items) {
+      if (item.kind !== "message") {
+        continue;
+      }
+      for (const ref of extractToolMessageRefs(item.message)) {
+        if (ref.runId) {
+          const previous = runs.get(ref.id);
+          runs.set(ref.id, previous === undefined || previous === ref.runId ? ref.runId : null);
+        }
       }
     }
   }
   const identity = (projection: Projection) => {
-    const owners = runs.get(projection.id);
-    projection.runId ??= owners?.size === 1 ? owners.values().next().value : undefined;
+    projection.runId ??= runs.get(projection.id) ?? undefined;
     return buildToolStreamIdentity(projection.runId ?? "", projection.id);
   };
   const names = new Map<string, Set<string>>();
@@ -284,21 +284,26 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     invocations.set(invocationKey, invocation);
   }
   const rows = new Map<number, ProjectedItem[]>();
-  const bundles = new Map<string, { item: ProjectedItem; index: number; inputs: unknown[] }>();
-  const memoInputs = new Map<ProjectedItem, { owner: object; inputs: unknown[] }>();
+  const bundles = new Map<
+    string,
+    { item: ProjectedItem; index: number; owner: object; inputs: unknown[] }
+  >();
   // Commentary beside a call always splits into its own row, even when the
   // call needs no merging, so no tool row renders outside its activity group.
   const unchanged = new Set(
     [...sources.values()].filter(({ remaining }) => remaining.length === 0),
   );
   for (const invocation of invocations.values()) {
-    const owners = new Set(invocation.projections.map((projection) => projection.source));
     if (
-      owners.size > 1 ||
+      invocation.projections.some(
+        (projection) => projection.source !== invocation.projections[0]!.source,
+      ) ||
       invocation.projections.length >
         Number(Boolean(invocation.call)) + Number(Boolean(invocation.result))
     ) {
-      owners.forEach((source) => unchanged.delete(source));
+      for (const { source } of invocation.projections) {
+        unchanged.delete(source);
+      }
     }
   }
   for (const invocation of invocations.values()) {
@@ -427,8 +432,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
           : {}),
       },
     };
-    bundles.set(bundleKey, { item, index, inputs });
-    memoInputs.set(item, { owner: owner.source.originalMessage, inputs });
+    bundles.set(bundleKey, { item, index, owner: owner.source.originalMessage, inputs });
   }
   for (const { item, index } of bundles.values()) {
     const row = rows.get(index) ?? [];
@@ -496,7 +500,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
   // Assembly and prose/media interleaving are complete. Only messages are
   // reused: duplicate grouping can still mutate the returned item wrappers.
   const nextBySource = new Map<object, Map<string, CachedBundle>>();
-  for (const [item, { owner, inputs }] of memoInputs) {
+  for (const { item, owner, inputs } of bundles.values()) {
     inputs.push(item.message.content.length);
     for (const block of item.message.content) {
       const raw = asRecord(block);

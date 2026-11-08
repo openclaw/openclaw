@@ -312,6 +312,28 @@ async function transcriptFixture(
   };
 }
 
+it("retains a geometry callback parked between its commit and microtask", async () => {
+  const view = await transcriptFixture();
+  const root = view.host.contentElement;
+  const effect = vi.fn();
+  view.host["renderer"].queueAfterCommit(effect);
+  // Start the real lifecycle task, leaving its nested-row microtask pending.
+  flush();
+  expect(effect).not.toHaveBeenCalled();
+  // present() changes the renderer's plain presentation before its first await.
+  await view.present(false);
+  expect(effect).not.toHaveBeenCalled();
+  view.draw();
+  await settle();
+  expect(effect).not.toHaveBeenCalled();
+
+  await view.present(true);
+  expect(view.host.contentElement).toBe(root);
+  expect(effect).toHaveBeenCalledOnce();
+  await settle();
+  expect(effect).toHaveBeenCalledOnce();
+});
+
 it("warms medium row data while idle and paces preparation during fast scroll", async () => {
   const view = await transcriptFixture(0, true, false, "data-only", 600, true);
   const initialRows = transcriptRows(view.container);

@@ -1,10 +1,11 @@
 // @vitest-environment node
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
+import * as toolStreamIdentity from "./tool-stream-identity.ts";
 
 type Fields = Record<string, unknown>;
 function result(id: string) {
@@ -30,19 +31,63 @@ const sameReferences = (actual: unknown[], expected: unknown[]) =>
   actual.map((entry, index) => entry === expected[index]);
 
 it("coalesces a new projected boundary's invocation without borrowing from the previous turn", () => {
-  const previous = assistant([toolCall("call", { turn: "old" })]);
+  const readRefs = vi.spyOn(toolStreamIdentity, "extractToolMessageRefs");
+  onTestFinished(() => readRefs.mockRestore());
+  const previous = assistant([toolCall("call", { turn: "old" })], { runId: "run" });
   const current = assistant([toolCall("call", { turn: "new" })], {
+    runId: "run",
     __openclaw: { turnBoundary: true },
   });
+  const output = { role: "toolResult", runId: "run", content: [result("call")] };
   const rows = messages([
     item(previous, "previous"),
     item(current, "current"),
-    item({ role: "toolResult", content: [result("call")] }, "result"),
+    item(output, "result"),
   ]);
   expect(rows).toHaveLength(2);
   expect(rows[0]).toBe(previous);
-  expect(extractToolCardsCached(rows[1])[0]).toMatchObject({ callId: "call", completed: true });
+  expect(extractToolCardsCached(rows[1])[0]).toMatchObject({
+    runId: "run",
+    callId: "call",
+    completed: true,
+  });
+  expect(readRefs).not.toHaveBeenCalled();
+  const unscoped = { role: "toolResult", content: output.content };
+  const repeated = assistant([toolCall("call", { turn: "repeat" })], {
+    runId: "run",
+    __openclawToolStreamLive: true,
+  });
+  const inferred = messages([
+    item(previous, "previous"),
+    item(current, "current"),
+    item(repeated, "repeat"),
+    item(unscoped, "result"),
+  ]);
+  expect(inferred[0]).toBe(previous);
+  expect(extractToolCardsCached(inferred[1])[0]).toMatchObject({
+    runId: "run",
+    callId: "call",
+    completed: true,
+  });
+  expect(readRefs).toHaveBeenCalledTimes(3);
+  const peer = assistant([toolCall("call", { turn: "peer" })], {
+    runId: "other",
+    __openclawToolStreamLive: true,
+  });
+  const ambiguous = messages([
+    item(previous, "previous"),
+    item(current, "current"),
+    item(peer, "peer"),
+    item(repeated, "repeat"),
+    item(unscoped, "result"),
+  ]);
+  expect(ambiguous[0]).toBe(previous);
+  const cards = ambiguous.slice(1).flatMap(extractToolCardsCached);
+  expect(cards.map((card) => card.runId)).toEqual(["run", "other", undefined]);
+  expect(cards[2]).toMatchObject({ callId: "call", completed: true });
+  expect(readRefs).toHaveBeenCalledTimes(7);
 });
+
 it("invalidates replaced blocks and messages without rebuilding unrelated bundles", () => {
   const first = invocation("first");
   const second = invocation("second");

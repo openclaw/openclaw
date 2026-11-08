@@ -1,0 +1,2 @@
+# Regression: A geometric callback survives parking between visible commit and its microtask.
+22

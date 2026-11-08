@@ -262,12 +262,20 @@ export class TranscriptInitialRange {
     this.refresh();
     this.invalidate();
     const begin = () => {
-      if (!this.preparingEnd || !this.canPrepare() || !isCurrent()) {
+      if (!this.preparingEnd || !isCurrent()) {
+        return;
+      }
+      if (!this.canPrepare()) {
+        // Retained panes resume this work at their next visible commit.
+        this.afterCommit(begin);
         return;
       }
       // Measuring a shorter tail expands the destination without moving the reader range.
       this.refresh();
-      if (native ? !this.rowsMeasured(this.endIndexes()) : this.measureRows()) {
+      const measured = this.rowsMeasured(this.endIndexes());
+      // Smooth scrolling can skip a destination's resize after row splitting.
+      // Replay its measurement only while the native receipts disagree.
+      if (((!native || !measured) && this.measureRows()) || !measured) {
         this.invalidate();
         // A measurement can mount another row. Let the browser present before
         // its next pass instead of draining every correction in one task.
