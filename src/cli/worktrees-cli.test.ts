@@ -146,6 +146,20 @@ describe("worktrees cli", () => {
     },
   );
 
+  it.each([
+    ["remove", "unknown active worktree: nope"],
+    ["restore", "worktree nope is not restorable"],
+  ] as const)("names an unknown id from %s instead of a generic failure", async (leaf, message) => {
+    setRuntimeConfigSnapshot({}, {});
+    const { WorktreeRecordNotFoundError } = await import("../agents/worktrees/errors.js");
+    vi.spyOn(owner, leaf).mockRejectedValue(new WorktreeRecordNotFoundError(message));
+    await expect(run([leaf, "nope"])).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      humanOutput: message,
+      machineOutput: message,
+    });
+  });
+
   it("rejects an empty cleanup job selector before cleanup", async () => {
     setRuntimeConfigSnapshot({}, {});
     const gc = vi.spyOn(owner, "gc").mockRejectedValue(new Error("Unexpected cleanup execution"));
