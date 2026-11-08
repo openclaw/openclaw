@@ -196,6 +196,7 @@ it("resolveDiscordReplyDeliveryPlan: applies delivery targets and reply referenc
 
 function createAutoThreadParams(client: Client) {
   return {
+    accountId: "default",
     client,
     channel: "discord",
     agentId: "agent",
