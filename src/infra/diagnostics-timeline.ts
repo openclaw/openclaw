@@ -6,7 +6,7 @@ import { performance } from "node:perf_hooks";
 import { appendRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { hasObservedModelUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { QueueEntry } from "../process/command-queue.state.js";
+import type { CommandQueueWait } from "../process/command-queue.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiagnosticBaseEvent } from "./diagnostic-event-snapshot.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
@@ -146,7 +146,7 @@ export type AdmissionDiagnostics = {
   laneMs?: number;
   writerMs?: number;
   placementMs?: number;
-  queueWait?: Readonly<QueueEntry>;
+  queueWait?: Readonly<CommandQueueWait>;
 };
 
 export function transitionAdmissionPhase(

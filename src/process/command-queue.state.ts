@@ -1,6 +1,6 @@
 // Capacity policy reads this state without importing the queue runtime.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { CommandQueueAdmissionOptions } from "./command-queue.types.js";
+import type { CommandQueueAdmissionOptions, CommandQueueWait } from "./command-queue.types.js";
 import { CommandLane, SUBAGENT_LANE_PREFIX, SWARM_LANE_PREFIX } from "./lanes.js";
 
 export function getDefaultLaneConcurrency(lane: string): number {
@@ -16,10 +16,8 @@ export type QueuePriority = -1 | 0 | 1;
 
 const PRIORITY_HEAD_START_MS = 15_000;
 
-export type QueueEntry = {
-  lane: string;
+export type QueueEntry = CommandQueueWait & {
   startedAt?: number;
-  queued?: true;
   previous?: QueueEntry;
   next?: QueueEntry;
   task: () => Promise<unknown>;
@@ -30,8 +28,6 @@ export type QueueEntry = {
   sequence: number;
   priority: QueuePriority;
   warnAfterMs: number;
-  queuedAheadAtEnqueue: number;
-  activeAheadAtEnqueue: number;
   taskIdentity?: CommandQueueAdmissionOptions["taskIdentity"];
   sessionTarget?: CommandQueueAdmissionOptions["sessionTarget"];
   onWait?: (waitMs: number, queuedAhead: number) => void;
