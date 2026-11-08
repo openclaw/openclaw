@@ -1,0 +1,2 @@
+# Four added lines in existing branch-action browser cases protect button/background containment.
+4

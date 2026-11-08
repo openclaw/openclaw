@@ -229,6 +229,10 @@ it.each([
     await expect.element(page.elementLocator(trigger)).toBeVisible();
     expect(publishButton.getBoundingClientRect().height).toBe(26);
     expect(trigger.getBoundingClientRect().width).toBeGreaterThanOrEqual(26);
+    const actions = row.querySelector<HTMLElement>(".chat-pr__publication-actions")!;
+    expect(trigger.getBoundingClientRect().right).toBeLessThanOrEqual(
+      actions.getBoundingClientRect().right,
+    );
     expect(row.getBoundingClientRect().left).toBeGreaterThanOrEqual(0);
     expect(row.getBoundingClientRect().right).toBeLessThanOrEqual(viewport);
     expect(branchLabel.textContent).toBe(branch.branch);
