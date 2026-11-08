@@ -445,7 +445,9 @@ it.each([
     expect(inventoryReads).toBe(1);
     const { page } = await mountPage(context, routeData);
     if (detail === "return") {
-      await waitForSolid(() => expect(page.querySelector("#plugin-catalog-detail")).not.toBeNull());
+      await waitForSolid(() =>
+        expect(page.querySelector("#plugin-catalog-detail-title")).not.toBeNull(),
+      );
       const hub = await loader(
         context,
         createRouteLoaderOptions(createPluginsRouteLocation("/plugins")),
@@ -466,9 +468,10 @@ it.each([
       "Loading plugins…",
     );
     const contentSelector = showingDetail
-      ? "#plugin-catalog-detail"
+      ? "#plugin-catalog-detail-title"
       : '[data-plugin-id="ch_Y2FsZW5kYXI"]';
     const content = page.querySelector(contentSelector);
+    expect(content).not.toBeNull();
     if (!showingDetail) {
       expect(page.querySelector<HTMLInputElement>('[type="search"]')!.disabled).toBe(false);
     }
@@ -535,7 +538,7 @@ it.each(["success", "failure", "metadata", "replacement", "reconnect"])(
       await settlePage(page);
       expect(page.textContent).not.toContain("Retired plugin");
     } else {
-      expect(page.querySelector('.settings-group[aria-busy="true"]')).not.toBeNull();
+      expect(page.querySelector('.settings-loading-skeleton[aria-busy="true"]')).not.toBeNull();
       if (outcome === "failure") {
         inventory.reject(new Error("Prepared inventory unavailable"));
         await waitForSolid(() =>
