@@ -379,6 +379,18 @@ describe("Muse native MSP harness", () => {
     expect(requests.map((request) => request.method)).toContain("turn/start");
   });
 
+  it("reports Muse's counted-once token usage and context occupancy", async () => {
+    const { run } = setup();
+    expect((await run({ prompt: "usage" })).attemptUsage).toMatchObject({
+      input: 2200,
+      output: 54,
+      reasoningTokens: 10,
+      total: 2254,
+      contextUsage: { state: "available", promptTokens: 1200, totalTokens: 1234 },
+    });
+    expect((await run()).attemptUsage).toBeUndefined();
+  });
+
   it("returns the terminal observer's unresolved native tool error", async () => {
     const { run } = setup();
     const lastToolError = { toolName: "read_file", error: "file unavailable" };

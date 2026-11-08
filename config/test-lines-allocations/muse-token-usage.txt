@@ -1,0 +1,2 @@
+27
+# Muse token usage: fake MSP session/tokenUsage completions and harness attemptUsage/context regression with a no-usage control.

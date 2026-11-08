@@ -72,6 +72,21 @@ function answer() {
       visibleOutput: "file content",
     });
   }
+  if (active.prompt === "usage") {
+    for (const [promptTokens, outputTokens] of [
+      [1000, 20],
+      [1200, 34],
+    ]) {
+      const totalTokens = promptTokens + outputTokens;
+      const usage = {
+        inputTokens: promptTokens,
+        outputTokens,
+        cachedTokens: 0,
+        reasoningTokens: 5,
+      };
+      event("session/tokenUsage", { promptTokens, totalTokens, usage, modelId: "muse-spark-1.3" });
+    }
+  }
   const responses = new Map([
     ["credential", `credential:${process.env.META_API_KEY ?? "cli-login"}`],
     ["effort", `effort:${active.reasoningEffort}`],
