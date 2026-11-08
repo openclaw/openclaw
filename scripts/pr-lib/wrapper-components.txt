@@ -2090,6 +2090,7 @@ src/config/sessions/session-accessor.sqlite-metadata-read.ts
 src/config/sessions/session-accessor.sqlite-model-context.ts
 src/config/sessions/session-accessor.sqlite-projection-read.ts
 src/config/sessions/session-accessor.sqlite-read.ts
+src/config/sessions/session-accessor.sqlite-read-scope.ts
 src/config/sessions/session-accessor.sqlite-sharing-acquisition.ts
 src/config/sessions/session-accessor.sqlite-transcript-parent.ts
 src/config/sessions/session-accessor.sqlite-transcript-state.ts
