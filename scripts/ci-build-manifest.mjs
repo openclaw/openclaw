@@ -939,18 +939,23 @@ if (runCheckPlan && proposedCheckScope?.types) {
     const budgetOnlyFallback =
       budgetCompanions.length < changedPaths.length &&
       resolveCiCheckFamilyScope(budgetCompanions).mode === "scoped";
+    const sourceOnlyFallback = compilerPaths.every((file) => file.startsWith("src/"));
     // Shared tests and numeric allocations retain every guard family, including
     // allocation validation. A budget record does not widen otherwise scoped
-    // source or root-test companions; compiler/lint owners still discover all consumers.
+    // companions. Ordinary source inputs can also use complete compiler/lint
+    // consumer discovery even when a fixture requires all guard families.
     preserveFullChecks = !changedPaths.every((file) => {
       const facts = getChangedPathFacts(file);
       return (
         path.posix.normalize(file) === file &&
         !file.includes("\\") &&
         (isTestLineAllocationPath(file) ||
-          (budgetOnlyFallback && ["docs", "rootTest"].includes(facts.surface)) ||
+          (budgetOnlyFallback && facts.surface === "rootTest") ||
+          ((budgetOnlyFallback || sourceOnlyFallback) && facts.surface === "docs") ||
           (["source", "package", "ui", "extension"].includes(facts.surface) &&
-            (budgetOnlyFallback || (facts.isTestOnly && facts.isChangedLaneTest))))
+            (budgetOnlyFallback ||
+              sourceOnlyFallback ||
+              (facts.isTestOnly && facts.isChangedLaneTest))))
       );
     });
   }
