@@ -137,9 +137,11 @@ a release-only test selects that test; full manual/release runs retain the
 complete inventory, including desktop resize proof. Unlabeled PRs keep
 change-selected UI coverage; the label does not expand unrelated platform lanes.
 
-Current UI unit/browser CI retains three native shards with three workers each,
+Current UI unit/browser CI retains up to three native shards with three workers each.
+Partial PR unit selections target three files per row to avoid repeated setup.
+Full UI owners and manual validation retain their existing shard layout,
 complete discovery, runtime ownership, and first-shard WebKit selection.
-Two-shard trials did not reduce measured runner minutes and exceeded the
+Full-inventory two-shard trials did not reduce measured runner minutes and exceeded the
 critical-path budget.
 
 Compact mocked Control UI E2E uses six 16-class jobs with four workers each,
