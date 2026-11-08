@@ -327,6 +327,8 @@ export class ChatTranscriptRenderer {
         release();
         if (this.isPresented()) {
           effect();
+        } else {
+          this.queueAfterCommit(effect, yieldToBrowser);
         }
         done();
       });
@@ -334,6 +336,8 @@ export class ChatTranscriptRenderer {
         if (pending) {
           pending = false;
           release();
+          // Parking cancels a started yield; retain its geometry work for reveal.
+          this.queueAfterCommit(effect, yieldToBrowser);
         }
       };
     }, release);

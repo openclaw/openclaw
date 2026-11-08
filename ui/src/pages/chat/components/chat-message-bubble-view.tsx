@@ -20,11 +20,12 @@ import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-cha
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import {
+  prepareChatMessageRender,
   resolveMessageDisplayMarkdown,
   type ChatMessageRenderPreparation,
 } from "../../../lib/chat/message-display.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { i18nRevision, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import "../../../components/solid/person-reference.tsx";
@@ -37,6 +38,7 @@ import { OmittedMedia, PairingQrNotices } from "./chat-message-attachment-status
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import {
   prepareGroupedMessage,
+  prepareGroupedMessageContent,
   type MessageContentProps as ContentProps,
 } from "./chat-message-bubble-presentation.ts";
 import {
@@ -86,9 +88,30 @@ export function GroupedMessage(props: {
   options: GroupedMessageOptions;
   onOpenSidebar?: (content: SidebarContent) => void;
 }) {
-  const refreshMedia = () => void refresh(state);
+  const preparation = createMemo(
+    () => {
+      const disclosure = props.options.assistantMessageDisclosure;
+      return disclosure?.expanded && disclosure.message
+        ? prepareChatMessageRender(disclosure.message)
+        : props.preparation;
+    },
+    {
+      equals: (before, after) =>
+        before.message === after.message &&
+        before.normalizedMessage === after.normalizedMessage &&
+        before.displayMarkdown === after.displayMarkdown &&
+        before.humanMentions === after.humanMentions,
+    },
+  );
+  const showToolCalls = createMemo(() => props.options.showToolCalls ?? true);
+  const content = createMemo(() => {
+    // Media labels follow locale/catalog changes; expiry keeps its existing resource refresh.
+    i18nRevision();
+    return prepareGroupedMessageContent(preparation(), showToolCalls());
+  });
+  const refreshMedia = () => void refresh(content);
   const state = createMemo(() =>
-    prepareGroupedMessage(props.preparation, props.messageKey, props.options, props.onOpenSidebar),
+    prepareGroupedMessage(content(), props.messageKey, props.options, props.onOpenSidebar),
   );
   const messageElements = useContext(TranscriptMessageElementsContext);
   // The keyed message owns this DOM registration through acknowledgement and option refreshes.

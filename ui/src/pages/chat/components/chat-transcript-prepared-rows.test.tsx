@@ -5,7 +5,10 @@ import { toSanitizedMarkdownContent } from "../../../components/markdown.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { prepareGroupedMessage } from "./chat-message-bubble-presentation.ts";
+import {
+  prepareGroupedMessage,
+  prepareGroupedMessageContent,
+} from "./chat-message-bubble-presentation.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { prepareMessageMarkdown } from "./chat-message-text-preparation.ts";
 import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
@@ -312,22 +315,42 @@ async function transcriptFixture(
   };
 }
 
-it("retains a geometry callback parked between its commit and microtask", async () => {
+it.each(["microtask", "yield", "dispose"])("settles deferred geometry through %s", async (mode) => {
   const view = await transcriptFixture();
   const root = view.host.contentElement;
   const effect = vi.fn();
-  view.host["renderer"].queueAfterCommit(effect);
+  let resume = () => {};
+  if (mode !== "microtask") {
+    vi.stubGlobal("scheduler", {
+      yield: () =>
+        new Promise<void>((resolve) => {
+          resume = resolve;
+        }),
+    });
+  }
+  view.host["renderer"].queueAfterCommit(effect, mode !== "microtask");
   // Start the real lifecycle task, leaving its nested-row microtask pending.
   flush();
   expect(effect).not.toHaveBeenCalled();
+  if (mode === "dispose") {
+    view.host.dispose();
+    resume();
+    await settle();
+    expect(effect).not.toHaveBeenCalled();
+    return;
+  }
   // present() changes the renderer's plain presentation before its first await.
   await view.present(false);
+  resume();
+  await settle();
   expect(effect).not.toHaveBeenCalled();
   view.draw();
   await settle();
   expect(effect).not.toHaveBeenCalled();
 
   await view.present(true);
+  resume();
+  await settle();
   expect(view.host.contentElement).toBe(root);
   expect(effect).toHaveBeenCalledOnce();
   await settle();
@@ -465,10 +488,11 @@ it("warms an embedded widget's caption without mounting the widget", () => {
     content:
       '**Prepared widget caption**\n\n[embed ref="prepared-caption-chart" title="Synthetic chart" height="220" /]',
   };
-  const state = prepareGroupedMessage(prepareChatMessageRender(message), "prepared-widget", {
-    isStreaming: false,
-    showReasoning: false,
-  });
+  const state = prepareGroupedMessage(
+    prepareGroupedMessageContent(prepareChatMessageRender(message)),
+    "prepared-widget",
+    { isStreaming: false, showReasoning: false },
+  );
   expect(state.assistantViewBlocks).toHaveLength(1);
   expect(state.bodyMarkdown).not.toContain("[embed");
   expect(prewarmGroupedMessage(message, {}, "fragment")).toBe(true);

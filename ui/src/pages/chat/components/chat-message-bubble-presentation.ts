@@ -296,43 +296,23 @@ export function messageMarkdownRenderOptions(
   };
 }
 
-export function prepareGroupedMessage(
+/** Message-derived facts stay with the selected immutable source, not option refreshes. */
+export function prepareGroupedMessageContent(
   preparation: ChatMessageRenderPreparation,
-  messageKey: string,
-  opts: GroupedMessageOptions,
-  onOpenSidebar?: (content: SidebarContent) => void,
+  showToolCalls = true,
 ) {
-  const disclosure = opts.assistantMessageDisclosure;
-  const selected =
-    disclosure?.expanded && disclosure.message
-      ? prepareChatMessageRender(disclosure.message)
-      : preparation;
-  const { message, normalizedMessage, displayMarkdown } = selected;
+  const { message, normalizedMessage } = preparation;
   // SAFETY: The group render boundary supplies transcript message records; fields remain unknown.
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
   const sourceRole = normalizeRoleForGrouping(role);
-  const asyncQuestions = opts.asyncQuestions?.submit ? readAsyncQuestions(message) : null;
   const normalizedRole = normalizeRoleForGrouping(normalizedMessage.role);
   const workspaceConflict = workspaceResultConflictFromTranscript(message);
-
   const voiceTranscript = isProviderVoiceTranscript(message);
-  const isToolShell = normalizedRole === "tool";
   const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
-
-  const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message) : [];
-  // Nested cards moved under their parent must not leave empty message shells.
-  const hasToolCards = toolCards.some((card) => opts.toolCardOverrides?.get(card) !== null);
-  const {
-    images,
-    attachments: visibleAttachments,
-    expiredPairingQrCount,
-    nextPairingQrExpiresAt,
-    orderedContent,
-    supplementalImages,
-    supplementalAttachments,
-  } = projectMessageMedia(message, normalizedMessage.content);
-  const hasImages = images.length > 0;
+  const toolCards = showToolCalls ? extractToolCardsCached(message) : [];
+  const media = projectMessageMedia(message, normalizedMessage.content);
+  const { images, attachments: visibleAttachments } = media;
   const videoPreviews =
     normalizedRole === "user"
       ? visibleAttachments.filter(
@@ -344,17 +324,81 @@ export function prepareGroupedMessage(
     (item) => item.type !== "attachment" || !videoPreviews.includes(item),
   );
   const hasUserFiles = normalizedRole === "user" && hasUserFileAttachments(cardAttachments);
-  const actionText = opts.messageActions?.markdown ?? displayMarkdown;
   const omittedMedia = normalizedMessage.content.filter((item) => item.type === "omitted_media");
   const assistantViewBlocks = normalizedMessage.content.filter((item) => item.type === "canvas");
   const inlineViewBlocks = normalizedMessage.content.filter((item) => item.type === "plugin_view");
-  const hasImagesOrNotices = hasImages || expiredPairingQrCount !== 0 || omittedMedia.length !== 0;
+  const hasImagesOrNotices =
+    images.length > 0 || media.expiredPairingQrCount !== 0 || omittedMedia.length !== 0;
   const hasMediaContent =
     hasImagesOrNotices ||
     visibleAttachments.length !== 0 ||
     assistantViewBlocks.length !== 0 ||
     inlineViewBlocks.length !== 0;
   const clawHubCards = normalizedMessage.content.filter((item) => item.type === "clawhub");
+  return {
+    preparation,
+    m,
+    role,
+    sourceRole,
+    normalizedRole,
+    workspaceConflict,
+    voiceTranscript,
+    isStandaloneToolMessage,
+    toolCards,
+    ...media,
+    videoPreviews,
+    cardAttachments,
+    hasUserFiles,
+    omittedMedia,
+    assistantViewBlocks,
+    inlineViewBlocks,
+    hasImagesOrNotices,
+    hasMediaContent,
+    clawHubCards,
+  };
+}
+
+export function prepareGroupedMessage(
+  content: ReturnType<typeof prepareGroupedMessageContent>,
+  messageKey: string,
+  opts: GroupedMessageOptions,
+  onOpenSidebar?: (content: SidebarContent) => void,
+) {
+  const disclosure = opts.assistantMessageDisclosure;
+  const {
+    preparation: selected,
+    m,
+    role,
+    sourceRole,
+    normalizedRole,
+    workspaceConflict,
+    voiceTranscript,
+    isStandaloneToolMessage,
+    toolCards,
+    images,
+    attachments: visibleAttachments,
+    expiredPairingQrCount,
+    nextPairingQrExpiresAt,
+    orderedContent,
+    supplementalImages,
+    supplementalAttachments,
+    videoPreviews,
+    cardAttachments,
+    hasUserFiles,
+    omittedMedia,
+    assistantViewBlocks,
+    inlineViewBlocks,
+    hasImagesOrNotices,
+    hasMediaContent,
+    clawHubCards,
+  } = content;
+  const { message, normalizedMessage, displayMarkdown } = selected;
+  const asyncQuestions = opts.asyncQuestions?.submit ? readAsyncQuestions(message) : null;
+  const isToolShell = normalizedRole === "tool";
+  // Nested cards moved under their parent must not leave empty message shells.
+  const hasToolCards = toolCards.some((card) => opts.toolCardOverrides?.get(card) !== null);
+  const hasImages = images.length > 0;
+  const actionText = opts.messageActions?.markdown ?? displayMarkdown;
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const reasoningMarkdown = extractedThinking ? `_Reasoning:_\n\n${extractedThinking}` : null;
