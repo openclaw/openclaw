@@ -1,8 +1,22 @@
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatGuardianNotice, ChatItem, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
-import type { ChatThreadDisplayProps } from "./chat-thread-display.ts";
 import type { ChatInputPlacementProps } from "./chat-thread-inputs.ts";
-import type { CompactionStatus } from "./tool-stream-contract.ts";
+import type { ChatReasoning, CompactionStatus } from "./tool-stream-contract.ts";
+
+export type ChatThreadDisplayProps = {
+  runId?: string | null;
+  reasoning?: ChatReasoning | null;
+  showReasoning?: boolean;
+  stream: string | null;
+  streamStartedAt: number | null;
+  showToolCalls: boolean;
+  /** True while the agent is visibly working (isChatRunWorking). */
+  runWorking?: boolean;
+  /** People the session row lists, loaded or not, keyed by `sessionParticipantIdentityKey`. */
+  replyPeople?: readonly string[];
+  /** Key of the signed-in viewer, who authors local user messages without a sender. */
+  replyLocalPerson?: string;
+};
 
 export type BuildChatItemsProps = ChatInputPlacementProps &
   ChatThreadDisplayProps & {

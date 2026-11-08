@@ -720,13 +720,10 @@ it.each(
       delta: 20,
       owned: false,
     },
-  ].flatMap((testCase) =>
-    [false, true].map((retired) => ({
-      ...testCase,
-      name: retired ? "late " + testCase.name : testCase.name,
-      retired,
-    })),
-  ),
+  ].flatMap((testCase) => [
+    Object.assign({}, testCase, { retired: false }),
+    Object.assign({}, testCase, { name: "late " + testCase.name, retired: true }),
+  ]),
 )("classifies preceding movement at its pre-write coordinate: $name", (testCase) => {
   const observed = observedMaintenance();
   observed.write(40);

@@ -305,7 +305,9 @@ it.each([
       if (kind === "footprint") {
         expect(reader.rowsMeasured()).toBe(false);
       }
-      for (const effect of [...afterCommit]) {
+      // Snapshot this commit; callbacks queued while it runs belong to the next commit.
+      const committedEffects = [...afterCommit];
+      for (const effect of committedEffects) {
         afterCommit.delete(effect);
         effect();
       }

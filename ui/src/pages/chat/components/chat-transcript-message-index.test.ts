@@ -1,3 +1,4 @@
+import { mergeChatStreamMessage } from "@openclaw/gateway-client/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fingerprint from "../../../../../src/shared/fnv1a.js";
 import * as historyIdentity from "../../../lib/chat/history-message-identity.ts";
@@ -201,8 +202,8 @@ it("does not serialize settled history again when a live status changes the row 
   expect(serializations).toBe(1);
 });
 
-it.each(["content array", "content block"] as const)(
-  "invalidates a retained terminal item after same-envelope %s replacement",
+it.each(["stream delta", "snapshot"] as const)(
+  "invalidates a retained terminal item after immutable %s replacement",
   (replacement) => {
     const message = {
       role: "assistant",
@@ -210,7 +211,10 @@ it.each(["content array", "content block"] as const)(
       timestamp: 10,
       __openclaw: { id: "replacement", seq: 1 },
     };
-    const items = chatItems({ messages: [message] });
+    const previousContent = message.content;
+    const previousBlock = message.content[0];
+    let items = chatItems({ messages: [message] });
+    const originalItems = items;
     const project = () => {
       const rows = indexFor(chainFor([...items])).rows.filter((row) => row.kind === "item");
       expect(rows).toHaveLength(1);
@@ -228,17 +232,30 @@ it.each(["content array", "content block"] as const)(
       );
       expect(unchanged.revision).toBe(before.revision);
       expect(hash).not.toHaveBeenCalled();
-      const previousContent = message.content;
-      const previousBlock = message.content[0];
-      if (replacement === "content array") {
-        message.content = [{ type: "text", text: "After" }];
-      } else {
-        message.content[0] = { type: "text", text: "After" };
+      const snapshot = { ...message, content: [{ type: "text", text: "Snapshot" }] };
+      const nextMessage = mergeChatStreamMessage(
+        message,
+        replacement === "stream delta" ? { deltaText: " appended" } : { message: snapshot },
+      );
+      expect(nextMessage).not.toBe(message);
+      if (replacement === "snapshot") {
+        expect(nextMessage).toBe(snapshot);
       }
+      expect(nextMessage).toMatchObject({
+        content: [
+          { type: "text", text: replacement === "stream delta" ? "Before appended" : "Snapshot" },
+        ],
+      });
+      items = chatItems({ messages: [nextMessage] });
+      // Count the new envelope and row digest, independently of item preparation.
+      hash.mockClear();
       const after = project();
-      expect(message.content === previousContent).toBe(replacement === "content block");
-      expect(message.content[0]).not.toBe(previousBlock);
-      expect(after.kind === "item" && after.item).toBe(before.kind === "item" && before.item);
+      expect(messagesIn(items)).toEqual([nextMessage]);
+      expect(message.content).toBe(previousContent);
+      expect(message.content[0]).toBe(previousBlock);
+      expect(message.content[0]?.text).toBe("Before");
+      expect(messagesIn(originalItems)).toEqual([message]);
+      expect(after.kind === "item" && after.item).not.toBe(before.kind === "item" && before.item);
       expect(after.key).toBe(before.key);
       expect(after.revision).not.toBe(before.revision);
       expect(hash).toHaveBeenCalledTimes(2);

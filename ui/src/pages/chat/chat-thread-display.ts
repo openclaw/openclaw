@@ -1,26 +1,11 @@
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { projectRunFailureStreaks } from "./chat-run-failure-streaks.ts";
 import { projectSessionsYieldItems } from "./chat-sessions-yield.ts";
+import type { ChatThreadDisplayProps } from "./chat-thread-contract.ts";
 import type { ChatItemsFacts } from "./chat-thread-facts.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import { timestampAfterVisibleItems } from "./chat-thread-items.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
-import type { ChatReasoning } from "./tool-stream-contract.ts";
-
-export type ChatThreadDisplayProps = {
-  runId?: string | null;
-  reasoning?: ChatReasoning | null;
-  showReasoning?: boolean;
-  stream: string | null;
-  streamStartedAt: number | null;
-  showToolCalls: boolean;
-  /** True while the agent is visibly working (isChatRunWorking). */
-  runWorking?: boolean;
-  /** People the session row lists, loaded or not, keyed by `sessionParticipantIdentityKey`. */
-  replyPeople?: readonly string[];
-  /** Key of the signed-in viewer, who authors local user messages without a sender. */
-  replyLocalPerson?: string;
-};
 
 export function groupChatDisplayItems(
   props: ChatThreadDisplayProps,
