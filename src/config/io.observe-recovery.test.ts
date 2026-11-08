@@ -268,6 +268,13 @@ describe("config observe recovery", () => {
         `Config permission hardening failed (backup restore): ${configPath}: EPERM: chmod denied`,
       );
       expectWarnContaining(warn, `Config auto-restored from backup: ${configPath}`);
+      const [original] = await listClobberFiles(configPath);
+      const originalPath = path.join(path.dirname(configPath), original!);
+      expect(await fsp.readFile(originalPath, "utf-8")).toBe(clobbered.raw);
+      expectWarnContaining(
+        warn,
+        `Original config kept at ${originalPath}; to undo, stop the Gateway`,
+      );
     },
   );
 
@@ -597,17 +604,37 @@ describe("config observe recovery", () => {
     expect((await readObserveEvents(auditPath)).at(-1)?.restoredFromBackup).toBe(true);
   });
 
-  it("recovery uses canonical metadata fingerprints", async () => {
-    const { deps, configPath } = makeDeps(home);
-    const backup = { meta: { authoredBy: "operator" }, gateway: { mode: "local" } };
-    await seedConfigBackup(configPath, backup);
-    const clobbered = await writeConfigRaw(configPath, { gateway: { mode: "local" } });
-    const input = { deps, configPath, ...clobbered, prepareBackup: approveRecoveryCandidate };
+  it.each(["snapshot", "sync", "async"] as const)(
+    "keeps a valid reseeded config without metadata through %s reads and promotion",
+    async (mode) => {
+      const { io, configPath, warn } = createTestConfigIO(home);
+      const backup = { meta: { lastTouchedVersion: "2026.4.22" }, gateway: { mode: "local" } };
+      await seedConfigBackup(configPath, backup);
+      const healthy = await io.readConfigFileSnapshot();
+      await expect(io.promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(true);
+      const reseeded = await writeConfigRaw(configPath, {
+        gateway: { mode: "local", port: 18790 },
+      });
 
-    const recovered = await maybeRecoverSuspiciousConfigRead(input);
+      const recovered =
+        mode === "snapshot"
+          ? (await io.readConfigFileSnapshot({ recoverSuspicious: true })).config
+          : mode === "sync"
+            ? io.loadConfig()
+            : await io.loadConfigAsync();
 
-    expect(recovered.parsed).toEqual(backup);
-  });
+      expect(recovered.gateway).toEqual(reseeded.parsed.gateway);
+      expect(await fsp.readFile(configPath, "utf-8")).toBe(reseeded.raw);
+      expect(await listClobberFiles(configPath)).toEqual([]);
+      expectWarnNotContaining(warn, "Config auto-restored");
+      const accepted = await io.readConfigFileSnapshot();
+      await expect(io.prepareConfigRecovery(accepted)).resolves.toBeNull();
+      await expect(io.promoteConfigSnapshotToLastKnownGood(accepted)).resolves.toBe(true);
+      expect(await fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).toBe(
+        reseeded.raw,
+      );
+    },
+  );
 
   it.each([
     {
@@ -782,6 +809,13 @@ describe("config observe recovery", () => {
     await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
     expectWarnContaining(warn, "Config auto-restored from last-known-good:");
     expectWarnContaining(warn, "Rejected validation details: gateway.mode: Expected string.");
+    const [original] = await listClobberFiles(configPath);
+    const originalPath = path.join(path.dirname(configPath), original!);
+    expect(await fsp.readFile(originalPath, "utf-8")).toBe(brokenRaw);
+    expectWarnContaining(
+      warn,
+      `Original config kept at ${originalPath}; to undo, stop the Gateway`,
+    );
     const observe = await readLastObserveEvent(auditPath);
     expect(observe?.restoredFromBackup).toBe(true);
     expect(observe?.restoredBackupPath).toBe(resolveLastKnownGoodConfigPath(configPath));

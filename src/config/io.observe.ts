@@ -69,7 +69,6 @@ function resolveObservation(params: {
   const baseline = entry.lastKnownGood ?? params.backupBaseline;
   const suspicious = resolveConfigObserveSuspiciousReasons({
     bytes: params.current.bytes,
-    hasMeta: params.current.hasMeta,
     gatewayMode: params.current.gatewayMode,
     parsed: params.snapshot.parsed,
     lastKnownGood: baseline,
