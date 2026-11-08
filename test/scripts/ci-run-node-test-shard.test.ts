@@ -213,6 +213,51 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       preset: "runtime",
     },
     {
+      configs: ["test/vitest/vitest.gateway-database-workers.config.ts"],
+      files: [
+        "src/gateway/talk/client-permission-parity.test.ts",
+        "src/gateway/tool-resolution.swarm-collector.test.ts",
+        "test/plugins/deep-research-routing.gateway.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.gateway-methods.config.ts"],
+      files: ["src/gateway/server-methods/session-catalog-privacy.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
+      files: ["src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.agents-core.config.ts"],
+      files: [
+        "src/agents/agent-tools.delegated-authority.test.ts",
+        "src/agents/session-placement-computer.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      files: ["src/gateway/server.beam-owned-view.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
+      files: [
+        "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
+        "unknown.test.ts",
+      ],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
+      files: [],
+      preset: "full",
+    },
+    {
       configs: ["test/vitest/vitest.gateway-client.config.ts"],
       files: ["src/gateway/client-callsites.guard.test.ts"],
       preset: "runtime",
