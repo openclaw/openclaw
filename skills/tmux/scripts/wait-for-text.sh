@@ -18,6 +18,11 @@ Options:
   -i, --interval  poll interval in seconds (default: 0.5)
   -l, --lines     number of history lines to inspect (integer, default: 1000)
   -h, --help      show this help
+
+Exit status:
+  0  pattern found
+  1  timed out, or tmux/timeout/lines unusable
+  2  invalid argument value (interval or pattern)
 USAGE
 }
 
@@ -57,9 +62,23 @@ if ! [[ "$lines" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+if ! [[ "$interval" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] || [[ "$interval" =~ ^[0.]+$ ]]; then
+  echo "interval must be a positive number of seconds" >&2
+  exit 2
+fi
+
 if ! command -v tmux >/dev/null 2>&1; then
   echo "tmux not found in PATH" >&2
   exit 1
+fi
+
+# An invalid pattern can never match, so fail now instead of polling to the deadline.
+pattern_error=""
+pattern_status=0
+pattern_error=$(printf '' | grep $grep_flag -- "$pattern" 2>&1 >/dev/null) || pattern_status=$?
+if [[ "$pattern_status" -eq 2 ]]; then
+  echo "invalid pattern: $pattern${pattern_error:+ ($pattern_error)}" >&2
+  exit 2
 fi
 
 # End time in epoch seconds (integer, good enough for polling)
