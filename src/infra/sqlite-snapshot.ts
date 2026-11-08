@@ -558,6 +558,7 @@ export async function createVerifiedSqliteSnapshot(
   options: CreateVerifiedSqliteSnapshotOptions,
 ): Promise<VerifiedSqliteSnapshot> {
   const retained = options.sourceAcquisition?.preparedSource;
+  const cleanupOptions = { cleanupFailure: options.sourceAcquisition?.cleanupFailure };
   // Take cleanup custody before any asynchronous admission; a rejected transfer
   // must retire this image rather than reacquire a different source generation.
   const create = async () => {
@@ -608,13 +609,17 @@ export async function createVerifiedSqliteSnapshot(
             undefined,
             options.onProgress,
           );
-      return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
-        verifyAndPublishSqliteSnapshot(options, privateSourcePath),
+      return withPreparedSqliteSnapshot(
+        prepared,
+        (privateSourcePath) => verifyAndPublishSqliteSnapshot(options, privateSourcePath),
+        cleanupOptions,
       );
     }
     return verifyAndPublishSqliteSnapshot(options);
   };
-  return retained ? withPreparedSqliteSnapshot(retained.prepared, create) : create();
+  return retained
+    ? withPreparedSqliteSnapshot(retained.prepared, create, cleanupOptions)
+    : create();
 }
 
 async function verifyAndPublishSqliteSnapshot(

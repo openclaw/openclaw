@@ -1,2 +1,2 @@
-# NFS publication handle lifetime, deferred staging/private-image cleanup, and Gateway preflight regression cases.
-157
+# NFS publication/private-image cleanup, strict preflight errors, and candidate cleanup outcomes.
+215

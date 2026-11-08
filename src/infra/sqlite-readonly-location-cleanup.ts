@@ -175,10 +175,11 @@ export function retainSnapshotWork<T>(work: Promise<T>, stop: () => void = () =>
   return work;
 }
 
-/** Keep signal cleanup behind the consumer; only retired NFS removal can defer. */
+/** Keep signal cleanup behind the consumer; candidate updates may retain cleanup warnings. */
 export async function withPreparedSqliteSnapshot<T>(
   snapshot: PreparedSqliteReadOnlyLocation,
   read: (location: string) => T | Promise<T>,
+  options: { cleanupFailure?: "warn" } = {},
 ): Promise<T> {
   let outcome: { value: T } | { cause: unknown };
   try {
@@ -188,15 +189,20 @@ export async function withPreparedSqliteSnapshot<T>(
   } catch (cause) {
     outcome = { cause };
   }
+  const cleanupRoot = snapshot.cleanupRoot ?? path.dirname(snapshot.location);
   let cleanupError: unknown;
   const removed = await snapshot.cleanupAsync().catch((error: unknown) => {
     cleanupError = error;
+    if (options.cleanupFailure === "warn") {
+      // Boolean failures are logged by the prepared owner; throwing owners need a report here.
+      emitSnapshotCleanupFailure({ cleanupRoot, operation: "rm", code: extractErrorCode(error) });
+    }
     return false;
   });
-  const cleanupRoot = snapshot.cleanupRoot ?? path.dirname(snapshot.location);
   cleanupError ??= snapshotDirectories.get(cleanupRoot)?.cleanupFailure;
   if (
     !removed &&
+    options.cleanupFailure !== "warn" &&
     !("value" in outcome && deferSqliteSnapshotCleanupAfterRead(cleanupError, cleanupRoot))
   ) {
     // An exit retry is best-effort, not proof that this private copy was removed.
@@ -288,7 +294,7 @@ export type CleanupFailureReport = {
   code: string | undefined;
 };
 
-function emitSnapshotCleanupFailure(
+export function emitSnapshotCleanupFailure(
   report: CleanupFailureReport,
   onCleanupFailure?: (report: CleanupFailureReport) => void,
 ): void {
