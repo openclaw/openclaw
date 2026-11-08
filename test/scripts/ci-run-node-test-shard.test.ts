@@ -222,6 +222,27 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: ["src/auto-reply/reply/dispatch-from-config.delivery.test.ts"],
       preset: "runtime",
     },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: [
+        "test/codex-settled-turn-finalization.integration.test.ts",
+        "test/conversation-tools.codex.integration.test.ts",
+        "test/scripts/eager-import-closure.test.ts",
+        "test/scripts/lint-suppressions.test.ts",
+        "test/scripts/plugin-sdk-surface-report.test.ts",
+        "test/scripts/pr-wrapper-source-closure.test.ts",
+        "test/vitest-projects-config.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: [
+        "test/codex-settled-turn-finalization.integration.test.ts",
+        "test/scripts/vitest-worker-shutdown.test.ts",
+      ],
+      preset: "full",
+    },
     { configs: [gatewayDatabaseConfig], files: [], preset: "full" },
     { configs: [gatewayDatabaseConfig], files: null, preset: "full" },
     { configs: [gatewayDatabaseConfig], files: undefined, preset: "full" },
