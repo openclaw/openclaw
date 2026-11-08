@@ -128,6 +128,19 @@ struct CommandSessionGroupingTests {
         #expect(fallback.map(\.key) == ["a", "b", "c"])
     }
 
+    @Test(arguments: ["", "amber"])
+    func `drawer search hides group headers without matches`(query: String) {
+        let sections = RootSidebarModel.sections(
+            sessions: [self.entry("agent:main:amber", category: "Projects", activity: 2)],
+            query: query,
+            currentSessionKey: "agent:main:amber",
+            mainSessionKey: "agent:main:main",
+            activeAgentID: "main",
+            groups: [.init(name: "Projects", position: 0), .init(name: "Empty", position: 1)])
+        let expected = query.isEmpty ? ["group:Projects", "group:Empty"] : ["group:Projects"]
+        #expect(sections.map(\.id) == expected)
+    }
+
     private func entry(
         _ key: String,
         category: String? = nil,

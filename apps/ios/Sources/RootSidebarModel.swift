@@ -291,7 +291,8 @@ final class RootSidebarModel {
             activeAgentID: activeAgentID,
             groups: groups,
             excludesMainSession: true,
-            includeEmptyGroups: true,
+            // Empty headers are move targets while browsing, not search results.
+            includeEmptyGroups: !isSearching,
             query: query,
             sessionRoutingContract: sessionRoutingContract)
     }
