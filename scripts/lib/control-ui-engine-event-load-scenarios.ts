@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
+import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../../ui/src/pages/chat/scroll.ts";
 import { getControlUiContextHandle } from "../../ui/src/test-helpers/control-ui-e2e-context.ts";
 import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
@@ -1136,10 +1137,61 @@ export async function verifyEngineEventLoad(page: Page, count: number, toolCount
     if (await latest.isVisible()) {
       await latest.press("Enter");
     }
-    await page
-      .locator(`${pane} .chat-text`)
-      .getByText("Event load foreground completed.", { exact: true })
-      .waitFor();
+    // Tail preparation can mount the final row before the latest command moves.
+    // Require the same visible target and end geometry across three layout updates.
+    await page.waitForFunction(
+      ({ paneSelector, finalText, endThreshold, state }) => {
+        const host = document.querySelector(paneSelector);
+        const thread = host?.querySelector<HTMLElement>(".chat-thread");
+        const target = [...(thread?.querySelectorAll(".chat-text") ?? [])].find(
+          (element) => element.textContent?.trim() === finalText,
+        );
+        const rect = target?.getBoundingClientRect();
+        const viewport = thread?.getBoundingClientRect();
+        const visible = Boolean(
+          target?.isConnected &&
+          target.checkVisibility({ checkOpacity: true, visibilityProperty: true }) &&
+          rect &&
+          viewport &&
+          thread &&
+          Math.min(rect.right, viewport.left + thread.clientLeft + thread.clientWidth, innerWidth) >
+            Math.max(rect.left, viewport.left + thread.clientLeft, 0) &&
+          Math.min(
+            rect.bottom,
+            viewport.top + thread.clientTop + thread.clientHeight,
+            innerHeight,
+          ) > Math.max(rect.top, viewport.top + thread.clientTop, 0) &&
+          Math.abs(thread.scrollHeight - thread.clientHeight - thread.scrollTop) <= endThreshold,
+        );
+        const geometry = JSON.stringify([
+          thread?.scrollTop,
+          thread?.scrollHeight,
+          thread?.clientHeight,
+          viewport?.x,
+          viewport?.y,
+          viewport?.width,
+          viewport?.height,
+          rect?.x,
+          rect?.y,
+          rect?.width,
+          rect?.height,
+        ]);
+        state.stableFrames =
+          visible && target === state.target && geometry === state.geometry
+            ? state.stableFrames + 1
+            : 0;
+        state.target = target ?? null;
+        state.geometry = geometry;
+        return state.stableFrames >= 3;
+      },
+      {
+        paneSelector: pane,
+        finalText: "Event load foreground completed.",
+        endThreshold: CHAT_TRANSCRIPT_END_THRESHOLD_PX,
+        state: { target: null as Element | null, geometry: "", stableFrames: 0 },
+      },
+      { polling: "raf" },
+    );
     evidence.foregroundFinalVisible = true;
     const context = await getControlUiContextHandle(page);
     try {

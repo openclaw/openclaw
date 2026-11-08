@@ -58,6 +58,10 @@ terminal receipts and a final revisit verify status, unread state and history.
 Every background row must
 settle, and all foreground tool results must remain in history. Blank scroll
 frames fail the scenario. Failed observations retain partial counters and CPU.
+The final revisit uses the latest button, then waits for the final reply inside
+the transcript viewport, within the scroll owner's end threshold, with stable
+geometry across three frames. Merely mounting the final row is insufficient:
+the virtualizer can temporarily mount it while measuring the jump destination.
 
 Live snapshots update the external producer's canonical row and history owner, so
 list and history replies agree with the event stream. List queries keep the existing
