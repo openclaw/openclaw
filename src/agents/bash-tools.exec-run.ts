@@ -426,7 +426,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           execParams: params,
           host,
           sandbox,
-          containerWorkdir,
           channelContext: defaults?.channelContext,
           subagentExecution,
           defaultPathPrepend,

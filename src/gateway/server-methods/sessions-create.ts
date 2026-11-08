@@ -21,6 +21,7 @@ import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { getNodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { projectRequesterForClient } from "../project-access.js";
 import { repositoryDispatchCredentialReader } from "../repository-dispatch.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
@@ -39,10 +40,7 @@ import {
   resolveSessionCreateAgentId,
 } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
-import {
-  prepareSessionWorktreeCreation,
-  resolveSessionProjectRoot,
-} from "../session-worktree-preparation.js";
+import { prepareSessionWorktreeCreation } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
@@ -61,6 +59,7 @@ import {
 } from "./session-create-initial-turn.js";
 import {
   normalizeSessionProjectGitUrl,
+  resolveRequestedSessionProjectRoot,
   resolveSessionRepositoryCreation,
   validateSessionProjectPreparation,
   validateSessionWorktreeSelection,
@@ -360,15 +359,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const deferWorktree =
       p.worktree === true && !emptyWorkspace && hasInitialTurn && !existingTargetEntry;
-    let projectRoot: string | undefined;
-    if (requestedProjectId) {
-      const project = await resolveSessionProjectRoot(cfg, requestedProjectId, p.worktree === true);
-      if (!project.ok) {
-        respond(false, undefined, project.error);
-        return;
-      }
-      projectRoot = project.value;
+    const requestedProject = await resolveRequestedSessionProjectRoot(cfg, p, client);
+    if (!requestedProject.ok) {
+      respond(false, undefined, requestedProject.error);
+      return;
     }
+    const projectRoot = requestedProject.value;
     let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
     if (repository) {
       // Mention validation and later creation must use the same real child target.
@@ -452,6 +448,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           target: lifecycleTarget,
           workspace: emptyWorkspace ? { kind: "empty" } : (projectRoot ?? requestedCwd),
           inheritParentKey: inheritParentWorktree ? spawnRequesterSessionKey : undefined,
+          projectRequester: projectRequesterForClient(client),
           repositoryMutations: context.workerRepositoryWorkspaceMutationService,
           projectGitUrl: requestedProjectGitUrl,
           name: normalizeOptionalString(p.worktreeName),
@@ -537,6 +534,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       clearExecBinding: !requestedExecNode,
       // A plain New Chat with no cwd must not inherit the prior session cwd.
       clearSpawnedCwd: p.worktree !== true && !sessionCwd,
+      worktree: p.worktree,
       fork: p.fork,
       forkFrom: p.forkFrom,
       ...resolveSessionCreateSpawnContext({
@@ -675,8 +673,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const responseEntry = sessionEntryForkedFromParent(created.entry)
       ? { ...created.entry, forkedFromParent: true as const }
       : created.entry;
+    const freshSession = !created.resetExisting;
     const runStarted =
-      !created.resetExisting &&
+      freshSession &&
       isFreshChatSendStarted({
         payload: runPayload,
         cached: runMeta?.cached === true,
@@ -690,16 +689,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       entry: responseEntry,
       runStarted,
       publicRead,
-      ...(!created.resetExisting && runPayload ? runPayload : {}),
-      ...(!created.resetExisting && runError ? { runError } : {}),
+      ...(freshSession && runPayload ? runPayload : {}),
+      ...(freshSession && runError ? { runError } : {}),
       resolved: created.resolved,
       ...(createdWorktree ? { worktree: createdWorktree } : {}),
     });
     diagnostics?.mark("handlerExit");
-    for (const reason of [
-      created.resetExisting ? "new" : "create",
-      ...(runStarted ? ["send"] : []),
-    ]) {
+    for (const reason of [freshSession ? "create" : "new", ...(runStarted ? ["send"] : [])]) {
       emitSessionsChanged(context, {
         sessionKey: created.key,
         agentId: created.agentId,

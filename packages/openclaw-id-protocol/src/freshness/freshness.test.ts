@@ -53,6 +53,7 @@ async function world() {
         binding_seq,
         owner_devices: [],
         owner_peer_keys: [],
+        node_peer_keys: [],
         members: [],
         protocols: { statement: [1], descriptor: [1] },
         issued_at: opts.issued_at ?? now - 60,
