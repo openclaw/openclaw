@@ -706,6 +706,43 @@ describe("renderSkills", () => {
     expect(text()).toContain("AgentReceipt Local trust card.");
   });
 
+  it("updates retained row status after filtering and verdict changes", async () => {
+    const { query, render } = createView();
+    const skill = createLinkedSkill();
+    const report = skillReport([skill]);
+    render({ report, clawhubVerdicts: verdicts() });
+    const row = query(".plugins-item");
+    const status = query(".skill-row-status");
+    render({ report, filter: skill.name, clawhubVerdicts: verdicts() });
+    expect(query(".plugins-item")).toBe(row);
+    expect(query(".skill-row-status")).toBe(status);
+
+    render({
+      report,
+      filter: skill.name,
+      clawhubVerdicts: verdicts(
+        verdict({
+          ok: false,
+          decision: "fail",
+          securityStatus: "suspicious",
+          reasons: ["security.suspicious"],
+        }),
+      ),
+    });
+    expect(query(".skill-row-status")).toBe(status);
+    expect(status?.getAttribute("aria-label")).toContain("Review · security.suspicious");
+
+    render({
+      report: skillReport([
+        { ...skill, eligible: false, missing: { ...skill.missing, bins: ["fixture-cli"] } },
+      ]),
+      filter: skill.name,
+      clawhubVerdicts: verdicts(),
+    });
+    expect(query(".skill-row-status")).toBe(status);
+    expect(status?.getAttribute("title")).toContain("Needs setup · bin:fixture-cli");
+  });
+
   it("retains the toolbar and keyed rows across status reads", async () => {
     const { container, query, render } = createView();
     const initial = createDeferred<{ value: SkillStatusReport | null; error: string | null }>();

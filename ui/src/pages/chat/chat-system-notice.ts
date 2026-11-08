@@ -10,7 +10,11 @@ import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { optionalBoundaryIdentity } from "./chat-thread-run-identity.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import { resolveSystemNoticeKind, type PendingInputStatus } from "./system-notice-kinds.ts";
+import {
+  resolveSystemNoticeKind,
+  projectSystemNoticeSummary,
+  type PendingInputStatus,
+} from "./system-notice-kinds.ts";
 
 registerChatSessionEnglish();
 
@@ -184,6 +188,9 @@ export function projectChatSystemNotice(
     return [item, ...pendingItems];
   }
   const sourceTool = typeof provenance.sourceTool === "string" ? provenance.sourceTool : undefined;
+  if (sourceTool === "restart") {
+    return [];
+  }
   const noticeKind = resolveSystemNoticeKind(sourceTool);
   const pluginSteering = sourceTool?.startsWith("plugin:")
     ? asRecord(asRecord(raw?.["__openclaw"])?.pluginSteering)
@@ -201,17 +208,23 @@ export function projectChatSystemNotice(
   if (!text.trim()) {
     return pendingItems;
   }
+  const summary = projectSystemNoticeSummary({
+    label: noticeKind ? t(noticeKind.labelKey, { plugin: pluginName ?? "" }) : t("common.system"),
+    text,
+    detailed: Boolean(noticeKind?.collapsedBody),
+    statusOnly: Boolean(summaryKey),
+  });
   return [
     {
       kind: "notice",
       key: item.key,
       icon: "cpu",
       ...(pending ? {} : { systemEvent: "info" as const }),
-      label: noticeKind ? t(noticeKind.labelKey, { plugin: pluginName ?? "" }) : t("common.system"),
+      label: summary.label,
       ...(noticeKind?.startsTurn === false ? {} : { startsTurn: true }),
-      ...(noticeKind?.collapsedBody ? { collapsedBody: true } : {}),
+      ...(summary.collapsedBody ? { collapsedBody: true } : {}),
       ...(noticeKind?.showTimestamp ? { showTimestamp: true } : {}),
-      text,
+      text: summary.text,
       timestamp: message.timestamp,
       ...optionalBoundaryIdentity(userTurnRunId(item.message)),
     },

@@ -103,7 +103,10 @@ export async function createNpmPublicationReadbackFixture(
   const runId = mode === "prior-deferred" ? 201 : 200;
   const runAttempt = 2;
   const replanned = mode === "replanned-failed";
+  const deferredAuth = mode === "deferred-auth";
   const noPublication = fault === "no-publish" || mode === "prior-deferred" || replanned;
+  const parentRunId = 300;
+  const parentRunAttempt = 1;
   const publisherAttempt = mode === "retained-publisher" || replanned ? 1 : 2;
   const plannerAttempt = mode === "retained-plan" ? 1 : replanned ? 2 : publisherAttempt;
   const producerId = mode === "prepared" ? 100 : runId;
@@ -194,6 +197,39 @@ export async function createNpmPublicationReadbackFixture(
     expires_at: "2099-01-01T00:00:00Z",
     workflow_run: { id: producer, head_sha: workflowSha },
   });
+  const deferredZip = deferredAuth
+    ? await zipNpmFixture({
+        "demo-npm-oidc-deferred.json": {
+          schemaVersion: 1,
+          kind: "openclaw-plugin-npm-deferred-auth",
+          reason: "npm-oidc-eneedauth",
+          repository,
+          workflow: {
+            ref: "refs/heads/main",
+            sha: workflowSha,
+            runId,
+            runAttempt: publisherAttempt,
+          },
+          parent: { runId: parentRunId, runAttempt: parentRunAttempt },
+          sourceSha: fault === "deferred-invalid" ? "c".repeat(40) : sourceSha,
+          package: {
+            extensionId: "demo",
+            name: packageName,
+            version,
+            publishTag: "beta",
+          },
+          recovery: {
+            environment: "npm-publish",
+            publishScope: "selected",
+            requiresParentPublication: false,
+            requiresTrustedPublisherPreflight: true,
+          },
+        },
+      })
+    : undefined;
+  const deferredMetadata = deferredZip
+    ? metadata(44, `plugin-npm-deferred-auth-demo-${runId}-${publisherAttempt}`, deferredZip, runId)
+    : undefined;
   const qualifiedZip = await zipNpmFixture({
     "demo.tgz": bytes,
     "plugin-publication-manifest.json": readFileSync(created.manifestPath),
@@ -300,7 +336,11 @@ export async function createNpmPublicationReadbackFixture(
       return { total_count: effectiveJobs.length, jobs: effectiveJobs };
     }
     if (endpoint.includes(`/actions/runs/${runId}/artifacts?`)) {
-      const artifacts = [planMetadata, ...(fault === "missing-receipt" ? [] : [receiptMetadata])];
+      const artifacts = [
+        planMetadata,
+        ...(fault === "missing-receipt" ? [] : [receiptMetadata]),
+        ...(deferredMetadata ? [deferredMetadata] : []),
+      ];
       return { total_count: artifacts.length, artifacts };
     }
     if (endpoint.includes("/attempts/") && endpoint.includes("/jobs?")) {
@@ -333,6 +373,7 @@ export async function createNpmPublicationReadbackFixture(
     { metadata: qualifiedMetadata, zip: qualifiedZip },
     { metadata: receiptMetadata, zip: receiptZip },
     { metadata: planMetadata, zip: planZip },
+    ...(deferredMetadata && deferredZip ? [{ metadata: deferredMetadata, zip: deferredZip }] : []),
   ];
   const respondFetch = async (url: string) => {
     requests.push(url);
@@ -357,6 +398,9 @@ export async function createNpmPublicationReadbackFixture(
       );
     }
     if (url.startsWith("https://registry.npmjs.org/")) {
+      if (deferredAuth) {
+        throw new Error("Deferred package registry readback must stay owned by recovery.");
+      }
       const name = decodeURIComponent(url).endsWith("/@openclaw/existing")
         ? "@openclaw/existing"
         : packageName;
@@ -392,6 +436,8 @@ export async function createNpmPublicationReadbackFixture(
       sourceRoot: root,
       cacheDir: join(root, "parent"),
       token: "synthetic-token",
+      parentRunId,
+      parentRunAttempt,
       runGh,
       fetchImpl,
     },

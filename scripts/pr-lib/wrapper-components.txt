@@ -413,6 +413,7 @@ src/infra/database-engine/adapters.ts
 src/infra/database-engine/admission-scope.ts
 src/infra/database-engine/capability-unavailable.ts
 src/infra/database-engine/context.ts
+src/infra/database-engine/database-store-live-read.worker.ts
 src/infra/database-engine/index-hint.ts
 src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
@@ -437,6 +438,7 @@ src/infra/database-engine/sqlite-full-text.ts
 src/infra/database-engine/sqlite-memory-search-fragments.ts
 src/infra/database-engine/sqlite-memory-vector-schema.ts
 src/infra/database-engine/sqlite-search-schema.ts
+src/infra/database-engine/sqlite-store-inspection.ts
 src/infra/database-engine/sqlite-vector-subprocess.ts
 src/infra/database-engine/sqlite-vector-types.ts
 src/infra/database-engine/sqlite-vector.ts
@@ -858,6 +860,7 @@ src/config/zod-schema.cloud-workers.ts
 src/config/zod-schema.core.ts
 src/config/zod-schema.desktop.ts
 src/config/zod-schema.gateway.ts
+src/config/zod-schema.gateway-openclaw-id.ts
 src/config/zod-schema.hooks.ts
 src/config/zod-schema.implicit-mentions.ts
 src/config/zod-schema.installs.ts
@@ -881,6 +884,7 @@ src/config/zod-schema.ts
 src/cron/automation-result.ts
 src/cron/completion-status.ts
 src/cron/execution-error-constants.ts
+src/cron/expression.ts
 src/cron/run-diagnostics-normalize.ts
 src/cron/run-history-detail.ts
 src/cron/scratch-contract.ts
@@ -1216,6 +1220,7 @@ src/infra/sqlite-database-admission-delta.ts
 src/infra/sqlite-database-admission-record.ts
 src/infra/sqlite-database-admission-seal.ts
 src/infra/sqlite-database-admission-turn.ts
+src/infra/sqlite-database-admission-wait.ts
 src/infra/sqlite-database-admission.ts
 src/infra/sqlite-error-diagnostics.ts
 src/infra/sqlite-existing-database.ts
@@ -1290,6 +1295,7 @@ src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
 src/infra/sqlite-snapshot-reclamation.ts
 src/infra/sqlite-snapshot-retirement.ts
+src/infra/sqlite-snapshot-reuse.ts
 src/infra/sqlite-snapshot-single-flight.ts
 src/infra/sqlite-temp-generation-schema.ts
 src/infra/sqlite-snapshot-source.ts
@@ -1438,6 +1444,7 @@ src/infra/update-runtime-staging.ts
 src/infra/update-snapshot-capacity-schema.ts
 src/infra/update-state-inspection-protocol.ts
 src/infra/update-step-identity.ts
+src/infra/utf8-input.ts
 src/infra/warning-filter.ts
 src/infra/windows-appcontainer-spawn.ts
 src/infra/windows-encoding.ts
@@ -1848,6 +1855,7 @@ src/process/process-deadline.ts
 src/process/scoped-child-reaper.ts
 src/process/spawn-broker/child-completion.ts
 src/process/spawn-broker/child-diagnostics.ts
+src/process/spawn-broker/admission.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/commands.ts

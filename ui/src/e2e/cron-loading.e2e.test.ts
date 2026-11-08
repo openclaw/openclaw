@@ -145,7 +145,7 @@ suite.define(() => {
           title: goBack ? b.name : outcome === "error" ? a.name : saved.name,
           samePage: true,
         });
-        const errors = await page.locator(".cron-error-banner").allTextContents();
+        const errors = await page.locator(".callout.danger").allTextContents();
         if (goBack || outcome === "saved") {
           expect(errors).toEqual([]);
         } else {

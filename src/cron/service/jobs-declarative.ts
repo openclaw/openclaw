@@ -25,6 +25,7 @@ export function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
     pluginCommand: job.pluginCommand,
     schedule: job.schedule,
     streamSandbox: job.streamSandbox,
+    streamOperatorSource: job.streamOperatorSource,
     pacing: job.pacing,
     activeHours: job.activeHours,
     idleOnly: job.idleOnly,

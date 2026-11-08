@@ -108,13 +108,16 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
             targetIds: getModelsCommandSecretTargetIds(),
             agent,
           });
-          const { readFile } = await import("node:fs/promises");
+          const { realpath } = await import("node:fs/promises");
           const inputImages =
             file && file.length > 0
               ? await Promise.all(
                   file.map(async (filePath) => {
                     const resolvedPath = path.resolve(filePath);
-                    const buffer = await readFile(resolvedPath);
+                    const { readRegularFile } = await import("../../infra/fs-safe.js");
+                    const { buffer } = await readRegularFile({
+                      filePath: await realpath(resolvedPath),
+                    });
                     return {
                       buffer,
                       fileName: path.basename(resolvedPath),
