@@ -1,5 +1,15 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  prepareSessionStoreCandidatesInWorker,
+  targetDiscoveryLane,
+  withSessionHistoryWorkerReadCandidates,
+} from "../config/sessions/session-transcript-worker-resources.js";
+import type {
+  SessionHistoryWorkerInput,
+  SessionTranscriptWorkerReply,
+} from "../config/sessions/session-transcript-worker.types.js";
+import { createOwnedWorkerTaskPool } from "../infra/worker-task-pool.js";
 import type { PluginHookHandlerMap } from "../plugins/hook-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
@@ -67,13 +77,59 @@ export function registerGatewayStartupAdmissionTests(params: {
     }
   });
 
-  it("opens external input after failed restart discovery", async () => {
+  it.each([
+    ["session.history.synthetic-private-suffix", "transcript_read"],
+    ["synthetic-private-operation\n/private/path", "execute"],
+    ["session-target-prepare", "session-target-prepare"],
+    ["session-target-inventory", "session-target-inventory"],
+  ])("opens external input after failed restart discovery (%s)", async (operation, label) => {
+    const pool = createOwnedWorkerTaskPool<
+      SessionHistoryWorkerInput,
+      SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
+    >({
+      workerUrl: new URL("file:///synthetic-private-root/private-worker.js"),
+      maxPendingBytes: 8,
+    });
+    const originalPool = targetDiscoveryLane.pool;
+    targetDiscoveryLane.pool = { ...pool, canCloseNativeResources: () => false };
     const tracked: Promise<unknown>[] = [];
     const lifetime = new AbortController();
     const owner = await import("./session-restart-resume.js");
-    const resumeSpy = vi
-      .spyOn(owner, "resumeMarkedSessions")
-      .mockRejectedValueOnce(new Error("fixture store unavailable"));
+    const resumeSpy = vi.spyOn(owner, "resumeMarkedSessions").mockImplementationOnce(async () => {
+      if (operation === "session-target-prepare") {
+        await prepareSessionStoreCandidatesInWorker({ storePath: "/synthetic-private/store" });
+        return;
+      }
+      if (operation === "session-target-inventory") {
+        await withSessionHistoryWorkerReadCandidates(
+          [],
+          (scope) =>
+            scope.readTargetInventory({
+              config: {},
+              agentIds: [],
+              env: { OPENCLAW_STATE_DIR: "/synthetic-private/state" },
+              paths: new Map(),
+              registeredDatabases: { status: "deferred" },
+            }),
+          targetDiscoveryLane,
+        );
+        return;
+      }
+      await pool
+        .runTask(
+          () => {
+            throw new Error("Rejected private input must not be prepared");
+          },
+          {
+            inputBytes: 9,
+            diagnosticOperation: operation,
+          },
+        )
+        .result.catch((error: unknown) => {
+          expect(error).toMatchObject({ code: "overloaded", capacityAvailable: undefined });
+          throw error;
+        });
+    });
     const unlockStartupMethods = vi.fn();
     const onChannelsStarted = vi.fn();
     const startup = params.createParams({
@@ -94,12 +150,19 @@ export function registerGatewayStartupAdmissionTests(params: {
       expect(unlockStartupMethods).toHaveBeenCalledOnce();
       expect(onChannelsStarted).toHaveBeenCalledOnce();
       expect(startup.log.warn).toHaveBeenCalledWith(
-        expect.stringContaining("Restart resume discovery failed"),
+        expect.stringMatching(
+          new RegExp(
+            "^Restart resume discovery failed: WorkerTaskError: worker task capacity reached " +
+              `\\[task=extension\\.${label} pool pending bytes: pendingBytes=0 maxPendingBytes=8 inputBytes=\\d+\\]$`,
+          ),
+        ),
       );
     } finally {
       lifetime.abort();
       await Promise.allSettled(tracked);
       resumeSpy.mockRestore();
+      targetDiscoveryLane.pool = originalPool;
+      await pool.close();
     }
   });
 

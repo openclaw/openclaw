@@ -511,6 +511,7 @@ export async function prepareSessionStoreCandidatesInWorker(
     const reply = await lane.pool.run(
       () => ({ kind: "session-target-prepare", request: prepared }),
       {
+        diagnosticOperation: "session-target-prepare",
         inputBytes: JSON.stringify(prepared).length * 2,
         timeoutMs: 60_000,
       },
@@ -702,7 +703,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
                 lane.native = true;
                 return input;
               },
-              { inputBytes, timeoutMs: 60_000, signal },
+              { inputBytes, timeoutMs: 60_000, signal, diagnosticOperation: input.kind },
             ),
           admissionFamilies,
           signal,
