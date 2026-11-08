@@ -157,6 +157,16 @@ suite.define(() => {
     await skeleton.waitFor();
     expect(await connection.getAttribute("aria-busy")).toBeNull();
     expect(await connection.locator(".gateway-mascot[data-pose=busy]").count()).toBe(1);
+    expect(
+      await connection
+        .locator(".gateway-mascot")
+        .evaluate(
+          (element) =>
+            element
+              .getAnimations({ subtree: true })
+              .filter((animation) => animation.effect?.getTiming().iterations === Infinity).length,
+        ),
+    ).toBe(6);
     expect(await page.getByText("Loading panel", { exact: true }).count()).toBe(0);
     expect(await page.locator("openclaw-app-sidebar").count()).toBe(1);
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
@@ -173,6 +183,12 @@ suite.define(() => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.locator(".topbar--navigation-locked").waitFor();
+    expect(
+      await page
+        .locator(".topbar-connection-brand svg")
+        .filter({ visible: true })
+        .evaluate((element) => (element as SVGSVGElement).getBBox().width),
+    ).toBeGreaterThan(0);
     const navigation = page.locator(".shell-nav");
     expect(await navigation.getAttribute("aria-hidden")).toBe("true");
     expect(

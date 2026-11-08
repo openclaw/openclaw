@@ -20,6 +20,7 @@ import {
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { selectControlUiRoutePreloads } from "../../../src/gateway/control-ui-route-preloads.ts";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
 import { controlUiLocaleModulesPlugin } from "../../config/control-ui-locales.ts";
 import { extractControlUiStartupAssetPaths } from "../../config/control-ui-startup-assets.ts";
 import controlUiViteConfig, {
@@ -696,6 +697,72 @@ it("includes every English dependency in the raw source-hash input", async () =>
   );
   for (const file of englishFiles) {
     expect(sourceRaw, file).toContain(readFileSync(path.join(localesDir, file), "utf8"));
+  }
+});
+
+it("keeps namespace URLs in one immutable locale generation across rebuilds", async () => {
+  const buildCatalog = async (label: string) => {
+    const assets: Array<{ fileName: string; source: string }> = [];
+    await withSourceImport(
+      async () =>
+        catalogImport({
+          common: { health: "Ready" },
+          chat: { title: label },
+          activity: { title: "Activity" },
+        }),
+      async () => {
+        const result = await build({
+          configFile: false,
+          logLevel: "silent",
+          plugins: [
+            {
+              name: "locale-generation-fixture",
+              resolveId: (id) => (id === "fixture:locale" ? id : null),
+              load: (id) =>
+                id === "fixture:locale"
+                  ? 'globalThis.loadLocale = () => import("virtual:openclaw-control-ui-locale/fr");'
+                  : null,
+            },
+            controlUiLocaleModulesPlugin(),
+          ],
+          build: {
+            write: false,
+            rolldownOptions: {
+              input: "fixture:locale",
+              output: { codeSplitting: controlUiCodeSplitting },
+            },
+          },
+        });
+        if (Array.isArray(result) || !("output" in result)) {
+          throw new Error("Expected one locale fixture build");
+        }
+        for (const asset of result.output) {
+          if (asset.fileName.startsWith("assets/locale-namespace-fr-")) {
+            assets.push({
+              fileName: asset.fileName,
+              source: asset.type === "asset" ? String(asset.source) : asset.code,
+            });
+          }
+        }
+      },
+    );
+    return assets;
+  };
+  const first = await buildCatalog("Chat");
+  const repeated = await buildCatalog("Chat");
+  const changed = await buildCatalog("Conversation");
+  const urls = (assets: typeof first) => assets.map((asset) => asset.fileName).toSorted();
+  expect(first).toHaveLength(2);
+  expect(new Set(first.map((asset) => asset.fileName.slice(-11, -3))).size).toBe(1);
+  expect(urls(repeated)).toEqual(urls(first));
+  expect(urls(changed).every((url) => !urls(first).includes(url))).toBe(true);
+  for (const asset of changed) {
+    const catalog = await import(dataModuleUrl(asset.source));
+    expect(catalog.default).toEqual(
+      asset.fileName.includes("-chat-")
+        ? { chat: { title: "Conversation" } }
+        : { activity: { title: "Activity" } },
+    );
   }
 });
 

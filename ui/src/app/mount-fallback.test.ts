@@ -304,6 +304,18 @@ describe("Control UI mount fallback", () => {
     expect(win.document.getElementById("openclaw-mount-fallback")?.hidden).toBe(true);
   });
 
+  it("preserves fallback artwork when browser guidance fails to load", () => {
+    const win = boot();
+    win.dispatchEvent(new win.Event("openclaw-control-ui-unsupported-browser"));
+    win.dispatchEvent(new win.Event("openclaw-control-ui-unsupported-browser-failed"));
+
+    expect(fallbackElement(win).hidden).toBe(false);
+    expect(win.document.body.textContent).toContain("Browser guidance didn’t load");
+    for (const use of win.document.querySelectorAll("svg use")) {
+      expect(win.document.querySelector(use.getAttribute("href")!)).not.toBeNull();
+    }
+  });
+
   it.each(["first render", "unsupported browser"])(
     "retires a pending recovery probe on %s",
     async (action) => {
