@@ -72,6 +72,9 @@ export function chatItemGroups(
 }
 
 function itemRunId(item: AgentRunFramePart): string | undefined {
+  if (item.kind === "group") {
+    return item.runId;
+  }
   if (item.kind === "work-group") {
     if (item.replyRunId) {
       return item.replyRunId;
@@ -91,6 +94,9 @@ function itemRunId(item: AgentRunFramePart): string | undefined {
 }
 
 function itemIsActive(item: AgentRunFramePart): boolean {
+  if (item.kind === "group") {
+    return item.isStreaming;
+  }
   if (item.kind === "stream-run") {
     return item.parts.some(
       (part) => part.kind === "reading-indicator" || (part.kind === "stream" && part.isStreaming),
@@ -289,7 +295,8 @@ export function coalesceAgentRunFrames(
       segmentId = boundaryId ? undefined : item.key;
       continue;
     }
-    const boundaryGroup = chatItemGroups(item)[0];
+    const boundaryGroup =
+      item.kind === "group" ? item : item.kind === "stream-run" ? undefined : item.groups[0];
     if (boundaryGroup && chatItemStartsDisplayTurn(boundaryGroup)) {
       flush();
       detached = [];
@@ -364,7 +371,9 @@ export function coalesceAgentRunFrames(
     // while the reply itself determines its frame’s terminal outcome.
     const failed =
       !(item.kind === "work-group" && item.replyRunId) &&
-      chatItemGroups(item).some(groupEndsRunInFailure);
+      (item.kind === "group"
+        ? groupEndsRunInFailure(item)
+        : item.kind !== "stream-run" && item.groups.some(groupEndsRunInFailure));
     if (runId && runId !== candidateRunId) {
       flush();
     }

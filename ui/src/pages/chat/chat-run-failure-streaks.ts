@@ -23,7 +23,7 @@ export function projectRunFailureStreaks(items: ChatItem[]): ChatItem[] {
   let latestIndex = 0;
   for (let index = items.length - 1; index >= 0; index--) {
     const item = items[index]!;
-    if (isRealUserInput(item)) {
+    if (latest && isRealUserInput(item)) {
       latest = undefined;
     } else if (item.kind === "notice" && item.runError) {
       if (latest?.runError?.summary === item.runError.summary) {
