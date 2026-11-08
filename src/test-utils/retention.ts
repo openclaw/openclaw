@@ -5,7 +5,7 @@ import { setImmediate } from "node:timers";
 import { writeHeapSnapshot } from "node:v8";
 
 /** Force a full collection without depending on heap-inspection APIs. */
-function forceFullGc(): void {
+export function forceFullGc(): void {
   const bun = (globalThis as typeof globalThis & { Bun?: { gc(full: boolean): unknown } }).Bun;
   if (typeof bun?.gc === "function") {
     bun.gc(true);
@@ -13,6 +13,15 @@ function forceFullGc(): void {
   }
   assert.ok(globalThis.gc, "The retention fixture requires --expose-gc");
   globalThis.gc();
+}
+
+async function expectLiveObjects(refs: readonly WeakRef<object>[], count: number): Promise<void> {
+  await collectForRetentionCheck("live-objects", 1);
+  assert.equal(refs.filter((ref) => ref.deref() !== undefined).length, count);
+}
+
+export async function expectCollected(...refs: WeakRef<object>[]): Promise<void> {
+  await expectLiveObjects(refs, 0);
 }
 
 /** Collects between jobs while the fixture keeps its real resource alive. */
