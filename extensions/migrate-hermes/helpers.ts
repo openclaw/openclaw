@@ -3,13 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parse as parseDotenv } from "dotenv";
-import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   markMigrationItemError,
   markMigrationItemSkipped,
   MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
+import { decodeUtf8Input } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { appendRegularFile, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parse as parseYaml } from "yaml";
@@ -51,10 +52,30 @@ export async function readText(filePath: string | undefined): Promise<string | u
     : undefined;
 }
 
+// Config and credentials must retain their exact text when imported.
+export async function readUtf8Text(filePath: string | undefined): Promise<string | undefined> {
+  if (!filePath) {
+    return undefined;
+  }
+  try {
+    const { buffer } = await readRegularFile({ filePath: await fs.realpath(filePath) });
+    return decodeUtf8Input(buffer, "Source file");
+  } catch (error) {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return undefined;
+    }
+    throw new Error(
+      `Failed reading text file ${filePath}: ${formatErrorMessage(error)}. Use an ordinary readable UTF-8 file and retry migration.`,
+      { cause: error },
+    );
+  }
+}
+
 export async function readJsonObject(
   filePath: string | undefined,
 ): Promise<Record<string, unknown>> {
-  const raw = await readText(filePath);
+  const raw = await readUtf8Text(filePath);
   try {
     return raw ? asNonArrayRecord(JSON.parse(raw)) : {};
   } catch {

@@ -8,7 +8,7 @@ import {
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appendItem, readText } from "./helpers.js";
+import { appendItem, readText, readUtf8Text } from "./helpers.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import { discoverHermesSource } from "./source.js";
 import { makeContext, makeHermesPaths, writeFile } from "./test/provider-helpers.js";
@@ -70,6 +70,7 @@ describe("Hermes regular-file admission", () => {
           await fs.symlink(file, input);
         }
         await expect(readText(input)).resolves.toBeUndefined();
+        await expect(readUtf8Text(input)).rejects.toThrow("path must be a regular file");
       });
     },
   );
@@ -86,10 +87,9 @@ describe("Hermes regular-file admission", () => {
           });
           expect(found.root).toBe(source);
         } else {
-          const plan = await buildHermesMigrationProvider().plan(
-            makeContext({ source, stateDir, workspaceDir }),
-          );
-          expect(plan).toBeDefined();
+          await expect(
+            buildHermesMigrationProvider().plan(makeContext({ source, stateDir, workspaceDir })),
+          ).rejects.toThrow("path must be a regular file");
         }
       });
     },
@@ -110,6 +110,9 @@ describe("Hermes regular-file admission", () => {
     await expect(readText(workspace.dir)).resolves.toBeUndefined();
     await expect(readText(path.join(workspace.dir, "missing"))).resolves.toBeUndefined();
     await expect(readText(undefined)).resolves.toBeUndefined();
+    await expect(readUtf8Text(workspace.dir)).rejects.toThrow("path must be a regular file");
+    await expect(readUtf8Text(path.join(workspace.dir, "missing"))).resolves.toBeUndefined();
+    await expect(readUtf8Text(undefined)).resolves.toBeUndefined();
   });
   it.skipIf(process.platform === "win32")(
     "preserves ordinary source symlinks, Unicode, BOM and append dedupe",
@@ -122,6 +125,7 @@ describe("Hermes regular-file admission", () => {
       await fs.symlink(source, link);
       await writeFile(target, "operator prefix");
       await expect(readText(link)).resolves.toBe(text);
+      await expect(readUtf8Text(link)).resolves.toBe(text);
       expect(await appendItem(memoryItem(link, target))).toMatchObject({ status: "migrated" });
       const first = await fs.readFile(target, "utf8");
       expect(first).toContain("operator prefix");

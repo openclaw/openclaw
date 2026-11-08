@@ -917,4 +917,58 @@ describe("Hermes migration config mapping", () => {
       (config.mcp as { servers?: { beta?: { command?: string } } }).servers?.beta?.command,
     ).toBe("beta");
   });
+  it.each([
+    ["config.yaml", 'skills:\n  config:\n    proof:\n      label: "', '"\n'],
+    [".env", 'OPENAI_API_KEY="', '"\n'],
+    [".local/share/opencode/auth.json", '{"opencode":{"key":"', '"}}'],
+    ["auth.json", '{"openai":{"access_token":"', '"}}'],
+  ])("refuses invalid UTF-8 in %s before writing imported state", async (name, prefix, suffix) => {
+    const { source, stateDir, workspaceDir } = makeHermesPaths(testWorkspace.dir);
+    const sourcePath = path.join(name.startsWith(".local/") ? path.dirname(source) : source, name);
+    await writeFile(
+      path.join(source, "config.yaml"),
+      "skills:\n  config:\n    untouched:\n      label: preserve\n",
+    );
+    await writeFile(path.join(source, ".env"), "OPENAI_API_KEY=valid-synthetic-secret\n");
+    await writeFile(sourcePath, "");
+    const bytes = Buffer.concat([Buffer.from(prefix), Buffer.from([0xff]), Buffer.from(suffix)]);
+    await fs.writeFile(sourcePath, bytes);
+    const config: OpenClawConfig = { gateway: { mode: "local" } };
+    const before = structuredClone(config);
+    const context = makeContext({
+      source,
+      stateDir,
+      workspaceDir,
+      config,
+      includeSecrets: true,
+      runtime: makeConfigRuntime(config),
+    });
+
+    await expect(buildHermesMigrationProvider().apply(context)).rejects.toThrow(
+      /UTF-8.*retry migration/s,
+    );
+    expect(config).toEqual(before);
+    await expect(fs.access(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(sourcePath)).toEqual(bytes);
+  });
+
+  it("imports repaired YAML without altering valid Unicode", async () => {
+    const label = "café 中文 🦞 literal �";
+    const { source, stateDir, workspaceDir } = makeHermesPaths(testWorkspace.dir);
+    await writeFile(
+      path.join(source, "config.yaml"),
+      ["skills:", "  config:", "    proof:", "      label: " + JSON.stringify(label), ""].join(
+        "\n",
+      ),
+    );
+    const config: OpenClawConfig = {};
+    const result = await buildHermesMigrationProvider().apply(
+      makeContext({ source, stateDir, workspaceDir, config, runtime: makeConfigRuntime(config) }),
+    );
+
+    expect(result.items.find((item) => item.id === "config:skill-entry:proof")?.status).toBe(
+      "migrated",
+    );
+    expect(config.skills?.entries?.proof?.config?.label).toBe(label);
+  });
 });
