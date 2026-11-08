@@ -43,7 +43,9 @@ it(
         const history = await client.request<{ messages: unknown[] }>("chat.history", {
           sessionKey: SESSION_KEY,
         });
-        expect((history.messages ?? []).map(readRunFailureNotice).filter(Boolean)).toEqual([
+        expect(
+          (history.messages ?? []).map((message) => readRunFailureNotice(message)).filter(Boolean),
+        ).toEqual([
           { runId: RUN_ID, summary: `Your request couldn't be completed: ${LEGACY_NOTICE}` },
         ]);
       },
