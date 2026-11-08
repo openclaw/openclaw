@@ -75,3 +75,37 @@ CLI ownership/config preparation and the docs opening; #186893 touches the docs
 Core table. Neither changes the Threads documentation or thread-list help hunk.
 No owner contact or publication was performed. CI and exact-head review remain
 separate coordinator gates; this local evidence does not claim they passed.
+
+## Public-main integration requalification
+
+The additive integration commit `5d2d5755ff16537c5c70b766d907726604065256`
+retains original head `2b159cc1ef08aa4c56384ca2cb6bc121579d05ed` as its first
+parent and public main `0566b7771956f0f5dcb1a1ce32a729e7c5f5d9e7` as its second.
+Its tree is `bcff201bdf30dfe45926ce6709f56e2e64a9b5aa`; the diff from that main
+contains only the original four source, documentation and proof files.
+
+At this integrated source revision, Node `26.13.0` and the existing pnpm
+`12.15.0` installation ran the following successfully:
+
+```text
+pnpm exec oxfmt --check docs/cli/message.md src/cli/program/register.message.ts
+node scripts/run-oxlint.mjs --type-aware src/cli/program/register.message.ts
+node scripts/check-docs-mdx.mjs docs/cli/message.md
+node scripts/docs-link-audit.mjs
+pnpm openclaw message thread list --help
+pnpm openclaw message read --help
+```
+
+The link audit checked 16,482 internal links with zero broken links. Both help
+commands exited zero with the literal option text shown above, using an empty,
+isolated OpenClaw home, state directory and configuration path. The maintained
+source launcher rebuilt its CLI artifacts. No live provider operation ran.
+
+The public archive implementation and thread-list result owner are byte-identical
+to the original source-fidelity snapshot: `send.messages.ts` blob
+`76a057a97c64d994bd345ca30eadc921e6f677b6`, and
+`actions/runtime.messaging.send.ts` blob
+`6ef63587cd340778926d13a5317882f48ed717a4`, under `extensions/discord/src/`.
+The proof-media placement check passed with zero candidate media and zero required
+fixes. These are author checks; CI, comprehensive review, native ClawSweeper
+review and human merge approval remain outstanding for the published head.
