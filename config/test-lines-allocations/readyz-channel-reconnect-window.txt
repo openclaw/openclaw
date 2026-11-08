@@ -1,2 +1,3 @@
-# Real Discord/X transport-to-HTTP readiness regressions and terminal/bounded recovery coverage.
-409
+# Real Discord/X transport-to-HTTP readiness, terminal failure, and initial-connect regressions.
+# 386 net test/fixture lines after removing duplicate X reconnect coverage; reconcile 18 inherited lines.
+404

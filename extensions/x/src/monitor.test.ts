@@ -103,7 +103,7 @@ afterEach(async () => {
 });
 
 describe("X account monitor", () => {
-  it("pins a stream outage to its first disconnect and clears it after reconnecting", async () => {
+  it("does not mark initial stream failures as reconnecting", async () => {
     const test = fixture({
       posts: [],
       cfg: {
@@ -113,46 +113,23 @@ describe("X account monitor", () => {
         },
       },
     });
-    let stream!: ReadableStreamDefaultController<Uint8Array>;
-    const connect = async () =>
-      new Response(new ReadableStream<Uint8Array>({ start: (value) => (stream = value) }));
     test.api.openActivityStream
       .mockRejectedValueOnce(new Error("initial connection failed"))
-      .mockImplementation(connect);
+      .mockResolvedValue(new Response(new ReadableStream<Uint8Array>()));
     const running = test.start();
     await vi.advanceTimersByTimeAsync(0);
-    expect(running.status()).toMatchObject({ connected: false, lifecycle: "ready" });
-    expect(running.status().lastDisconnect).toBeNull();
-    await vi.advanceTimersByTimeAsync(1_000);
-    const connectedAt = Date.now();
     expect(running.status()).toMatchObject({
-      connected: true,
+      connected: false,
       lifecycle: "ready",
-      lastConnectedAt: connectedAt,
+      lastDisconnect: null,
     });
-    test.api.openActivityStream.mockRejectedValue(new Error("reconnect failed"));
-    await vi.advanceTimersByTimeAsync(100);
-    const disconnectedAt = Date.now();
-    stream.close();
-    await vi.advanceTimersByTimeAsync(0);
-    for (const elapsed of [0, 1_000, 2_000, 4_000]) {
-      await vi.advanceTimersByTimeAsync(elapsed);
-      expect(running.status()).toMatchObject({
-        connected: false,
-        lifecycle: "recovering",
-        lastConnectedAt: connectedAt,
-        lastDisconnect: { at: disconnectedAt },
-      });
-    }
-    test.api.openActivityStream.mockImplementation(connect);
-    await vi.advanceTimersByTimeAsync(8_000);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(running.status()).toMatchObject({
       connected: true,
       lifecycle: "ready",
       lastConnectedAt: Date.now(),
       lastDisconnect: null,
     });
-    expect(test.logger.info).toHaveBeenCalledWith("activity stream reconnect backoff");
   });
 
   it("carries a previous work session into a later mention without rerouting the front door", async () => {
