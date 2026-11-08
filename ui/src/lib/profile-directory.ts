@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   UserProfile,
   UsersListResult,
@@ -154,20 +155,40 @@ class ProfileDirectory {
     this.listeners.add(listener);
     this.selfAvatar = this.gateway.snapshot.selfUser?.avatarUrl;
     // Avatars, person cards, and assignment menus share this authorized directory's Gateway lifetime.
-    this.stop ??= this.gateway.subscribe(() => {
-      const avatar = this.gateway.snapshot.selfUser?.avatarUrl;
-      const avatarChanged = avatar !== this.selfAvatar;
-      this.selfAvatar = avatar;
-      if (this.synchronize()) {
-        this.notify();
-        void this.load(true);
-      } else if (avatarChanged) {
-        this.notify();
-        if (this.result) {
+    if (!this.stop) {
+      const stopGateway = this.gateway.subscribe(() => {
+        const avatar = this.gateway.snapshot.selfUser?.avatarUrl;
+        const avatarChanged = avatar !== this.selfAvatar;
+        this.selfAvatar = avatar;
+        if (this.synchronize()) {
+          this.notify();
           void this.load(true);
+        } else if (avatarChanged) {
+          this.notify();
+          if (this.result) {
+            void this.load(true);
+          }
         }
-      }
-    });
+      });
+      const stopEvents = this.gateway.subscribeEvents((event) => {
+        if (
+          event.event !== "sessions.changed" ||
+          asOptionalRecord(event.payload)?.reason !== "profile-identity"
+        ) {
+          return;
+        }
+        // Role/merge facts changed: an older in-flight directory cannot restore them.
+        this.connection.invalidate();
+        this.pending = undefined;
+        this.result = undefined;
+        this.profiles.clear();
+        void this.load(true);
+      });
+      this.stop = () => {
+        stopGateway();
+        stopEvents();
+      };
+    }
     void this.load();
     return () => {
       this.listeners.delete(listener);

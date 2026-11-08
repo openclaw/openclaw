@@ -196,7 +196,7 @@ const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupSecurity",
-    routes: ["security", "secrets", "approvals"],
+    routes: ["people", "security", "secrets", "approvals"],
   },
   {
     labelKey: "nav.settingsGroupSystem",
@@ -205,6 +205,7 @@ const SETTINGS_NAVIGATION_GROUPS = [
 ] as const satisfies readonly SettingsNavigationGroup[];
 
 const NON_ADMIN_SETTINGS_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
+  "people",
   "profile",
   "appearance",
   "notifications",
@@ -338,6 +339,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   custodian: navigationPresentation("lobster", "custodian"),
   config: ["settings", "nav.settings", "subtitles.config"],
   profile: navigationPresentation("circleUser", "profile"),
+  people: navigationPresentation("users", "people"),
   communications: navigationPresentation("send", "communications"),
   appearance: navigationPresentation("palette", "appearance"),
   lobsterdex: navigationPresentation("bug", "lobsterdex"),

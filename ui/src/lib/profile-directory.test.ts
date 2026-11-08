@@ -47,7 +47,7 @@ function fixture(
   const directory = profileDirectory(gateway);
   const stop = directory.subscribe(vi.fn());
   onTestFinished(stop);
-  return { gateway, publish, directory, stop, reply, request };
+  return { gateway, publish, publishEvent: source.publishEvent, directory, stop, reply, request };
 }
 
 it.each(["account", "recovery scope"])(
@@ -157,4 +157,25 @@ it("waits for roster access while a profile-only guest stays on known identity",
   await directory.load();
   expect(request).toHaveBeenCalledTimes(1);
   expect(profileAvatarUrl(directory.get("photo"))).toBe("/api/users/photo/avatar?v=7");
+});
+
+it("refreshes canonical role facts and retires a reply started before a profile change", async () => {
+  const old = createDeferred<UsersListResult>();
+  let reads = 0;
+  const { directory, publishEvent, request } = fixture([photo], {}, async () =>
+    ++reads === 1 ? old.promise : { profiles: [{ ...photo, role: "maintainer" }] },
+  );
+  await directory.load();
+  const pending = directory.load(true);
+  publishEvent({
+    type: "event",
+    event: "sessions.changed",
+    payload: { reason: "profile-identity" },
+  });
+  expect(request).toHaveBeenCalledTimes(3);
+  await directory.load();
+  expect(directory.get("photo")?.role).toBe("maintainer");
+  old.resolve({ profiles: [{ ...photo, role: "guest" }] });
+  await pending;
+  expect(directory.get("photo")?.role).toBe("maintainer");
 });

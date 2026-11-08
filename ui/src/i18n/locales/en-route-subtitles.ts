@@ -31,6 +31,7 @@ const enRouteSubtitles = {
     custodian: "System setup and care.",
     config: "Legacy settings route; opens Appearance.",
     profile: "Manage your name, avatar, and connected accounts.",
+    people: "Inspect saved roles and configured permission limits.",
     communications: "Messages, text-to-speech, and meeting capture settings.",
     appearance: "Theme and UI settings.",
     lobsterdex: "Every lobster palette that has visited this browser.",

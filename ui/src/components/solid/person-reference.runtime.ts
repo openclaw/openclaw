@@ -1,6 +1,7 @@
 import type { UsersMentionableParams, UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
@@ -228,6 +229,17 @@ export function createPersonReferenceCard(options: {
                       entries: presence?.entries ?? (data?.presencePayload ? [] : undefined),
                     },
                     ariaName: person.name,
+                    gateway: context.gateway,
+                    openPermissions: (targetId) => {
+                      if (!scope || !connection.isCurrent(scope)) {
+                        return;
+                      }
+                      close();
+                      context.navigate("people", {
+                        pathname: pathForRoute("people", context.basePath),
+                        search: "?person=" + encodeURIComponent(targetId),
+                      });
+                    },
                     sessionData: data,
                     watchAgentId: resolveUiDefaultAgentId(defaults),
                     mainKey: resolveUiConfiguredMainKey(defaults),

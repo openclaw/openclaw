@@ -440,6 +440,20 @@ openclaw-appearance-background .settings-background-preview .session-background_
   gap: var(--space-8);
 }
 
+.people-permissions__columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+.people-permissions__columns > div {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+.people-permissions__policy {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .settings-page__intro {
   margin: 0;
   font-size: var(--control-ui-text-sm);
@@ -978,6 +992,10 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 .settings-row--nav:hover {
   background: var(--surface-hover);
+}
+
+.settings-row--nav[aria-current] {
+  background: var(--bg-hover);
 }
 
 /* Fully-inset ring: the group clips overflow, so an outer ring would vanish. */

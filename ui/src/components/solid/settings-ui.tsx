@@ -250,10 +250,18 @@ export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status
 }
 
 export function SettingsNavRow(
-  props: Omit<SettingsRowProps, "stacked" | "stackedOnNarrow"> & { onClick: () => void },
+  props: Omit<SettingsRowProps, "stacked" | "stackedOnNarrow"> & {
+    onClick: () => void;
+    selected?: boolean;
+  },
 ) {
   return (
-    <button type="button" class="settings-row settings-row--nav" onClick={() => props.onClick()}>
+    <button
+      type="button"
+      class="settings-row settings-row--nav"
+      aria-current={props.selected ? "true" : undefined}
+      onClick={() => props.onClick()}
+    >
       <SettingsRowText title={props.title} description={props.description} />
       <div class="settings-row__control">
         {props.control}

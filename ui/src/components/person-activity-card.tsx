@@ -3,7 +3,10 @@ import "../styles/person-activity-card.css";
 import { render, spread } from "@solidjs/web";
 import { createMemo, createSignal, Errored, For, Loading, runWithOwner, Show } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { pathForRoute } from "../app-route-paths.ts";
+import type { ApplicationGateway } from "../app/gateway.ts";
 import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { presenceConnectionDescriptions } from "../lib/presence-connections.ts";
 import {
@@ -13,6 +16,7 @@ import {
   presenceUserLabel,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
 import { registerEnglishCatalog, getLocale, i18nRevision, t } from "../lib/reactive/i18n.ts";
 import { createResizeObserver } from "../lib/reactive/observers.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
@@ -43,6 +47,8 @@ registerEnglishCatalog(registerChatComposerEnglish);
 type ScopedSession = { row: GatewaySessionRow; agentId: string };
 export type PersonCardInput = {
   user: PresenceViewer;
+  gateway?: ApplicationGateway;
+  openPermissions?: (profileId: string) => void;
   ariaName?: string;
   sessionData: PersonActivityData | undefined;
   watchAgentId: string;
@@ -185,6 +191,45 @@ function Sessions(props: {
   );
 }
 
+function PersonPermissionLink(props: {
+  gateway: ApplicationGateway;
+  personId: string;
+  basePath: string;
+  open: (id: string) => void;
+}) {
+  const gateway = createMemo(() => projectGateway(props.gateway));
+  const canRead = () => {
+    const snapshot = gateway().read().snapshot;
+    return (
+      snapshot.phase === "connected" &&
+      (canCallGatewayMethod(snapshot, "users.list", "operator.read") ||
+        snapshot.selfUser?.identity?.id === props.personId)
+    );
+  };
+  return (
+    <Show when={canRead()}>
+      <a
+        ref={createHovercardControlRef()}
+        href={
+          pathForRoute("people", props.basePath) + "?person=" + encodeURIComponent(props.personId)
+        }
+        onClick={(event) =>
+          handleNavigationClick(event, () => {
+            if (canRead()) {
+              props.open(props.personId);
+            }
+          })
+        }
+      >
+        {t("presence.card.viewPermissions")}
+        <span aria-hidden="true">
+          <Icon name="chevronRight" />
+        </span>
+      </a>
+    </Show>
+  );
+}
+
 function PersonActivityCard(props: { input: PersonCardInput }) {
   const user = () => props.input.user;
   const label = createMemo(() => presenceUserLabel(user(), t("presence.card.person")));
@@ -313,21 +358,41 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
       </Show>
       <Sessions sessions={sessions().viewing} input={props.input} recent={false} />
       <Sessions sessions={sessions().recent} input={props.input} recent={true} />
-      <Show when={activityLink()}>
-        {(link) => (
-          <footer>
-            <a
-              ref={createHovercardControlRef()}
-              href={link().href}
-              onClick={(event) => link().open(event)}
-            >
-              {t("presence.card.viewActivity")}
-              <span aria-hidden="true">
-                <Icon name="chevronRight" />
-              </span>
-            </a>
-          </footer>
-        )}
+      <Show when={activityLink() || props.input.openPermissions}>
+        <footer>
+          <Show when={activityLink()}>
+            {(link) => (
+              <a
+                ref={createHovercardControlRef()}
+                href={link().href}
+                onClick={(event) => link().open(event)}
+              >
+                {t("presence.card.viewActivity")}
+                <span aria-hidden="true">
+                  <Icon name="chevronRight" />
+                </span>
+              </a>
+            )}
+          </Show>
+          <Show
+            when={
+              props.input.gateway &&
+              props.input.openPermissions &&
+              user().identity?.type === "profile"
+                ? props.input.gateway
+                : undefined
+            }
+          >
+            {(gateway) => (
+              <PersonPermissionLink
+                gateway={gateway()}
+                personId={user().identity!.id}
+                basePath={props.input.routing.basePath}
+                open={(id) => props.input.openPermissions?.(id)}
+              />
+            )}
+          </Show>
+        </footer>
       </Show>
     </div>
   );

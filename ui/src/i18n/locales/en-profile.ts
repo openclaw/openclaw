@@ -5,6 +5,61 @@ const identity = en.profilePage.identity;
 
 const enProfile = {
   profilePage: {
+    people: {
+      peopleView: "People",
+      rolesView: "Roles",
+      viewBy: "View permissions by",
+      directory: "People",
+      person: "Person",
+      searchPeople: "Search people",
+      searchRoles: "Search roles",
+      role: "Effective role",
+      assignedRole: "Saved role assignment",
+      noRole: "No saved role",
+      assigned: "Explicit assignment",
+      githubLogin: "GitHub login mapping",
+      default: "Default role",
+      owner: "Gateway owner",
+      ownerPolicy: "The Gateway owner is not limited by a named role.",
+      policy: "Configured role limits",
+      ceilingHint: "Maximums, not live permissions.",
+      agents: "Available agents",
+      allAgents: "All configured agents",
+      otherSessions: "Other people’s sessions",
+      others: {
+        none: "Hidden",
+        view: "View only",
+        suggest: "Suggest changes",
+        write: "Can make changes",
+      },
+      sandbox: "New-session sandbox",
+      sandboxRequired: "Required",
+      sandboxInherit: "Inherited from agent settings",
+      details: "Technical policy details",
+      detailsHint:
+        "Configured scopes, model rules, access programs, and other ceilings. These do not show live grants, invitation eligibility, or an existing session’s sandbox.",
+      scopes: "Granted scopes",
+      none: "None",
+      unknown: "Not reported",
+      defaultRole: "Configured default",
+      thisConnection: "This connection’s permissions",
+      connectionHint:
+        "These are your negotiated connection grants, not another person’s permissions. Session and tool restrictions still apply.",
+      noReportedCap: "No additional connection ceiling reported",
+      personUnavailable: "This profile is unavailable or cannot be read with your current access.",
+      directoryDenied: "Your access does not include the profile directory or role configuration.",
+      unavailable: "Couldn’t load people. Refresh to try again.",
+      noMatches: "No matches.",
+      choosePerson: "Choose a person to inspect their configured limits.",
+      rolesOff: "Named roles are not configured on this Gateway.",
+      policyLoading: "Loading configured role limits…",
+      policyUnavailable: "Configured role limits are unavailable. Refresh to try again.",
+      offline: "Reconnect to inspect permissions.",
+      members: "People using this role",
+      membersHint:
+        "Resolved by the Gateway from saved assignments, GitHub mappings, or the default. Not live access.",
+      noMembers: "No people use this role.",
+    },
     discord: {
       title: "Discord account",
       description:
@@ -97,7 +152,10 @@ const enProfile = {
 export const registerProfileEnglish = Object.assign(
   () => {
     // Shared menu/search labels stay eager; editor copy loads with its consumers.
-    Object.assign(en.profilePage, { discord: enProfile.profilePage.discord });
+    Object.assign(en.profilePage, {
+      discord: enProfile.profilePage.discord,
+      people: enProfile.profilePage.people,
+    });
     en.profilePage.access = enProfile.profilePage.access;
     Object.assign(en.profilePage.identity, enProfile.profilePage.identity);
   },

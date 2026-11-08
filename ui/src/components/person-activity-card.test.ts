@@ -5,7 +5,13 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import { i18n } from "../i18n/lib/translate.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../test-helpers/application-context-fixtures.ts";
 import { createSessionsListResult } from "../test-helpers/chat-model.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { updatePersonActivityCard } from "./person-activity-card.tsx";
 import type { PersonActivityData } from "./person-activity-data.ts";
@@ -194,4 +200,43 @@ it("localizes connection and session labels without replacing the focused link",
     await restoreI18n();
     flush();
   }
+});
+
+it("limits permission links to broad readers or self and rechecks a retired link on click", () => {
+  const source = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client: createTestGatewayClient(async () => ({})),
+      hello: gatewayHelloForMethods(["users.list"], ["operator.read"]),
+      selfUser: { id: "bob", name: "Bob", identity: { type: "profile", id: "bob" } },
+    }),
+  );
+  const openPermissions = vi.fn();
+  show({ gateway: source.gateway, openPermissions });
+  flush();
+  const link = getQueriesForElement(container).getByRole("link", {
+    name: "View permissions",
+  });
+  expect(link.getAttribute("href")).toBe("/ui/settings/people?person=alice");
+  link.click();
+  expect(openPermissions).toHaveBeenCalledWith("alice");
+  openPermissions.mockClear();
+  source.publish({
+    ...source.gateway.snapshot,
+    hello: gatewayHelloForMethods(["users.list"], ["operator.sessions.read"]),
+  });
+  flush();
+  expect(
+    getQueriesForElement(container).queryByRole("link", { name: "View permissions" }),
+  ).toBeNull();
+  link.click();
+  expect(openPermissions).not.toHaveBeenCalled();
+  source.publish({
+    ...source.gateway.snapshot,
+    selfUser: { id: "alice", name: "Alice", identity: alice.identity },
+  });
+  flush();
+  expect(
+    getQueriesForElement(container).getByRole("link", { name: "View permissions" }),
+  ).not.toBeNull();
 });

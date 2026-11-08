@@ -1,5 +1,6 @@
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { pathForRoute } from "../app-route-paths.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { projectOnlinePresenceViewers, profilePresenceViewer } from "../lib/presence-users.ts";
@@ -251,6 +252,17 @@ export class SidebarPeopleRuntime {
         card,
         {
           user,
+          gateway: context.gateway,
+          openPermissions: (profileId) => {
+            if (!this.isCurrent()) {
+              return;
+            }
+            this.close();
+            this.host.onNavigate?.("people", {
+              pathname: pathForRoute("people", this.host.basePath),
+              search: "?person=" + encodeURIComponent(profileId),
+            });
+          },
           sessionData: activity.data,
           watchAgentId: resolveUiDefaultAgentId(defaults),
           mainKey: resolveUiConfiguredMainKey(defaults),
