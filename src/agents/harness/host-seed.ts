@@ -91,6 +91,7 @@ export function bindBoundedSeed(
       qualityDegraded?: true;
       summaryRefused?: true;
     }) => {
+      assert();
       // The host observer is advisory. Its failure must not abort the turn.
       try {
         await attempt.onAgentEvent?.({ stream: "compaction", data });
