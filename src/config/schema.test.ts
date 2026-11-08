@@ -64,10 +64,31 @@ describe("config schema", () => {
       { "bad name": { allow: ["read"] } },
       { "": { allow: ["read"] } },
       { blank: {} },
+      { blank: { allow: ["", "  "], deny: [] } },
       { discipline: { base: "minimal", allow: "read" } },
       { discipline: { base: "desk-operator" } },
     ]) {
       expect(acceptsTools({ profiles })).toBe(false);
+    }
+  });
+
+  it("rejects empty tool profile references and whitespace-only profile entries", () => {
+    expect(acceptsTools({ profile: "" })).toBe(false);
+    expect(acceptsTools({ profile: "   " })).toBe(false);
+    const result = validateConfigObjectRaw({
+      agents: {
+        ownership: "explicit",
+        entries: { scout: { tools: { profile: "" } } },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(
+        result.issues.filter((issue) => issue.path === "agents.entries.scout.tools.profile"),
+      ).toHaveLength(1);
+      expect(result.issues.some((issue) => issue.message.includes("empty tool profile"))).toBe(
+        true,
+      );
     }
   });
 

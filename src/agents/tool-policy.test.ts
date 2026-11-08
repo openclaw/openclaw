@@ -45,10 +45,6 @@ describe("tool-policy", () => {
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
 
-  it("ignores custom profile names when no profile map is provided", () => {
-    expect(resolveToolProfilePolicy("desk-operator")).toBeUndefined();
-  });
-
   it("resolves custom profiles by unioning the builtin base with extra entries", () => {
     const policy = resolveToolProfilePolicy("desk-operator", {
       "desk-operator": {

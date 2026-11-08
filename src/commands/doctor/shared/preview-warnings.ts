@@ -18,7 +18,11 @@ import {
   isToolAllowedByPolicies,
   isToolAllowedByPolicyName,
 } from "../../../agents/tool-policy-match.js";
-import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
+import {
+  mergeAlsoAllowPolicy,
+  resolveToolProfilePolicy,
+  type CustomToolProfiles,
+} from "../../../agents/tool-policy.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
@@ -58,10 +62,10 @@ function resolveMessageToolAvailability(params: {
       : Array.isArray(global?.alsoAllow)
         ? global.alsoAllow
         : [];
-    return mergeAlsoAllowPolicy(resolveToolProfilePolicy(agent?.profile ?? global?.profile), [
-      ...alsoAllow,
-      ...(params.runtimeAlsoAllow ?? []),
-    ]);
+    return mergeAlsoAllowPolicy(
+      resolveToolProfilePolicy(agent?.profile ?? global?.profile, params.cfg.tools?.profiles),
+      [...alsoAllow, ...(params.runtimeAlsoAllow ?? [])],
+    );
   };
   return isToolAllowedByPolicies("message", [
     profilePolicy(params.globalTools, params.agentTools),
@@ -221,11 +225,15 @@ function collectProfileConfiguredSectionWarnings(params: {
   profilePath: string;
   advicePath?: string;
   profileKind: "active" | "provider" | "inherited provider";
+  customProfiles?: CustomToolProfiles;
 }): string[] {
   const alsoAllow =
     readPreviewStringList(params.policy?.alsoAllow) ??
     readPreviewStringList(params.inheritedPolicy?.alsoAllow);
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(params.profile), alsoAllow);
+  const profilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(params.profile, params.customProfiles),
+    alsoAllow,
+  );
   if (!profilePolicy) {
     return [];
   }
@@ -261,6 +269,7 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
   tools?: Record<string, unknown> | null;
   inheritedTools?: Record<string, unknown> | null;
   pathLabel: string;
+  customProfiles?: CustomToolProfiles;
 }): string[] {
   const tools = params.tools;
   const profile =
@@ -287,6 +296,7 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
     profile,
     profilePath: params.pathLabel,
     profileKind: "active",
+    customProfiles: params.customProfiles,
   });
 }
 
@@ -295,6 +305,7 @@ function collectByProviderConfiguredToolSectionWarnings(params: {
   inheritedTools?: Record<string, unknown> | null;
   pathLabel: string;
   configuredEntries: ConfiguredToolSectionGrantEntry[];
+  customProfiles?: CustomToolProfiles;
 }): string[] {
   const byProvider = asOptionalRecord(params.tools?.byProvider);
   if (!byProvider || params.configuredEntries.length === 0) {
@@ -318,6 +329,7 @@ function collectByProviderConfiguredToolSectionWarnings(params: {
       profile,
       profilePath: `${params.pathLabel}.byProvider.${providerKey}`,
       profileKind: "provider",
+      customProfiles: params.customProfiles,
     });
   });
 }
@@ -407,11 +419,13 @@ export async function collectDoctorPreviewNotes(params: {
     ...collectProfileConfiguredToolSectionScopeWarnings({
       tools: globalTools,
       pathLabel: "tools",
+      customProfiles: asOptionalRecord(cfg.tools)?.profiles as CustomToolProfiles | undefined,
     }),
     ...collectByProviderConfiguredToolSectionWarnings({
       tools: globalTools,
       pathLabel: "tools",
       configuredEntries: globalConfiguredEntries,
+      customProfiles: asOptionalRecord(cfg.tools)?.profiles as CustomToolProfiles | undefined,
     }),
   );
 
@@ -430,12 +444,14 @@ export async function collectDoctorPreviewNotes(params: {
         tools: agentTools,
         inheritedTools: globalTools,
         pathLabel: agentPath,
+        customProfiles: asOptionalRecord(cfg.tools)?.profiles as CustomToolProfiles | undefined,
       }),
       ...collectByProviderConfiguredToolSectionWarnings({
         tools: agentTools,
         inheritedTools: globalTools,
         pathLabel: agentPath,
         configuredEntries: agentConfiguredEntries,
+        customProfiles: asOptionalRecord(cfg.tools)?.profiles as CustomToolProfiles | undefined,
       }),
     );
     const modelProvider = modelRef.provider;
@@ -479,6 +495,7 @@ export async function collectDoctorPreviewNotes(params: {
             profilePath: `tools.byProvider.${providerKey}`,
             advicePath: `${agentPath}.byProvider.${overridingEntry?.key ?? providerKey}`,
             profileKind: "inherited provider",
+            customProfiles: asOptionalRecord(cfg.tools)?.profiles as CustomToolProfiles | undefined,
           });
         }),
       );

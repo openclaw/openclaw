@@ -255,7 +255,22 @@ function collectToolProfileReferenceIssues(config: OpenClawConfig): ConfigValida
   ]);
   const issues: ConfigValidationIssue[] = [];
   const checkProfile = (profile: unknown, configPath: string): void => {
-    if (typeof profile !== "string" || profile.length === 0 || knownProfiles.has(profile)) {
+    if (typeof profile !== "string") {
+      return;
+    }
+    const trimmed = profile.trim();
+    if (trimmed.length === 0) {
+      // An empty selection overrides nullish inheritance and resolves to no policy;
+      // removing the key is the only intent that matches that result.
+      issues.push({
+        path: configPath,
+        message:
+          "empty tool profile selection; remove the key to inherit the parent profile, " +
+          "or use a defined profile name",
+      });
+      return;
+    }
+    if (knownProfiles.has(trimmed)) {
       return;
     }
     issues.push({

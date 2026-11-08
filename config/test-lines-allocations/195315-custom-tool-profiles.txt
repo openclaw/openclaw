@@ -2,4 +2,4 @@
 # Covers resolver semantics (built-in base union, standalone allowlists, deny
 # precedence, blank-entry tolerance) and config validation (accepted
 # definitions, reserved built-in ids, unknown-reference rejection).
-125
+190

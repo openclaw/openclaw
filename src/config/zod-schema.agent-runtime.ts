@@ -225,6 +225,13 @@ const CustomToolProfileRefSchema = z.custom<string & { __profileRef?: true }>(
 
 const ToolProfileSchema = z
   .union([BUILTIN_TOOL_PROFILE_SCHEMA, CustomToolProfileRefSchema])
+  // Empty selections are rejected here for schema-parse parity: they override
+  // nullish inheritance while resolving to no policy.
+  .refine((value) => value.trim().length > 0, {
+    message:
+      "empty tool profile selection; remove the key to inherit the parent profile, " +
+      "or use a defined profile id",
+  })
   .optional();
 
 const ToolProfilesMapSchema = z
@@ -244,10 +251,16 @@ const ToolProfilesMapSchema = z
         deny: z.array(z.string()).optional(),
       })
       .superRefine((value, ctx) => {
-        if (!value.base && !value.allow?.length && !value.deny?.length) {
+        const normalizeEntries = (entries: string[] | undefined) =>
+          (entries ?? []).map((entry) => entry.trim()).filter(Boolean);
+        const allow = normalizeEntries(value.allow);
+        const deny = normalizeEntries(value.deny);
+        if (!value.base && allow.length === 0 && deny.length === 0) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: "tool profile must set base, allow or deny",
+            message:
+              "tool profile must set base or nonempty allow/deny entries; " +
+              "a definition without any of these resolves to no policy",
           });
         }
       }),
