@@ -37,6 +37,10 @@ it.each(["complete", "cancel", "revoke", "consumer-error", "worker-failure"] as 
     const failure = new Error(`stream ${finish}`);
     let current = true;
     const authority = {
+      acquire<T>(operation: () => T): T {
+        authority.assertCurrent();
+        return operation();
+      },
       signal: controller.signal,
       assertCurrent() {
         controller.signal.throwIfAborted();
@@ -208,7 +212,14 @@ it("lets an active reader's host callback finish a nested read before the parent
   const context = captureOpenClawStateWorkerContext(options);
   const location = { context, location: pathname, checkFreshAdmission: false };
   const controller = new AbortController();
-  const authority = { signal: controller.signal, assertCurrent: context.admission.assertCurrent };
+  const authority = {
+    signal: controller.signal,
+    assertCurrent: context.admission.assertCurrent,
+    acquire: <T>(operation: () => T) => {
+      context.admission.assertCurrent();
+      return operation();
+    },
+  };
   const firstTask = queueTask();
   const nestedTask = queueTask();
   const nestedTransport = captureOpenClawStateReadSource().createTransport({ type: "backup.runs" });
@@ -533,6 +544,12 @@ it.each(captures)(
     const authority = {
       signal: new AbortController().signal,
       assertCurrent: fixture.checkFreshAdmission ? context.admission.assertCurrent : () => {},
+      acquire: <T>(operation: () => T) => {
+        if (fixture.checkFreshAdmission) {
+          context.admission.assertCurrent();
+        }
+        return operation();
+      },
     };
     const transport = fixture.prepared
       ? captureOpenClawStateReadSource().createTransport(fixture.command)

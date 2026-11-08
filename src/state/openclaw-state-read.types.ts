@@ -65,6 +65,8 @@ export type OpenClawStateReadLocation = {
 export type OpenClawStateReadAuthority = {
   signal: AbortSignal;
   assertCurrent(this: void): void;
+  /** Retry only unentered acquisition, sharing this read's bounded admission budget. */
+  acquire<T>(this: void, operation: () => T): T | Promise<T>;
 };
 
 export type OpenClawStateReadCommand =

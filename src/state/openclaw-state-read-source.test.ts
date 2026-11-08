@@ -2,8 +2,16 @@
 // oxfmt-ignore
 import { emptyReply, mock, queueTask, source } from "./openclaw-state-read-worker.test-harness.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as processRole from "../infra/database-engine/admission-scope.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import {
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../infra/gateway-state-owner-record.js";
+import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
@@ -49,9 +57,104 @@ function readFixture() {
         checkFreshAdmission: false,
       };
     },
-    authority: { signal: new AbortController().signal, assertCurrent: () => {} },
+    authority: {
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+      acquire: <T>(operation: () => T) => operation(),
+    },
   };
 }
+
+it.each(["release", "offline", "exhausted", "cancelled"] as const)(
+  "settles queued shared-state admission without dispatch or replay: %s",
+  async (outcome) => {
+    const { options, pathname } = source();
+    const ownerPath = resolveGatewayStateOwnerPath(pathname);
+    const dispatch = createDeferredCore();
+    const task = queueTask(dispatch.promise);
+    const dispatched = vi.fn();
+    void task.captured.then(dispatched, () => {});
+    const controller = new AbortController();
+    const cancelled = new Error("read cancelled while awaiting foreign schema owner");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const reading = executeExistingOpenClawStateRead(options, backupRead, {
+      signal: controller.signal,
+    });
+    let settled = false;
+    const result = reading.then(
+      (value) => {
+        settled = true;
+        return { value };
+      },
+      (error: unknown) => {
+        settled = true;
+        return { error };
+      },
+    );
+    try {
+      await task.submitted;
+      // The real persisted-owner classifier sees a live foreign process, not a mocked error.
+      fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
+      fs.writeFileSync(
+        ownerPath,
+        JSON.stringify({
+          pid: process.ppid,
+          createdAt: new Date().toISOString(),
+          processNamespace: readGatewayLockProcessNamespace(),
+          role: "sqlite-maintenance",
+          stateOwnerKind: outcome === "offline" ? "process" : "schema",
+        }),
+      );
+      dispatch.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(dispatched).not.toHaveBeenCalled();
+      if (outcome === "release") {
+        await vi.advanceTimersByTimeAsync(30);
+        expect(settled).toBe(false);
+        fs.unlinkSync(ownerPath);
+        await vi.advanceTimersByTimeAsync(10);
+        await task.captured;
+        task.result.resolve(emptyReply);
+        expect(await result).toEqual({ value: emptyReply });
+        expect(dispatched).toHaveBeenCalledOnce();
+      } else {
+        if (outcome === "exhausted") {
+          await vi.advanceTimersByTimeAsync(4_999);
+          expect(settled).toBe(false);
+          await vi.advanceTimersByTimeAsync(1);
+        } else if (outcome === "cancelled") {
+          expect(settled).toBe(false);
+          controller.abort(cancelled);
+        }
+        const settledResult = await result;
+        if (outcome === "cancelled") {
+          expect("error" in settledResult && settledResult.error).toBe(cancelled);
+        } else {
+          expect(settledResult).toMatchObject({
+            error: expect.any(
+              outcome === "offline"
+                ? StateDatabaseOfflineMaintenanceError
+                : StateDatabaseAdmissionPendingError,
+            ),
+          });
+        }
+      }
+      if (outcome !== "release") {
+        expect(dispatched).not.toHaveBeenCalled();
+      }
+      expect(mock.runTask).toHaveBeenCalledOnce();
+      expect(task.close).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      fs.rmSync(ownerPath, { force: true });
+      controller.abort(cancelled);
+      dispatch.resolve();
+      task.result.resolve(emptyReply);
+      await result;
+      vi.useRealTimers();
+    }
+  },
+);
 
 it.each(["gateway", "cli-oneshot", undefined] as const)(
   "uses the %s process lifetime for early awaited reads",
