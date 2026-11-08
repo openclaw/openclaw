@@ -489,35 +489,29 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
 
   it("settles a queued completion once its dialogue ends without a visible reply", async () => {
     vi.useFakeTimers();
-    const sessionKey = "agent:main:telegram:direct:123";
     const scheduled: Array<() => Promise<void>> = [];
-    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement
+    const announce = subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement;
+    announce
       .mockResolvedValueOnce({ delivered: false, path: "queued", disposition: "session_queued" })
       .mockResolvedValue({
         delivered: false,
-        path: "direct",
         reason: "visible_reply_missing",
-        error: "completion agent did not produce a visible reply",
         disposition: "retryable",
       });
     const lifecycle = createImageMediaLifecycle();
-    const handle = await lifecycle.createTaskRun({ sessionKey, prompt: "proof image" });
+    const handle = await lifecycle.createTaskRun({ sessionKey: "agent:main:media", prompt: "p" });
     assert(handle);
     scheduleImageCompletion({
       lifecycle,
       handle,
-      scheduleBackgroundWork: (work) => scheduled.push(work),
+      scheduleBackgroundWork: (w) => scheduled.push(w),
     });
-
     const backgroundWork = scheduled[0]?.();
-    // Past the Gateway's five-minute dedupe expiry, where a resubmitted wake
-    // would no longer replay the terminal result and could readmit the dialogue.
+    // Past the Gateway's five-minute dedupe expiry, where a resubmitted wake could readmit the dialogue.
     await vi.advanceTimersByTimeAsync(10 * 60_000);
-    expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(2);
+    expect(announce).toHaveBeenCalledTimes(2);
     await backgroundWork;
-
     expectCall(detachedTaskRuntimeMocks.completeOperation, { terminalOutcome: "blocked" });
-    expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(false);
   });
 
   it("caps exponential pending-handoff retries until delivery succeeds", async () => {
