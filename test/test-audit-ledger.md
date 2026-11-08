@@ -252,6 +252,15 @@ Targeted typecheck, typed lint, formatting and the exact growth allocation passe
 PR [194212](https://github.com/openclaw/openclaw/pull/194212) merged as
 `838f4bfc4d83` after exact-head CI and security passed.
 
+Diagnostics OTel, pinned main `b97bc15cd7af`: remove the retired NodeSDK
+comparison helper after production moved to a private `BasicTracerProvider`.
+Keep all 11 sampler rows, the case covering six span-limit variables, and the
+unchanged real-OTLP start/stop/restart suite. Both suites pass before and after
+(33→33 cases); 21 fewer test lines, production unchanged. Format, typed lint,
+extension types and both unused-file scans pass. Both dependency phases and all
+three export phases completed with unchanged Gateway, UI and release-tool
+export findings. Exact-head CI and landing remain pending.
+
 Batches113–118, pinned main `a07facd84480`, used one native checkout and
 separate scoped proofs. Unchanged baselines passed: destinations6, History1,
 read coalescing1, fallback8, dictation33 and annotation lifetime11.
@@ -373,7 +382,7 @@ permission to delete without root qualification.
 - Transfer rows before consolidating core failed-tool classification, CodeMode deadline duplication, Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.
 - Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup and aggregate-only tool-result fidelity. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
-- Diagnostics OTel: obsolete NodeSDK replay only; preserve every private-provider sampler row and six span-limit probes. Content capture proof is a separate repair.
+- Diagnostics OTel: the NodeSDK replay removal is runtime-qualified above; content capture proof remains a separate repair.
 - SDK removal search was incomplete: public2,115/2,527 complete and bundled169/179 complete. No observed consumer is not proof of no external reliance. The retired target facade was private and excluded from packaging since `780bc791470`.
 - Retain duplicate Swift TLS fixtures in separate packages, renderer-discovered Blobster JSON (also production prompt inputs), process-entry helpers referenced extensionlessly, stable borrowed-reference assertions, and independent release/architecture/platform guards.
 - CI merge-preparation source/comment candidates remain pending Linux keeper proof; the independent Git-owner admission guard stays. Do not treat a stopped Testbox allocation as a product result.
