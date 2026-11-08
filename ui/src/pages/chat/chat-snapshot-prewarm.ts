@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { finishBootFrame } from "../../app/boot-composer.ts";
 import { loadChatDetailsDesktopComposition } from "./components/chat-details-desktop-loader.ts";
 import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
 import {
@@ -40,6 +41,7 @@ export function peekPrewarmedChatSnapshot(): PrewarmedSnapshot | undefined {
 
 export function discardPrewarmedChatSnapshot(cacheKey?: string): void {
   if (pending && (cacheKey === undefined || pending.cacheKey === cacheKey)) {
+    finishBootFrame();
     pending.cancelled = true;
     pending = undefined;
   }
@@ -94,9 +96,12 @@ export function prewarmChatSnapshot(cacheKey: string): Promise<void> {
         loadChatHistoryStateValidator(),
       ]);
       if (pending === entry) {
-        await readPrewarmedChatSnapshot(cacheKey);
+        const snapshot = await readPrewarmedChatSnapshot(cacheKey);
+        if (!snapshot && pending === entry) finishBootFrame();
       }
-    } catch {}
+    } catch {
+      if (pending === entry) finishBootFrame();
+    }
   })();
   return entry.ready;
 }

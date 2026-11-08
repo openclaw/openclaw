@@ -25,6 +25,15 @@ let element: HTMLTextAreaElement | null = null;
 let scroll: readonly [left: number, top: number] = [0, 0];
 let stopHistory: (() => void) | undefined;
 let stopReloadGuard: (() => void) | undefined;
+const committedBootRegions = new Set<"sidebar" | "transcript">();
+
+/** Reveal committed cached regions together, or release immediately on admission/route escape. */
+export function finishBootFrame(region?: "sidebar" | "transcript"): void {
+  const root = document.documentElement;
+  if (!root.hasAttribute("data-openclaw-warm-frame")) return;
+  if (region) committedBootRegions.add(region);
+  if (!region || committedBootRegions.size === 2) root.removeAttribute("data-openclaw-warm-frame");
+}
 
 /** Takes the static element before the first app commit replaces the boot frame. */
 export function adoptBootComposer(applicationRoute: boolean): void {

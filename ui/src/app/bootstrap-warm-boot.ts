@@ -69,6 +69,7 @@ export function subscribeWarmBootConnection(
   // Rejected connection receipts retire warm-boot ownership before recovery consumers run.
   const stopConnection = gateway.subscribe((snapshot) => {
     if (gateway.connectionRevision !== bootConnectionRevision) {
+      if (admittedOwner) onRejected();
       pendingBootProfileId = undefined;
       admittedOwner = undefined;
     }
