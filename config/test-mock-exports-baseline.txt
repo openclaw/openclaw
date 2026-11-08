@@ -3031,7 +3031,6 @@
 ["src/cli/skills-cli.commands.test.ts","../infra/clawhub-skills.js","4257b984038ea30e17bb42a3c7c2da112299df6c55ea70babc68f850c624038d",1]
 ["src/cli/skills-cli.commands.test.ts","./one-shot-exit.js","0f90b817161cda63805e4c2a6ef3b6156f4d91039c01232f7e05f16bfd004af1",1]
 ["src/cli/skills-cli.test.ts","openclaw/plugin-sdk/agent-sessions","548c67ecfcd1d666c41ef827b824edf897f6d8eb3464f76f6bf9ae23dffbded3",1]
-["src/cli/skills-cli.verify.test.ts","../agents/agent-scope.js","b117793af3d676d859052beb892f058481587162d102cd2400f51961e3e24b01",1]
 ["src/cli/skills-cli.verify.test.ts","../infra/clawhub-artifacts.js","dcf44a95b02a5787330c7f0aa6c09f6e44928be0f89400757dfd835f0c2fe93a",1]
 ["src/cli/skills-cli.verify.test.ts","../infra/clawhub-skills.js","22650f746cf121c1465529e0ada287c7fa52815bcabe992bb0e6abea3d9ccab1",1]
 ["src/cli/skills-library-cli.test.ts","./gateway-rpc.runtime.js","dc9d2411497017aa35e2a7a3413a1e40c968980097ab7f6e347d940b8da0399e",1]
