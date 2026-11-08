@@ -7409,15 +7409,23 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     const steps = job.steps as WorkflowStep[];
     const checkout = requiredWorkflowStep(steps, "Checkout selected tag");
     expect(job.permissions, jobName).toEqual({ contents: "read" });
-    expect(checkout.with?.["persist-credentials"], jobName).toBe(false);
     const jobJson = JSON.stringify(job);
     expect(jobJson, jobName).not.toContain("${{ secrets.");
     for (const envName of tauriSigningEnvNames) {
       expect(jobJson, jobName).not.toContain(envName);
     }
     if (jobName === "validate_release") {
+      expect(checkout.uses).toBeUndefined();
+      expect(checkout.env).toEqual({
+        RELEASE_TAG: "${{ steps.request.outputs.release_tag }}",
+      });
+      expect(checkout.run).toContain('f"+refs/tags/{release_tag}:refs/tags/{release_tag}"');
+      expect(checkout.run).toContain("for attempt in range(1, 4):");
+      expect(checkout.run).toContain("timeout=120");
+      expect(checkout.run).toContain('git_output(workspace, "rev-parse", "HEAD")');
       continue;
     }
+    expect(checkout.with?.["persist-credentials"], jobName).toBe(false);
     const checkoutIndex = steps.indexOf(checkout);
     expect(checkout.with?.ref).toBe("${{ needs.validate_release.outputs.tag_sha }}");
     expect(checkoutIndex, `${jobName} selected checkout order`).toBeGreaterThan(0);
