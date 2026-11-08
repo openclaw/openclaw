@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import {
   createDoctorHealthFlowContext,
@@ -13,7 +14,10 @@ import {
 import { runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
 import { withProjectCheckoutLifecycle } from "../projects/project-checkout.js";
 import { cloneProjectCheckout } from "../projects/project-clone-runtime.js";
-import { registerProjectRegistry } from "../projects/project-registry.js";
+import {
+  registerProjectRegistry,
+  selectStoredProjectRegistry,
+} from "../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectProjectCloneShapeHealthFindings } from "./doctor-project-clone-shape.js";
@@ -58,7 +62,11 @@ describe("doctor project clone shape", () => {
           originUrl,
           clone,
         );
-        await registerClonedProjectRegistry({ path: clone, name: "Stored project", originUrl });
+        const project = await registerClonedProjectRegistry({
+          path: clone,
+          name: "Stored project",
+          originUrl,
+        });
         await registerProjectRegistry({ path: ignored, name: "User checkout" });
         const configBefore = await fs.readFile(path.join(clone, ".git", "config"), "utf8");
         if (shape === "missing") {
@@ -137,6 +145,31 @@ describe("doctor project clone shape", () => {
           await cloneProjectCheckout({ url: originUrl, target: fresh });
           expect(await git(fresh, "rev-list", "--count", "HEAD")).toBe("2");
           expect(await git(fresh, "rev-parse", "--is-shallow-repository")).toBe("false");
+          const linked = state.path("agent-linked");
+          await git(clone, "worktree", "add", "--detach", linked);
+          await git(linked, "fetch", "--depth", "1", "origin");
+          expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("true");
+          const selected = (await selectStoredProjectRegistry(project.id))!;
+          const service = new ManagedWorktreeService({
+            env: state.env,
+            getConfig: () => ({ worktreeAcceleration: false }),
+          });
+          // Linked-parent creation must repair before taking the source's checkout lease.
+          const child = await service.create({
+            repoRoot: linked,
+            name: "after-depth-fetch",
+            baseRef: "HEAD",
+            withSource: (run) => selected.withCurrent((current) => run(current)),
+          });
+          expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("false");
+          expect(await git(child.path, "rev-list", "--count", "HEAD")).toBe("2");
+          await git(ignored, "init", "--separate-git-dir", state.path("operator.git"));
+          const ordinary = await service.create({
+            repoRoot: ignored,
+            name: "operator",
+            baseRef: "HEAD",
+          });
+          expect(await git(ordinary.path, "rev-parse", "--is-shallow-repository")).toBe("true");
         }
       });
     },

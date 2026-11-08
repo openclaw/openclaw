@@ -107,15 +107,18 @@ export function resolveProjectRegistryInDatabase(
   return row ? rowToProject(row) : undefined;
 }
 
-export function resolveRecordedProjectRootInDatabase(
+export function resolveProjectRegistryByRootInDatabase(
   database: EngineConnection,
   repoRoot: string,
-): string | undefined {
+  source?: ProjectRegistryInsert["source"],
+): ProjectRegistryRecord | undefined {
   const db = getNodeSqliteKysely<ProjectsDatabase>(database);
-  return executeSqliteQueryTakeFirstSync(
+  const query = db.selectFrom("projects").selectAll().where("repo_root", "=", repoRoot).limit(1);
+  const row = executeSqliteQueryTakeFirstSync(
     database,
-    db.selectFrom("projects").select("repo_root").where("repo_root", "=", repoRoot),
-  )?.repo_root;
+    source ? query.where("source", "=", source) : query,
+  );
+  return row ? rowToProject(row) : undefined;
 }
 
 function readMatchingProjectRow(

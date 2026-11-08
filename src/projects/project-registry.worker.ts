@@ -12,9 +12,10 @@ import {
   removeProjectCheckoutReferenceInDatabase,
   removeProjectRegistryInDatabase,
   resolveProjectCloneRefreshOwnerInDatabase,
+  resolveProjectRegistryByRootInDatabase,
   resolveProjectRegistryInDatabase,
-  resolveRecordedProjectRootInDatabase,
 } from "./project-registry.kernel.js";
+import type { ProjectRegistryInsert } from "./project-registry.types.js";
 
 // Registry writes are admitted only under the checkout lease for the same repo root.
 function checkoutTransaction<Project extends { repoRoot: string }, Output>(
@@ -49,8 +50,11 @@ function registryDatabase({ open, stateOptions }: WorkerOperationContext): Engin
 }
 
 export const projectRegistryOperations = {
-  "projects.findRoot": (input: { repoRoot: string }, context) =>
-    resolveRecordedProjectRootInDatabase(registryDatabase(context), input.repoRoot),
+  "projects.findRoot": (
+    input: { repoRoot: string; source?: ProjectRegistryInsert["source"] },
+    context,
+  ) =>
+    resolveProjectRegistryByRootInDatabase(registryDatabase(context), input.repoRoot, input.source),
   "projects.resolve": (input: { id: string }, context) =>
     resolveProjectRegistryInDatabase(registryDatabase(context), input.id),
   "projects.insert": checkoutTransaction(

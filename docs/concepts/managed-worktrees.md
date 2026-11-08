@@ -999,6 +999,22 @@ it, does not refresh the checkout when a branch name advances.
 
 For a workspace-bound caller, `path` and the repository root must exactly match the target agent workspace. Workboard then runs directly in that directory and records a directory workspace instead of host-materializing a managed worktree. The target must use a writable, non-shared Docker sandbox for the same workspace, its live container hash must match the requested mounts and policy, and it must not expose elevated execution, host control, host-wide sessions, persisted host/node execution, or unclassified plugin and MCP tools. If the target policy or live container is broader, dispatch leaves the card unclaimed and reports the incompatible state.
 
+## Shared clone history
+
+Managed project preparation repairs a shallow base before reusing it, under the
+project checkout lifecycle lease, using the same full-history fetch as Doctor.
+The repair retains `blob:none` and existing objects. A shallow origin that cannot
+supply complete history stops preparation; restore origin access and run
+`openclaw doctor --fix` before retrying. Operator-registered repositories keep
+their own history policy.
+
+Linked worktrees share the base's shallow boundary. Do not run `git fetch` or
+`git pull` with `--depth`, `--shallow-since`, or `--shallow-exclude` in a managed
+base or its linked worktrees. Fetch the required ref without a depth limit;
+Git retains the configured blob filter. Git has no repository setting that
+prevents an explicit depth fetch, so an already-running agent can still make
+the shared clone shallow until the next managed-project preparation repairs it.
+
 ## Related
 
 - [Workboard plugin](/plugins/workboard) — cards that materialize a managed worktree

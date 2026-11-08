@@ -5,6 +5,7 @@ import { setImmediate as yieldTurn } from "node:timers/promises";
 import { resolveStateDir } from "../../config/paths.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { ProjectCheckoutBusyError } from "../../projects/project-checkout.js";
+import { ensureManagedProjectCloneHistory } from "../../projects/project-clone-preparation.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { createCrustaceanSlug } from "../session-slug.js";
 import {
@@ -67,6 +68,20 @@ export type RepositoryCreationParams = CreateManagedWorktreeParams &
     prepareBase?: WorktreeBasePreparation;
     gitInventory: Awaited<ReturnType<typeof readWorktreeGitInventory>>;
   };
+
+export async function prepareWorktreeRepository(
+  params: Pick<CreateManagedWorktreeParams, "repoRoot" | "signal" | "commitGuard">,
+  env: NodeJS.ProcessEnv,
+): Promise<ResolvedRepository> {
+  params.signal?.throwIfAborted();
+  const repository = await resolveRepository(params.repoRoot);
+  await ensureManagedProjectCloneHistory(repository, {
+    env,
+    signal: params.signal,
+    assertCurrent: params.commitGuard,
+  });
+  return repository;
+}
 
 export async function readWorktreeGitInventory(repoRoot: string, suppliedName?: string) {
   const [branches, worktrees] = await Promise.all([

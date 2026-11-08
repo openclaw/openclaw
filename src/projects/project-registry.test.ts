@@ -161,6 +161,37 @@ describe("project registry persistence", () => {
     },
   );
 
+  it.each(["reused", "refreshed"] as const)(
+    "repairs a base re-shallowed by a linked agent before it is %s",
+    async (mode) => {
+      const source = await initializeRepository(root, "history");
+      await commitFile(source, "README.md", "second commit\n");
+      await git(source, "config", "uploadpack.allowFilter", "true");
+      const target = path.join(root, "managed");
+      await git(root, "clone", "--filter=blob:none", pathToFileURL(source).href, target);
+      const worktree = path.join(root, "linked-agent");
+      await git(target, "worktree", "add", "--detach", worktree);
+      const originUrl = mode === "reused" ? "https://github.com/example/history.git" : source;
+      const project = await registerClone(target, originUrl);
+      const head = await gitText(worktree, "rev-parse", "HEAD");
+      await git(worktree, "fetch", "--depth", "1", "origin");
+      expect(await gitText(target, "rev-parse", "--is-shallow-repository")).toBe("true");
+      if (mode === "reused") {
+        await materializeProjectClone({ cfg: {}, gitUrl: originUrl }, options);
+      } else {
+        await refreshProjectClone(project, options);
+      }
+      for (const checkout of [target, worktree]) {
+        expect(await gitText(checkout, "rev-parse", "--is-shallow-repository")).toBe("false");
+        expect(await gitText(checkout, "rev-list", "--count", "HEAD")).toBe("2");
+        expect(await gitText(checkout, "config", "remote.origin.partialclonefilter")).toBe(
+          "blob:none",
+        );
+      }
+      expect(await gitText(worktree, "rev-parse", "HEAD")).toBe(head);
+    },
+  );
+
   function workspaceConfig(workspaces: Record<string, string>): OpenClawConfig {
     return {
       agents: {

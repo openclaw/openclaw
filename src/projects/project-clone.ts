@@ -22,6 +22,7 @@ import {
   ProjectCloneError,
   refreshProjectCheckout,
 } from "./project-clone-runtime.js";
+import { ensureProjectCloneHistory } from "./project-clone-shape.js";
 import { parseProjectGitUrl } from "./project-git-url.js";
 import {
   prepareProjectRegistration,
@@ -105,6 +106,14 @@ export async function materializeProjectClone(
               return undefined;
             }
             if (current.source === "cloned") {
+              await ensureProjectCloneHistory(current, {
+                env,
+                signal: checkoutLease.signal,
+                assertCurrent: () => {
+                  assertCloneCurrent();
+                  checkoutLease.assertOwned();
+                },
+              });
               await configureProjectCheckoutMaintenance(current.repoRoot, {
                 env,
                 signal: checkoutLease.signal,
@@ -257,6 +266,11 @@ export async function refreshProjectClone(
           "Saved project repository is invalid; select the repository and retry.",
         );
       }
+      await ensureProjectCloneHistory(current, {
+        env,
+        signal: lease.signal,
+        assertCurrent: assertRefreshCurrent,
+      });
       await configureProjectCheckoutMaintenance(current.repoRoot, {
         env,
         signal: lease.signal,

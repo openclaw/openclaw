@@ -1,0 +1,2 @@
+87
+# Linked-worktree re-shallow regressions for managed preparation, Doctor repair, and desktop tag fetch; preserve environment-routing isolation.
