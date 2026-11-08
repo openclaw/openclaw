@@ -59,8 +59,8 @@ const controlUiPerformanceBudgets = {
   newBootCssRequests: 3,
   // Coordinator-accepted transcript anchor (#194751): retained drift 27/44 px → 0/0,
   // WebKit wheel input restored; desktop scroll CPU median/p95 -6.57%/-7.79%.
-  // Current-main 1,296,137 B + 140 B measured growth + 64 B build variance.
-  chatBootJsGzipBytes: 1_296_341,
+  // Current-main 1,296,175 B + 140 B measured growth + 64 B build variance.
+  chatBootJsGzipBytes: 1_296_379,
   // Channels: raw -159 B, served +22 B; coordinator-accepted normalized trade +64 B.
   newBootJsGzipBytes: 803_250,
   startupCssRequests: 1,
