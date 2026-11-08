@@ -35,11 +35,11 @@ export async function dispatchSignalReactionConversation(params: {
   // A target timestamp identifies a message, not a reaction occurrence. Never
   // mint a fresh identity for replay/history lacking a transport timestamp.
   if (!Number.isSafeInteger(timestamp) || !timestamp || timestamp <= 0) {
-    return;
+    return undefined;
   }
   const senderId = entry.senderPeerId;
   if (senderId.length > 100 || (entry.groupId?.length ?? 0) > 256) {
-    return;
+    return undefined;
   }
   const reactionMessageId = reaction.targetSentTimestamp
     ? String(reaction.targetSentTimestamp)
@@ -93,7 +93,7 @@ export async function dispatchSignalReactionConversation(params: {
     inboundEventKind: "room_event",
   });
   if (!channelIngress.senderAccess.allowed) {
-    return;
+    return undefined;
   }
   const reactionBody = `Conversational reaction (not approval or task acceptance): ${JSON.stringify(context)}`;
   await params.dispatch({
