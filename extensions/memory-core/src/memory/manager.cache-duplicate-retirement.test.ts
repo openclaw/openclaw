@@ -187,11 +187,23 @@ describe("memory embedding cache duplicate retirement", () => {
     expect(remaining.every((row) => !published.has(row.hash))).toBe(true);
   });
 
-  it("leaves a disabled cache alone", async () => {
-    const spy = vi.spyOn(MemoryIndexDatabase.prototype, "retireEmbeddingCache");
-    const { manager } = await indexedManager(false);
+  it("leaves a disabled cache's existing rows alone", async () => {
+    const { manager, writer, cacheRows } = await indexedManager(false);
+    // Duplicates of every published chunk, kept while the cache was still enabled.
+    writer.exec(`INSERT INTO memory_embedding_cache
+        (provider, model, provider_key, hash, embedding, dims, updated_at)
+      SELECT json_extract(meta.value, '$.provider'), chunk.model,
+        json_extract(meta.value, '$.providerKey'), chunk.hash, chunk.embedding,
+        length(chunk.embedding) / 8, 1
+      FROM memory_index_chunks AS chunk, memory_index_meta AS meta
+      WHERE meta.key = 'memory_index_meta_v1'`);
+    const existing = cacheRows();
+    expect(existing.length).toBeGreaterThan(3);
+
     await edit(manager, "Zeta header without a cache.");
     await manager.sync({ reason: "watch" });
-    expect(spy).not.toHaveBeenCalled();
+    expect(cacheRows()).toEqual(existing);
+    await manager.sync({ reason: "cli", force: true });
+    expect(cacheRows()).toEqual(existing);
   });
 });
