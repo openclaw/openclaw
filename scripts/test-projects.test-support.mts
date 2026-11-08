@@ -3287,6 +3287,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ["scripts/e2e/cron-cli-docker.sh", [dockerBuild, "docker-e2e-observability"]],
   ["scripts/ios-release-upload.sh", ["ios-release-wrapper-args", "ios-release-fastlane-gates"]],
   ["scripts/release-verify-beta.ts", ["release-wrapper-scripts"]],
+  ["scripts/container-registry-readback.mjs", ["container-registry-readback"]],
   ["scripts/lib/bundled-plugin-build-entries.mjs", ["bundled-plugin-build-entries", releaseCheck]],
   ["scripts/lib/docker-e2e-package.sh", [dockerBuild]],
   ["scripts/relay-build-limit-warnings.mts", [dockerBuild]],
@@ -3576,7 +3577,12 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^\.github\/workflows\/package-acceptance\.yml$/u, [packageAcceptance]],
   [
     /^\.github\/workflows\/vercel-container-registry-publish\.yml$/u,
-    ["docker-channel-promote", "release-plan-producer", "vercel-container-registry-publish"],
+    [
+      "container-registry-readback",
+      "docker-channel-promote",
+      "release-plan-producer",
+      "vercel-container-registry-publish",
+    ],
   ],
   [
     /^\.github\/workflows\/plugin-clawhub-new\.yml$/u,

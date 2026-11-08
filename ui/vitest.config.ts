@@ -96,6 +96,7 @@ const webkitTestFiles = [
   "src/pages/apps/apps-page.browser.test.tsx",
   "src/pages/config/view.config-read.browser.test.tsx",
   "src/pages/usage/view-details.browser.test.tsx",
+  "src/pages/sessions/view.invalidation.browser.test.tsx",
   "src/components/settings-ui.browser.test.tsx",
   "src/components/select-picker.behavior.browser.test.ts",
   "src/components/select-picker.browser.test.tsx",

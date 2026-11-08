@@ -196,10 +196,20 @@ export function jsonValid(db: DatabaseSync | PostgresSqlConnection, value: Expre
     : /* kysely-allow-raw: Keep SQLite validation unchanged. */ sql`json_valid(${value})`;
 }
 
-export function jsonType(db: DatabaseSync | PostgresSqlConnection, value: Expression<unknown>) {
+export function jsonType(
+  db: DatabaseSync | PostgresSqlConnection,
+  value: Expression<unknown>,
+  path?: Expression<string>,
+) {
+  // SQLite must classify the member directly; extracting first reparses scalar strings.
+  const argument = path
+    ? isPostgresSqlConnection(db)
+      ? /* kysely-allow-raw: Engine-owned object-member path preserves native JSON types. */ sql`(${value}::jsonb #> ${objectPath(path)})`
+      : sql`${value}, ${path}`
+    : value;
   return isPostgresSqlConnection(db)
-    ? /* kysely-allow-raw: Engine-owned JSON value classification. */ sql<string>`jsonb_typeof(${value}::jsonb)`
-    : /* kysely-allow-raw: Engine-owned JSON value classification. */ sql<string>`json_type(${value})`;
+    ? /* kysely-allow-raw: Engine-owned JSON value classification. */ sql<string>`jsonb_typeof(${argument}::jsonb)`
+    : /* kysely-allow-raw: Engine-owned JSON value classification. */ sql<string>`json_type(${argument})`;
 }
 
 export function jsonRemovePaths(

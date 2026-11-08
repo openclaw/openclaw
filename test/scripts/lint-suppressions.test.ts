@@ -164,6 +164,8 @@ describe("production lint suppressions", () => {
         "extensions/x/src/thread.ts|unicorn/no-array-sort|2",
         // The memory census attributes RSS only to the pinned Playwright browser's child tree.
         "scripts/bench-control-ui-engines.ts|no-underscore-dangle|1",
+        // Read rendered content so parked Chat panes cannot satisfy readiness evidence.
+        "scripts/bench-control-ui-rpc-hostage.ts|unicorn/prefer-dom-node-text-content|1",
         // The Talk readiness probe calls the saved media method with its original receiver.
         "scripts/bench-control-ui-talk.ts|typescript/unbound-method|1",
         // The fault observer preserves methods for restoration and supplies each database receiver through .call.
@@ -178,6 +180,8 @@ describe("production lint suppressions", () => {
         "scripts/lib/control-ui-engine-page-scenarios.ts|typescript/unbound-method|1",
         // The streaming probe forwards native methods with their original receivers.
         "scripts/lib/control-ui-engine-streaming-scenarios.ts|typescript/unbound-method|2",
+        // The heavy-row probe forwards native image decoding with its original image receiver.
+        "scripts/lib/control-ui-heavy-window-scenarios.ts|typescript/unbound-method|1",
         // The diagnostic observer restores native methods and forwards their original receiver.
         "scripts/lib/control-ui-mutation-audit.ts|typescript/unbound-method|2",
         // The scheduling probe forwards native methods with the original call receiver through Reflect.apply.
@@ -186,6 +190,7 @@ describe("production lint suppressions", () => {
         "scripts/lib/control-ui-talk-fixture.ts|typescript/unbound-method|5",
         "scripts/lib/plain-gh.mjs|no-warning-comments|1",
         "scripts/lib/sqlite-reliability-process.ts|typescript/prefer-promise-reject-errors|1",
+        "scripts/lib/usage-bench-observer.mjs|typescript/unbound-method|1",
         // The frame census retains native methods and supplies their original receivers through .call.
         "scripts/perf/agent-event-frame-census-preload.mjs|typescript/unbound-method|3",
         // The copy-count probe restores the native method after measurement.

@@ -131,7 +131,44 @@ describe("PostgreSQL conformance selection", () => {
       shard: "${{ matrix.shard }}",
     });
     expect(workflow.jobs["ci-gate"].needs).toContain("postgres-conformance");
+    const smoke = requiredWorkflowStep(job.steps, "Run PostgreSQL 16 Gateway cron smoke");
+    expect(smoke.uses).toBe(conformance.uses);
+    expect(smoke.with).toEqual({
+      image:
+        "pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a",
+      target: "src/gateway/server-database-engine.postgres.test.ts",
+    });
   });
+
+  it.each([
+    ["", "", []],
+    ["2/3", "", ["--shard", "2/3"]],
+    [
+      "",
+      "gateway fixtures/cron.postgres.test.ts",
+      ["--", "gateway fixtures/cron.postgres.test.ts"],
+    ],
+  ])(
+    "forwards the conformance shard %j and target %j as separate arguments",
+    (shard, target, args) => {
+      const action = parse(readFileSync(".github/actions/postgres-conformance/action.yml", "utf8"));
+      const step = requiredWorkflowStep(action.runs.steps, "Run PostgreSQL conformance");
+      const result = runWorkflowShellScript(`node() { printf '<%s>\\n' "$@"; }\n${step.run}`, {
+        env: { ...process.env, CONFORMANCE_SHARD: shard, CONFORMANCE_TARGET: target },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim().split("\n")).toEqual(
+        [
+          "scripts/test-database-conformance.mjs",
+          "--engine",
+          "postgres",
+          "--connection",
+          "postgresql://postgres@127.0.0.1:5432/postgres",
+          ...args,
+        ].map((arg) => `<${arg}>`),
+      );
+    },
+  );
 
   it("qualifies pg17 daily and pg16/pg18 weekly in three shards each on main", () => {
     const workflow = parse(
@@ -211,6 +248,16 @@ describe("PostgreSQL conformance selection", () => {
     [["extensions/workboard/README.md", "extensions/workboard/src/store.ts"], true],
     [["extensions/workboard/test/fixtures/README.md", "src/utils/absolute-deadline.test.ts"], true],
     [["src/infra/database-engine/open.ts"], true],
+    ...[
+      "src/cron/store/row-codec.ts",
+      "src/cron/store/runtime-rows.kernel.ts",
+      "src/cron/store/run-finalization.worker.ts",
+      "src/cron/service.ts",
+      "src/cron/service/ops-run.ts",
+      "src/gateway/server-methods/cron.ts",
+      "src/gateway/server-methods/cron-add.ts",
+      "src/gateway/server-methods/cron-run.ts",
+    ].map((file): [string[], boolean] => [[file], true]),
     [["src/commands/doctor-database-port-migrations.ts"], true],
     [["src/infra/database-engine/matrix-roots.postgres.test.ts"], true],
     [["src/infra/database-engine/deleted.test.ts"], true],
@@ -10388,6 +10435,64 @@ describe("ci workflow guards", () => {
     },
   );
 
+  it.each([
+    { patterns: ["ui/src/e2e/connection-settings.e2e.test.ts"], discover: false },
+    { patterns: [], discover: false },
+    { patterns: ["ui/src/e2e/logs-scroll.e2e.test.ts"], discover: true },
+    { patterns: ["ui/src/e2e/stale-build-recovery.production.e2e.test.ts"], discover: true },
+    { patterns: ["ui/src/e2e/*.e2e.test.ts"], discover: true },
+    { patterns: null, discover: true },
+  ])(
+    "discovers E2E requirements only for potentially selected suites: $patterns",
+    ({ patterns, discover }) => {
+      const root = tempDirs.make("openclaw-ui-e2e-requirements-");
+      for (const file of [
+        "ui/src/e2e/logs-scroll.e2e.test.ts",
+        "ui/src/e2e/stale-build-recovery.production.e2e.test.ts",
+        "node_modules/vitest/node.mjs",
+      ]) {
+        mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+        writeFileSync(path.join(root, file), 'throw new Error("discovery required");');
+      }
+      writeFileSync(
+        path.join(root, "node_modules/vitest/package.json"),
+        JSON.stringify({
+          type: "module",
+          exports: { "./node": "./node.mjs" },
+        }),
+      );
+      mkdirSync(path.join(root, "test/vitest"), { recursive: true });
+      symlinkSync(
+        path.resolve("test/vitest/vitest.pattern-file.ts"),
+        path.join(root, "test/vitest/vitest.pattern-file.ts"),
+      );
+      const includeFile = path.join(root, "include.json");
+      if (patterns !== null) {
+        writeFileSync(includeFile, JSON.stringify(patterns));
+      }
+      const outputFile = path.join(root, "output");
+      const discovery = requiredWorkflowStep(
+        readCiWorkflow().jobs["checks-ui-e2e"].steps,
+        "Discover Control UI E2E requirements",
+      );
+      const result = runWorkflowShellScript(`set -e\n${discovery.run}`, {
+        cwd: root,
+        env: {
+          ...process.env,
+          GITHUB_OUTPUT: outputFile,
+          OPENCLAW_VITEST_INCLUDE_FILE: patterns === null ? "" : includeFile,
+        },
+      });
+      if (discover) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("discovery required");
+      } else {
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(readFileSync(outputFile, "utf8")).toBe("requirements=\n");
+      }
+    },
+  );
+
   it("uses the target-owned UI project capability for frozen manual matrices and commands", () => {
     for (const [runnerBackend, legacyJobCount] of [
       ["blacksmith", 4],
@@ -10449,6 +10554,11 @@ describe("ci workflow guards", () => {
       "Control UI E2E worker count",
     );
     mkdirSync(commandBin);
+    mkdirSync(path.join(commandRoot, "test/vitest"), { recursive: true });
+    symlinkSync(
+      path.resolve("test/vitest/vitest.pattern-file.ts"),
+      path.join(commandRoot, "test/vitest/vitest.pattern-file.ts"),
+    );
     writeExecutable(path.join(commandBin, "node"), [
       "#!/bin/sh",
       'printf "%s\\n" "$@" > "$UI_E2E_COMMAND_ARGS"',
@@ -10537,6 +10647,32 @@ describe("ci workflow guards", () => {
     ).toBe(false);
   });
 
+  it.each([
+    { files: 4, rows: 2 },
+    { files: 6, rows: 2 },
+    { files: 10, rows: 3 },
+  ])("packs partial UI unit selections: $files files into $rows rows", ({ files, rows }) => {
+    const selected = Array.from({ length: files }, (_, index) => `ui/src/unit-${index}.test.ts`);
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      eventName: "pull_request",
+      changedPaths: ["src/owner.ts"],
+      selectedTestTargets: selected,
+      targetFiles: selected,
+      uiTestGroupsSource: `export const createUiTestShardGroups = () => ({
+        ui: [{configs: ["ui/vitest.config.ts"], includePatterns: ${JSON.stringify(selected)}}], e2e: [],
+      });`,
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(readJsonOutput(manifest.outputs, "ui_test_matrix").include).toHaveLength(rows);
+    expect(
+      resolveSelectedUiIncludes(
+        expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI selection"),
+      ).flat(),
+    ).toEqual(selected);
+  });
+
   it.each(
     [
       {
@@ -10551,10 +10687,10 @@ describe("ci workflow guards", () => {
         windows: [2],
       },
       {
-        label: "unit and smoke without Windows ownership",
+        label: "small unit selection without Windows ownership",
         windowsArea: false,
         unitOwner: false,
-        ui: [1],
+        ui: [0, 1, 2],
         mocked: [],
         real: [],
         browser: [],
@@ -10643,10 +10779,12 @@ describe("ci workflow guards", () => {
         manifest.outputs.reuse_browser_extension_build === "true",
     ).toBe(selected.mocked.length + selected.browser.length > 0);
     expect(manifest.outputs.run_ui_real_gateway).toBe(String(!isPr && selected.real.length > 0));
+    const expectedUiRows =
+      isPr && !scenario.unitOwner && expectedUi.length > 0 ? 1 : Math.min(3, expectedUi.length);
     expect(readJsonOutput(manifest.outputs, "ui_test_matrix").include).toEqual(
-      expectedUi.slice(0, 3).map((_, index) => ({ shard: index + 1 })),
+      Array.from({ length: expectedUiRows }, (_, index) => ({ shard: index + 1 })),
     );
-    expect(manifest.outputs.ui_test_shard_count).toBe(String(Math.min(3, expectedUi.length)));
+    expect(manifest.outputs.ui_test_shard_count).toBe(String(expectedUiRows));
     expect(
       resolveSelectedUiIncludes(
         expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI selection"),
@@ -13821,12 +13959,22 @@ describe("shared test-source check execution", () => {
   };
 
   it.each([
+    ["test/scripts/ci-check-plan.test.ts", "config/test-lines-allocations/example.txt"],
+    ["test/example.test.ts", "config/test-lines-allocations/example.txt"],
     [
       "extensions/codex/src/session-catalog-index.test.ts",
       "extensions/codex/src/session-catalog-rollouts.test.ts",
       "extensions/codex/src/session-catalog-index.test-support.ts",
     ],
     ["src/shared.test-support.ts", "src/shared.test.ts"],
+    ["src/test-helpers/shared.ts", "src/shared.test.ts"],
+    ["src/shared.test-support.ts", "src/runtime.ts"],
+    [
+      "src/shared.test-support.ts",
+      "src/runtime.ts",
+      "docs/selection.md",
+      "config/test-lines-allocations/selection-proof.txt",
+    ],
     ["packages/example/src/shared.test-support.ts"],
     ["ui/src/shared.test-support.ts"],
     ["src/selection.test.ts", "config/test-lines-allocations/selection-proof.txt"],
@@ -13852,7 +14000,11 @@ describe("shared test-source check execution", () => {
     expect(manifest.status, manifest.output).toBe(0);
     const input = readJsonOutput(manifest.outputs, "check_plan_input_json");
     expect(input.preserveFullChecks).toBe(false);
-    expect(input.typeGraphBoundaryOwner).toBe("additional-checks");
+    expect(input.typeGraphBoundaryOwner).toBe(
+      changedPaths.every((file) => file.startsWith("extensions/"))
+        ? "additional-checks"
+        : "check-plan",
+    );
     const rows = readJsonOutput(manifest.checkPlanOutputs, "check_matrix").include;
     expect(
       rows.flatMap((row: { type_graph_names_json?: string }) =>
@@ -13881,14 +14033,8 @@ describe("shared test-source check execution", () => {
 
   it.each([
     ["test/helpers/shared.ts"],
+    ["test/scripts/ci-check-plan.test.ts", "scripts/generate-kysely-types.mts"],
     ["src/shared.test-support.d.ts"],
-    ["src/shared.test-support.ts", "src/runtime.ts"],
-    [
-      "src/shared.test-support.ts",
-      "src/runtime.ts",
-      "docs/selection.md",
-      "config/test-lines-allocations/selection-proof.txt",
-    ],
     ["src/shared.test-support.ts", "tsconfig.json"],
     ["src/shared.test-support.ts", "src/config/settings.json"],
     ["unknown/shared.test-support.ts"],

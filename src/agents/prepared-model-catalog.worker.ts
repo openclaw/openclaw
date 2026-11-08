@@ -371,12 +371,18 @@ async function runCatalogRequest(
     }
     const staticOwner = acquiredGeneration ?? prepared;
     await beginDiscovery();
+    const ownedProviderIds = new Set(
+      discoveryPluginIds.flatMap((id) => discoveryScope?.get(id) ?? []),
+    );
     const staticProviderIds = new Set([
       ...staticOwner.staticProviderIds,
-      ...exactAgentFacts.providerIds,
+      ...exactAgentFacts.providerIds
+        .map(normalizeProviderId)
+        .filter((id) => ownedProviderIds.has(id)),
     ]);
-    // Static preparation grows only with requested provider scope. Registry replacement
-    // clears its result so retired provider handles cannot survive in the next generation.
+    // Unknown credential identities cannot add static hooks. Retain only requested refs
+    // with a plugin owner, including aliases and sibling providers of the same owner.
+    // Registry replacement clears the result so retired handles cannot survive.
     if (
       !catalogGeneration.preparedStaticProviderCatalog ||
       staticProviderIds.size > staticOwner.staticProviderIds.size
