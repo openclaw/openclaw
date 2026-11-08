@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   checkDeviceTokenPeer,
   recordDeviceTokenPeer,
+  recordTokenlessOpenClawIdOperator,
   setDeviceTokenBindingOwner,
   setDeviceTokenBindingsLoading,
   type DeviceTokenBindingOwner,
@@ -17,11 +18,21 @@ function owner(bindings: Record<string, string> = {}) {
     record: async (deviceId, role, peerKey) => {
       bindings[`${deviceId}/${role}`] = peerKey;
     },
+    forget: async () => {},
     reportMismatch,
   };
   setDeviceTokenBindingOwner(value);
   return { reportMismatch, bindings };
 }
+
+it("marks a tokenless relayed operator once, without a token to guard", async () => {
+  const { bindings } = owner();
+  await recordTokenlessOpenClawIdOperator("browser", W1);
+  await recordTokenlessOpenClawIdOperator("browser", W1);
+  expect(bindings).toEqual({ "browser/operator": W1 });
+  setDeviceTokenBindingOwner(undefined);
+  await expect(recordTokenlessOpenClawIdOperator("other", W2)).resolves.toBeUndefined();
+});
 
 afterEach(() => {
   setDeviceTokenBindingOwner(undefined);

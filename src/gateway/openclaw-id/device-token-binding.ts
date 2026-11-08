@@ -117,6 +117,27 @@ export function hasOpenClawIdOperatorBinding(deviceId: string): boolean {
   }
 }
 
+/**
+ * Marks a relayed operator that received no device token (trusted-proxy auth mode,
+ * configured operator roles) as an OpenClaw ID browser, without minting a credential.
+ * The binding guards no token here, so an unavailable owner only skips the marker.
+ */
+export async function recordTokenlessOpenClawIdOperator(
+  deviceId: string,
+  peerKey: string,
+): Promise<void> {
+  if (!owner || owner === "unreadable") {
+    return;
+  }
+  try {
+    if (owner.lookup(deviceId, "operator") !== peerKey) {
+      await owner.record(deviceId, "operator", peerKey);
+    }
+  } catch {
+    // Marker only: a failed claw write leaves this browser removable as a device.
+  }
+}
+
 /** Forgets the bindings of a deleted pairing. Best effort: the pairing is already gone. */
 export async function forgetDeviceTokenBindings(
   deviceId: string,

@@ -71,12 +71,9 @@ const OPENCLAW_ID_MANAGED_MESSAGE =
   "This browser connects through OpenClaw ID. Manage access on the Access page.";
 
 /**
- * A browser whose operator token was issued over the tunnel is managed by OpenClaw ID
- * membership while the feature is on: removing it as a device would be undone by its
- * next sign-in. Nodes stay ordinary devices, and with OpenClaw ID off there is no
- * Access page. Accepted gap: lanes that issue no device token (trusted-proxy auth mode,
- * configured human operator roles) leave no binding, so those browsers stay removable;
- * their next sign-in pairs them again.
+ * A browser (UI client, never a node) bound to an OpenClaw ID device key is managed by
+ * OpenClaw ID membership while the feature is on: removing it as a device would be
+ * undone by its next sign-in. With OpenClaw ID off there is no Access page.
  */
 function isManagedByOpenClawId(
   context: Pick<GatewayRequestContext, "getRuntimeConfig">,
@@ -84,6 +81,7 @@ function isManagedByOpenClawId(
 ): boolean {
   return (
     device != null &&
+    (device.clientMode === "webchat" || device.clientMode === "ui") &&
     !listApprovedPairedDeviceRoles(device).includes("node") &&
     hasOpenClawIdOperatorBinding(device.deviceId.trim()) &&
     context.getRuntimeConfig().gateway?.openclawId?.enabled === true

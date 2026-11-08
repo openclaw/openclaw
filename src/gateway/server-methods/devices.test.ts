@@ -67,6 +67,8 @@ it("marks only OpenClaw ID operator browsers and forgets bindings of a removed p
   const bindings = new Map([
     ["ocid-browser:operator", "iroh:browser"],
     ["tunnel-node:node", "iroh:node"],
+    // A node host whose node role was removed first keeps its operator row: still a node host.
+    ["node-host:operator", "iroh:host"],
   ]);
   const forget = vi.fn(async () => {});
   setDeviceTokenBindingOwner({
@@ -79,13 +81,21 @@ it("marks only OpenClaw ID operator browsers and forgets bindings of a removed p
     const browser = {
       deviceId: "ocid-browser",
       publicKey: "pk-b",
+      clientMode: "webchat",
       role: "operator",
       roles: ["operator"],
     };
     const node = { deviceId: "tunnel-node", publicKey: "pk-n", role: "node", roles: ["node"] };
+    const host = {
+      deviceId: "node-host",
+      publicKey: "pk-h",
+      clientMode: "node",
+      role: "operator",
+      roles: ["operator"],
+    };
     pairing.listDevicePairing.mockResolvedValue({
       pending: [],
-      paired: [browser, node, device(1)],
+      paired: [browser, node, host, device(1)],
     });
     let enabled = true;
     const withConfig = (opts: ReturnType<typeof createOptions>) =>
@@ -100,6 +110,7 @@ it("marks only OpenClaw ID operator browsers and forgets bindings of a removed p
     expect(payload.paired.map((d) => [d.deviceId, d.managedBy])).toEqual([
       ["ocid-browser", "openclaw-id"],
       ["tunnel-node", undefined],
+      ["node-host", undefined],
       ["device-1", undefined],
     ]);
     pairing.getPairedDevice.mockResolvedValue(browser);
