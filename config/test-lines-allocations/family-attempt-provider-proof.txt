@@ -1,2 +1,2 @@
-# Shared family-attempt proof: real-socket stall coverage plus the Gateway provider path.
-268
+# Shared family-attempt proof, including the process-local unanswered-handshake drop.
+380
