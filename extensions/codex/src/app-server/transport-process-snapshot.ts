@@ -23,7 +23,12 @@ export function isDeadProcessState(state: string): boolean {
 }
 
 const PROCESS_COLUMNS = "pid=,ppid=,pgid=,stat=,lstart=";
-const MAX_PROCESS_CONTAINMENT_MS = 2_000;
+/**
+ * Budget for one process-containment pass. A full snapshot is O(processes) and
+ * containment takes several passes, so a busy host (~1.6 s per snapshot at ~950
+ * processes) must still finish; the deadline only bounds a genuinely stuck probe.
+ */
+export const MAX_PROCESS_CONTAINMENT_MS = 10_000;
 const PROCESS_INSPECTION_MAX_BYTES = 8 * 1024 * 1024;
 
 export class ProcessInspectionError extends Error {

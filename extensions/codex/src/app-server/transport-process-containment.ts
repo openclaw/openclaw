@@ -1,5 +1,6 @@
 import {
   isDeadProcessState,
+  MAX_PROCESS_CONTAINMENT_MS,
   readCodexAppServerProcess,
   readCodexAppServerProcessSnapshot,
   type PosixProcess,
@@ -15,7 +16,6 @@ type ContainableTransport = {
 export type CodexAppServerProcessIdentity = Pick<PosixProcess, "pid" | "pgid" | "startedAt">;
 
 const MAX_CONTAINED_PROCESSES = 512;
-const MAX_PROCESS_CONTAINMENT_MS = 2_000;
 const MAX_PROCESS_QUIESCE_PASSES = 16;
 const heldStoppedRoots = new Map<
   PosixProcess,
