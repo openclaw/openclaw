@@ -53,13 +53,7 @@ function mutateWorktree<T>(
     // An id that names no record is operator input, so its message is the human output.
     const { WorktreeRecordNotFoundError } = await import("../agents/worktrees/errors.js");
     if (error instanceof WorktreeRecordNotFoundError) {
-      const message = error.message;
-      throw new ExpectedCliError({
-        message,
-        humanOutput: message,
-        machineOutput: message,
-        cause: error,
-      });
+      throwExpectedCliError(error.message);
     }
     throw error;
   });
