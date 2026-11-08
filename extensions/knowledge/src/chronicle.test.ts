@@ -2,11 +2,13 @@ import { randomUUID, createHash } from "node:crypto";
 import { mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { OpenClawPluginToolFactory } from "openclaw/plugin-sdk/plugin-entry";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { stringify } from "yaml";
 import type { SinceInput, TimelineInput } from "./chronicle-contract.js";
 import { contract } from "./contract.js";
+import plugin from "./index.js";
 import { createKnowledgeService } from "./service.js";
 import { returnedRecords } from "./session-activity.js";
 import { dateInterval, timeBounds } from "./temporal-query.js";
@@ -18,6 +20,7 @@ import {
   afterTest,
   useTestTempDirs,
   defaultOrder,
+  sessionActions,
 } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
@@ -92,6 +95,34 @@ async function fixture() {
 }
 const ids = (r: any) => r.items.map((x: any) => x.record.id);
 const event = (occurred_at: any, more = {}) => ({ kind: "claim", occurred_at, ...more });
+
+it("exposes record-type guidance on every registered temporal kind parameter", async () => {
+  const f = await fixture();
+  const factories = new Map<string, OpenClawPluginToolFactory>();
+  plugin.register({
+    ...f.api,
+    session: {
+      ...f.api.session,
+      controls: { ...f.api.session?.controls, ...sessionActions().session.controls },
+    },
+    registerTool(factory, options) {
+      if (typeof factory === "function" && options?.name) {
+        factories.set(options.name, factory);
+      }
+    },
+  });
+  for (const name of ["timeline", "chronicle_day", "chronicle_since"]) {
+    const tool = factories.get("knowledge_" + name)?.(f.owner.tool);
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("Missing registered temporal tool: " + name);
+    }
+    expect.soft(tool.parameters, name).toMatchObject({
+      properties: {
+        kind: { description: expect.stringMatching(/\S/) },
+      },
+    });
+  }
+});
 
 it("date validation, inclusive UTC days and date-only precision", () => {
   expect(() => dateInterval("2025-02-29")).toThrow(/real/);
