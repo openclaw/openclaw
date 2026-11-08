@@ -684,39 +684,27 @@ it("keeps warmed current context across sessions, historical and smaller-window 
     }
     await waitForSessionTranscriptProjection(scope);
     const siblingScope = sessionScope(scope.storePath, "model-anchor-retention-sibling");
-    await upsertSessionEntryCore(siblingScope, {
-      sessionId: siblingScope.sessionId,
-      updatedAt: 1,
-    });
+    await upsertSessionEntryCore(siblingScope, { sessionId: siblingScope.sessionId, updatedAt: 1 });
     const sibling = SessionManager.open(siblingScope);
     await sibling.appendMessageAsync(makeUserMessage("sibling question", 1));
     await waitForSessionTranscriptProjection(siblingScope);
     const limits = { maxBytes: 8192, maxEvents: 4 };
-    const readCurrent = () => SessionManager.openModelContext(scope, { limits });
-    const current = readCurrent();
+    const smallerLimits = { ...limits, maxEvents: 2 };
+    const current = SessionManager.openModelContext(scope, { limits });
     const expected = current.buildSessionContext();
     expect(current.getBranch().some((entry) => entry.id === discardedId)).toBe(false);
     expect(expected.messages.at(-1)).toMatchObject({ content: "question-15" });
 
-    const earlier = SessionManager.openModelContext(scope, {
-      through: historical.anchor,
-      limits: { ...limits, maxEvents: 2 },
-    });
-    expect(earlier.buildSessionContext().messages.at(-1)).toMatchObject({ content: "question-6" });
+    const earlier = readModel(scope, { through: historical.anchor, limits: smallerLimits });
+    expect(earlier.messages.at(-1)).toMatchObject({ content: "question-6" });
 
     withoutPayload([JSON.stringify(discardedId)], () => {
-      expect(
-        SessionManager.openModelContext(siblingScope, { limits }).buildSessionContext(),
-      ).toEqual(sibling.buildSessionContext());
-      expect(readCurrent().buildSessionContext()).toEqual(expected);
-      expect(
-        SessionManager.openModelContext(scope, {
-          limits: { ...limits, maxEvents: 2 },
-        })
-          .buildSessionContext()
-          .messages.at(-1),
-      ).toMatchObject({ content: "question-15" });
-      expect(readCurrent().buildSessionContext()).toEqual(expected);
+      expect(readModel(siblingScope, { limits })).toEqual(sibling.buildSessionContext());
+      expect(readModel(scope, { limits })).toEqual(expected);
+      expect(readModel(scope, { limits: smallerLimits }).messages.at(-1)).toMatchObject({
+        content: "question-15",
+      });
+      expect(readModel(scope, { limits })).toEqual(expected);
     });
   });
 });
