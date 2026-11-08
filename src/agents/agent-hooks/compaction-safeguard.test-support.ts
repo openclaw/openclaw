@@ -260,3 +260,7 @@ export function expectCompactionResult(result: {
   }
   return result.compaction;
 }
+
+export function headingTemplate(prefix: string): string {
+  return `${prefix}\n${structuredSummary({ decisions: "alpha", todos: "beta", rules: "gamma", asks: "delta", identifiers: "epsilon" })}`;
+}

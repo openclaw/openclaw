@@ -22,6 +22,11 @@ import * as oauth from "./oauth.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
+  createModelCooldownCases,
+  makeStoreWithCopilot,
+  markFailure,
+} from "./usage-cooldown-cases.test-support.js";
+import {
   mockLockedUpdateForStore,
   mockLockedUpdatesForStore,
   resetAuthProfileUsageMocks,
@@ -1126,109 +1131,8 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 });
 
 describe("markAuthProfileFailure — per-model cooldown metadata", () => {
-  type FailureReason = Parameters<typeof markAuthProfileFailure>[0]["reason"];
-
-  function makeStoreWithCopilot(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore {
-    const store = makeStore(usageStats);
-    store.profiles["github-copilot:github"] = createApiKeyCredential("github-copilot", "ghu_test");
-    return store;
-  }
-
-  async function markFailure(params: {
-    store: ReturnType<typeof makeStoreWithCopilot>;
-    now: number;
-    reason: FailureReason;
-    modelId?: string;
-    useFakeTime?: boolean;
-  }): Promise<void> {
-    if (params.useFakeTime !== false) {
-      vi.useFakeTimers();
-      vi.setSystemTime(params.now);
-    }
-    mockLockedUpdateForStore(params.store);
-    try {
-      await markAuthProfileFailure({
-        store: params.store,
-        profileId: "github-copilot:github",
-        reason: params.reason,
-        modelId: params.modelId,
-      });
-    } finally {
-      if (params.useFakeTime !== false) {
-        vi.useRealTimers();
-      }
-    }
-  }
-
   const now = 1_000_000;
-  const activeStats = (
-    reason: FailureReason,
-    modelId: string,
-  ): NonNullable<AuthProfileStore["usageStats"]>[string] => ({
-    cooldownUntil: now + 30_000,
-    cooldownReason: reason,
-    cooldownModel: modelId,
-    errorCount: 1,
-    lastFailureAt: now - 1_000,
-  });
-  const cases = [
-    {
-      name: "records cooldownModel on first rate_limit failure",
-      initialStats: {},
-      reason: "rate_limit",
-      modelId: "claude-sonnet-4.6",
-      expectedReason: "rate_limit",
-      expectedModel: "claude-sonnet-4.6",
-    },
-    {
-      name: "preserves cooldownModel when the same model fails again during active model_not_found cooldown",
-      initialStats: activeStats("model_not_found", "claude-sonnet-4.6"),
-      reason: "model_not_found",
-      modelId: "claude-sonnet-4.6",
-      expectedReason: "model_not_found",
-      expectedModel: "claude-sonnet-4.6",
-      expectedUntil: now + 30_000,
-    },
-    {
-      name: "keeps a healthy sibling model available after a model_not_found failure on the same profile — #116464",
-      initialStats: {},
-      reason: "model_not_found",
-      modelId: "claude-sonnet-4.6",
-      expectedReason: "model_not_found",
-      expectedModel: "claude-sonnet-4.6",
-      availability: [
-        { modelId: "claude-sonnet-4.6", expected: true },
-        { modelId: "gpt-4.1", expected: false },
-      ],
-    },
-    {
-      name: "widens cooldownModel to undefined when a different model fails during active cooldown",
-      initialStats: activeStats("rate_limit", "claude-sonnet-4.6"),
-      reason: "rate_limit",
-      modelId: "gpt-4.1",
-      expectedReason: "rate_limit",
-      expectedModel: undefined,
-    },
-    {
-      name: "updates cooldownReason when auth failure occurs during active rate_limit window",
-      initialStats: activeStats("rate_limit", "claude-sonnet-4.6"),
-      reason: "auth",
-      modelId: "claude-opus-4.6",
-      expectedReason: "auth",
-      expectedModel: undefined,
-      useFakeTime: false,
-    },
-  ] satisfies Array<{
-    name: string;
-    initialStats: ProfileUsageStats;
-    reason: FailureReason;
-    modelId: string | undefined;
-    expectedReason: FailureReason;
-    expectedModel: string | undefined;
-    expectedUntil?: number;
-    availability?: Array<{ modelId: string; expected: boolean }>;
-    useFakeTime?: boolean;
-  }>;
+  const cases = createModelCooldownCases(now);
 
   it.each(cases)("$name", async (testCase) => {
     const store = makeStoreWithCopilot({
