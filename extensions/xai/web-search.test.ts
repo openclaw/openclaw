@@ -505,7 +505,8 @@ describe("xai x_search tool", () => {
       expect(firstFetchBody(mockFetch)).toMatchObject({
         input: [{ role: "user", content: "dinner recipes" }],
         max_turns: 2,
-        tools: [{ type: "x_search", ...filters }],
+        // xAI's to_date is exclusive; the tool's to_date is the last included day.
+        tools: [{ type: "x_search", ...filters, to_date: "2026-03-21" }],
       });
       expect(result.details).toMatchObject({
         citations: [citation],
@@ -517,6 +518,14 @@ describe("xai x_search tool", () => {
       expect(JSON.stringify(result.details)).not.toContain("<|im_start|>");
     },
   );
+
+  it("keeps a single-day to_date inclusive across a month end", async () => {
+    const mockFetch = installXaiWebSearchFetch();
+    await runXSearch("single day", undefined, { from_date: "2026-02-28", to_date: "2026-02-28" });
+    expect(firstFetchBody(mockFetch)).toMatchObject({
+      tools: [{ type: "x_search", from_date: "2026-02-28", to_date: "2026-03-01" }],
+    });
+  });
 
   it.each([
     {
