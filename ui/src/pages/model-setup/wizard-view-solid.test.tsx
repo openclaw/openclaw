@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { createSignal, flush, untrack } from "solid-js";
-import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
@@ -12,6 +12,7 @@ import { ModelSetupWizard } from "./wizard-view-solid.tsx";
 registerEnglishCatalog(registerModelSetupEnglish);
 
 beforeEach(() => onTestFinished(installDialogPolyfill()));
+afterEach(() => vi.useRealTimers());
 
 const wizardDefaults = {
   mode: "auth" as const,
@@ -155,9 +156,6 @@ const redirectStep = {
 
 it("presents browser sign-in as a provider badge with quiet recovery and corner cancel", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
   const cancel = vi.fn();
   const { container } = mountSolid(() => (
     <ModelSetupWizard
@@ -206,9 +204,6 @@ it("presents browser sign-in as a provider badge with quiet recovery and corner 
 
 it("shows device-code expiry only near the end and retires an expired code", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
   const { container } = mountSolid(() => (
     <ModelSetupWizard
       {...wizardDefaults}
