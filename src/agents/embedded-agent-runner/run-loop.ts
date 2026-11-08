@@ -75,6 +75,8 @@ export async function runPreparedEmbeddedLoop(
   } = input;
   const { notifyExecutionPhase } = input.progressController;
   let startupStagesEmitted = false;
+  const abortSignal = input.laneController.abortSignal;
+  params = { ...params, abortSignal };
   const preparedRuntime = await measureEmbeddedAgentPreparation(
     "runtime",
     () =>
@@ -82,7 +84,7 @@ export async function runPreparedEmbeddedLoop(
         ...input,
         assertCurrent: input.laneController.throwIfAborted,
         getAuthDeadline: input.laneController.getExecutionDeadline,
-        runParams: { ...input.runParams, abortSignal: input.laneController.abortSignal },
+        runParams: params,
         hookContext: preReplyGeneration?.assertCurrent
           ? withClaimingHookAdmission(
               { ...hookCtx },
@@ -94,7 +96,6 @@ export async function runPreparedEmbeddedLoop(
       }),
     { config: params.config },
   );
-  const abortSignal = input.laneController.abortSignal;
   params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext, abortSignal };
   const accountingAuthority = getAdmittedRunDelegatedAuthority(preparedRuntime.admittedRunContext);
   const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
