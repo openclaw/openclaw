@@ -68,7 +68,7 @@ it.each([
   {
     interrupted: false,
     screenshots: 0,
-    label: "keeps genuinely completed work successful after summary recovery",
+    label: "summarizes completed work when reasoning display is on",
   },
   // The summary reopens the session within contextWindow * 8 bytes; screenshots
   // fill those bytes long before the token budget, so the request must survive.
@@ -205,6 +205,7 @@ it.each([
               models: [
                 completionModelDefinition({
                   id: modelId,
+                  reasoning: true,
                   ...(screenshots
                     ? { contextWindow: 65_536, input: ["text", "image"] }
                     : { contextWindow: 200_000 }),
@@ -246,6 +247,8 @@ it.each([
               },
               provider: "anthropic",
               model: modelId,
+              thinkLevel: "low",
+              reasoningLevel: interrupted ? "off" : "on",
               prompt,
               toolsAllow: ["read", "write"],
               cleanupBundleMcpOnRunEnd: true,
