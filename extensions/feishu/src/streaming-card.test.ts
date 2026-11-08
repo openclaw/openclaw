@@ -4,11 +4,7 @@ import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readRequestBody, stripDispatcher, writeOversizedJson } from "./http.test-support.js";
-import {
-  FeishuStreamingFinalizationError,
-  FeishuStreamingSession,
-  mergeStreamingText,
-} from "./streaming-card.js";
+import { FeishuStreamingFinalizationError, FeishuStreamingSession } from "./streaming-card.js";
 import { createStreamingSession, type StreamingFetchDeps } from "./streaming-card.test-support.js";
 
 const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
@@ -1169,26 +1165,6 @@ describe("FeishuStreamingSession", () => {
 
     expect(authTokens).toEqual(["token-1", "token-2"]);
     dateNow.mockRestore();
-  });
-});
-
-describe("mergeStreamingText", () => {
-  it("keeps previous text when the next partial is empty or redundant", () => {
-    expect(mergeStreamingText("hello", "")).toBe("hello");
-    expect(mergeStreamingText("hello world", "hello")).toBe("hello world");
-  });
-
-  it("appends fragmented chunks without injecting newlines", () => {
-    expect(mergeStreamingText("hello wor", "ld")).toBe("hello world");
-    expect(mergeStreamingText("line1", "line2")).toBe("line1line2");
-  });
-
-  it("merges overlap between adjacent partial snapshots", () => {
-    expect(mergeStreamingText("好的，让我", "让我再读取一遍")).toBe("好的，让我再读取一遍");
-    expect(mergeStreamingText("revision_id: 552", "2，一点变化都没有")).toBe(
-      "revision_id: 552，一点变化都没有",
-    );
-    expect(mergeStreamingText("abc", "cabc")).toBe("cabc");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

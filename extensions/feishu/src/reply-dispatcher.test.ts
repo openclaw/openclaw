@@ -81,8 +81,8 @@ vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
 }));
-vi.mock("./streaming-card.js", async () => {
-  const { mergeStreamingText } = await import("./card-test-helpers.js");
+vi.mock("./streaming-card.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./streaming-card.js")>();
   class FeishuStreamingFinalizationError extends Error {
     result: { visibleReplySent: boolean; content?: string; messageId?: string };
     constructor(
@@ -94,7 +94,7 @@ vi.mock("./streaming-card.js", async () => {
     }
   }
   return {
-    mergeStreamingText,
+    ...actual,
     FeishuStreamingFinalizationError,
     FeishuStreamingSession: class {
       active = false;
@@ -1101,15 +1101,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it.each([
     { name: "delta blocks", partials: ["hello"], block: "lo world", expected: "hellolo world" },
     {
-      name: "new generation snapshots",
-      partials: [
-        "Preparing the lookup plan with enough text to count as one block.",
-        "Found",
-        "Found the answer.",
-      ],
+      name: "authoritative corrected snapshots",
+      partials: ["Old draft answer.", "Corrected answer.", "Old draft"],
       block: undefined,
-      expected:
-        "Preparing the lookup plan with enough text to count as one block.Found the answer.",
+      expected: "Old draft",
     },
     {
       name: "private reasoning tags",

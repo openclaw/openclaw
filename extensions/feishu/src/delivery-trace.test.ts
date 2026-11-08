@@ -381,6 +381,7 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
     replyToMessageId: "om-inbound",
   });
   const options = created.dispatcherOptions;
+  let completedText = "";
 
   return async (step: DeliveryTraceInStep) => {
     switch (step.kind) {
@@ -388,10 +389,13 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         await options.onReplyStart?.();
         break;
       case "partial":
-        created.replyOptions.onPartialReply?.({ text: step.text });
+        // Trace steps are block-local; callbacks remain cumulative within one
+        // assistant message until an explicit message-start boundary.
+        created.replyOptions.onPartialReply?.({ text: completedText + step.text });
         break;
       case "block-final":
         await created.delivery.deliver({ text: step.text }, { kind: "block" });
+        completedText += step.text;
         break;
       case "tool-progress":
         created.replyOptions.onItemEvent?.({
@@ -439,6 +443,89 @@ const FEISHU_TRACE_SCENARIOS: readonly DeliveryTraceScenarioName[] = [
 ];
 
 describe("feishu delivery trace goldens", () => {
+  it.each([
+    { first: "Echo.", next: "Echo.", preFinal: true, partial: true, expected: "Echo.\n\nEcho." },
+    { first: "Echo.", next: "Echo.", preFinal: false, partial: true, expected: "Echo.\n\nEcho." },
+    {
+      first: "Checking the records.",
+      next: "OK.",
+      preFinal: true,
+      partial: false,
+      expected: "Checking the records.\n\nOK.",
+    },
+    {
+      first: "Checking the records.",
+      next: "OK.",
+      preFinal: false,
+      partial: true,
+      expected: "Checking the records.\n\nOK.",
+    },
+  ])(
+    "retains $first then $next across a tool with preFinal=$preFinal, partial=$partial",
+    async ({ first, next, preFinal, partial, expected }) => {
+      const events = await runDeliveryTraceScenario({
+        scenario: { name: "feishu-assistant-boundaries", steps: [{ kind: "final" }] },
+        setup: (recorder) => {
+          setupFeishuTrace(recorder, "final-only");
+          const created = createFeishuReplyDispatcher({
+            cfg: {} as never,
+            agentId: "agent",
+            runtime: { log: () => {}, error: () => {}, exit: vi.fn() },
+            chatId: "oc-trace-chat",
+            sendTarget: "oc-trace-chat",
+          });
+          return async () => {
+            await created.dispatcherOptions.onReplyStart?.();
+            created.replyOptions.onAssistantMessageStart?.();
+            created.replyOptions.onPartialReply?.({ text: first });
+            if (preFinal) {
+              await created.delivery.deliver({ text: first }, { kind: "final" });
+            }
+            created.replyOptions.onItemEvent?.({
+              itemId: "tool:lookup",
+              kind: "tool",
+              name: "web_search",
+              phase: "end",
+              status: "completed",
+            });
+            created.replyOptions.onAssistantMessageStart?.();
+            if (partial) {
+              created.replyOptions.onPartialReply?.({ text: next });
+            }
+            // Repeated finals in this message must replace its snapshot, not its prefix.
+            await created.delivery.deliver({ text: next }, { kind: "final" });
+            await created.delivery.deliver({ text: next }, { kind: "final" });
+            await created.dispatcherOptions.onIdle?.();
+            created.dispatcherOptions.onCleanup?.();
+          };
+        },
+      });
+      const lastWrite = events.findLast((event) =>
+        /\/elements\/content(?:\/content)?$/.test(event.kind),
+      );
+      expect(lastWrite).toMatchObject({
+        data: {
+          payload: lastWrite?.kind.endsWith("/content/content")
+            ? { content: expected }
+            : { element: { content: expected } },
+        },
+      });
+      expect(events.find((event) => event.kind.endsWith("/settings"))).toMatchObject({
+        data: {
+          payload: {
+            settings: {
+              config: {
+                streaming_mode: false,
+                summary: { content: expected.replace(/\n/g, " ") },
+              },
+            },
+          },
+        },
+      });
+      expect(events.filter((event) => event.kind === "im.message.create")).toHaveLength(1);
+    },
+  );
+
   it("updates the accepted card without a duplicate send when its message receipt is absent", async () => {
     const events = await runDeliveryTraceScenario({
       scenario: deliveryTraceScenarios["final-only"],
