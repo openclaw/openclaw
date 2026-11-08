@@ -9,7 +9,8 @@ import {
 import { publishAgentInstructions } from "./workspace-bootstrap-publish.js";
 
 const templates = vi.hoisted(() => ({ dir: "" }));
-vi.mock("./workspace-templates.js", () => ({
+vi.mock("./workspace-templates.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./workspace-templates.js")>()),
   resolveWorkspaceTemplateSearchDirs: async () => [templates.dir],
 }));
 
