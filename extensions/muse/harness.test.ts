@@ -639,7 +639,9 @@ describe("Muse native MSP harness", () => {
     const { params, sessionStore } = setup();
     const warn = vi.fn();
     const harness = createMuseAgentHarness({ binaryPath: fixture, sessionStore, logger: { warn } });
-    expectFailure(await harness.runAttempt({ ...params, prompt: "loggedout" }), "muse login");
+    const result = await harness.runAttempt({ ...params, prompt: "loggedout" });
+    expectFailure(result, "muse login");
+    expect(terminal(result)).toMatchObject({ error: { cause: { status: 401 } } });
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("Muse Code is not signed in on the Gateway host"),
     );
