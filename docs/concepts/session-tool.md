@@ -531,6 +531,8 @@ See [Session state awareness](/concepts/session-state) for the full model: event
 
 `sessions_spawn` creates a separate session for a background task. Non-thread spawns start with isolated context by default; thread-bound spawns follow the configured context policy described below. It returns a `runId` and `childSessionKey` when startup is accepted, without waiting for the child task to finish. Spawns from an OpenClaw cloud worker can first wait for child provisioning and node enrollment. Native sub-agent runs receive their delegated task in a user message appended after any forked history; model-only runtime context marks inherited conversation as background, not the current child's assignment. The Control UI displays the task without this runtime context. The system prompt carries only sub-agent runtime rules and routing context.
 
+To message that child, pass the returned `childSessionKey` as `sessions_send.sessionKey`.
+
 Key options:
 
 - `runtime: "subagent"` (default) or `"acp"` for external harness agents.
