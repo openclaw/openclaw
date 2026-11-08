@@ -133,6 +133,7 @@ heartbeat observer works independently of the optional V8 flight recorder.
 | Root session left unfinished in a pending crash-recovery interval | Receives the same single resume input at the next startup                       |
 | Accepted user input captured in that shutdown marker              | Runs after the resume input, in FIFO order, with its sender's current authority |
 | Running sub-agent                                                 | Stops quietly; its root requester receives the resume input                     |
+| Sub-agent parked in `sessions_yield waitFor:"message"`            | Keeps its recorded wait; no model request runs until its requester continues it |
 | Background process                                                | Ends with the old process; its root session receives the resume input           |
 | Already-produced outbound messages and media                      | Keep the existing delivery queue and delivery reconciliation                    |
 | Scheduled jobs                                                    | Keep cron's own scheduling, catch-up, and interruption policy                   |
@@ -149,8 +150,8 @@ ACP/external-harness sessions are excluded.
 
 The marker is a small private field on the existing session entry. It records the
 IDs of accepted user inputs still queued behind that session at shutdown. The
-Gateway writes one marker per running root session, batched by session store,
-before aborting work. It uses the existing session-entry JSON in SQLite and needs
+Gateway writes one marker per running root session or parked message wait,
+batched by session store, before aborting work. It uses the existing session-entry JSON in SQLite and needs
 no schema migration.
 Crash recovery uses the nonterminal run marker committed with accepted plain
 chat input, before dispatch hooks or runtime start. The same commit records its
@@ -564,6 +565,20 @@ Graceful shutdown marks the root requester of a running child, then cancels the
 child through the ordinary abort path. The child settles terminally without a
 shutdown completion announcement or a "subagent failed" notice to its parent.
 Children are not adopted or independently resumed at startup.
+
+A child that already ended its execution with `sessions_yield waitFor:"message"`
+keeps its paused task across restart. Shutdown marks that session directly;
+startup consumes the marker while preserving the registry's exact paused task,
+without replaying execution or restoring old tool or completion authority.
+The same registry fact protects a recorded message wait after an unclean stop.
+A fresh continuation from its controlling requester goes through ordinary
+admission and retains task-owned result delivery. If the requester finishes or
+is released without continuing it, the wait closes with a recorded outcome.
+Ordinary ownerless mid-turn runs still follow the orphan recovery rules above.
+
+A requester yielded for running children keeps the ordinary root recovery path:
+those executions stop during shutdown, and its resume input reconciles their
+recorded work. It is not re-parked waiting for completions from stopped executions.
 
 The parent's single resume input covers reconciliation of its children. It can
 inspect their transcripts and results with the existing sub-agent tools, then
