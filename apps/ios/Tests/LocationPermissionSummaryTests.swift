@@ -195,7 +195,7 @@ extension LocationServicing {
         initialStatus: CLAuthorizationStatus,
         authorizationBeforeRegistration: Bool) async throws
     {
-        let isolation = GatewayRegistryTestIsolation()
+        let isolation = await GatewayRegistryTestIsolation()
         defer { isolation.restore() }
         try await withUserDefaults(["location.enabledMode": "whileUsing", "gateway.autoconnect": false]) {
             let locationService = MockLocationService(authorizationStatus: initialStatus)
@@ -247,7 +247,7 @@ extension LocationServicing {
     func `authorization change waits for forced reset ownership before restoring registration`(
         supersedingHandoff: Bool) async throws
     {
-        let isolation = GatewayRegistryTestIsolation()
+        let isolation = await GatewayRegistryTestIsolation()
         defer { isolation.restore() }
         try await withUserDefaults(["location.enabledMode": "whileUsing", "gateway.autoconnect": false]) {
             let replacementHost = "replacement.gateway.invalid"
@@ -339,7 +339,7 @@ extension LocationServicing {
     }
 
     @MainActor @Test func `connect generation reconciles authorization when the route remains unchanged`() async throws {
-        let isolation = GatewayRegistryTestIsolation()
+        let isolation = await GatewayRegistryTestIsolation()
         defer { isolation.restore() }
         try await withUserDefaults(["location.enabledMode": "whileUsing", "gateway.autoconnect": false]) {
             let locationService = MockLocationService(authorizationStatus: .denied)
