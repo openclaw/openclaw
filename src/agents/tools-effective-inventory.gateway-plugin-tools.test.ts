@@ -19,7 +19,10 @@ import {
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   hasAnyAuthProfileStoreSourceAsync,
   hasLocalAuthProfileStoreSourceAsync,
@@ -57,7 +60,56 @@ afterEach(async () => {
   cleanupPluginLoaderFixturesForTest();
 });
 
-it("includes X search for an OpenAI Codex preview with inherited XAI OAuth", async () => {
+async function writeProviderFixture(state: OpenClawTestState, normalize = false) {
+  const model = makeProviderModelFixture({
+    id: modelId,
+    provider: providerId,
+    api: "openai-completions",
+    baseUrl: "https://inventory.invalid/v1",
+  });
+  const file = await state.writeText(
+    "plugins/provider/index.cjs",
+    `module.exports = {
+  id: ${JSON.stringify(providerPluginId)},
+  register(api) {
+    api.registerProvider({
+      id: ${JSON.stringify(providerId)}, label: "Inventory dynamic provider", auth: [],
+      async prepareDynamicModel(ctx) {
+        if (ctx.modelId === ${JSON.stringify(modelId)}) return ${JSON.stringify(model)};
+      },
+      ${
+        normalize
+          ? `normalizeToolSchemas(ctx) {
+        globalThis[${JSON.stringify(probeKey)}]("normalize", ctx.tools.map(tool => tool.name));
+        return ctx.tools;
+      },`
+          : ""
+      }
+    });
+  },
+};`,
+  );
+  await state.writeJson("plugins/provider/openclaw.plugin.json", {
+    id: providerPluginId,
+    providers: [providerId],
+    configSchema: { type: "object", additionalProperties: false },
+  });
+  return file;
+}
+
+async function createGatewayInventoryOwner(config: OpenClawConfig, workspaceDir: string) {
+  const metadataContext = { config, env: process.env, workspaceDir };
+  const metadata = resolvePluginMetadataSnapshot(metadataContext);
+  setGatewayPluginMetadataSnapshot(metadata, metadataContext);
+  const root = await loadAndActivateRootPluginRegistry({ config, workspaceDir, cache: false });
+  return { root, owner: createPluginRegistryOwner(root, workspaceDir), metadata, metadataContext };
+}
+
+it.each([
+  { context: "an OpenAI Codex preview", mode: "preview" },
+  { context: "a selected-model scope with equal Research workspace", mode: "equal" },
+  { context: "a selected-model scope with distinct Research workspace", mode: "distinct" },
+])("includes X search for $context", async ({ mode }) => {
   await withOpenClawTestState(
     {
       prefix: "openclaw-xai-inventory-",
@@ -72,16 +124,28 @@ it("includes X search for an OpenAI Codex preview with inherited XAI OAuth", asy
     async (state) => {
       const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("No provider I/O"));
       onTestFinished(() => fetch.mockRestore());
+      await state.writeText("research-workspace/.keep", "synthetic Research workspace\n");
+      const workspaceDir =
+        mode === "distinct" ? state.statePath("research-workspace") : state.workspaceDir;
+      const selected = mode !== "preview";
+      const providerFile = selected ? await writeProviderFixture(state) : undefined;
       const config: OpenClawConfig = {
         agents: {
-          defaults: { model: "openai/inventory-openai", workspace: state.workspaceDir },
-          entries: { main: {}, research: {} },
+          defaults: {
+            model: selected ? `${providerId}/${modelId}` : "openai/inventory-openai",
+            workspace: state.workspaceDir,
+          },
+          entries: { main: {}, research: { workspace: workspaceDir } },
         },
         tools: { profile: "full", allow: ["x_search"] },
         plugins: {
-          allow: ["xai"],
+          allow: selected ? [providerPluginId, "xai"] : ["xai"],
+          load: providerFile ? { paths: [providerFile] } : undefined,
           slots: { memory: "none" },
-          entries: { xai: { enabled: true, config: { xSearch: { enabled: true } } } },
+          entries: {
+            ...(selected ? { [providerPluginId]: { enabled: true } } : {}),
+            xai: { enabled: true, config: { xSearch: { enabled: true } } },
+          },
         },
       };
       await state.writeConfig(config);
@@ -100,27 +164,30 @@ it("includes X search for an OpenAI Codex preview with inherited XAI OAuth", asy
       const agentDir = state.agentDir("research");
       expect(await hasLocalAuthProfileStoreSourceAsync(agentDir)).toBe(false);
       expect(await hasAnyAuthProfileStoreSourceAsync(agentDir)).toBe(true);
-      const metadataContext = { config, env: process.env, workspaceDir: state.workspaceDir };
-      setGatewayPluginMetadataSnapshot(
-        resolvePluginMetadataSnapshot(metadataContext),
-        metadataContext,
-      );
-      const root = await loadAndActivateRootPluginRegistry({
-        config,
-        workspaceDir: state.workspaceDir,
-        cache: false,
-      });
-      const owner = createPluginRegistryOwner(root, state.workspaceDir);
+      const { root, owner } = await createGatewayInventoryOwner(config, state.workspaceDir);
       try {
         expect(root.plugins.find((plugin) => plugin.id === "xai")?.status).toBe("loaded");
-        const inventory = await withPluginRuntimeRegistryScope(owner.registry, () =>
-          resolveEffectiveToolInventory({
+        const inventory = await withPluginRuntimeRegistryScope(owner.registry, async () => {
+          const params = {
             cfg: config,
             agentId: "research",
             agentDir,
-            workspaceDir: state.workspaceDir,
-            modelProvider: "openai",
-            modelId: "inventory-openai",
+            workspaceDir,
+            modelProvider: selected ? providerId : "openai",
+            modelId: selected ? modelId : "inventory-openai",
+          };
+          if (selected) {
+            await using acquired = await acquireEffectiveToolInventoryRuntimeModelContext(params);
+            return await acquired.run((runtime) =>
+              resolveEffectiveToolInventory({
+                ...params,
+                modelApi: runtime.modelApi,
+                runtimeModel: runtime.runtimeModel,
+              }),
+            );
+          }
+          return await resolveEffectiveToolInventory({
+            ...params,
             agentRuntime: "codex",
             modelApi: "openai-responses",
             runtimeModel: makeProviderModelFixture({
@@ -129,10 +196,9 @@ it("includes X search for an OpenAI Codex preview with inherited XAI OAuth", asy
               api: "openai-responses",
               baseUrl: "https://inventory.invalid/v1",
             }),
-          }),
-        );
-        const tools = inventory.groups.flatMap((group) => group.tools);
-        expect(tools).toEqual([
+          });
+        });
+        expect(inventory.groups.flatMap((group) => group.tools)).toEqual([
           expect.objectContaining({ id: "x_search", source: "plugin", pluginId: "xai" }),
         ]);
         expect(inventory.toolAccess?.tools.find((tool) => tool.id === "x_search")).toMatchObject({
@@ -147,130 +213,6 @@ it("includes X search for an OpenAI Codex preview with inherited XAI OAuth", asy
   );
 });
 
-it.each(["equal", "distinct"] as const)(
-  "recovers XAI from a selected-model scope with %s Research workspace",
-  async (workspaceSelection) => {
-    await withOpenClawTestState(
-      {
-        prefix: "openclaw-xai-selected-scope-",
-        layout: "split",
-        env: {
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(
-            new URL("../../extensions/", import.meta.url),
-          ),
-          XAI_API_KEY: undefined,
-          OPENAI_API_KEY: undefined,
-        },
-      },
-      async (state) => {
-        const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("No provider I/O"));
-        onTestFinished(() => fetch.mockRestore());
-        await state.writeText("research-workspace/.keep", "synthetic Research workspace\n");
-        const workspaceDir =
-          workspaceSelection === "equal"
-            ? state.workspaceDir
-            : state.statePath("research-workspace");
-        const providerFile = await state.writeText(
-          "plugins/provider/index.cjs",
-          `module.exports = {
-  id: ${JSON.stringify(providerPluginId)},
-  register(api) {
-    api.registerProvider({
-      id: ${JSON.stringify(providerId)}, label: "Inventory dynamic provider", auth: [],
-      async prepareDynamicModel(ctx) {
-        if (ctx.modelId !== ${JSON.stringify(modelId)}) return;
-        return {
-          id: ctx.modelId, name: "Inventory dynamic model", provider: ctx.provider,
-          api: "openai-completions", baseUrl: "https://inventory.invalid/v1",
-          reasoning: false, input: ["text"], contextWindow: 8192, maxTokens: 1024,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        };
-      },
-    });
-  },
-};`,
-        );
-        await state.writeJson("plugins/provider/openclaw.plugin.json", {
-          id: providerPluginId,
-          providers: [providerId],
-          configSchema: { type: "object", additionalProperties: false },
-        });
-        const config: OpenClawConfig = {
-          agents: {
-            defaults: { model: `${providerId}/${modelId}`, workspace: state.workspaceDir },
-            entries: { main: {}, research: { workspace: workspaceDir } },
-          },
-          tools: { profile: "full", allow: ["x_search"] },
-          plugins: {
-            allow: [providerPluginId, "xai"],
-            load: { paths: [providerFile] },
-            slots: { memory: "none" },
-            entries: {
-              [providerPluginId]: { enabled: true },
-              xai: { enabled: true, config: { xSearch: { enabled: true } } },
-            },
-          },
-        };
-        await state.writeConfig(config);
-        await state.writeAuthProfiles({
-          version: 1,
-          profiles: {
-            "xai:synthetic": {
-              type: "oauth",
-              provider: "xai",
-              access: "synthetic-access",
-              refresh: "synthetic-refresh",
-              expires: Date.now() + 3_600_000,
-            },
-          },
-        });
-        const agentDir = state.agentDir("research");
-        expect(await hasLocalAuthProfileStoreSourceAsync(agentDir)).toBe(false);
-        expect(await hasAnyAuthProfileStoreSourceAsync(agentDir)).toBe(true);
-        const metadataContext = { config, env: process.env, workspaceDir: state.workspaceDir };
-        setGatewayPluginMetadataSnapshot(
-          resolvePluginMetadataSnapshot(metadataContext),
-          metadataContext,
-        );
-        const root = await loadAndActivateRootPluginRegistry({
-          config,
-          workspaceDir: state.workspaceDir,
-          cache: false,
-        });
-        const owner = createPluginRegistryOwner(root, state.workspaceDir);
-        try {
-          expect(root.plugins.find((plugin) => plugin.id === "xai")?.status).toBe("loaded");
-          const inventory = await withPluginRuntimeRegistryScope(owner.registry, async () => {
-            const params = {
-              cfg: config,
-              agentId: "research",
-              agentDir,
-              workspaceDir,
-              modelProvider: providerId,
-              modelId,
-            };
-            await using acquired = await acquireEffectiveToolInventoryRuntimeModelContext(params);
-            return await acquired.run((runtime) =>
-              resolveEffectiveToolInventory({
-                ...params,
-                modelApi: runtime.modelApi,
-                runtimeModel: runtime.runtimeModel,
-              }),
-            );
-          });
-          expect(inventory.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual([
-            "x_search",
-          ]);
-          expect(fetch).not.toHaveBeenCalled();
-        } finally {
-          await owner.close();
-        }
-      },
-    );
-  },
-);
-
 it("assembles full Gateway plugin tools without widening the selected model generation", async () => {
   await withOpenClawTestState(
     {
@@ -279,35 +221,7 @@ it("assembles full Gateway plugin tools without widening the selected model gene
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
     },
     async (state) => {
-      const providerFile = await state.writeText(
-        "plugins/provider/index.cjs",
-        `module.exports = {
-  id: ${JSON.stringify(providerPluginId)},
-  register(api) {
-    api.registerProvider({
-      id: ${JSON.stringify(providerId)}, label: "Inventory dynamic provider", auth: [],
-      async prepareDynamicModel(ctx) {
-        if (ctx.modelId !== ${JSON.stringify(modelId)}) return;
-        return {
-          id: ctx.modelId, name: "Inventory dynamic model", provider: ctx.provider,
-          api: "openai-completions", baseUrl: "https://inventory.invalid/v1",
-          reasoning: false, input: ["text"], contextWindow: 8192, maxTokens: 1024,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        };
-      },
-      normalizeToolSchemas(ctx) {
-        globalThis[${JSON.stringify(probeKey)}]("normalize", ctx.tools.map(tool => tool.name));
-        return ctx.tools;
-      },
-    });
-  },
-};`,
-      );
-      await state.writeJson("plugins/provider/openclaw.plugin.json", {
-        id: providerPluginId,
-        providers: [providerId],
-        configSchema: { type: "object", additionalProperties: false },
-      });
+      const providerFile = await writeProviderFixture(state, true);
       const toolFile = await state.writeText(
         "plugins/workboard/index.cjs",
         `globalThis[${JSON.stringify(probeKey)}]("tool-load");
@@ -381,16 +295,11 @@ module.exports = {
           },
         },
       };
-      const metadataContext = { config, env: process.env, workspaceDir: state.workspaceDir };
-      const metadata = resolvePluginMetadataSnapshot(metadataContext);
-      setGatewayPluginMetadataSnapshot(metadata, metadataContext);
-      const root = await loadAndActivateRootPluginRegistry({
+      const { root, owner, metadata, metadataContext } = await createGatewayInventoryOwner(
         config,
-        workspaceDir: state.workspaceDir,
-        cache: false,
-      });
+        state.workspaceDir,
+      );
       expect(pluginIds(root)).toEqual([providerPluginId, toolPluginId]);
-      const owner = createPluginRegistryOwner(root, state.workspaceDir);
       lifecycle.close = owner.close;
       const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
       const loadRegistry = vi.spyOn(pluginLoader, "loadPluginRegistryHandle");
@@ -435,16 +344,11 @@ module.exports = {
         expect(loadRegistry).not.toHaveBeenCalled();
         expect(loadPlugins).not.toHaveBeenCalled();
 
-        const disabledConfig: OpenClawConfig = {
+        const disabledConfig = {
           ...config,
-          plugins: {
-            ...config.plugins,
-            entries: {
-              ...config.plugins?.entries,
-              [toolPluginId]: { enabled: false },
-            },
-          },
+          plugins: { ...config.plugins, entries: { ...config.plugins?.entries } },
         };
+        disabledConfig.plugins.entries[toolPluginId] = { enabled: false };
         const factoryCount = probes.filter((probe) => probe.event === "tool-factory").length;
         const disabledInventory = await resolveInventory(disabledConfig);
         expect(disabledInventory).not.toContainEqual(expect.objectContaining({ id: toolName }));
