@@ -22,9 +22,14 @@ census's 10 Mbps throughput cap or nonlocal client identity. The operator remain
 on localhost, where custom-provider setup is supported. Run Chromium separately with `--cpu-throttle 4`;
 throttling is not supported by the other engines. Firefox emulates viewport and
 touch, without the unsupported `isMobile` flag.
+`--viewport-width` overrides the width for focused layout checks. Add
+`--first-run-layout` only for diagnostic runs: it records up to 500 changes to
+shell columns and wizard bounds, classes, and heading. Its per-frame layout
+reads must stay out of timing comparisons.
 
 The driver opens the default URL, asserts that detection has not activated a
-model, explicitly chooses a custom provider, and answers each visible form step.
+model, opens and dismisses Add account to exercise the provider catalog, then
+explicitly chooses a custom provider and answers each visible form step.
 It preserves key-storage choice, protocol/model selection, image-input consent,
 verification, setup consent, and the handoff to the first chat. The local HTTP
 provider serves a deterministic catalog and reply through the normal inference
@@ -47,6 +52,20 @@ message. `onboardingRestart` records this wall-time gap and document replacement
 it does not claim CPU or CLS coverage across documents. This avoids mistaking the
 early composer for a stable connection, while keeping that premature readiness
 and restart delay visible in the report.
+The restart record includes its epoch origin and first disconnected-socket time.
+Starting at that close, an independent `/readyz` probe must observe a non-ready
+response or connection refusal/reset, followed by a successful response. An old process
+still returning 200 cannot count as recovery. Probes wait 100 ms between attempts,
+and each request has a 100 ms timeout. A timeout alone is not evidence of shutdown:
+the old process may simply be busy. Recorded timestamps are observations with
+that polling and request latency. Received shutdown, disconnection, observed
+unavailability and recovery, accepted hello, and the enabled composer can then be
+separated without treating socket creation as connection. The later `http server
+listening` log is a separate logging milestone, not proof of when the listener or
+Gateway first became ready. Failure to observe the down/up transition fails the
+journey instead of reporting a successful restart measurement.
+`gateway-ready` diagnostics record process spawn to the initial successful
+readiness probe; that Gateway startup is outside the browser first-load timer.
 On a mobile layout, it also measures closing the full-screen assistant through
 its visible close button when that panel covers the chat composer.
 
