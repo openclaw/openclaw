@@ -1,1 +1,2 @@
-26
+118
+# Publication negotiation-tip regression coverage: 26 new lines plus 92 inherited lines, exact total only.
