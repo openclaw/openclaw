@@ -1,0 +1,2 @@
+# Exercise the real Matrix config adapter and shared command authorization; preserve exact IDs and reject non-owner target forms.
+51

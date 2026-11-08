@@ -17,18 +17,11 @@ function normalizeMatrixUser(raw?: string | null): string {
 }
 
 export function normalizeMatrixUserId(raw?: string | null): string {
-  const trimmed = (raw ?? "").trim();
-  if (!trimmed) {
-    return "";
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lowered.startsWith("matrix:")) {
-    return normalizeMatrixUser(trimmed.slice("matrix:".length));
-  }
-  if (lowered.startsWith("user:")) {
-    return normalizeMatrixUser(trimmed.slice("user:".length));
-  }
-  return normalizeMatrixUser(trimmed);
+  const value = (raw ?? "")
+    .trim()
+    .replace(/^matrix:/i, "")
+    .replace(/^user:/i, "");
+  return normalizeMatrixUser(value);
 }
 
 function normalizeMatrixAllowListEntry(raw: string): string {
