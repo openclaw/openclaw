@@ -114,4 +114,15 @@ describe("retained research view projection", () => {
     ).toBe(true);
     expect(view.citations).toEqual([{ sourceId: "P1", startByte: 6, endByte: 9 }]);
   });
+  it("truncates the title without splitting a surrogate pair at the 160-unit boundary", () => {
+    // 159 ASCII units + an astral character (emoji, 2 UTF-16 units) straddles the
+    // boundary. A raw slice(0, 160) would cut the emoji in half and emit a lone
+    // surrogate that JSON/terminal/UI render as U+FFFD.
+    const question = "x".repeat(159) + "🙂";
+    expect(question.length).toBe(161);
+    const view = projectResearchJob({ ...job, request: { question } });
+    expect(view.title).toBe("x".repeat(159));
+    expect(view.title.length).toBe(159);
+    expect([...view.title].pop()).toBe("x");
+  });
 });
