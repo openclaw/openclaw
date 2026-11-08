@@ -146,6 +146,11 @@ Compact mocked Control UI E2E uses six 16-class jobs with four workers each,
 matching the four observed CPUs per runner and retaining 24 aggregate worker slots.
 Private source-server projects stay serial. The conditional browser-extension
 row, noncompact plans, and real-Gateway worker limits retain their existing rules.
+The Mantis chat recording runs in its dedicated evidence workflow and full release
+validation, or when its test changes; routine CI keeps the equivalent chat lifecycle
+assertions without recording the same scenario again.
+Sidebar cached-row parity screenshots and JSON require `OPENCLAW_CAPTURE_UI_PROOF=1`;
+the parity assertions still run during routine CI.
 Browser suites that only exercise the rendered UI borrow the invocation's
 production bundle. Private source servers are reserved for source-module
 interception, custom build identities, or development-server contracts.
@@ -292,6 +297,21 @@ bundle time from 621 to 217 seconds. This trades paid compute for shorter releas
 runs; qualification and ordinary screenshot CI retain hosted Ubuntu. See
 [runner evidence and cost](/ci/runners#android-release-runner).
 
+Both Android release destinations restore the shared Gradle user-home cache
+read-only, reusing dependency downloads, compiled scripts, transforms and wrapper
+distributions from main CI. A cache miss or transfer failure keeps the cold build
+path. Release jobs do not save the archive or enable Gradle task-output caching.
+Toolchain setup runs before mobile dependency installation so cache-key hashing
+does not traverse the installed dependency tree.
+The shared toolchain action's `gradle-cache-mode` override leaves Android SDK
+caching off for these jobs; other callers inherit their existing `cache-mode`.
+
+Android's Gradle daemon uses Parallel GC with the existing 3 GiB heap. A controlled
+phone/Wear release comparison with warm dependencies and fresh build outputs
+reduced median bundle time from 158.78 to 149.10 seconds (6.09%), with lower Java
+CPU time and peak memory. Task selection, lint, R8, signing, and upload behavior
+stay unchanged.
+
 Android Release E2E adds one hosted Ubuntu KVM job to exact-source, full-scope
 manual validation when Android is selected, matching the iOS qualification
 selection. The final CI gate requires its success. Manual Android Store Release
@@ -436,6 +456,12 @@ Changed-owner Node rows use existing file/group timing evidence with a
 150-test-second admission target and the existing 130-row PR cap. Complete files,
 standard configs, and worker policies remain intact; predicted test seconds
 are separate from measured CI wall time.
+Private-QA direct targets can share up to 196 predicted test seconds when the
+same execution policy already selects a slower target. This reserves 104 seconds
+for preparation within a 300-second job budget without increasing the policy's
+longest predicted test row. Repacking must reduce total jobs without adding jobs
+to either private-QA policy. The 12-target limit and hourly reservations remain
+unchanged.
 Compatible selected serial jobs share setup after singleton worker limits are
 fixed. Combined jobs retain the shortest contributing timeout and the existing
 test-work budget; complete and scheduled plans keep their original layout.
@@ -472,6 +498,10 @@ Audited synchronous unit-fast tests can use Bun's native runner; changed test or
 setup bytes return to Vitest. Full Release Validation retains complete Node
 coverage plus qualified Bun coverage; see
 [test runtime selection](/ci/pipeline#test-runtime-selection).
+The protected main warmer publishes the pinned Bun release assets for both Linux
+backends. Readers restore by the complete pin hash and recheck metadata, archive,
+executable, architecture, and revision before use. A cache miss downloads normally;
+a valid cache avoids GitHub Release downloads, including metadata requests.
 Both runtimes group uncached, non-isolated UI files by environment in batches
 to reduce worker restarts while retaining native shard ownership and worker budgets.
 Bun UI workers also use an [allocation-based collection trigger](/ci/scope-and-routing/job-budgets)

@@ -554,7 +554,7 @@ describe("worker turn execution", () => {
   );
 
   it.each([false, true])(
-    "preserves recorded workspace context and limits launch authority to supervisor tools (declared: %s)",
+    "preserves recorded agent-workspace checkout context and limits launch authority to supervisor tools (declared: %s)",
     async (declared) => {
       await seedActivePlacement();
       const launchToolNames = resolveNodeWorkerLaunchToolNames({
@@ -584,8 +584,12 @@ describe("worker turn execution", () => {
       const provider = credentialedProvider(tunnel);
       const input = turn("launch-tool-negotiation");
       const agentWorkspace = path.join(root, "agent-bootstrap");
-      await mkdir(agentWorkspace);
+      // The selected checkout shares the agent repository, so its bootstrap files own identity.
+      const gitDir = path.join(agentWorkspace, ".git", "worktrees", "worker");
+      await mkdir(gitDir, { recursive: true });
       await Promise.all([
+        writeFile(path.join(gitDir, "commondir"), path.join(agentWorkspace, ".git")),
+        writeFile(path.join(root, ".git"), `gitdir: ${gitDir}\n`),
         writeFile(path.join(agentWorkspace, "AGENTS.md"), "Canonical agent instructions."),
         writeFile(path.join(agentWorkspace, "SOUL.md"), "Canonical agent identity."),
         writeFile(path.join(agentWorkspace, "USER.md"), "Canonical user context."),

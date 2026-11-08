@@ -68,6 +68,14 @@ and Gateway permissions are unchanged.
 
 Open **Settings** in the sidebar to use the same Dashboard settings pages as the
 web and macOS apps. A connected operator session with `operator.admin` is required.
+The toolbar's **Device** button opens local appearance, notification delivery,
+camera access, keep-awake, Health summaries, Voice & Talk, and permission controls.
+These controls also appear under **Device Settings** at the top of the native
+fallback when offline, connected with Limited access, or using native Cloudflare
+Access authorization that cannot open the embedded Dashboard. They use the same
+native preferences, consent, and iOS permission prompts as the Dashboard; local
+access does not grant Gateway scopes or expose Gateway credentials.
+
 Access comes from the current connection's accepted scopes, including when
 authenticated ingress does not issue a reusable Gateway token.
 The toolbar's **Gateway** button opens the native connection screen, including
@@ -104,6 +112,11 @@ Gateway protocol; the native authentication path does not persist it in page sto
 
 The **This iPhone** or **This iPad** page contains appearance, notification
 delivery, camera access, keep-awake behavior, and optional Health summaries.
+QR scanning requests camera permission on first use. If access was denied, the
+scanner offers **Open Settings**; allow **Camera** for OpenClaw, then return to
+the scanner. Screen Time or device-management restrictions must be changed by
+the person who manages those restrictions.
+
 Its **Permissions** page shows notification, camera, microphone, speech, location,
 contacts, calendars, reminders, and photo access. Permission requests use native
 iOS prompts; Precise Location shows the system's current state and links to iOS
@@ -121,14 +134,15 @@ that share. These changes do not remove the Gateway's `talk.speechLocale` option
 **This iPhone** and **This iPad** also open native **Apple Watch**, **Diagnostics**,
 **Licenses**, and **About** screens. When disconnected, connected without admin
 access, or running in demo or screenshot mode, Settings shows a native fallback:
-the Gateway connection controls followed by those four rows in a **Device**
-section. Connection and these device screens remain available without loading
-the Dashboard.
+a **Device** section with **Device Settings** and those four rows, followed by
+the Gateway connection controls. These local screens remain available without
+loading the Dashboard. Connected admins can still use Dashboard settings normally.
 
 Channels (`/settings/channels`) and Skills (`/skills`) are managed in the
-Dashboard. Appearance, notifications, privacy, permissions, and Voice & Talk
-settings also use the Dashboard pages; the separate native settings screens and
-system-agent settings chat have been removed. Agent selection and read-only
+Dashboard. Local device settings are also available natively without duplicating
+Gateway work pages. Provider, voice, speech language, and other Gateway
+configuration remain owned by the Dashboard and keep their existing admin gates.
+The system-agent settings chat remains removed. Agent selection and read-only
 Files browsing remain native.
 
 The sidebar opens these Gateway pages in the embedded Dashboard without web
@@ -196,6 +210,18 @@ cannot connect, or open native Gateway settings to recover the connection. Acces
 sign-in alone does not grant operator admin access or replace Gateway pairing.
 The share extension asks you to send from OpenClaw for an Access-protected
 Gateway. Access credentials are not exported to Apple Watch or cloud workers.
+
+## Share request admission
+
+The share extension shows **Sent** only after the Gateway explicitly accepts the
+request for agent dispatch, not after the agent finishes. Rejected messages and
+attachments leave the draft in the sheet with an error so you can correct it.
+The Gateway limits share message text to 20,000 UTF-16 code units.
+
+Older Gateways return an acknowledgement without confirming admission. The
+extension keeps the draft and asks you to check OpenClaw before retrying and
+update the Gateway. That request might already have been accepted: retries are
+not deduplicated, so do not resend it without checking the destination session.
 
 ## Sessions
 
@@ -332,6 +358,19 @@ creation has a token or password auth path.
    limited for bearer-token safety. If it is limited, configure `wss://` or
    Tailscale Serve, scan a new full-access code from Control UI or `openclaw qr`,
    then reconnect to enable settings and upgrades.
+
+   Full-access connections also prepare the **OpenClaw Share** extension
+   automatically, so sharing a photo or link does not require a second device
+   approval. The extension keeps its own Gateway-scoped, node-only credential;
+   it does not receive the app's administrative credential. Existing Share
+   credentials are not automatically replaced, including after revocation.
+   After upgrading, reconnecting an already full-access app also prepares Share
+   if it has no credential yet. Existing identities and credentials are reused;
+   reconnecting does not restore revoked or removed Share access. To restore it,
+   set up the app again with a new full-access code; a revoked Share identity
+   then needs `openclaw devices approve`.
+   Limited connections still require separate Share approval. Cloudflare Access
+   Gateways continue to require sending from the foreground app.
 
 The Control UI button requires an already paired session with `operator.admin`.
 As a terminal fallback, pick a discovered Gateway in the iOS app (or enable
