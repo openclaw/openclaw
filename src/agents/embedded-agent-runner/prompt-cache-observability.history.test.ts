@@ -1,6 +1,5 @@
 import * as crypto from "node:crypto";
 import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import { convertProviderResponsesMessages } from "../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
@@ -12,6 +11,7 @@ import type { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { Message, TextContent } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
+import { forceFullGc } from "../../test-utils/retention.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
@@ -101,7 +101,7 @@ describe("prompt cache history fingerprints", () => {
     }
     const control = new WeakRef({ unowned: true });
     await setImmediate();
-    queryObjects(WeakRef);
+    forceFullGc();
     expect(control.deref()).toBeUndefined();
     const retainedStringBytes = references.reduce((bytes, reference) => {
       const fingerprint = reference.deref();

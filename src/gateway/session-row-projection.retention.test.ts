@@ -102,7 +102,7 @@ it("collects superseded resident rows and their materializations after metadata 
     const control = weakControl();
     function refreshEntries(revision: number) {
       for (const row of rows()) {
-        retired.push(...[row, row.entry, row.materialized].map(weak));
+        retired.push(...[row, row.entry, row.materialized, row.materialized.row].map(weak));
         write(row.key, revision);
       }
     }
