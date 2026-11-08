@@ -1,4 +1,4 @@
-import { createMemo, For, Match, onSettled, Show, Switch } from "solid-js";
+import { createMemo, createSignal, For, Match, onSettled, Show, Switch } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
@@ -16,6 +16,7 @@ import {
   sharedAgentsProjection,
   sharedSessionsRevision,
 } from "../lib/reactive/shared-application-projections.ts";
+import { createTimeout } from "../lib/reactive/timers.ts";
 import { registerModalSurface } from "./overlay-registry.ts";
 import "../styles/sidebar-menus.css";
 import "../styles/sidebar-issues.css";
@@ -337,6 +338,15 @@ export function SidebarAttentionPanel(
   const mentionsLoading = createMemo(
     () => mentionsShown() && mentions.read().phase === "loading" && visibleEntries().length === 0,
   );
+  // Fast loads settle before the indicator appears, so it never flashes; each load re-arms it.
+  const [loadingDue, setLoadingDue] = createSignal(() => {
+    mentionsLoading();
+    return false;
+  });
+  createTimeout(
+    () => setLoadingDue(true),
+    () => (mentionsLoading() ? 300 : undefined),
+  );
   const showMentionStatus = createMemo(
     () =>
       mentionsShown() &&
@@ -484,7 +494,7 @@ export function SidebarAttentionPanel(
                   </Show>
                 </div>
               </Show>
-              <Show when={mentionsLoading()}>
+              <Show when={mentionsLoading() && loadingDue()}>
                 <div class="sidebar-issues-panel__loading" role="status">
                   <span class="btn__spinner" aria-hidden="true" />
                   <span class="sr-only">{t("attention.mentions.loading")}</span>

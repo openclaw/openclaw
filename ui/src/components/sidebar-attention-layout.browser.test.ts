@@ -213,19 +213,18 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     },
   );
 
-  it("shows mention loading only while the list has nothing to show", () => {
+  it("shows mention loading only after a delay and only while the list has nothing to show", async () => {
     const params = panelParams(inboxEntries([authWarning], []));
     params.mentions.snapshot.phase = "loading";
-
     const all = mountPanel(params, shellFor());
+    const mentions = mountPanel({ ...params, selectedTab: "mentions" }, shellFor());
+    expect([part(mentions, "loading"), part(mentions, "empty")]).toEqual([null, null]);
+    await waitForSolid(() =>
+      expect(part(mentions, "loading")?.textContent).toBe("Loading mentions…"),
+    );
     expect([part(all, "loading"), part(all, "mentions-note"), part(all, "empty")]).toEqual([
       null,
       null,
-      null,
-    ]);
-    const mentions = mountPanel({ ...params, selectedTab: "mentions" }, shellFor());
-    expect([part(mentions, "loading")?.textContent, part(mentions, "empty")]).toEqual([
-      "Loading mentions…",
       null,
     ]);
     params.mentions.snapshot.phase = "ready";

@@ -238,11 +238,6 @@
   text-align: center;
 }
 
-/* Fast loads finish before the indicator appears, so it never flashes. */
-.sidebar-issues-panel__loading {
-  animation: fade-in 160ms 300ms backwards;
-}
-
 .sidebar-issues-panel__empty strong {
   color: var(--text-strong);
   font-size: var(--control-ui-text-md);
