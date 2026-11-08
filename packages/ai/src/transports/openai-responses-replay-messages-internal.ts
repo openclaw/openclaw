@@ -106,6 +106,13 @@ function readOpenAIResponsesReasoningReplayBlockMetadata(
   return isOpenAIResponsesReasoningReplayMetadata(value) ? value : null;
 }
 
+function hasReplayableReasoningText(item: ReplayableResponseReasoningItem): boolean {
+  return (
+    Array.isArray(item.content) &&
+    item.content.some((part) => part?.type === "reasoning_text" && typeof part.text === "string")
+  );
+}
+
 function prepareOpenAIResponsesReasoningItemForReplay(
   item: ReplayableResponseReasoningItem,
   context: ProviderReplayContext,
@@ -496,7 +503,12 @@ function convertResponsesMessagesWithStyle(
               delete replayableReasoningItem.id;
               // Summaries alone cannot verify stateless reasoning and poison
               // the next cached continuation, even if this request succeeds.
-              if (!replayableReasoningItem.encrypted_content) {
+              // Plaintext reasoning_text is verifiable content that some providers
+              // (for example DeepSeek) require echoed back with the next turn.
+              if (
+                !replayableReasoningItem.encrypted_content &&
+                !hasReplayableReasoningText(replayableReasoningItem)
+              ) {
                 continue;
               }
             }

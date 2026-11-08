@@ -30,4 +30,35 @@ describe("Responses reasoning transcript preservation", () => {
     });
     expect(JSON.stringify(redacted)).not.toContain("\u2026");
   });
+
+  it("preserves plaintext reasoning_text parts required for stateless replay", () => {
+    const signature = JSON.stringify({
+      id: "rs_deepseek",
+      type: "reasoning",
+      summary: [],
+      content: [
+        { type: "reasoning_text", text: "synthetic reasoning text" },
+        { type: "text", text: "not reasoning" },
+      ],
+      status: "completed",
+    });
+    const message = castAgentMessage({
+      role: "assistant",
+      provider: "deepseek",
+      api: "openai-responses",
+      model: "deepseek-flash",
+      content: [{ type: "thinking", thinking: "", thinkingSignature: signature }],
+    });
+
+    const redacted = sanitizeTranscriptMessage(message);
+    const stored = JSON.parse(
+      String(
+        (redacted as { content: Array<{ thinkingSignature?: string }> }).content[0]
+          ?.thinkingSignature,
+      ),
+    );
+
+    expect(stored.content).toEqual([{ type: "reasoning_text", text: "synthetic reasoning text" }]);
+    expect(stored.content).not.toContainEqual({ type: "text", text: "not reasoning" });
+  });
 });

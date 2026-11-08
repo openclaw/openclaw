@@ -153,4 +153,28 @@ describe("OpenAI Responses reasoning replay", () => {
       }
     },
   );
+
+  it.each(responseConverters)(
+    "$name replays plaintext reasoning_text when the provider returns no ciphertext",
+    ({ convert }) => {
+      const item = {
+        type: "reasoning",
+        id: "rs_deepseek",
+        summary: [],
+        content: [{ type: "reasoning_text", text: "synthetic reasoning text" }],
+      };
+      const input = convert({
+        messages: [
+          createAssistant([
+            thinking(item),
+            { type: "toolCall", id: "call_probe|fc_probe", name: "probe", arguments: {} },
+          ]),
+        ],
+      });
+      expect(input.find((entry) => entry.type === "reasoning")).toMatchObject({
+        type: "reasoning",
+        content: [{ type: "reasoning_text", text: "synthetic reasoning text" }],
+      });
+    },
+  );
 });

@@ -332,6 +332,30 @@ function sanitizeOpenAIReasoningReplayMetadata(
   };
 }
 
+/**
+ * Providers that accept stateless reasoning replay only when the plaintext
+ * reasoning_text is echoed back on the following turn.
+ */
+const REASONING_TEXT_REPLAY_PROVIDERS = new Set(["deepseek"]);
+
+function preservesReasoningTextForReplay(route: TranscriptAssistantRoute | undefined): boolean {
+  return typeof route?.provider === "string" && REASONING_TEXT_REPLAY_PROVIDERS.has(route.provider);
+}
+
+function projectStoredReasoningTextParts(
+  content: unknown[],
+): Array<{ type: "reasoning_text"; text: string }> {
+  const parts: Array<{ type: "reasoning_text"; text: string }> = [];
+  for (const part of content) {
+    if (typeof part !== "object" || part === null) continue;
+    const candidate = part as { type?: unknown; text?: unknown };
+    if (candidate.type !== "reasoning_text" || typeof candidate.text !== "string") continue;
+    if (candidate.text.length === 0) continue;
+    parts.push({ type: "reasoning_text", text: candidate.text });
+  }
+  return parts;
+}
+
 export function sanitizeOpenAIReasoningSignature(
   value: string,
   route: TranscriptAssistantRoute | undefined,
@@ -380,7 +404,11 @@ export function sanitizeOpenAIReasoningSignature(
     ...(parsed.id !== undefined ? { id: parsed.id } : {}),
     type: "reasoning",
     summary: [],
-    ...(Array.isArray(parsed.content) && parsed.content.length === 0 ? { content: [] } : {}),
+    ...(preservesReasoningTextForReplay(route) && Array.isArray(parsed.content)
+      ? { content: projectStoredReasoningTextParts(parsed.content) }
+      : Array.isArray(parsed.content) && parsed.content.length === 0
+        ? { content: [] }
+        : {}),
     ...(parsed.status !== undefined ? { status: parsed.status } : {}),
     ...(hasEncryptedContent ? { encrypted_content: encryptedContent } : {}),
     ...(replayMetadata ? { [OPENAI_REASONING_REPLAY_METADATA_KEY]: replayMetadata } : {}),
