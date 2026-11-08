@@ -156,6 +156,10 @@ sudo loginctl enable-linger "$(whoami)"
 
 The generated Quadlet service keeps a fixed, hardened default shape: `127.0.0.1` published ports (`18789` gateway, `18790` bridge), `--bind lan` inside the container, `keep-id` user namespace, `OPENCLAW_NO_RESPAWN=1`, `Restart=on-failure`, and `TimeoutStartSec=300`. It reads `~/.openclaw/.env` as a runtime `EnvironmentFile` for values such as `OPENCLAW_GATEWAY_TOKEN`, but does not consume the manual launcher's Podman-specific override allowlist. For custom publish ports, publish host, or other container-run flags, use the manual launcher instead, or edit `~/.config/containers/systemd/openclaw.container` directly and then reload and restart the service.
 
+<Note>
+Keep the generated `--bind lan`. Bind modes `loopback` and `tailnet` select host interfaces and don't work as intended inside a container network namespace: a container has no Tailscale interface, and `tailnet` silently falls back to loopback-only, so published ports cannot reach the gateway even though startup logs report ready. Scope exposure with the Quadlet's published ports instead; if you need a raw address, use `gateway.bind: "custom"` with `gateway.customBindHost: "0.0.0.0"`.
+</Note>
+
 ## Config, env, and storage
 
 - **Config dir:** `~/.openclaw`
@@ -228,8 +232,11 @@ openclaw doctor --json
 
 - **Token generation fails:** Setup and launch stop before saving a generated token or starting the container when the selected random source (`openssl`, Python, or `od`) fails. Repair that command and retry.
 - **Init executable missing (`lookup init binary` / `container-init binary not found on the host`):** Install `catatonit` on the Podman engine host or repair its configured `init_path`/`helper_binaries_dir` in `containers.conf`, then retry. Installing the helper inside the Gateway or sandbox image does not repair the engine host. Keep `--init` enabled; see [Host init prerequisite](/gateway/sandboxing/podman-backend#host-init-prerequisite).
-- **Permission denied (EACCES) on config or workspace:** The container runs with `--userns=keep-id` and `--user <your uid>:<your gid>` by default. Check that the host config/workspace paths are owned by your current user.
+- **Permission denied (EACCES) on config or workspace:** The container runs with `--userns=keep-id` and `--user <your uid>:<your gid>` by default. Check that the host config/workspace paths are owned by your current user. One-off `podman run` commands that touch the same state need the same mapping (`--userns=keep-id`) — without it the container uid doesn't match files the gateway created, even when the host paths are owned by you.
 - **Gateway start blocked (missing `gateway.mode=local`):** Check that `~/.openclaw/openclaw.json` exists and sets `gateway.mode="local"`. `scripts/podman/setup.sh` creates this if missing.
+- **Published port unreachable but startup logs report `ready`:** The gateway bound to loopback only. `gateway.bind: "tailnet"` and `"loopback"` are host-centric (see the Quadlet note above); inside a container there is no Tailscale interface, and `tailnet` falls back to loopback-only. Use the Quadlet default (`--bind lan`) or `gateway.bind: "custom"` + `gateway.customBindHost: "0.0.0.0"`, and control exposure with published ports.
+- **Config changes rejected with `cannot verify Gateway ownership from this process`:** The running gateway locks `openclaw.json` and only admits writes from its own container/PID namespace. Run config-mutating commands through the container-aware host CLI (`openclaw --container openclaw config ...`) or `podman exec openclaw ...`; the same command from a fresh one-off container is rejected. After stopping the gateway, wait about 90 seconds for the ownership heartbeat to expire before mutating config from outside the container.
+- **SELinux relabel fails on a bind mount (`failed to change selinux label: insufficient permissions`):** Rootless Podman applies `:Z`/`:z` relabels as your user and cannot relabel host directories owned by root (for example a read-only `/var/log/journal` mount). Use a plain `ro` mount without a relabel suffix for system directories you don't own; reserve `:Z` for state directories your user owns.
 - **Container restarts after an image update:** Run the one-off `openclaw doctor --fix` command in [Upgrading images](#upgrading-images), then start the gateway again.
 - **Container CLI commands hit the wrong target:** Use `openclaw --container <name> ...` explicitly, or export `OPENCLAW_CONTAINER=<name>` in your shell.
 - **`openclaw update` fails with `--container`:** Expected. Rebuild/pull the image, then restart the container or the Quadlet service.
