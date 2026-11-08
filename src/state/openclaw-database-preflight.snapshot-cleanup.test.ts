@@ -25,8 +25,10 @@ afterEach(async () => {
 it.each([
   { capable: false, code: "EBUSY", read: "success", caller: "signal", settles: "deferred" },
   { capable: false, code: "EBUSY", read: "success", caller: "none", settles: "deferred" },
-  { capable: true, code: "EBUSY", read: "success", caller: "signal", settles: "rejected" },
-  { capable: true, code: "EBUSY", read: "success", caller: "none", settles: "rejected" },
+  { capable: true, code: "EBUSY", read: "success", caller: "signal", settles: "deferred" },
+  { capable: true, code: "EBUSY", read: "success", caller: "none", settles: "deferred" },
+  { capable: true, code: "ENOTEMPTY", read: "success", caller: "signal", settles: "deferred" },
+  { capable: true, code: "ENOTEMPTY", read: "success", caller: "none", settles: "deferred" },
   { capable: false, code: "EPERM", read: "success", caller: "signal", settles: "rejected" },
   { capable: false, code: "EBUSY", read: "failure", caller: "signal", settles: "rejected" },
 ] as const)(
@@ -79,8 +81,8 @@ it.each([
     if (settles === "deferred") {
       await expect(outcome).resolves.toEqual({ incompatible: [], indeterminate: [] });
       expect(warn).toHaveBeenCalledWith(
-        { path: cleanupRoot, errorCode: "EBUSY" },
-        "SQLite snapshot cleanup deferred until native SQLite resources are released.",
+        { path: cleanupRoot, errorCode: code },
+        "SQLite snapshot cleanup deferred until open files are released.",
       );
     } else {
       await expect(outcome).rejects.toBeInstanceOf(Error);

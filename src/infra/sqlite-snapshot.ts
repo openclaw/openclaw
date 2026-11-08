@@ -459,13 +459,14 @@ async function publishSqliteFile(
       expectedIdentity,
     );
     assertExpectedContent(publishedContent, expectedContent, options.targetPath);
-    await fs.rmdir(stagingDir);
+    // Retiring an open hard-link alias can leave an NFS .nfs file in staging.
+    await target.close();
+    target = undefined;
+    await removePublicationStagingDirectory(stagingDir, stagingIdentity);
     requireDirectorySync(
       await syncDirectory(targetDirectoryReceipt),
       "SQLite publication directory",
     );
-    await target.close();
-    target = undefined;
     targetPinFileDescriptor = fsSync.openSync(options.targetPath, "r");
     assertOpenFileIdentitySync(targetPinFileDescriptor, options.targetPath, expectedIdentity);
 
@@ -591,8 +592,11 @@ export async function createVerifiedSqliteSnapshot(
       const prepared = await prepareSqliteReadOnlyLocation(sourcePath, {
         preserveSourceArtifacts: true,
       });
-      return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
-        verifyAndPublishSqliteSnapshot(options, privateSourcePath, recordSourceIntegrity),
+      return withPreparedSqliteSnapshot(
+        prepared,
+        (privateSourcePath) =>
+          verifyAndPublishSqliteSnapshot(options, privateSourcePath, recordSourceIntegrity),
+        { bestEffortCleanup: true },
       );
     }
     if (options.sourceAcquisition) {
@@ -610,14 +614,14 @@ export async function createVerifiedSqliteSnapshot(
       return withPreparedSqliteSnapshot(
         prepared,
         (privateSourcePath) => verifyAndPublishSqliteSnapshot(options, privateSourcePath),
-        { bestEffortCleanup: options.sourceAcquisition.bestEffortCleanup },
+        { bestEffortCleanup: true },
       );
     }
     return verifyAndPublishSqliteSnapshot(options);
   };
   return retained
     ? withPreparedSqliteSnapshot(retained.prepared, create, {
-        bestEffortCleanup: options.sourceAcquisition?.bestEffortCleanup,
+        bestEffortCleanup: true,
       })
     : create();
 }

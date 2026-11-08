@@ -2,12 +2,14 @@ import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assert, afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as logger from "../logging/logger.js";
 import { listDirectoryTreeStrict } from "./directory-walk.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   readMigrationArtifactIdentity,
   type MigrationArtifactVerification,
 } from "./session-sqlite-migration-artifact.js";
+import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import {
   exclusiveCopyPublication,
   snapshotContent,
@@ -52,10 +54,11 @@ beforeEach(() => {
   ({ tempDir, sourcePath, targetPath } = fixture);
 });
 
-afterEach(() => {
+afterEach(async () => {
   durabilityTestState.transfer = undefined;
   durabilityTestState.hashedBytes = 0;
   vi.restoreAllMocks();
+  await cleanupSnapshotOperations();
 });
 
 function mockExclusiveCopyTransfer() {
@@ -90,6 +93,87 @@ function mockUnavailableBirthtime(
       : substituteBirthtime(await lstat(args[0])),
   );
 }
+
+it("closes the published image before removing its NFS staging directory", async () => {
+  const open = fs.open;
+  let targetOpen = false;
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (String(args[0]) === targetPath && args[1] === "r") {
+      targetOpen = true;
+      const close = handle.close.bind(handle);
+      vi.spyOn(handle, "close").mockImplementation(async () => {
+        await close();
+        targetOpen = false;
+      });
+    }
+    return handle;
+  });
+  const rmdir = fs.rmdir;
+  vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
+    if (path.basename(String(args[0])).startsWith(".sqlite-publish-") && targetOpen) {
+      throw Object.assign(new Error("NFS silly rename keeps the directory nonempty"), {
+        code: "ENOTEMPTY",
+      });
+    }
+    return rmdir(...args);
+  });
+  await fixture.expectSnapshotSuccess();
+  expect((await fs.readdir(tempDir)).toSorted()).toEqual(["snapshot.sqlite", "source.sqlite"]);
+});
+
+it.each(["ENOTEMPTY", "EBUSY"])(
+  "keeps a verified snapshot when NFS staging cleanup returns %s",
+  async (code) => {
+    const warn = vi.fn();
+    const childLogger = logger.getChildLogger;
+    vi.spyOn(logger, "getChildLogger").mockImplementation((bindings, options) =>
+      bindings?.subsystem === "infra/sqlite-snapshot"
+        ? ({ warn } as unknown as ReturnType<typeof childLogger>)
+        : childLogger(bindings, options),
+    );
+    const unlink = fs.unlink;
+    vi.spyOn(fs, "unlink").mockImplementation(async (...args) => {
+      await unlink(...args);
+      const directory = path.dirname(String(args[0]));
+      if (path.basename(directory).startsWith(".sqlite-publish-")) {
+        await fs.writeFile(path.join(directory, ".nfs00000001"), "");
+      }
+    });
+    const rmdir = fs.rmdir;
+    let deferredDirectory = "";
+    vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
+      if (path.basename(String(args[0])).startsWith(".sqlite-publish-")) {
+        deferredDirectory = String(args[0]);
+        throw Object.assign(new Error("NFS open file pending release"), { code });
+      }
+      return rmdir(...args);
+    });
+    await fixture.expectSnapshotSuccess();
+    expect(await fs.readdir(deferredDirectory)).toEqual([".nfs00000001"]);
+    expect(warn).toHaveBeenCalledWith(
+      { path: deferredDirectory, errorCode: code },
+      expect.stringContaining("cleanup deferred"),
+    );
+    expect(query("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+  },
+);
+
+it("keeps a verified backup when its private read image cannot yet be removed on NFS", async () => {
+  const original = await fs.readFile(sourcePath);
+  const remove = fs.rm;
+  vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+    if (String(args[0]).includes("openclaw-sqlite-readonly-v2-")) {
+      throw Object.assign(new Error("NFS private image still busy"), { code: "EBUSY" });
+    }
+    return remove(...args);
+  });
+  await fixture.expectSnapshotSuccess({
+    sourceAcquisition: { mode: "isolated-process", stagingRoot: tempDir },
+  });
+  expect(await fs.readFile(sourcePath)).toEqual(original);
+  expect(query("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+});
 
 it("publishes a snapshot in a deeply nested destination", async () => {
   let directory = tempDir;

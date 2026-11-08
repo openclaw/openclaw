@@ -608,7 +608,6 @@ export async function snapshotUpdateCandidateState(
       sourceAcquisition: {
         mode: "isolated-process",
         stagingRoot: input.targetStateDir,
-        bestEffortCleanup: true,
       },
       integrity:
         snapshotSource === file
