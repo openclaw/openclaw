@@ -214,8 +214,11 @@ missing previews.
 After marker persistence and cancellation, process-owned shutdown logs a warning
 when required connection cleanup exceeds five seconds, then keeps joining its
 accepted finalizers before releasing the Gateway lock and state admission. The
-existing process shutdown deadline still bounds this join. Embedded hosts also
-join those resources before reusing the runtime.
+existing process shutdown deadline still bounds this join. Session admissions and
+cron finalizers that settle after their grace warning still proceed through database
+retirement; the warning does not permanently abandon the close operation. Resume
+markers do not replace pending transcript or cron outcome writes. Embedded hosts
+also join those resources before reusing the runtime.
 
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.

@@ -41,7 +41,7 @@ import {
 import { installControlUiRpcObserver } from "./lib/control-ui-rpc-observer.ts";
 import { createControlUiWireLink } from "./lib/control-ui-wire-link.ts";
 import { stopChild, stopGatewayGracefully } from "./lib/gateway-bench-child.ts";
-import { getFreePort } from "./lib/gateway-bench-probes.ts";
+import { getFreePort, requestProbeStatus } from "./lib/gateway-bench-probes.ts";
 import {
   buildGatewayBenchChildArgs,
   createGatewayBenchEnv,
@@ -83,15 +83,21 @@ const { values } = parseArgs({
     stream: { type: "boolean", default: false },
     screenshots: { type: "boolean", default: false },
     "first-run": { type: "boolean", default: false },
+    "first-run-layout": { type: "boolean", default: false },
     "first-run-plugins": { type: "boolean", default: false },
     "empty-plugin-installation": { type: "boolean", default: false },
     viewport: { type: "string", default: "desktop" },
+    "viewport-width": { type: "string" },
     "cpu-throttle": { type: "string", default: "1" },
   },
 });
 assert(values.output, "--output is required (a fresh directory on the external disk)");
 assert(["local", "remote"].includes(values.profile));
 assert(["desktop", "mobile"].includes(values.viewport));
+assert(
+  values["viewport-width"] === undefined ||
+    (Number.isInteger(Number(values["viewport-width"])) && Number(values["viewport-width"]) > 0),
+);
 assert(["1", "4"].includes(values["cpu-throttle"]));
 if (values["first-run"]) {
   values["restart-gateway-per-sample"] = true;
@@ -358,6 +364,7 @@ async function startGateway() {
     await rm(cacheRoot, { recursive: true, force: true });
     await mkdir(cacheRoot);
   }
+  const startupAt = performance.now();
   child = spawn(
     process.execPath,
     buildGatewayBenchChildArgs(
@@ -394,6 +401,12 @@ async function startGateway() {
     200,
     `Compiled Gateway did not start: ${path.join(output, "gateway.log")}`,
   );
+  report.diagnostics.push({
+    type: "gateway-ready",
+    spawnedAtEpochMs: performance.timeOrigin + startupAt,
+    readyAtEpochMs: performance.timeOrigin + performance.now(),
+    startupMs: performance.now() - startupAt,
+  });
 }
 async function stopGateway() {
   if (child) {
@@ -612,7 +625,59 @@ async function serveFirstRunProvider(request: IncomingMessage, response: ServerR
 }
 
 async function installFirstRunReadiness(page: Page) {
-  await page.addInitScript(() => {
+  await page.addInitScript((traceLayout) => {
+    const layouts: unknown[] = [];
+    let previousLayout = "";
+    const frameIds = new WeakMap<Element, number>();
+    let nextFrameId = 0;
+    function sampleLayout() {
+      const shell = document.querySelector(".shell");
+      const main = shell?.querySelector("main.content");
+      if (main && !frameIds.has(main)) {
+        frameIds.set(main, ++nextFrameId);
+      }
+      const wizard = document.querySelector(".model-setup-wizard");
+      const dialog = wizard?.closest("dialog");
+      const bounds = dialog?.getBoundingClientRect();
+      const layout = {
+        shell: shell?.className,
+        columns: shell ? getComputedStyle(shell).gridTemplateColumns : null,
+        main: main
+          ? {
+              id: frameIds.get(main),
+              rect: (() => {
+                const rect = main.getBoundingClientRect();
+                return [rect.x, rect.y, rect.width, rect.height];
+              })(),
+            }
+          : null,
+        chat: [
+          ".chat-pane-cache__pane--active .chat-thread",
+          ".chat-pane-cache__pane--active textarea[aria-label='Chat composer']",
+        ].map((selector) => {
+          const rect = main?.querySelector(selector)?.getBoundingClientRect();
+          return { selector, rect: rect ? [rect.x, rect.y, rect.width, rect.height] : null };
+        }),
+        wizard: wizard?.className,
+        title: wizard?.querySelector("h2")?.textContent,
+        dialog: bounds ? [bounds.x, bounds.y, bounds.width, bounds.height] : null,
+        regions: wizard
+          ? [...wizard.children].map((element) => {
+              const rect = element.getBoundingClientRect();
+              return { class: element.className, rect: [rect.x, rect.y, rect.width, rect.height] };
+            })
+          : [],
+      };
+      const serialized = JSON.stringify(layout);
+      if (serialized !== previousLayout && layouts.length < 500) {
+        layouts.push({ at: performance.now(), ...layout });
+        previousLayout = serialized;
+      }
+      requestAnimationFrame(sampleLayout);
+    }
+    if (traceLayout) {
+      requestAnimationFrame(sampleLayout);
+    }
     const probe = {
       startedAt: 0,
       inputAt: null as number | null,
@@ -648,8 +713,9 @@ async function installFirstRunReadiness(page: Page) {
       );
     }
     Reflect.set(window, "firstRunReadiness", probe);
+    Reflect.set(window, "firstRunLayouts", layouts);
     sample();
-  });
+  }, values["first-run-layout"]);
   // The first measured step navigates; its new document starts at time origin.
   await page.evaluate(() => Reflect.set(window, "firstRunReadiness", { start() {} }));
 }
@@ -730,10 +796,10 @@ try {
           await startGateway();
         }
         const context = await browser.newContext({
-          viewport:
-            values.viewport === "mobile"
-              ? { width: 390, height: 844 }
-              : { width: 1440, height: 1000 },
+          viewport: {
+            width: Number(values["viewport-width"] ?? (values.viewport === "mobile" ? 390 : 1440)),
+            height: values.viewport === "mobile" ? 844 : 1000,
+          },
           ...(values.viewport === "mobile"
             ? { hasTouch: true, ...(engine !== "firefox" ? { isMobile: true } : {}) }
             : {}),
@@ -895,6 +961,9 @@ try {
             const probe = Reflect.get(window, "firstRunReadiness");
             return { startedAt: probe.startedAt, inputAt: probe.inputAt, readyAt: probe.readyAt };
           });
+          const layouts = values["first-run-layout"]
+            ? await page.evaluate(() => Reflect.get(window, "firstRunLayouts"))
+            : undefined;
           const metrics = await measurement.stop();
           const server = await control("end");
           const pageMetrics = await readControlUiPageObserver(
@@ -902,9 +971,7 @@ try {
             readiness.startedAt,
             readiness.readyAt ?? undefined,
           );
-          const records = await page.evaluate(
-            () => Reflect.get(window, "openclawRpcPayloads") ?? [],
-          );
+          const records = await page.evaluate(() => window.openclawRpcPayloads?.splice(0) ?? []);
           const resources = await page.evaluate(
             (start) =>
               performance
@@ -929,6 +996,7 @@ try {
             engine,
             browserVersion: browser.version(),
             viewport: values.viewport,
+            viewportWidth: page.viewportSize()?.width,
             cpuThrottle: Number(values["cpu-throttle"]),
             sample,
             name,
@@ -940,6 +1008,7 @@ try {
             wallMs: performance.now() - startedAt,
             metrics,
             pageMetrics,
+            layouts,
             resources,
             server,
             records,
@@ -957,11 +1026,6 @@ try {
           console.log(
             `${engine} ${name}: ${readiness.readyAt === null ? "unavailable" : (readiness.readyAt - readiness.startedAt).toFixed(1)} ms${error ? ` ERROR ${error}` : ""}`,
           );
-          await page.evaluate(() => {
-            if (window.openclawRpcPayloads) {
-              window.openclawRpcPayloads.length = 0;
-            }
-          });
           if (error) {
             throw new Error(error);
           }
@@ -1031,6 +1095,34 @@ try {
               url,
               providerUrl: `http://127.0.0.1:${providerPort}`,
               measure: measureFirstRun,
+              waitForGatewayReady: async () => {
+                const deadline = performance.now() + 120_000;
+                let unavailableAtEpochMs: number | undefined;
+                while (performance.now() < deadline) {
+                  if (interrupted) {
+                    break;
+                  }
+                  const { status, errorKind } = await requestProbeStatus(port, "/readyz");
+                  const observedAtEpochMs = performance.timeOrigin + performance.now();
+                  if (
+                    (status !== null && status !== 200) ||
+                    errorKind === "econnrefused" ||
+                    errorKind === "econnreset"
+                  ) {
+                    unavailableAtEpochMs ??= observedAtEpochMs;
+                  } else if (status === 200 && unavailableAtEpochMs !== undefined) {
+                    return { unavailableAtEpochMs, readyAtEpochMs: observedAtEpochMs };
+                  }
+                  await new Promise((resolve) => {
+                    setTimeout(resolve, 100);
+                  });
+                }
+                throw new Error(
+                  unavailableAtEpochMs === undefined
+                    ? "Gateway readiness probe never observed the announced restart become unavailable"
+                    : "Gateway readiness probe did not recover after becoming unavailable",
+                );
+              },
             });
             const pluginVisits = values["first-run-plugins"]
               ? await runControlUiFirstRunPluginVisits(page, { url, measure: measureFirstRun })
@@ -1260,6 +1352,8 @@ async function compare() {
         "--cpu-throttle",
         values["cpu-throttle"],
         ...(values["first-run"] ? ["--first-run"] : []),
+        ...(values["first-run-layout"] ? ["--first-run-layout"] : []),
+        ...(values["viewport-width"] ? ["--viewport-width", values["viewport-width"]] : []),
         ...(values["first-run-plugins"] ? ["--first-run-plugins"] : []),
         ...(values["empty-plugin-installation"] ? ["--empty-plugin-installation"] : []),
         ...(values.screenshots ? ["--screenshots"] : []),

@@ -144,7 +144,6 @@
 }
 
 .shell--chat {
-  overflow: hidden;
   --shell-content-leading-inset: 12px;
 }
 
@@ -152,7 +151,6 @@
    Keep --shell-nav-width in sync for fixed-position consumers (e.g. the
    docked terminal panel). */
 .shell--nav-collapsed {
-  grid-template-columns: 0 minmax(0, 1fr);
   --shell-nav-width: 0px;
   /* The collapsed strip shows all three base controls, so unlike the expanded
      safe edge this keeps the complete collapsed width. */
@@ -243,10 +241,6 @@ html.openclaw-native-nav:not(.openclaw-native-web-chrome)
   .shell--nav-collapsed
   .shell-chrome-controls,
 html.openclaw-native-nav .topbar .topbar-nav-toggle {
-  display: none;
-}
-
-html.openclaw-native-web-chrome .shell--mobile-nav .sidebar-brand__desktop-control {
   display: none;
 }
 
@@ -341,12 +335,17 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .shell--onboarding {
-  grid-template-columns: 0 minmax(0, 1fr);
-  grid-template-rows: 0 auto minmax(0, 1fr);
   --shell-nav-width: 0px;
+  /* The incoming page already fills the viewport; do not sweep it through the old sidebar. */
+  transition: none;
 }
 
-.shell--onboarding .topbar,
+/* Keep mobile's one-column layout, but never restore its app-header row during setup. */
+div.shell.shell--onboarding {
+  grid-template-rows: 0 auto minmax(0, 1fr);
+}
+
+.shell.shell--onboarding .topbar,
 .shell--onboarding .shell-nav {
   display: none;
 }
@@ -3522,6 +3521,9 @@ openclaw-tooltip.sidebar-hover-tooltip {
 
 .content {
   grid-area: content;
+  /* Keep the focusable frame stable when setup hands off to a sidebar route. */
+  grid-column: 1 / -1;
+  border-inline-start: var(--shell-nav-width) solid transparent;
   --content-inline-padding: 20px;
   padding: 16px var(--content-inline-padding) 32px;
   display: block;
@@ -3560,14 +3562,12 @@ openclaw-tooltip.sidebar-hover-tooltip {
 
 .content--chat {
   gap: 2px;
-  padding-top: 0;
-  padding-bottom: 0;
+  padding-block: 0;
 }
 
 /* Session routes reserve the final frame before their lazy styles load. */
 .content--chat.content--workbench {
-  padding-left: 0;
-  padding-right: 0;
+  padding-inline: 0;
 }
 
 .content--chat > :where(:not(:first-child)),

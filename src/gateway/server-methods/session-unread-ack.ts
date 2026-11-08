@@ -38,10 +38,9 @@ export function isReadMarkerOnly(patch: { unread?: boolean }): boolean {
 
 /**
  * A patch that carries nothing but the read acknowledgement itself (plus its
- * compare-and-swap preconditions). Shared with the patch projection owner, which
- * must not age the session row for a read.
+ * compare-and-swap preconditions).
  */
-export function isSessionUnreadAckOnlyPatch(patch: { unread?: boolean }): boolean {
+function isSessionUnreadAckOnlyPatch(patch: { unread?: boolean }): boolean {
   return patch.unread === false && isReadMarkerOnly(patch);
 }
 
