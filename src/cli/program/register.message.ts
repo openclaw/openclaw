@@ -416,9 +416,13 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
     });
 
   register(thread, "list", "List threads", "thread-list", ["guild"])
-    .option("--channel-id <id>", "Channel id")
-    .option("--include-archived", "Include archived threads", false)
-    .option("--before <id>", "Read/search before id")
+    .option("--channel-id <id>", "Parent channel id (required with --include-archived)")
+    .option(
+      "--include-archived",
+      "List public archived threads in the parent channel instead of active threads",
+      false,
+    )
+    .option("--before <timestamp>", "ISO 8601 nextBefore value from the previous archived page")
     .option("--limit <n>", "Result limit");
 
   register(thread, "reply", "Reply in a thread", "thread-reply", ["message", "target"])
