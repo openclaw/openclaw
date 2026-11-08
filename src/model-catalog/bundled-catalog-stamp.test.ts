@@ -7,7 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { bundledCatalogGeneratedAt } from "./bundled-catalog-stamp.js";
 
 vi.mock("node:module", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:module")>();
+  const actual = await importOriginal<{ createRequire: typeof createRequire }>();
   return { ...actual, createRequire: vi.fn(actual.createRequire) };
 });
 
