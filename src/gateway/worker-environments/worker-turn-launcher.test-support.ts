@@ -37,9 +37,10 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import type { WorkerComputerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import {
-  replaceConnectedNodePluginTools,
+  publishNodeSessionPluginTools,
   removeConnectedNodePluginTools,
 } from "../node-plugin-tool-snapshot.js";
+import { makeNodeSession } from "../node-registry.test-helpers.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
 import type { MintedWorkerCredential } from "./credential.js";
@@ -618,23 +619,21 @@ export function registerWorkerMcpTestTools() {
     ["local-node", ["local_search", "local_action", "local_denied"]],
     ["other-node", ["remote_search"]],
   ] as const) {
-    replaceConnectedNodePluginTools({
-      nodeId,
-      tools: names.map((name) => ({
-        registered: false,
-        descriptor: {
-          pluginId: "node-mcp",
-          name,
-          description: name,
-          parameters: {
-            type: "object",
-            properties: name === "local_action" ? { action: { type: "string" } } : {},
-          },
-          command: "mcp.tools.call.v1",
-          mcp: { server: "workspace", tool: name },
+    const node = makeNodeSession(nodeId, {
+      commands: ["mcp.tools.call.v1"],
+      declaredNodePluginTools: names.map((name) => ({
+        pluginId: "node-mcp",
+        name,
+        description: name,
+        parameters: {
+          type: "object",
+          properties: name === "local_action" ? { action: { type: "string" } } : {},
         },
+        command: "mcp.tools.call.v1",
+        mcp: { server: "workspace", tool: name },
       })),
     });
+    publishNodeSessionPluginTools(node, undefined, []);
     onTestFinished(() => removeConnectedNodePluginTools(nodeId));
   }
 }

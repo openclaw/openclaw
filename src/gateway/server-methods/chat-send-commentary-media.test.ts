@@ -47,7 +47,10 @@ import {
   onInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
-import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import {
+  drainGlobalSingletonLifecycleState,
+  readGlobalSingleton,
+} from "../../shared/global-singleton.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
 import { cleanupManagedOutgoingMediaRecords } from "../managed-image-attachments.js";
@@ -313,6 +316,13 @@ it.for([
         commentarySettled.resolve();
       }
     });
+    const listeners = readGlobalSingleton(
+      Symbol.for("openclaw.internalSessionTranscriptListeners"),
+    );
+    if (!(listeners instanceof Set)) {
+      throw new Error("Transcript listener registry is unavailable");
+    }
+    const listenersBefore = listeners.size;
     let run: Promise<void> | undefined;
     let expectedContent: unknown;
     const expectMaterialized = () => {
@@ -589,6 +599,7 @@ it.for([
         upstream.closeAllConnections();
       }
       await run?.catch(() => {});
+      expect.soft(listeners.size).toBe(listenersBefore);
       stopUpdates();
       await closeHttpServer(upstream);
       hookSpy?.mockRestore();

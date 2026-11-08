@@ -1,0 +1,2 @@
+# Exact performance exception: authenticated historical receipt rejection, pre-dispatch not-run coverage/manifest, and strict npm/Docker consumer rejection.
+423

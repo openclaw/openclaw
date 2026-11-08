@@ -1,0 +1,2 @@
+# Emitted shared Markdown closure must not pull Chat into non-Chat routes.
+17

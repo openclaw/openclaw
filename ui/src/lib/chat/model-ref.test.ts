@@ -16,6 +16,25 @@ import {
 const ambiguous = createAmbiguousModelCatalog("gpt-5-mini", "openai", "openrouter");
 
 describe("chat-model-ref helpers", () => {
+  it.each([
+    ["clawrouter", "Example Model via ClawRouter", "Example Model", "Example Model"],
+    ["clawrouter", "Example Model", "Example Model via ClawRouter", "Example Model"],
+    ["clawrouter", "Example Model", "Example Model", "Example Model"],
+    [
+      "example",
+      "Example Model via ClawRouter",
+      "Example Model via ClawRouter",
+      "Example Model via ClawRouter",
+    ],
+  ])("formats %s catalog name %s with alias %s", (provider, name, alias, label) => {
+    const entry = { id: "vendor/example", provider, name, alias };
+    const lookup = buildCatalogDisplayLookup([entry]);
+    expect(buildChatModelOptionFromLookup(entry, lookup)).toEqual({
+      value: `${provider}/vendor/example`,
+      label,
+    });
+  });
+
   it("keeps case-distinct catalog display identities with shared names", () => {
     const labels = ["Shared name · model-a · custom", "Shared name · Model-A · custom"];
     const entries = ["model-a", "Model-A"].map((id) => ({

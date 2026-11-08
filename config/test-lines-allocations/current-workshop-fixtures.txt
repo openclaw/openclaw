@@ -1,0 +1,2 @@
+3
+# Mark three current configuration fixtures without weakening their independent assertions.

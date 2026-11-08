@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const hoistedMocks = vi.hoisted(() => ({
-  applyPluginAutoEnable: vi.fn(),
+  applyPluginAutoEnableAsync: vi.fn(),
   materializePluginAutoEnableCandidates: vi.fn(),
   collectChannelDoctorCompatibilityMutations: vi.fn(),
   collectOpenAICodexAuthProfileStoreIdMap: vi.fn(),
@@ -31,8 +31,9 @@ const hoistedMocks = vi.hoisted(() => ({
   resolveProfileUnusableUntilForDisplay: vi.fn(),
 }));
 
+// mock-isolation: Sequencing fixtures supply activation outcomes; the setup regression exercises the real loader separately.
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: hoistedMocks.applyPluginAutoEnable,
+  applyPluginAutoEnableAsync: hoistedMocks.applyPluginAutoEnableAsync,
   materializePluginAutoEnableCandidates: hoistedMocks.materializePluginAutoEnableCandidates,
 }));
 

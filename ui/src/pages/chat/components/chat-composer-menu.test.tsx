@@ -44,6 +44,43 @@ function mountSlashMenu(paneId: string) {
   return { menu, host, view };
 }
 
+it("navigates the full slash menu in visual order and runs the highlighted command", async () => {
+  const { menu, host, view } = mountSlashMenu("menu-keyboard-order");
+  await waitForSolid(() => expect(view.container.querySelector('[aria-busy="true"]')).toBeNull());
+  const options = view.getAllByRole("option");
+  const names = options.map((option) => option.querySelector(".slash-menu-name")!.textContent);
+  expect(names[0]).toBe("/stop");
+  const compactIndex = names.findIndex((name) => name?.startsWith("/compact"));
+  expect(compactIndex).toBeGreaterThanOrEqual(0);
+  expect(names[compactIndex + 1]).toMatch(/^\/fork\b/);
+  expect(view.getByRole("option", { selected: true })).toBe(options[0]);
+
+  const press = (key: string) => {
+    expect(menu.handleKeydown(new KeyboardEvent("keydown", { key, cancelable: true }), host)).toBe(
+      true,
+    );
+    flush();
+  };
+  for (const key of ["ArrowDown", "ArrowUp"]) {
+    for (let step = 1; step <= options.length; step += 1) {
+      press(key);
+      const index =
+        key === "ArrowDown" ? step % options.length : (options.length - step) % options.length;
+      expect(view.getByRole("option", { selected: true })).toBe(options[index]);
+    }
+  }
+
+  const clearIndex = names.indexOf("/clear");
+  expect(clearIndex).toBeGreaterThan(0);
+  for (let step = 0; step < clearIndex; step += 1) {
+    press("ArrowDown");
+  }
+  expect(view.getByRole("option", { selected: true })).toBe(options[clearIndex]);
+  press("Enter");
+  expect(host.commitDraft).toHaveBeenCalledExactlyOnceWith("/clear");
+  expect(host.runCommand).toHaveBeenCalledOnce();
+});
+
 it("keeps loading suggestions named, selected and actionable", () => {
   const select = vi.fn();
   const [activeId, setActiveId] = createSignal("pending-status");
@@ -51,22 +88,13 @@ it("keeps loading suggestions named, selected and actionable", () => {
     <div role="listbox" aria-label="Suggestions">
       <ComposerMenuLoadingRows
         activeId={activeId()}
-        rows={[
-          {
-            id: "pending-status",
-            name: "/status",
-            description: "Show status",
-            select,
-            hover: () => setActiveId("pending-status"),
-          },
-          {
-            id: "pending-help",
-            name: "/help",
-            description: "Show help",
-            select,
-            hover: () => setActiveId("pending-help"),
-          },
-        ]}
+        rows={["status", "help"].map((name) => ({
+          id: `pending-${name}`,
+          name: `/${name}`,
+          description: `Show ${name}`,
+          select,
+          hover: () => setActiveId(`pending-${name}`),
+        }))}
       />
     </div>
   ));
@@ -82,10 +110,6 @@ it("keeps loading suggestions named, selected and actionable", () => {
 
 it("keeps current editing state when suggestion rows load after dismissal", async () => {
   const { menu, host, view } = mountSlashMenu("lazy-menu-dismissal");
-  expect(view.getByRole("listbox")).toBeTruthy();
-  expect(view.container.querySelectorAll(".slash-menu-item")).toHaveLength(
-    menu.state.slashMenuItems.length,
-  );
   menu.reset();
   await import("./chat-composer-slash-menu-options.tsx");
   flush();
@@ -99,23 +123,19 @@ it("keeps current editing state when suggestion rows load after dismissal", asyn
 });
 
 it("uses the current focus policy on a retained suggestion option", () => {
-  let setPreserveFocus!: (value: boolean) => void;
-  const view = mountSolid(() => {
-    const [preserveFocus, update] = createSignal(true);
-    setPreserveFocus = update;
-    return (
-      <ComposerMenuOption
-        id="retained-option"
-        active={false}
-        preserveFocus={preserveFocus()}
-        select={vi.fn()}
-        hover={vi.fn()}
-        icon={undefined}
-        name="Suggestion"
-        description=""
-      />
-    );
-  });
+  const [preserveFocus, setPreserveFocus] = createSignal(true);
+  const view = mountSolid(() => (
+    <ComposerMenuOption
+      id="retained-option"
+      active={false}
+      preserveFocus={preserveFocus()}
+      select={vi.fn()}
+      hover={vi.fn()}
+      icon={undefined}
+      name="Suggestion"
+      description=""
+    />
+  ));
   const option = view.getByRole("option");
   for (const preserve of [true, false, true]) {
     setPreserveFocus(preserve);
@@ -140,7 +160,7 @@ it("retains the slash viewport through row loading and selection changes, and re
   expect(viewport.scrollTop).toBe(120);
   expect(view.getByRole("option", { selected: true }).textContent).toContain("/status");
 
-  host.resolveArgOptions = () => ["on", "off"];
+  host.resolveArgOptions = () => ["on", "off", "other"];
   menu.selectCommand(command, host);
   flush();
   await waitForSolid(() => expect(view.getByRole("option", { selected: true })).toBeTruthy());
@@ -148,6 +168,20 @@ it("retains the slash viewport through row loading and selection changes, and re
   expect(argumentsViewport).not.toBe(viewport);
   expect(argumentsViewport.scrollTop).toBe(0);
   expect(view.getByRole("option", { selected: true }).textContent).toContain("/status on");
+  for (const [draft, args, expected] of [
+    ["/status ", ["on", "off", "other"], "off"],
+    ["/status ", ["off", "on", "other"], "off"],
+    ["/status o", ["off", "on", "other"], "off"],
+    ["/status o", ["off", "other"], "off"],
+    ["/verbose ", ["off", "other"], "off"],
+  ] as const) {
+    menu.hover(1);
+    flush();
+    host.resolveArgOptions = () => [...args];
+    menu.update(draft, host);
+    flush();
+    expect(menu.state.slashMenuArgItems[menu.state.slashMenuIndex]).toBe(expected);
+  }
 
   menu.reset();
   flush();
@@ -721,14 +755,16 @@ it("expands one server at a time and keeps switch and bulk tool actions separate
   setCurrentView("root");
   await waitForSolid(() =>
     expect(
-      view.queryByRole("menuitem", { name: "2 changes in this chat", hidden: true }),
+      view.queryByRole("menuitem", { name: "2 changes in this session", hidden: true }),
     ).not.toBeNull(),
   );
-  view.getByRole("menuitem", { name: "2 changes in this chat", hidden: true }).click();
+  view.getByRole("menuitem", { name: "2 changes in this session", hidden: true }).click();
   await waitForSolid(() => {
     expect(patch).toHaveBeenLastCalledWith(null);
     expect(overrides()).toBeNull();
-    expect(view.queryByRole("menuitem", { name: /changes in this chat/, hidden: true })).toBeNull();
+    expect(
+      view.queryByRole("menuitem", { name: /changes in this session/, hidden: true }),
+    ).toBeNull();
   });
 });
 

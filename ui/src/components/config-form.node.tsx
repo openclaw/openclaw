@@ -31,6 +31,7 @@ import {
   resolveConfigFieldMeta,
 } from "./config-form.search.ts";
 import { hintForPath, pathKey, schemaType, type JsonSchema } from "./config-form.shared.ts";
+import { Checkbox } from "./solid/checkbox.tsx";
 import { SettingsToggle, SettingsToggleRow } from "./solid/settings-ui.tsx";
 
 // Past this a segmented control stops fitting the control column at a readable size.
@@ -183,7 +184,22 @@ export function ConfigNode(props: { params: ConfigNodeRenderParams }): JSX.Eleme
       !hasConfigSearchCriteria(params().searchCriteria!) ||
       matchesNodeSearch({ ...params(), criteria: params().searchCriteria! }),
   );
-  const initialDraft = createMemo(() => resolveStructuredDraftInitialValue(params()));
+  const draftInputs = createMemo(
+    () => ({
+      schema: params().schema,
+      value: params().value,
+      isRequired: params().isRequired,
+      structuredDraftOwner: params().structuredDraftOwner,
+    }),
+    {
+      equals: (previous, next) =>
+        previous.schema === next.schema &&
+        Object.is(previous.value, next.value) &&
+        previous.isRequired === next.isRequired &&
+        previous.structuredDraftOwner === next.structuredDraftOwner,
+    },
+  );
+  const initialDraft = createMemo(() => resolveStructuredDraftInitialValue(draftInputs()));
   return (
     <Switch>
       <Match when={unsupported()}>
@@ -385,8 +401,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
           helpContext={props.params.helpContext}
           showLabel={props.params.showLabel ?? true}
           control={
-            <input
-              type="checkbox"
+            <Checkbox
               aria-label={meta().label}
               aria-describedby={props.params.descriptionId}
               checked={checked()}

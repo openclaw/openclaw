@@ -143,10 +143,10 @@ it("attributes completed models and refreshes their selection on warm reuse", as
       ),
     },
   });
-  let nativeModel = "ready-native-model";
+  let nativeModel = "gpt-5.5";
   const readyThread = {
     ...threadStartResult("native-thread", { cwd: params.workspaceDir }),
-    model: "ready-native-model",
+    model: "gpt-5.5",
     modelProvider: "openai",
   };
   let turnStarted = createDeferred<void>();
@@ -166,7 +166,7 @@ it("attributes completed models and refreshes their selection on warm reuse", as
         method: "thread/status/changed",
         params: { threadId: "native-thread", status: { type: "notLoaded" } },
       });
-      return readyThread;
+      return { ...readyThread, model: nativeModel };
     },
     "turn/start": () => {
       turnStarted.resolve();
@@ -227,7 +227,7 @@ it("attributes completed models and refreshes their selection on warm reuse", as
   };
   const modelEvents = () =>
     events.filter((event) => event.stream === "lifecycle" && event.data.phase === "model");
-  const readyModelEvent = modelEvent("ready-native-model");
+  const readyModelEvent = modelEvent("gpt-5.5");
   const reroutedModelEvent = modelEvent("rerouted-model");
   const runAttempt = registered.runAttempt.bind(registered);
   const run = runInHarnessToolAuthorityForTest(params, "codex", runAttempt);
@@ -246,7 +246,7 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     ]) {
       transport.send({
         method: "model/rerouted",
-        params: { threadId, turnId, fromModel: "ready-native-model", toModel, reason: "other" },
+        params: { threadId, turnId, fromModel: "gpt-5.5", toModel, reason: "other" },
       });
     }
     await beforeResult(modelPublished.promise, run, "rerouted model attribution");
@@ -254,7 +254,7 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     expect(events.filter((event) => event.stream === "fallback")).toEqual([
       {
         stream: "fallback",
-        data: { fromModel: "ready-native-model", toModel: "rerouted-model", reason: "other" },
+        data: { fromModel: "gpt-5.5", toModel: "rerouted-model", reason: "other" },
       },
     ]);
     sendTurn("completed", [{ type: "agentMessage", id: "answer", text: "Native answer." }]);
@@ -262,13 +262,17 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     expect(result).toEqual(
       expect.objectContaining({
         terminal: { kind: "ok" },
-        runtimeModelSelection: { provider: "openai", model: "ready-native-model" },
+        runtimeModelSelection: { provider: "openai", model: "gpt-5.5" },
         assistantTexts: ["Native answer."],
       }),
     );
     expect(
       events.filter((event) => event.stream === "lifecycle").map((event) => event.data.phase),
     ).toEqual(["start", "model", "model", "end"]);
+    // The cold resume renders the base for Codex's current model, not the stored binding's.
+    expect(requests.find(({ method }) => method === "thread/resume")?.params).toMatchObject({
+      baseInstructions: expect.stringContaining("<execution_policy>"),
+    });
     for (const method of ["thread/resume", "turn/start"]) {
       const matching = requests.filter((request) => request.method === method);
       expect(matching).toHaveLength(1);
@@ -301,14 +305,18 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     expect(bindingStore.read(sessionBindingIdentity(params))).toMatchObject({
       model: nativeModel,
     });
-    expect(requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
-    expect(requests.filter(({ method }) => method === "thread/unsubscribe")).toHaveLength(0);
+    // The switched model's base differs, so warm reuse yields to a cold resume that sends it.
+    const resumes = requests.filter(({ method }) => method === "thread/resume");
+    expect(resumes).toHaveLength(2);
+    expect(resumes[1]!.params).toMatchObject({
+      baseInstructions: expect.not.stringContaining("<execution_policy>"),
+    });
     expect(
       requests.filter(
         ({ method, params: requestParams }) =>
           method === "thread/inject_items" && !isCodexTurnContextHandoff(requestParams),
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
   } finally {
     abort.abort("test cleanup");
     try {

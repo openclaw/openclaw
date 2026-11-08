@@ -80,6 +80,7 @@ describe("attachment frame admission", () => {
       expect(host.chatQueue).toEqual([]);
       expect(listStoredChatOutboxes(host)).toEqual([]);
       expect(showToast).toHaveBeenCalledExactlyOnceWith({
+        severity: "error",
         message: "Too large to send: brief.pdf",
       });
     },
@@ -182,6 +183,8 @@ describe("structured Goal admission", () => {
     async (objective) => {
       const host = makeChatHost({
         chatMessage: objective,
+        chatGoalDraftMode:
+          objective === "/stop" ? { action: "start" } : { action: "start", fromCommand: true },
         chatAttachments: [createStagedAttachment("goal-document")],
         chatReplyTarget: {
           messageId: "message-a",
@@ -324,7 +327,8 @@ describe("composer recovery", () => {
       expect(host.chatReplyTarget).toBe(newerReply);
       expect(host.chatGoalDraftMode).toBe(newerGoal);
       expect(host.chatQueue[0]).toMatchObject({
-        sendError: "Chat settings update was interrupted. Review and retry when ready.",
+        sendError:
+          "Couldn’t update session settings. The update was interrupted. Review the settings before trying again.",
         sendState: "failed",
         text: "keep this send separate",
       });
@@ -567,7 +571,7 @@ describe("handleSendChat immediate local commands", () => {
           ? [
               expect.objectContaining({
                 role: "system",
-                content: "There are no messages to export yet.",
+                content: "No messages to export yet.",
               }),
             ]
           : [],

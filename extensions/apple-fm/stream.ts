@@ -3,6 +3,7 @@ import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime
 import { quoteUnsafeIntegerLiterals } from "openclaw/plugin-sdk/json-unsafe-integers";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 import {
+  applyProviderPayloadHook,
   buildAssistantMessage,
   createEmptyTransportUsage,
   failTransportStream,
@@ -32,7 +33,7 @@ export function createAppleFmStream(native: Pick<AppleFmNative, "run">): StreamF
           temperature: options?.temperature,
           responseFormat: responseFormat ? structuredClone(responseFormat) : undefined,
         };
-        const payload = (await options?.onPayload?.(request, model)) ?? request;
+        const payload = (await applyProviderPayloadHook(options, request, model)) ?? request;
         if (!payload || typeof payload !== "object") {
           throw new Error("Apple Foundation Models requires an object request.");
         }
