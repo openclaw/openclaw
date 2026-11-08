@@ -1,6 +1,5 @@
 // Transcript write contexts carry the admitted run fence and teardown tracking
 // through nested session-manager callbacks.
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import type {
   ModelChangeEntry,
@@ -8,7 +7,7 @@ import type {
 } from "../../agents/sessions/session-manager-types.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { getCliHistoryWriter, runWithCliHistoryWriter } from "./cli-history-boundary.js";
+import { getCliHistoryWriter } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
@@ -20,7 +19,6 @@ import {
   matchSessionEntryCohortScope,
 } from "./session-entry-cohort-scope.js";
 import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";
-import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -39,7 +37,10 @@ import {
   sameSessionTranscriptTargetBinding,
   type SessionTranscriptTargetBinding,
 } from "./transcript-target-binding.js";
-import type { SessionEntry } from "./types.js";
+import {
+  ownedTranscriptWriteContext,
+  type TranscriptSourcePublication,
+} from "./transcript-write-context-owner.js";
 
 export { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 export type {
@@ -105,16 +106,6 @@ type SessionTranscriptWriteRequest = Pick<
   OwnedSessionTranscriptWriteContext,
   "sessionFile" | "sessionKey" | "sessionTarget"
 >;
-
-type TranscriptSourcePublication = {
-  target: SessionTranscriptWriteTarget;
-  claimed: boolean;
-  publish?: (source: CapturedSessionEntryReadSource, entry: SessionEntry) => void;
-};
-
-const ownedTranscriptWriteContext = new AsyncLocalStorage<
-  OwnedSessionTranscriptWriteContext & { sourcePublication?: TranscriptSourcePublication }
->();
 
 /** Bind an initiating write's acknowledged source before fallible publication observers. */
 export async function withSessionTranscriptSourcePublication<T>(
@@ -474,11 +465,6 @@ export function withSessionTranscriptWriteAssertion<T>(
     },
     run,
   );
-}
-
-/** Runs detached work without retaining an attempt-owned transcript context. */
-export function runWithoutOwnedSessionTranscriptWrites<T>(run: () => T): T {
-  return ownedTranscriptWriteContext.exit(() => runWithCliHistoryWriter(undefined, run));
 }
 
 export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResult>(

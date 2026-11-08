@@ -27,10 +27,8 @@ import { withSessionActorStorage } from "../../config/sessions/session-actor-sto
 import { acquireSessionInputActor } from "../../config/sessions/session-input-actor.js";
 import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/session-transcript-watermark.js";
 import * as historyReaders from "../../config/sessions/session-transcript-worker-readers.js";
-import {
-  runWithoutOwnedSessionTranscriptWrites,
-  withOwnedSessionTranscriptWrites,
-} from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-owner.js";
+import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {

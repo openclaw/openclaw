@@ -24,10 +24,10 @@ import * as transcriptHydration from "../../config/sessions/session-transcript-h
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-owner.js";
 import {
   getOwnedSessionTranscriptReader,
   readOwnedSessionTranscriptEntry,
-  runWithoutOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
   type InitialSessionTranscriptWriter,
 } from "../../config/sessions/transcript-write-context.js";
