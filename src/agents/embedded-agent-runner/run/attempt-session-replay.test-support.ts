@@ -126,6 +126,11 @@ export async function withInterruptedTurn(
     sourceReply?: { final?: boolean; runId?: string };
     retryInput?: Partial<UserTurnInput>;
     provenance?: UserTurnInput["provenance"];
+    /** Persists the user row under a caller-owned admission, such as a session turn. */
+    admitUserTurn?: (
+      target: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
+      persist: () => Promise<unknown>,
+    ) => Promise<unknown>;
   } = {},
 ) {
   await withOpenClawTestState({ label: "interrupted-keyed-replay" }, async (state) => {
@@ -182,13 +187,21 @@ export async function withInterruptedTurn(
         preparedUserTurnTranscriptRecorder: previous,
       },
     );
-    await previous.withPendingInput!(() =>
-      original.appendMessageAsync({
-        role: "user",
-        content: "Finish this exact turn",
-        timestamp: 1,
-      }),
-    );
+    const persistUserTurn = () =>
+      previous.withPendingInput!(() =>
+        original.appendMessageAsync({
+          role: "user",
+          content: "Finish this exact turn",
+          timestamp: 1,
+        }),
+      );
+    await (options.admitUserTurn
+      ? options.admitUserTurn(target, async () => {
+          // Rows admitted ahead of this turn were written outside this manager.
+          await original.reloadPersistedTranscriptAsync();
+          return await persistUserTurn();
+        })
+      : persistUserTurn());
     if (appendOnlyRuntimeContext) {
       const carrier = buildRuntimeContextCustomMessage("Original runtime context")!;
       await original.appendCustomMessageEntryAsync(

@@ -231,6 +231,8 @@ access cancels the collected turn and blocks further effects.
   including input queued during its preparation. New prompts accepted after that
   selection keep their own cancellation and queue custody. If the stopped turn
   is still settling, the new prompt waits for that owner to finish before running.
+  A `/stop` sent as a message also holds the new prompt until its reply is
+  delivered and recorded, so the Stop exchange comes first in session history.
 - Queued waits are not projected as active agent runs for `sessions.list` and
   do not own active-run timeout semantics; only the active phase does.
 - A queued request that expires or is cancelled before execution settles only
