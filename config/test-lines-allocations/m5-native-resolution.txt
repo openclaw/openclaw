@@ -1,3 +1,3 @@
-161
+142
 # 96 lines prove fresh-process capture and false missing-module failure.
-# Reconcile the verified 65-line debt on base e64215c411f; leaves zero headroom.
+# Reconcile 46 inherited lines on CI base 058133da525; leaves zero headroom.
