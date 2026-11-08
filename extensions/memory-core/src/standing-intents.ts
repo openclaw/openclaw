@@ -148,6 +148,11 @@ async function executeStandingIntent(
         }
         recordDueAt(options.path, result.nextDueAt);
         return result.value;
+      } catch (error) {
+        // A failed or uncertain write may have committed; the next owner must sweep, not trust
+        // the deadline learned before it.
+        knownDueAt.delete(options.path);
+        throw error;
       } finally {
         await worker.close();
       }
