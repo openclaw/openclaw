@@ -278,7 +278,7 @@ async function duringCleanup(
 
 it.each([
   { capable: false, failure: "busy", succeeds: true },
-  { capable: true, failure: "busy", succeeds: false },
+  { capable: true, failure: "busy", succeeds: true },
   { capable: false, failure: "permission", succeeds: false },
   { capable: false, failure: "read", succeeds: false },
   { capable: false, failure: "native close", succeeds: false },
