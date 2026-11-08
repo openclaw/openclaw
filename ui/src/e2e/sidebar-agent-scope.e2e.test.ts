@@ -139,6 +139,9 @@ suite.define(() => {
           for (const id of ["main", "new-mentor"]) {
             await sidebar.getByRole("button", { name: /Switch agent/ }).click();
             await sidebar.locator(`[data-value="agent:${id}"]`).click();
+            await expect
+              .poll(() => sidebar.locator(".sidebar-agent-card__main").getAttribute("aria-label"))
+              .toContain(id === "main" ? "Main" : "New mentor");
             if (id === "new-mentor") {
               await gateway.waitForRequest("sessions.list", {
                 match: {

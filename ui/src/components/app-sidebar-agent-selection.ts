@@ -1,14 +1,25 @@
 import type { SessionsListResult } from "../api/types.ts";
+import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { buildAgentMainSessionKey } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
 import { personalSidebarAgentNavigationResult } from "./app-sidebar-personal-navigation.ts";
 import { resolveLatestSidebarAgentSession } from "./app-sidebar-session-navigation-logic.ts";
-import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import type { SessionDataOwner } from "./session-data.ts";
+
+export type AgentSelectionHost = Parameters<typeof personalSidebarAgentNavigationResult>[0] & {
+  readonly isConnected: boolean;
+  readonly connected: boolean;
+  readonly activeRouteId: NavigationRouteId | undefined;
+  readonly onNavigate: ((route: "appearance") => void) | undefined;
+  readonly sidebarMenus: { closeAgentMenu(): void };
+  readonly sessionData: Pick<SessionDataOwner, "sessionListQuery">;
+  selectSession(key: string): void;
+};
 
 export async function switchSidebarChipAgent(
-  host: AppSidebarSessionNavigationElement,
+  host: AgentSelectionHost,
   agentId: string,
   context: ApplicationContext,
   isCurrent: () => boolean,
