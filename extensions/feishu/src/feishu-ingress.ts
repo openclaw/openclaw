@@ -12,9 +12,15 @@ import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import type { ClawdbotConfig } from "../runtime-api.js";
+import { resolveFeishuAccount } from "./accounts.js";
+import { resolveFeishuGroupSession } from "./bot-content.js";
+import { resolveFeishuGroupConfig } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
+import { isFeishuGroupChatType, normalizeFeishuEventChatType } from "./types.js";
 
 const FEISHU_INGRESS_PAYLOAD_VERSION = 1;
 const FEISHU_INGRESS_POLL_INTERVAL_MS = 500;
@@ -40,6 +46,7 @@ type FeishuIngressFacts = {
 
 type FeishuIngressOptions = {
   accountId: string;
+  cfg?: ClawdbotConfig;
   dispatcher: Pick<Lark.EventDispatcher, "invoke">;
   encryptKey?: string;
   runtime: {
@@ -119,6 +126,7 @@ function inspectFeishuIngressEnvelope(
   rawEnvelope: string,
   encryptKey: string | undefined,
   allowInvalidLane = false,
+  account?: { accountId: string; cfg: ClawdbotConfig },
 ): FeishuIngressFacts | null {
   const envelope = decryptEnvelope(parseRawEnvelope(rawEnvelope), encryptKey);
   const nestedHeader = isRecord(envelope.header) ? envelope.header : null;
@@ -152,7 +160,37 @@ function inspectFeishuIngressEnvelope(
     if (!chatId) {
       return missingLane("Feishu message ingress envelope is missing event.message.chat_id.");
     }
-    return { eventId, laneKey: `chat:${chatId}` };
+    let peerId = chatId;
+    const chatType = normalizeFeishuEventChatType(message?.chat_type);
+    if (account && message && isFeishuGroupChatType(chatType)) {
+      const feishuCfg = resolveFeishuAccount(account).config;
+      const sender = isRecord(event.sender) ? event.sender : null;
+      const senderId = isRecord(sender?.sender_id) ? sender.sender_id : null;
+      // Missing native thread identity is hydrated only after durable admission.
+      // Keep that event in the conservative chat lane until the handler barrier.
+      if (message.chat_type !== "topic_group" || normalizeNullableString(message.thread_id)) {
+        const session = resolveFeishuGroupSession({
+          chatId,
+          senderOpenId:
+            normalizeNullableString(senderId?.open_id) ??
+            normalizeNullableString(senderId?.user_id) ??
+            "",
+          messageId: normalizeNullableString(message.message_id) ?? "",
+          rootId: normalizeNullableString(message.root_id) ?? undefined,
+          threadId: normalizeNullableString(message.thread_id) ?? undefined,
+          chatType: chatType ?? undefined,
+          groupConfig: resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: chatId }),
+          feishuCfg,
+        });
+        if (
+          session.groupSessionScope === "group_topic" ||
+          session.groupSessionScope === "group_topic_sender"
+        ) {
+          peerId = session.peerId;
+        }
+      }
+    }
+    return { eventId, laneKey: `chat:${peerId}` };
   }
   const noticeMeta = isRecord(event.notice_meta) ? event.notice_meta : null;
   const fileType = normalizeNullableString(noticeMeta?.file_type);
@@ -309,6 +347,14 @@ export function buildFeishuFlushIngressLifecycle(
 }
 
 export function createFeishuDurableIngress(options: FeishuIngressOptions) {
+  const readConfig = options.cfg ? createRuntimeConfigReader(options.cfg) : undefined;
+  const inspect = (rawEnvelope: string, allowInvalidLane: boolean) =>
+    inspectFeishuIngressEnvelope(
+      rawEnvelope,
+      options.encryptKey,
+      allowInvalidLane,
+      readConfig ? { accountId: options.accountId, cfg: readConfig() } : undefined,
+    );
   let socketTerminator: (() => void) | undefined;
   const activeLifecycles = new Map<string, FeishuIngressLifecycle>();
 
@@ -323,8 +369,18 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
         getFeishuRuntime().state.openChannelIngressQueue<FeishuIngressPayload>({
           accountId: options.accountId,
         })),
-    inspect: (rawEnvelope, context) =>
-      inspectFeishuIngressEnvelope(rawEnvelope, options.encryptKey, context.phase === "admission"),
+    inspect: (rawEnvelope, context) => {
+      const facts = inspect(rawEnvelope, context.phase === "admission");
+      if (context.phase === "claim" && facts?.laneKey !== context.claimedLaneKey) {
+        // Rows retained across the topic-queue upgrade still own their original
+        // chat lane. Validate that identity without dropping recoverable work.
+        const legacy = inspectFeishuIngressEnvelope(rawEnvelope, options.encryptKey);
+        if (legacy?.laneKey === context.claimedLaneKey) {
+          return legacy;
+        }
+      }
+      return facts;
+    },
     payload: {
       version: FEISHU_INGRESS_PAYLOAD_VERSION,
       serialize: (rawEnvelope, { receivedAt }) => ({ receivedAt, rawEnvelope }),
@@ -444,7 +500,7 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
     // Lark WS client invokes from its authenticated socket with needCheck=false.
     // Keep malformed recognized deliveries durable when their stable event id
     // exists. Claim-side validation then dead-letters them without retry.
-    const facts = inspectFeishuIngressEnvelope(rawEnvelope, options.encryptKey, true);
+    const facts = inspect(rawEnvelope, true);
     if (!facts) {
       return {
         kind: "non-durable",

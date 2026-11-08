@@ -8,6 +8,7 @@ import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runt
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import { feishuDedupeState } from "./dedup-state.js";
 import { claimUnprocessedFeishuMessage, finalizeFeishuMessageProcessing } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
@@ -28,14 +29,22 @@ import {
 type FeishuIngressQueue = NonNullable<Parameters<typeof createFeishuDurableIngress>[0]["queue"]>;
 type FeishuIngressPayload = Parameters<FeishuIngressQueue["enqueue"]>[1];
 
-function messageEnvelope(eventId: string) {
+function messageEnvelope(eventId: string, threadId?: string) {
   return {
     schema: "2.0",
     header: {
       event_id: eventId,
       event_type: "im.message.receive_v1",
     },
-    event: { message: { chat_id: "oc-chat" } },
+    event: {
+      sender: { sender_id: { open_id: "ou-user" } },
+      message: {
+        chat_id: "oc-chat",
+        chat_type: "topic_group",
+        message_id: `om-${eventId}`,
+        thread_id: threadId,
+      },
+    },
   };
 }
 
@@ -73,10 +82,12 @@ const failAdoption = async () => {
 
 function createTestIngress(params: {
   queue: FeishuIngressQueue;
+  cfg?: ClawdbotConfig;
   dispatch?: (data: ReturnType<typeof messageEnvelope>) => unknown;
 }) {
   return createFeishuDurableIngress({
     accountId: "default",
+    cfg: params.cfg,
     queue: params.queue,
     dispatcher: {
       invoke: async (data) => await params.dispatch?.(data as ReturnType<typeof messageEnvelope>),
@@ -279,46 +290,69 @@ describe("Feishu durable ingress", () => {
     });
   });
 
-  it("keeps buffered input in its chat lane until a lifecycle handoff", async () => {
+  it.each([false, true])(
+    "keeps buffered input in its configured lane until handoff (topics=%s)",
+    async (topics) => {
+      await withQueue(async (queue, startIngress) => {
+        const buffered = createDeferred<FeishuIngressLifecycle>();
+        const dispatched: string[] = [];
+        const ingress = startIngress({
+          queue,
+          cfg: topics ? { channels: { feishu: { groupSessionScope: "group_topic" } } } : undefined,
+          dispatch: async (data) => {
+            const lifecycle = ingress.resolveLifecycle({ event_id: data.header.event_id });
+            if (!lifecycle) {
+              throw new Error("Missing ingress lifecycle");
+            }
+            dispatched.push(data.header.event_id);
+            if (data.header.event_id === "evt-buffered") {
+              buffered.resolve(lifecycle);
+              return { kind: "deferred" };
+            }
+            await lifecycle.onAdopted();
+            return undefined;
+          },
+        });
+        ingress.start();
+        await ingress.invoke(messageEnvelope("evt-buffered", "omt-a"), { needCheck: false });
+        const first = await buffered.promise;
+        try {
+          await ingress.invoke(messageEnvelope("evt-later", "omt-a"), { needCheck: false });
+          const sentinel = messageEnvelope("evt-other", "omt-b");
+          if (!topics) {
+            sentinel.event.message.chat_id = "oc-other-chat";
+          }
+          await ingress.invoke(sentinel, { needCheck: false });
+          await vi.waitFor(() => expect(dispatched).toContain("evt-other"));
+          expect((await queue.listPending()).map((row) => row.id)).toEqual(["evt-later"]);
+          expect(dispatched).toEqual(["evt-buffered", "evt-other"]);
+        } finally {
+          await first.onAdopted();
+          await ingress.waitForIdle();
+        }
+        expect(dispatched).toEqual(["evt-buffered", "evt-other", "evt-later"]);
+      });
+    },
+  );
+
+  it("recovers retained chat-lane rows after enabling topic queues", async () => {
     await withQueue(async (queue, startIngress) => {
-      const buffered = createDeferred<FeishuIngressLifecycle>();
-      const otherChat = createDeferred<void>();
+      const before = startIngress({ queue });
+      await before.invoke(messageEnvelope("evt-upgrade", "omt-a"), { needCheck: false });
+      await before.stop();
       const dispatched: string[] = [];
-      const ingress = startIngress({
+      const after = startIngress({
         queue,
+        cfg: { channels: { feishu: { groupSessionScope: "group_topic" } } },
         dispatch: async (data) => {
-          const lifecycle = ingress.resolveLifecycle({ event_id: data.header.event_id });
-          if (!lifecycle) {
-            throw new Error("Missing ingress lifecycle");
-          }
           dispatched.push(data.header.event_id);
-          if (data.header.event_id === "evt-buffered") {
-            buffered.resolve(lifecycle);
-            return { kind: "deferred" };
-          }
-          await lifecycle.onAdopted();
-          if (data.header.event_id === "evt-other") {
-            otherChat.resolve();
-          }
-          return undefined;
+          await after.resolveLifecycle({ event_id: data.header.event_id })?.onAdopted();
         },
       });
-      ingress.start();
-      await ingress.invoke(messageEnvelope("evt-buffered"), { needCheck: false });
-      const first = await buffered.promise;
-      try {
-        await ingress.invoke(messageEnvelope("evt-later"), { needCheck: false });
-        const sentinel = messageEnvelope("evt-other");
-        sentinel.event.message.chat_id = "oc-other-chat";
-        await ingress.invoke(sentinel, { needCheck: false });
-        await otherChat.promise;
-        expect((await queue.listPending()).map((row) => row.id)).toEqual(["evt-later"]);
-        expect(dispatched).toEqual(["evt-buffered", "evt-other"]);
-      } finally {
-        await first.onAdopted();
-        await ingress.waitForIdle();
-      }
-      expect(dispatched).toEqual(["evt-buffered", "evt-other", "evt-later"]);
+      after.start();
+      await after.waitForIdle();
+      expect(dispatched).toEqual(["evt-upgrade"]);
+      expect(await queue.listPending()).toEqual([]);
     });
   });
 
