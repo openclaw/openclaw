@@ -1,0 +1,119 @@
+name: CI Planner Benchmark
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-planner-benchmark-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  CI: "true"
+
+jobs:
+  measure:
+    if: github.repository == 'openclaw/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+        working-directory: harness
+    steps:
+      - name: Checkout measurement harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Checkout frozen planner workload
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 79f5aeb133830a1db60b55cff3cf7a617086aa07
+          path: workload
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
+      - name: Setup pinned pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.0.1
+        with:
+          package_json_file: harness/package.json
+          run_install: false
+          cache: false
+
+      - name: Verify checkout and toolchain identities
+        env:
+          HARNESS_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HARNESS_SHA"
+          test "$(git -C ../workload rev-parse HEAD)" = 79f5aeb133830a1db60b55cff3cf7a617086aa07
+          test "$(node --version)" = v24.22.1
+          test "$(pnpm --version)" = 12.15.0
+          /usr/bin/time --version
+
+      - name: Install each checkout from its own frozen lockfile
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          (cd ../workload && pnpm install --frozen-lockfile)
+          git diff --exit-code
+          git -C ../workload diff --exit-code
+
+      - name: Validate the measurement tool
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          pnpm test test/scripts/ci-planner-benchmark.test.ts --maxWorkers=1
+          node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.root.tooling.json --incremental
+          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.tooling.json scripts/bench-ci-planner.mts test/scripts/ci-planner-benchmark.test.ts
+          pnpm format:check scripts/bench-ci-planner.mts test/scripts/ci-planner-benchmark.test.ts config/knip.config.ts .github/workflows/ci-planner-benchmark.yml scripts/bench-ci-planner.md
+          pnpm check:workflows
+          pnpm deadcode:unused-files
+
+      - name: Measure fifteen serial planner flows
+        timeout-minutes: 22
+        env:
+          PLANNER_BENCHMARK_INSTALL_PROOF: separate pnpm install --frozen-lockfile completed for harness and workload in this job; caches off
+        run: |
+          set -euo pipefail
+          node scripts/bench-ci-planner.mts --workload ../workload --output "$RUNNER_TEMP/ci-planner-benchmark.json"
+
+      - name: Check report size and completeness
+        id: report
+        if: always()
+        env:
+          REPORT: ${{ runner.temp }}/ci-planner-benchmark.json
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, statSync } from 'node:fs';
+          const file = process.env.REPORT;
+          if (statSync(file).size > 16 * 1024 * 1024) throw new Error('Planner report exceeds 16 MiB');
+          const report = JSON.parse(readFileSync(file, 'utf8'));
+          if (report.schema !== 'openclaw-ci-planner-benchmark.v1') throw new Error('Unexpected planner report');
+          NODE
+
+      - name: Upload bounded report, including failed flows
+        if: always() && steps.report.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-planner-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-planner-benchmark.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 6
