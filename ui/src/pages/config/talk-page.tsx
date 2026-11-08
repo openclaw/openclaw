@@ -600,7 +600,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       (family?.unsupportedTransports.some((candidate) => candidate === configuredTransport) ||
         talkProviderRejectsTransport(option?.transports, configuredTransport));
     const supportedTransports = option?.transports?.filter(
-      (transport) => !unsupportedTransports.includes(transport),
+      (transport) => !unsupportedTransports.some((candidate) => candidate === transport),
     );
     runtimeConfig.patchForm(["talk", "realtime", "provider"], providerId);
     const relayOnly =
@@ -617,7 +617,8 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
         null;
     } else if (
       relayOnly &&
-      (configuredTransport === null || supportedTransports?.includes(configuredTransport) !== true)
+      (configuredTransport === null ||
+        supportedTransports?.some((candidate) => candidate === configuredTransport) !== true)
     ) {
       // Providers with no client-owned transport need an explicit supported route.
       resultingTransport = supportedTransports?.[0] ?? null;
