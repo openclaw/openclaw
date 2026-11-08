@@ -9,17 +9,27 @@ import type { ProcessCommand } from "./service-child-group-ownership.js";
 
 let reportedForeignArguments = false;
 
-function isJsRuntime(value: string): boolean {
-  return isNodeRuntime(value) || isBunRuntime(value) || path.basename(value) === "tsx";
+const REDACTED_ARGUMENTS_ENTITLEMENT = "com.apple.private.no-read-procargs";
+
+/** The running image from its kernel text vnode, which process.title cannot rewrite. */
+function readDarwinImagePath(pid: number): string | undefined {
+  const result = spawnSync("/usr/sbin/lsof", ["-a", "-p", String(pid), "-d", "txt", "-Fn"], {
+    encoding: "utf8",
+    timeout: 2_000,
+  });
+  return result.status === 0 ? /^n(\/.+)$/mu.exec(result.stdout)?.[1] : undefined;
 }
 
-/** Kernel accounting name: the exec basename, which process.title cannot rewrite. */
-function readDarwinImageName(pid: number): string | undefined {
-  const result = spawnSync("/bin/ps", ["-o", "ucomm=", "-p", String(pid)], {
+/** A sealed Apple binary that opts out of argument inspection, such as mdworker. */
+function isRedactedSystemImage(image: string): boolean {
+  if (!image.startsWith("/System/")) {
+    return false;
+  }
+  const result = spawnSync("/usr/bin/codesign", ["-d", "--entitlements", "-", "--xml", image], {
     encoding: "utf8",
-    timeout: 1_000,
+    timeout: 2_000,
   });
-  return (result.status === 0 && result.stdout.trim()) || undefined;
+  return result.status === 0 && result.stdout.includes(REDACTED_ARGUMENTS_ENTITLEMENT);
 }
 
 function readCommandWithServiceMarker(pid: number) {
@@ -34,7 +44,10 @@ function readCommandWithServiceMarker(pid: number) {
     // environment on earlier releases. As on Linux, only a JS runtime needs the
     // marker; its argv still classifies, and only a marker decision stays unknown.
     const command = readProcessCommand(pid);
-    return command && [command.executable, command.argv[0] ?? ""].some(isJsRuntime)
+    return command &&
+      [command.executable, command.argv[0] ?? ""].some(
+        (value) => isNodeRuntime(value) || isBunRuntime(value) || path.basename(value) === "tsx",
+      )
       ? { ...command, serviceMarkerUnavailable: true as const }
       : command;
   }
@@ -67,11 +80,11 @@ export function readDarwinProcessCommand(
     }
     if (cause.code === "layout-mismatch" || cause.code === "incomplete") {
       // Darwin redacts the argument image of binaries entitled with
-      // com.apple.private.no-read-procargs (mdworker), which then fails the
-      // alignment check. Without argv, only a JS runtime or OpenClaw binary can
-      // hold OpenClaw artifacts, as on Windows; other images are not custody doubt.
-      const image = readDarwinImageName(pid);
-      if (image && !isJsRuntime(image) && !/openclaw/iu.test(image)) {
+      // no-read-procargs, which then fails the alignment check. Those sealed
+      // system binaries cannot hold OpenClaw artifacts. Other unparseable images
+      // (non-UTF-8 argv) may, so they stay unknown.
+      const image = readDarwinImagePath(pid);
+      if (image && isRedactedSystemImage(image)) {
         return { argvUnavailable: true, executable: image, ...(owner ? { owner } : {}) };
       }
       throw cause;

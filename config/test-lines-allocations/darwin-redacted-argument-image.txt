@@ -1,2 +1,2 @@
-39
-# Redacted Darwin argument images (mdworker no-read-procargs) classified by kernel image name.
+50
+# Redacted Darwin argument images (mdworker no-read-procargs) trusted only for entitled sealed system binaries.

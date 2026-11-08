@@ -17,7 +17,7 @@ export type ProcessCommand =
     }
   | { argvUnavailable: true; uid: number; owner?: "same" | "different" | "unknown" }
   | { argvUnavailable: true; uid?: never; owner: "different" }
-  /** Darwin redacted the argument image of a binary that is not a JS runtime or OpenClaw. */
+  /** A sealed Apple binary whose argument image Darwin redacts (no-read-procargs). */
   | {
       argvUnavailable: true;
       executable: string;

@@ -119,22 +119,34 @@ it.each(["layout-mismatch", "incomplete", "helper-unavailable"] as const)(
   },
 );
 
+const mdworker =
+  "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker";
+
 it.each([
-  { code: "layout-mismatch", image: "mdworker", owner: "same", redacted: true },
-  { code: "incomplete", image: "mdworker", owner: undefined, redacted: true },
-  { code: "layout-mismatch", image: "node", owner: "same", redacted: false },
-  { code: "layout-mismatch", image: "bun", owner: "same", redacted: false },
-  { code: "layout-mismatch", image: "openclaw-gateway", owner: "same", redacted: false },
-  { code: "layout-mismatch", image: "", owner: "same", redacted: false },
+  { code: "layout-mismatch", image: mdworker, entitled: true, owner: "same", redacted: true },
+  { code: "incomplete", image: mdworker, entitled: true, owner: undefined, redacted: true },
+  { code: "layout-mismatch", image: mdworker, entitled: false, owner: "same", redacted: false },
+  // Non-UTF-8 argv also fails alignment; an unentitled shell may hold a runtime.
+  { code: "layout-mismatch", image: "/bin/sh", entitled: true, owner: "same", redacted: false },
+  { code: "layout-mismatch", image: "", entitled: true, owner: "same", redacted: false },
 ] as const)(
-  "classifies a $code argument image by its $image kernel image",
-  ({ code, image, owner, redacted }) => {
-    // mdworker's private no-read-procargs entitlement leaves a misaligned argv.
+  "trusts a $code argument image only for an entitled system image ($image)",
+  ({ code, image, entitled, owner, redacted }) => {
     const error = new ProcSafeError(code, "invalid Darwin argument alignment");
     readCommand.mockImplementation(() => {
       throw error;
     });
-    spawn.mockReturnValue({ status: image ? 0 : 1, stdout: image ? `${image}\n` : "" });
+    spawn.mockImplementation((command: string) =>
+      command === "/usr/sbin/lsof"
+        ? {
+            status: image ? 0 : 1,
+            stdout: image ? `p992\nftxt\nn${image}\nftxt\nn/usr/lib/dyld\n` : "",
+          }
+        : {
+            status: 0,
+            stdout: entitled ? "<key>com.apple.private.no-read-procargs</key><true/>" : "<dict/>",
+          },
+    );
     const inspect = () => readDarwinProcessCommand(992, owner);
     if (redacted) {
       expect(inspect()).toEqual({
@@ -145,7 +157,6 @@ it.each([
     } else {
       expect(inspect).toThrow(error);
     }
-    expect(spawn).toHaveBeenCalledWith("/bin/ps", ["-o", "ucomm=", "-p", "992"], expect.anything());
   },
 );
 
