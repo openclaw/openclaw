@@ -281,10 +281,10 @@ it("offers the human turn's skill authoring definitions on an internal turn", as
     createOpenClawCodingTools({
       ...options,
       ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
-    }).filter((tool) => tool.name === "skill_library" || tool.name === "skill_workshop");
+    }).filter((tool) => tool.name === "skill_library");
   const user = authoring(userTurn, resolve(session.sessionKey, human));
   const wake = completionTurn("exec");
-  expect(user.map((tool) => tool.name).toSorted()).toEqual(["skill_library", "skill_workshop"]);
+  expect(user.map((tool) => tool.name)).toEqual(["skill_library"]);
   expect(surface(authoring(wake))).not.toEqual(surface(user));
   const stable = authoring(wake, resolve(session.sessionKey, undefined));
   expect(surface(stable)).toEqual(surface(user));
