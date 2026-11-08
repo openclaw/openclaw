@@ -60,6 +60,8 @@ const installerSecrets = [...hostSecrets, ".env.installer"];
 let source: string;
 let baseCommit: string;
 let changedCommit: string;
+let sourceCommit: string;
+let attributeCommit: string;
 let env: NodeJS.ProcessEnv;
 
 async function expectMissing(root: string, ...relatives: string[]) {
@@ -104,9 +106,16 @@ beforeAll(async () => {
   await git(source, "add", ".");
   await git(source, "commit", "--quiet", "-m", "fixture");
   baseCommit = await git(source, "rev-parse", "HEAD");
+  await write(source, "source.ts", "export const version = 'updated';\n");
+  await git(source, "commit", "--quiet", "-am", "source update");
+  sourceCommit = await git(source, "rev-parse", "HEAD");
   await write(source, "pnpm-lock.yaml", secondLock);
   await git(source, "commit", "--quiet", "-am", "lockfile update");
   changedCommit = await git(source, "rev-parse", "HEAD");
+  await write(source, ".gitattributes", "source.ts text eol=crlf\n");
+  await git(source, "add", ".gitattributes");
+  await git(source, "commit", "--quiet", "-m", "checkout attributes");
+  attributeCommit = await git(source, "rev-parse", "HEAD");
   await write(source, ".gitignore", "\n.env*\n.npmrc\nbuild/\n");
   await git(source, "commit", "--quiet", "-am", "dependency ignore variant");
   const remote = path.join(root, "origin.git");
@@ -121,7 +130,10 @@ beforeEach(() => {
   mocks.backend.mockResolvedValue(createCopyWorktreeBackend());
   mocks.install.mockImplementation(async ({ directory }) => {
     await expectMissing(directory, ...hostSecrets);
-    return installFiles(directory, { [dependencyFile]: await read(directory, "pnpm-lock.yaml") });
+    return installFiles(directory, {
+      [dependencyFile]: await read(directory, "pnpm-lock.yaml"),
+      "node_modules/source-derived.txt": await read(directory, "source.ts"),
+    });
   });
 });
 async function fixture(signal: AbortSignal) {
@@ -155,7 +167,11 @@ async function fixture(signal: AbortSignal) {
   };
 }
 
-it("isolates dependency clones and rebuilds after lockfile changes", async ({ signal }) => {
+it("refreshes source changes once, isolates clones, and rebuilds changed lockfiles", async ({
+  signal,
+}) => {
+  const backend = createCopyWorktreeBackend();
+  mocks.backend.mockResolvedValue(backend);
   const clone = await fixture(signal);
   const first = await clone("first");
   expect(await read(first, dependencyFile)).toBe(firstLock);
@@ -174,19 +190,42 @@ it("isolates dependency clones and rebuilds after lockfile changes", async ({ si
   expect(await read(first, dependencyFile)).toBe("consumer edit\n");
   expect(await git(second, "branch", "--show-current")).toBe("openclaw/second");
   expect(mocks.install).toHaveBeenCalledOnce();
+  const refreshed = await Promise.all([
+    clone("updated-a", sourceCommit),
+    clone("updated-b", sourceCommit),
+  ]);
+  for (const checkout of refreshed) {
+    expect(await git(checkout, "rev-parse", "HEAD")).toBe(sourceCommit);
+    expect(await read(checkout, "source.ts")).toBe("export const version = 'updated';\n");
+    expect(await read(checkout, dependencyFile)).toBe(firstLock);
+    expect(await read(checkout, "node_modules/source-derived.txt")).toBe(
+      "export const version = 'updated';\n",
+    );
+    expect(await git(checkout, "status", "--porcelain")).toBe("");
+  }
+  expect(await read(first, "source.ts")).toBe(sourceText);
+  expect(backend.createTemplate).toHaveBeenCalledOnce();
+  expect(mocks.install).toHaveBeenCalledTimes(2);
+  expect(mocks.install.mock.calls[0]![0].scopeKey).not.toBe(
+    mocks.install.mock.calls[1]![0].scopeKey,
+  );
   const third = await withWorktreePreparationTiming("managed", () =>
     clone("changed-lock", changedCommit),
   );
   expect(await read(third, dependencyFile)).toBe(secondLock);
   expect(await read(third, "pnpm-lock.yaml")).toBe(secondLock);
-  expect(mocks.install).toHaveBeenCalledTimes(2);
+  expect(mocks.install).toHaveBeenCalledTimes(3);
+  expect(backend.createTemplate).toHaveBeenCalledTimes(2);
   expect(mocks.preparation.mock.lastCall?.[0].details).toMatchObject({
     template: "cold",
     "template.reason": "ready",
     "template.missReason": "commit-changed",
-    "template.priorSourceCommit": baseCommit.slice(0, 12),
+    "template.priorSourceCommit": sourceCommit.slice(0, 12),
     "template.requestedSourceCommit": changedCommit.slice(0, 12),
   });
+  const attributes = await clone("attributes", attributeCommit);
+  expect(await read(attributes, "source.ts")).toBe("export const version = 'updated';\r\n");
+  expect(backend.createTemplate).toHaveBeenCalledTimes(3);
 });
 
 it("retains dependencies without credentials or install debris", async ({ signal }) => {
