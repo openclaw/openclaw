@@ -78,8 +78,7 @@ suite.define(() => {
         observer.observe(element, { childList: true, characterData: true, subtree: true });
         return { records, observer };
       });
-      await gateway.deferNext("logs.tail");
-      const reads = (await gateway.getRequests("logs.tail")).length;
+      const reads = await gateway.deferNext("logs.tail");
       await expect
         .poll(async () => (await gateway.getRequests("logs.tail")).length)
         .toBeGreaterThan(reads);

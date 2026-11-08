@@ -156,9 +156,9 @@ export async function requireGitHubPublicationCommit(
   cwd: string,
   env: NodeJS.ProcessEnv,
   failure: string,
-  options: { contents?: boolean; commitPresent?: boolean } = {},
+  options: { contents?: boolean; commitPresent?: boolean; baseBranch?: string } = {},
 ) {
-  const fetch = async (missing?: string[]) => {
+  const fetch = async (missing?: string[], tips = [sha]) => {
     const result = await run(
       [
         ...GITHUB_CREDENTIAL_ARGS,
@@ -171,6 +171,8 @@ export async function requireGitHubPublicationCommit(
         "--no-tags",
         "--no-write-fetch-head",
         "--recurse-submodules=no",
+        // Match managed base refresh: omit unrelated session histories from negotiation.
+        ...tips.map((tip) => `--negotiation-tip=${tip}`),
         // Keep ancestry and tree metadata; callers request file contents below.
         ...(missing ? ["--refetch", "--stdin"] : ["--filter=blob:none"]),
         "--",
@@ -190,22 +192,35 @@ export async function requireGitHubPublicationCommit(
   };
   if (!options.commitPresent) {
     // Fetching a present non-promisor commit still makes Git enumerate every
-    // promisor object for connectivity. Probe the physical commit without lazy
-    // fetching or trusting commit-graph metadata; content hydration stays below.
+    // promisor object for connectivity. Probe physical commits without lazy
+    // fetching or commit-graph metadata; collect cached base tips in the same process.
     const present = await run(
       [
         "git",
         "-c",
         "core.commitGraph=false",
-        "rev-list",
-        "--missing=allow-any",
-        "--no-walk",
-        `${sha}^{commit}`,
+        "cat-file",
+        "--batch-check=%(objectname) %(objecttype)",
       ],
-      { cwd, env },
+      {
+        cwd,
+        env,
+        input: [
+          sha,
+          "refs/remotes/origin/HEAD",
+          ...(options.baseBranch ? [`refs/remotes/origin/${options.baseBranch}`] : []),
+        ]
+          .map((ref) => `${ref}^{commit}\n`)
+          .join(""),
+      },
     );
-    if (present.code !== 0 || !present.stdout.toString("utf8").trim()) {
-      await fetch();
+    const [commit, ...tips] = present.stdout
+      .toString("utf8")
+      .trim()
+      .split("\n")
+      .map((line) => (line.endsWith(" commit") ? line.slice(0, -7) : ""));
+    if (present.code !== 0 || !commit) {
+      await fetch(undefined, tips.filter(Boolean));
     }
   }
   if (!options.contents) {
