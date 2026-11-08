@@ -1,0 +1,3 @@
+# Native pre-resize completed-fragment regression for short and exact-estimate rows,
+# plus ordinary-row exclusion to preserve wheel CPU. Exact net regression-test growth.
+61

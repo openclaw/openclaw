@@ -58,8 +58,8 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Coordinator-accepted completed-run anchor fix: keep cold overscan out of flow.
-  // Current-main 1,296,714 B + 203 B measured growth; no startup growth.
-  chatBootJsGzipBytes: 1_296_917,
+  // Current-main 1,296,590 B + 205 B measured growth; no startup growth.
+  chatBootJsGzipBytes: 1_296_795,
   // Channels: raw -159 B, served +22 B; coordinator-accepted normalized trade +64 B.
   newBootJsGzipBytes: 803_250,
   startupCssRequests: 1,

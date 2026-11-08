@@ -153,10 +153,13 @@ export class TranscriptInitialRange {
     const active = this.activeIndexes();
     const virtualizer = this.virtualizer();
     const first = active[0];
+    // Ordinary rows would pay another commit on every wheel step. Retained fragments
+    // need preparation before their cold, estimated height can enter the flow.
     const predecessor =
       !this.pending &&
       !this.preparingEnd &&
       first !== undefined &&
+      rows[first]?.retainDom &&
       first === (virtualizer.range?.startIndex ?? 0) - 1 &&
       !this.cachedRowSize(first) &&
       !virtualizer.itemSizeCache.has(virtualizer.options.getItemKey(first)) &&
