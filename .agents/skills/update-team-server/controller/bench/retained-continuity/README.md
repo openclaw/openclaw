@@ -101,6 +101,8 @@ unbound build intent before timing. Baseline must refuse the unsupported
 `retire-build` action; candidate must return `BUILD_RETIRED` and preserve each
 archived artifact byte-for-byte while removing the active files. This arm measures
 the retirement owner and its incumbent inspection child, and likewise compares
-different outcomes. The standalone
-regression suite separately covers captured-operation replay and fresh-operation
-admission after retirement.
+different outcomes. Allocation aggregation counts only `release-lib.mjs` owner
+processes: synthetic native-observation stubs also inherit the sampler, but their
+allocations are fixture IO and are excluded. All raw profiles remain available.
+The standalone regression suite separately covers captured-operation replay and
+fresh-operation admission after retirement.

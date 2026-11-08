@@ -175,9 +175,9 @@ try {
   assert.deepEqual(readFileSync(f.originalPath), originalWitness);
   const allocations =
     mode === "alloc"
-      ? readdirSync(prefix + ".alloc").map((p) =>
-          JSON.parse(readFileSync(join(prefix + ".alloc", p))),
-        )
+      ? readdirSync(prefix + ".alloc")
+          .map((p) => JSON.parse(readFileSync(join(prefix + ".alloc", p))))
+          .filter((profile) => profile.argv[1].endsWith("/release-lib.mjs"))
       : [];
   assert.equal(
     allocations.length,
