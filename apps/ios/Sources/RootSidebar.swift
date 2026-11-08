@@ -435,6 +435,7 @@ struct RootSidebar: View {
                 }
             }
 
+            let isSessionsSelected = self.selectedDestination == .sessions
             Button {
                 self.selectSidebarDestination(.sessions)
             } label: {
@@ -451,6 +452,10 @@ struct RootSidebar: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(OpenClawSidebarPalette.accent)
+            .background(isSessionsSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
+                cornerRadius: OpenClawProMetric.controlRadius,
+                style: .continuous))
+            .accessibilityAddTraits(isSessionsSelected ? .isSelected : [])
         }
     }
 
@@ -535,12 +540,18 @@ struct RootSidebar: View {
 
     /// Web-parity compact footer: connection state left, Settings gear right.
     private var footer: some View {
-        VStack(spacing: 0) {
+        let isGatewaySelected = self.selectedDestination == .gateway
+        let isSettingsSelected = self.selectedDestination == .settings
+        return VStack(spacing: 0) {
             self.separator
             HStack(spacing: 4) {
                 RootSidebarGatewayControl(fallbackName: self.gatewayName) {
                     self.selectSidebarDestination(.gateway)
                 }
+                .background(isGatewaySelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
+                    cornerRadius: OpenClawProMetric.controlRadius,
+                    style: .continuous))
+                .accessibilityAddTraits(isGatewaySelected ? .isSelected : [])
 
                 Spacer(minLength: 4)
 
@@ -550,7 +561,11 @@ struct RootSidebar: View {
                 {
                     self.selectSidebarDestination(.settings)
                 }
+                .background(isSettingsSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
+                    cornerRadius: OpenClawProMetric.controlRadius,
+                    style: .continuous))
                 .accessibilityIdentifier("RootTabs.Sidebar.Destination.settings")
+                .accessibilityAddTraits(isSettingsSelected ? .isSelected : [])
             }
         }
         .padding(.horizontal, 10)

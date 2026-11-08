@@ -17,6 +17,7 @@ export type XEventStatus = {
   eventMode?: "stream" | "poll";
   streamConnected?: boolean;
   streamBackoffMs?: number;
+  terminalDisconnect?: true;
   lastEventAt?: number;
   cursor?: string;
   message?: string;
@@ -580,6 +581,13 @@ export async function runXEvents(
           await pollXMentions(options);
         } catch (error) {
           options.signal.throwIfAborted();
+          if (error instanceof XApiError && (error.status === 401 || error.status === 403)) {
+            options.onStatus?.({
+              terminalDisconnect: true,
+              message: "mentions polling authentication failed; check X credentials",
+            });
+            throw error;
+          }
           if (error instanceof XBudgetExceededError) {
             options.onStatus?.({ message: error.message, spend: await options.api.spend.status() });
             await waitForXBudgetReset(error.exhaustedUntil, options.signal);

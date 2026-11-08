@@ -80,7 +80,15 @@ with sandbox mode `all` or `non-main` in the background. Agents with sandbox mod
 `off` skip background dependency preparation; creator-role-required sandboxes
 still prepare dependencies on first use. A session arriving during preparation
 waits for the same build; later checkouts arrive with `node_modules`. Other selected commits
-still prepare their dependencies on first use. Shutdown cancels preparation and
+still run dependency installation on first use. When the frozen lockfile and Git
+attributes are unchanged, an idle template imports only the new Git objects and
+checks out the source delta before reinstalling into its retained dependencies.
+Repeat installation still runs repository lifecycle scripts when manifests and
+lockfiles are unchanged.
+Concurrent requests for that commit share the refresh. Lockfile or attribute changes
+build a fresh template; a template still being cloned cannot be refreshed. Each
+clone still receives only the selected source snapshot in its private Git object
+store. Shutdown cancels preparation and
 drains accepted installer cleanup. Before publishing a template, OpenClaw fences
 the disposable installer against restart and verifies that it has stopped. Container
 removal runs serially in the background, so a slow Docker or Podman removal does
@@ -103,8 +111,10 @@ cache falls back promptly instead of waiting through network retries.
 
 The reusable generation binds the source commit, frozen lockfile, immutable image
 (including its Node and pnpm versions), guest path, and sandbox policy. A changed
-generation prepares a new template with a distinct builder identity; background
-housekeeping recovers interrupted builders independently of template expiration. Installation failure or changed tracked source
+generation uses a distinct builder identity, including incremental refreshes.
+Exact commit identity remains necessary because repository lifecycle scripts and
+local packages can consume source files outside the lockfile and manifests.
+Background housekeeping recovers interrupted builders independently of template expiration. Installation failure or changed tracked source
 records a warning with a bounded, redacted tail of the installer output and keeps
 a source-only template for that generation. Repeated preparations with the same
 inputs reuse that source-only template without rerunning the failed install. Missing
@@ -124,7 +134,9 @@ the original PR selected for subsequent publication; the earlier publication
 receipt remains unchanged.
 Publication and base refresh reuse exact commits already stored locally instead
 of fetching them again. Partial clones still fetch missing contents when the
-operation needs those files.
+operation needs those files. Missing publication commits use the cached target
+and default base tips for fetch negotiation when available, avoiding unrelated
+session histories while retaining commit ancestry and trees.
 Only sessions with a writable managed sandbox are offered this action; direct
 host sessions merge the base with git in their workspace before publishing.
 Resolve reported conflicts and repeat it with `conflictsResolved: true` and the
@@ -262,7 +274,12 @@ The Gateway keeps one prepared checkout per active repository, destination root,
 
 Preparation logs include `templateDetails` with the backend, selection or failure reason, clone-byte estimate, and an error code when available. Reasons distinguish disabled acceleration, empty or profiled checkouts, native probing, ACL rejection, checkout policy, missing or stale templates, template creation, and disk admission.
 
-The `checkout` phase includes its child phases; do not add it to `templateApply`. Sub-phases separate registration metadata and inspection, commit preparation, clone admission estimates, destination preparation, marker replacement, index location/copy/refresh, prompt publication, template release, and warm-slot acquisition/application. The clone-byte estimate is a disk-admission allowance, not measured bytes written.
+Preparation phases are inclusive. For sandbox dependency preparation, `checkout`,
+`setup`, and a concurrent caller's `mutationWait` are inside `templatePrepare`;
+`templateApply` measures each private clone separately. A warm caller waiting
+for a build therefore reports preparation time without running a second install.
+For managed source checkouts, `checkout` includes its child phases; do not add it
+to `templateApply`. Sub-phases separate registration metadata and inspection, commit preparation, clone admission estimates, destination preparation, marker replacement, index location/copy/refresh, prompt publication, template release, and warm-slot acquisition/application. The clone-byte estimate is a disk-admission allowance, not measured bytes written.
 
 The `workspaceWait` phase records waits for private sandbox workspace reconciliation custody and for an already-running preparation. It includes waits behind another caller's dependency-template build, even when the waiting caller ultimately reuses the prepared workspace without selecting a template itself.
 
