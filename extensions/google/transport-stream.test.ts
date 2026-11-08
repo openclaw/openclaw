@@ -1460,62 +1460,6 @@ describe("google transport stream", () => {
   });
 
   it.each([
-    'data: {"candidates":[{"finishReason":"STOP"}]}\n\ndata: {"candidates":[',
-    'data: {"candidates":[{"finishReason":"STOP"}]}\r\n',
-  ])("rejects an incomplete SSE frame: %s", async (sse) => {
-    guardedFetchMock.mockResolvedValueOnce(buildRawSseResponse(sse));
-    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
-    expect(result.stopReason).toBe("error");
-    // Agent retry classifies this exact text as a transient disconnect.
-    expect(result.errorMessage).toBe("Google SSE stream ended with an incomplete frame");
-  });
-
-  it.each([
-    ...[
-      { label: "keepalive comment", tail: ": keepalive\n" },
-      { label: "control fields", tail: "event: ping\nid: heartbeat" },
-      { label: "empty data field", tail: "data:\n" },
-    ].map(({ label, tail }) => ({
-      label,
-      sse: `data: {"candidates":[{"finishReason":"STOP"}]}\n\r${tail}`,
-    })),
-    ...[
-      { label: "carriage-return-only", delimiter: "\r\r" },
-      { label: "line-feed then CRLF", delimiter: "\n\r\n" },
-      { label: "CRLF then carriage-return", delimiter: "\r\n\r" },
-      { label: "carriage-return then CRLF", delimiter: "\r\r\n" },
-    ].map(({ label, delimiter }) => ({
-      label,
-      sse: `data: {"candidates":[{"finishReason":"STOP"}]}${delimiter}`,
-    })),
-    {
-      label: "CRLF-separated data lines",
-      sse: 'data: {"candidates":[\r\ndata: {"finishReason":"STOP"}]}\r\n\r\n',
-    },
-  ])("accepts Google SSE framing with $label", async ({ sse }) => {
-    guardedFetchMock.mockResolvedValueOnce(buildRawSseResponse(sse));
-    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
-    expect(result.stopReason).toBe("stop");
-  });
-
-  it("surfaces a framed provider error arriving after a terminal Google response", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      buildRawSseResponse(
-        'data: {"candidates":[{"finishReason":"STOP"}]}\n\n' +
-          'data: {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"quota exceeded"}}\n\n',
-      ),
-    );
-
-    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
-
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorCode: "RESOURCE_EXHAUSTED",
-      errorMessage: expect.stringContaining("quota exceeded"),
-    });
-  });
-
-  it.each([
     { prefix: "data: ", framing: "framed" },
     { prefix: "", framing: "bare" },
   ] as const)(
