@@ -7,6 +7,7 @@ import { runOutsideOperatorToolGatewayAuthority } from "../../../gateway/operato
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
 import type { GatewayLifecycleTypingParams } from "../../../gateway/server-instance-runtime.types.js";
 import { getGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime-context.js";
+import { isRetryableDeliveryNotSentError } from "../../../infra/delivery-recovery.shared.js";
 import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { normalizeOutboundReplyPayloadCore } from "../../../infra/outbound/reply-payload-normalize.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
@@ -374,17 +375,22 @@ export async function deliverCompletionDirect(params: {
   };
   internalEvents?: readonly AgentInternalEvent[];
   contentKind: "completed_result" | "failed_notice";
+  /** Deterministic recovery notice, not model-generated completion output. */
+  preparedNotice?: string;
   signal?: AbortSignal;
   agentResult?: { payloads?: unknown };
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   onDeliveryError?: (error: unknown) => void;
   isSourceSessionEffectsAllowed?: () => boolean;
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
-  const completionContent = collectDirectCompletionContent({
-    agentResult: params.agentResult,
-    events: params.internalEvents,
-    contentKind: params.contentKind,
-  });
+  const completionContent: DirectCompletionContent | undefined =
+    params.preparedNotice === undefined
+      ? collectDirectCompletionContent({
+          agentResult: params.agentResult,
+          events: params.internalEvents,
+          contentKind: params.contentKind,
+        })
+      : { content: params.preparedNotice, mediaUrls: [] };
   // A failed completion must not deliver partial child media as its result.
   const content = completionContent?.content;
   const mediaUrls = completionContent?.mediaUrls ?? [];
@@ -510,6 +516,8 @@ export async function deliverCompletionDirect(params: {
     return {
       delivered: false,
       path: "direct",
+      // Only proven no-send failures may be resent; unproven ones stay unclassified.
+      ...(isRetryableDeliveryNotSentError(err) ? { disposition: "retryable" as const } : {}),
       error: `text completion direct delivery failed: ${summarizeDeliveryError(err)}`,
     };
   } finally {

@@ -1,0 +1,3 @@
+# Parent-stall delivery-only recovery: watchdog fallback, private/mixed/yielded findings withheld,
+# proven no-send retry through the real sender, real-SQLite transcript write, opt-in live watchdog proof.
+606
