@@ -3,10 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
-import type { ApplicationContext } from "../app/context.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
-import { patchReceipt } from "../lib/sessions/session-rpc.test-support.ts";
-import "../lib/toast-host.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { sessionProgressHoverTargetFromEvent } from "./session-progress-hovercard-target.ts";
 import { createHovercard } from "./session-progress-hovercard.test-support.ts";
@@ -180,111 +177,6 @@ describe("session progress hovercard ownership", () => {
       expect(portalText()).toContain(`${agentId} progress`);
     },
   );
-
-  it("dismisses the hovered failure with its unread marker and owner role", async () => {
-    const patch = vi.fn<ApplicationContext["sessions"]["patch"]>(async () => null);
-    const childKey = "agent:research:subagent:child";
-    const harness = createHovercard({
-      sessionKey: childKey,
-      // Session-scoped writers may patch only sessions they own.
-      scopes: ["operator.read", "operator.sessions.write"],
-      sessionsPatch: patch,
-      rowDetails: {
-        attention: {
-          kind: "error",
-          reason: "Synthetic child failure",
-          sourceSessionKey: childKey,
-          sourceSessionId: "child-session",
-          sourceMarkedUnreadAt: 100,
-          sourceSharingRole: "owner",
-        },
-      },
-    });
-    document.body.append(harness.provider);
-    flush();
-    await harness.focus();
-    const dismiss = () =>
-      getPortal()?.querySelector<HTMLButtonElement>(".session-hovercard__error .btn") ?? null;
-    await waitForSolid(() => expect(dismiss()).not.toBeNull());
-    dismiss()!.click();
-    await waitForSolid(() =>
-      expect(patch).toHaveBeenCalledWith(
-        childKey,
-        { unread: false },
-        { agentId: "research", expectedMarkedUnreadAt: 100, expectedSessionId: "child-session" },
-      ),
-    );
-  });
-
-  it("reports a rejected Dismiss and keeps it for a retry", async () => {
-    const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
-    await toast.updateComplete;
-    const patch = vi
-      .fn<ApplicationContext["sessions"]["patch"]>(async (key) =>
-        patchReceipt(key, { sessionId: "child-session", lastReadAt: 20 }),
-      )
-      .mockRejectedValueOnce(new Error("Session store unavailable"))
-      .mockResolvedValueOnce(null);
-    const harness = createHovercard({
-      sessionKey: "agent:research:subagent:child",
-      scopes: ["operator.read", "operator.write"],
-      sessionsPatch: patch,
-      rowDetails: {
-        attention: {
-          kind: "error",
-          reason: "Synthetic child failure",
-          sourceSessionKey: "agent:research:subagent:child",
-          sourceSessionId: "child-session",
-        },
-      },
-    });
-    document.body.append(harness.provider);
-    flush();
-    await harness.focus();
-    const dismiss = () =>
-      getPortal()?.querySelector<HTMLButtonElement>(".session-hovercard__error .btn") ?? null;
-    await waitForSolid(() => expect(dismiss()).not.toBeNull());
-    dismiss()!.click();
-    await waitForSolid(() =>
-      expect(toast.toasts[0]?.options.message).toBe(
-        "Couldn't mark as read. Try again. Session store unavailable",
-      ),
-    );
-    expect(toast.toasts[0]?.options.severity).toBe("error");
-    expect(dismiss()?.disabled).toBe(false);
-    const messages = () => toast.toasts.map((entry) => entry.options.message);
-    // A retired connection ends the retry without a receipt: still not read.
-    dismiss()!.click();
-    await waitForSolid(() => expect(patch).toHaveBeenCalledTimes(2));
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(messages()).toEqual(["Couldn't mark as read. Try again. Session store unavailable"]);
-    await waitForSolid(() => expect(dismiss()?.disabled).toBe(false));
-    dismiss()!.click();
-    await waitForSolid(() => expect(messages()).toEqual(["Marked as read"]));
-    expect(patch).toHaveBeenCalledTimes(3);
-  });
-
-  it("offers no Dismiss for a restored failure without its session id", async () => {
-    const harness = createHovercard({
-      sessionKey: "agent:research:main",
-      scopes: ["operator.read", "operator.write"],
-      sessionsPatch: vi.fn<ApplicationContext["sessions"]["patch"]>(async () => null),
-      rowDetails: {
-        attention: {
-          kind: "error",
-          reason: "Synthetic child failure",
-          sourceSessionKey: "agent:research:subagent:child",
-        },
-      },
-    });
-    document.body.append(harness.provider);
-    flush();
-    await harness.focus();
-    await waitForSolid(() => expect(portalText()).toContain("Synthetic child failure"));
-    expect(getPortal()?.querySelector(".session-hovercard__error .btn")).toBeNull();
-  });
 
   it("retires a removed provider while its progress request is pending", async () => {
     const harness = mountHovercard("global", true);

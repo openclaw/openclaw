@@ -22,7 +22,6 @@ import { PersonAvatarLink, PersonName } from "./person-activity-link-solid.tsx";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createHovercardControlRef, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
 import { SessionGitDiff } from "./session-git-diff.tsx";
-import { SessionHovercardError } from "./session-hovercard-error.tsx";
 import { participantLabel, formatSessionAge, sessionAttribution } from "./session-hovercard.ts";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import { progressCardHeadsUp } from "./session-progress-card.ts";
@@ -176,8 +175,6 @@ export type SessionHovercardInput = {
   personActivity?: PersonActivityRouting;
   pullRequests?: ControlUiSessionPullRequestSnapshot;
   progressCard?: ProgressCard | null;
-  /** Marks the failed source session read; omitted when the viewer cannot. */
-  dismissFailure?: () => void;
   connected?: boolean;
 };
 function ParticipantLink(props: {
@@ -576,7 +573,6 @@ export function SessionHovercard(props: SessionHovercardInput) {
             </Show>
           </div>
         </Show>
-        <SessionHovercardError attention={props.row?.attention} dismiss={props.dismissFailure} />
         <Show when={commentary() || headsUp()}>
           <section
             class="session-hovercard__section session-hovercard__task session-hovercard__notepad"

@@ -1,2 +1,0 @@
-# Failed-session acknowledgement: identity, permissions, authoritative receipts, partial-bulk retry focus and desktop/mobile browser behavior. Capture-only plumbing trimmed.
-653

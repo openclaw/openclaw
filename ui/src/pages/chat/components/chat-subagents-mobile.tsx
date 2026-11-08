@@ -1,6 +1,5 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
-import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
@@ -22,8 +21,6 @@ export type ChatSubagentMobileItem = {
   elapsed?: JSX.Element;
   /** Omitted when the native owner does not offer Stop for this run. */
   stop?: ChatSubagentMobileStop;
-  /** Offered for unacknowledged failures the viewer may mark read. */
-  dismiss?: { label: string; onDismiss: () => Promise<void> };
 };
 
 export type ChatSubagentsMobileListProps = {
@@ -35,8 +32,6 @@ export type ChatSubagentsMobileListProps = {
   finishedId: string;
   finishedOpen: boolean;
   onToggleFinished: () => void;
-  /** Offered when two or more failures can be dismissed. */
-  dismissAll?: { label: string; onDismiss: () => Promise<void> };
   onOpen: (key: string) => void;
   /** Parent-owned loading/error/retry and empty feedback. */
   notice?: JSX.Element;
@@ -66,8 +61,6 @@ function MobileRow(props: {
   const control = props.createStop(() => props.item.key);
   const nameScrollState = useScrollState(true, false);
   const finished = () => ["finished", "failed", "stopped"].includes(props.item.status);
-  let open: HTMLButtonElement | undefined;
-  let dismissButton: HTMLButtonElement | undefined;
   return (
     <div
       class={["chat-subagents-mobile__row", { "chat-subagents-mobile__row--finished": finished() }]}
@@ -76,12 +69,7 @@ function MobileRow(props: {
     >
       <button
         class="chat-subagents-mobile__open"
-        ref={[
-          elementRef(props.registerOpen.bind(undefined, props.item.key)),
-          (button) => {
-            open = button;
-          },
-        ]}
+        ref={[elementRef(props.registerOpen.bind(undefined, props.item.key))]}
         type="button"
         onClick={() => props.onOpen(props.item.key)}
       >
@@ -114,29 +102,6 @@ function MobileRow(props: {
       {finished() && <span class="chat-subagents-mobile__elapsed">{props.item.elapsed}</span>}
       <Show when={props.item.stop && !props.item.stop.disabled ? props.item.stop : undefined}>
         {(stop) => <MobileStop action={stop()} control={control} />}
-      </Show>
-      <Show when={props.item.dismiss}>
-        {(dismiss) => (
-          <IconButton
-            glyph="row"
-            icon="check"
-            label={dismiss().label}
-            tooltip={false}
-            ref={(button: HTMLButtonElement) => {
-              dismissButton = button;
-            }}
-            onClick={() =>
-              void dismiss()
-                .onDismiss()
-                .finally(() => {
-                  // The row stays; keep focus on it once its dismiss control is gone.
-                  if (!dismissButton?.isConnected && open?.isConnected) {
-                    open.focus({ preventScroll: true });
-                  }
-                })
-            }
-          />
-        )}
       </Show>
       <Icon class="chat-subagents-mobile__chevron" name="chevronRight" />
     </div>
@@ -208,26 +173,6 @@ export function ChatSubagentsMobileList(props: ChatSubagentsMobileListProps) {
             </span>
             <Icon name={props.finishedOpen ? "chevronDown" : "chevronRight"} />
           </button>
-          <Show when={props.finishedOpen && props.dismissAll}>
-            {(dismissAll) => (
-              <button
-                class="btn btn--ghost btn--xs"
-                type="button"
-                onClick={(event) => {
-                  const button = event.currentTarget;
-                  void dismissAll()
-                    .onDismiss()
-                    .finally(() => {
-                      if (!button.isConnected) {
-                        finishedToggle?.focus({ preventScroll: true });
-                      }
-                    });
-                }}
-              >
-                {dismissAll().label}
-              </button>
-            )}
-          </Show>
           <div
             class="chat-subagents-mobile__list"
             id={props.finishedId}
