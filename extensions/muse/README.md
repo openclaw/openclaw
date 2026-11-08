@@ -12,8 +12,10 @@ openclaw plugins install @openclaw/muse
 Install Muse Code separately and sign in once on the Gateway host with `muse`
 or `muse login`.
 
-The harness is opt-in only: set `agentRuntime.id: "muse"` on a `meta/*` model
-or on the `meta` provider; `auto` never picks it.
+Set `agentRuntime.id: "muse"` on a `meta/*` model or on the `meta` provider to
+route explicitly. Without that, automatic selection still uses Muse when it is the
+only native runtime for the model and no authored API binding or host credential
+takes precedence (the guide below states the full rule).
 
 See [Muse Code agent runtime](https://docs.openclaw.ai/plugins/muse) for auth,
 approvals, sessions, limitations, and live tests.
