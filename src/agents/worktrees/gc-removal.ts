@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -51,7 +52,7 @@ export type WorktreeCleanupMutation = <T>(
 
 export type WorktreeCleanupOwnerPolicy = {
   retryDeferred?: boolean;
-  beforeRemoval?: () => Promise<void>;
+  beforeRemoval?: (record: ManagedWorktreeRecord) => Promise<void>;
   prepareOwners?: (
     records: readonly ManagedWorktreeRecord[],
   ) => Promise<Pick<WorktreeCleanupOwnerPolicy, "readOwnerState">>;
@@ -289,6 +290,21 @@ export function createWorktreeGcRemoval(context: {
     if (hasWorktreeUnknownOutcome(initialError)) {
       throw initialError;
     }
+    const { RejectedLocalWorkspaceResultError } =
+      await import("../../gateway/worker-environments/local-workspace-checkpoint.js");
+    const rejected = collectNestedErrorCandidates(initialError).find(
+      (error) => error instanceof RejectedLocalWorkspaceResultError,
+    );
+    if (rejected) {
+      const reason =
+        `Workspace result too large to apply automatically; reserved result ${rejected.resultRef}; ` +
+        `files preserved at ${rejected.projectionPath}. Reduce the change and checkpoint it, or recover manually, then run openclaw worktrees gc --retry-deferred.`;
+      await withOwnerMutation(async () =>
+        deferWorktreeGcRecord(env, record, reason, await prepareOwnerCurrent(record, retiredOwner)),
+      );
+      progress.protect("idle", record.id, reason);
+      return;
+    }
     if (retiredOwner && !(initialError instanceof WorktreeRemovalContentionError)) {
       try {
         await withOwnerMutation(async () => {
@@ -496,7 +512,7 @@ export function createWorktreeGcRemoval(context: {
             progress.result.eligibleCount += 1;
             // Wait outside owner/checkout custody; removal still acquires and
             // validates live authority after admission.
-            await policy.beforeRemoval?.();
+            await policy.beforeRemoval?.(record);
             await withOwnerCleanup(record, async (withOwnerMutation) => {
               const assertOwnerCurrent = await prepareOwnerCurrent(record, retiredOwner);
               return context.remove({

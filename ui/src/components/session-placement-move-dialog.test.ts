@@ -261,7 +261,7 @@ it.each([undefined, "Gateway unavailable"])(
   async (gatewayDisabledReason) => {
     const { result, modal, button, submit } = await openDialog({ gatewayDisabledReason });
     expect(button("gateway").disabled).toBe(Boolean(gatewayDisabledReason));
-    expect(button("gateway").getAttribute("aria-pressed")).toBe("false");
+    expect(button("gateway").getAttribute("aria-checked")).toBe("false");
     expect(submit.disabled).toBe(true);
     modal.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
     flush();

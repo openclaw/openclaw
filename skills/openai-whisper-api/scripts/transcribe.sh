@@ -62,7 +62,10 @@ if [[ "${OPENAI_API_KEY:-}" == "" ]]; then
 fi
 
 if [[ "$out" == "" ]]; then
-  base="${in%.*}"
+  base="$in"
+  if [[ "${in##*/}" == *.* ]]; then
+    base="${in%.*}"
+  fi
   if [[ "$json_output" == "1" ]]; then
     out="${base}.json"
   else
@@ -71,6 +74,12 @@ if [[ "$out" == "" ]]; then
 fi
 
 mkdir -p "$(dirname "$out")"
+
+# Reject predictable output failures before making a paid request.
+if [[ -d "$out" || ( -e "$out" && ! -w "$out" ) || ( ! -e "$out" && ! -w "$(dirname "$out")" ) ]]; then
+  echo "Cannot write output to $out. Choose a writable file with --out." >&2
+  exit 1
+fi
 
 api_base="${OPENAI_BASE_URL:-https://api.openai.com/v1}"
 api_base="${api_base%/}"
@@ -96,19 +105,18 @@ if [[ "$diarize" == "1" && "$prompt" != "" ]]; then
   exit 2
 fi
 
-target="$out"
-tmp=""
-if [[ "$json_output" == "0" && ( "$request_format" == "json" || "$request_format" == "diarized_json" ) ]]; then
-  tmp="$(mktemp)"
-  trap '[[ "$tmp" == "" ]] || rm -f "$tmp"' EXIT
-  target="$tmp"
-fi
+# Preserve existing output until the response has downloaded successfully.
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
 
+# Quote the filename for curl's form parser, including literal quotes and backslashes.
+upload_path="${in//\\/\\\\}"
+upload_path="${upload_path//\"/\\\"}"
 curl_args=(
-  -sS "${api_base}/audio/transcriptions"
+  -fsS "${api_base}/audio/transcriptions"
   -H "Authorization: Bearer $OPENAI_API_KEY"
   -H "Accept: application/json"
-  -F "file=@${in}"
+  -F "file=@\"${upload_path}\""
   -F "model=${model}"
   -F "response_format=${request_format}"
 )
@@ -116,15 +124,15 @@ if [[ "$language" != "" ]]; then
   curl_args+=(-F "language=${language}")
 fi
 if [[ "$prompt" != "" ]]; then
-  curl_args+=(-F "prompt=${prompt}")
+  curl_args+=(--form-string "prompt=${prompt}")
 fi
 if [[ "$diarize" == "1" ]]; then
   curl_args+=(-F "chunking_strategy=auto")
 fi
 
-curl "${curl_args[@]}" >"$target"
+curl "${curl_args[@]}" >"$tmp"
 
-if [[ "$target" != "$out" ]]; then
+if [[ "$json_output" == "0" && ( "$request_format" == "json" || "$request_format" == "diarized_json" ) ]]; then
   node -e '
 const fs = require("fs");
 const input = process.argv[1];
@@ -148,7 +156,9 @@ if (typeof payload.text !== "string") {
   throw new Error("Transcription response missing text");
 }
 fs.writeFileSync(output, payload.text);
-' "$target" "$out"
+' "$tmp" "$out"
+else
+  cat "$tmp" >"$out"
 fi
 
 echo "$out"

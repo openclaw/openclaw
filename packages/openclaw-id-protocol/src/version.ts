@@ -46,3 +46,32 @@ export function checkVersion<V extends number>(
   }
   return { kind: "unsupported", version: value };
 }
+
+/**
+ * Result of {@link selectVersion}. `update_required`: the Gateway only accepts versions newer
+ * than this build implements. `gateway_outdated`: it only accepts versions older than this
+ * build still implements.
+ */
+export type VersionSelection<V extends number> =
+  | { ok: true; version: V }
+  | { ok: false; code: "update_required" | "gateway_outdated" };
+
+/**
+ * Picks the highest version both sides implement. `advertised` must come from a Gateway-signed
+ * snapshot that passed `assessFreshness` (MembershipSnapshot `protocols`); a list from anywhere
+ * else could be edited by Discovery.
+ */
+export function selectVersion<V extends number>(
+  advertised: readonly number[],
+  local: readonly V[],
+): VersionSelection<V> {
+  const shared = local.filter((version) => advertised.includes(version));
+  if (shared.length > 0) {
+    // SAFETY: the maximum of `shared` is one of its members, all taken from `local`.
+    return { ok: true, version: Math.max(...shared) as V };
+  }
+  return {
+    ok: false,
+    code: Math.max(...advertised) > Math.max(...local) ? "update_required" : "gateway_outdated",
+  };
+}

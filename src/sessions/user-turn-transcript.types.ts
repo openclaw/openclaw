@@ -1,6 +1,7 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import type { ChatAppContextAttachment } from "../../packages/gateway-protocol/src/chat-app-context.js";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { MessageClientSource } from "../chat/message-client-source.js";
@@ -74,6 +75,8 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
 
 export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeFromContext"> & {
   text?: string | null;
+  /** Display receipt of shared App references; never added to model text. */
+  appContext?: ChatAppContextAttachment[];
   /** Authored text and its captured reference; model content stays unchanged. */
   workContext?: AttachedChatWorkContext;
   /** Explicit human selections bound to UTF-16 offsets in text. */

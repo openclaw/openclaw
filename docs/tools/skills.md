@@ -205,8 +205,13 @@ another. Enablement does not bypass agent allowlists, required binaries,
 operating-system restrictions, or other prerequisites.
 
 A managed bundle is limited to 256 files, 1 MiB per file, and 8 MiB total.
-Worker resource delivery also has an 8 MiB aggregate limit; narrow the session
-selection if its complete bundles exceed that limit. Published revisions are
+Worker resource delivery also has an 8 MiB aggregate limit. If the selected
+bundles exceed it, delivery omits supporting files and adds a notice to the
+delivered instructions. Complete instructions are retained when they fit;
+otherwise that skill receives an explicit unavailability notice, never partial
+instructions. The turn can continue with available tools. The notice explains
+how to request a missing resource or narrow the selection. Gateway logs identify
+each reduced skill, its size, and its largest file. Published revisions are
 retained, including revisions still selected by older sessions.
 
 ZIP imports allow up to 16 unfinished uploads per Gateway profile and 32
@@ -320,10 +325,11 @@ slash commands, with the same precedence and allowlist as the execution
 workspace catalog above. They appear only when you could create a session in that
 project, and switching projects replaces the list.
 
-Skills with `disable-model-invocation: true` stay out of the `$` picker and the
-model's normal prompt, so the model cannot select them on its own. An authorized
-explicit `$skill-name` reference still invokes them; the flag only hides the
-skill from model-initiated selection.
+Eligible, user-invocable skills with `disable-model-invocation: true` appear in
+the `$` picker and inline slash suggestions, but stay out of the model's normal
+prompt so it cannot select them on its own. Selecting one inserts an explicit
+`$skill-name` reference. Bundle prompt-template commands remain available as
+leading slash commands, not as `$` references or inline skill suggestions.
 
 ## Skill Workshop
 
@@ -469,6 +475,10 @@ When the user asks to generate an image, use the `image_generate` tool...
   under [Gating](#gating) works. Use `{baseDir}` in the body to reference the
   skill folder path.
 </Note>
+
+The bundled skill-creator Python validator also works without PyYAML. In that
+mode, trailing comments on plain indented description lines are ignored; hashes
+inside quoted or block-scalar content remain literal.
 
 ### Optional frontmatter keys
 

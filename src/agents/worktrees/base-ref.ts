@@ -416,6 +416,9 @@ async function prepareDefaultBase(
   return { commit, gitOperand: commit, recordRef: "HEAD", noOrigin: true };
 }
 
+// `ls-remote --symref` names HEAD's branch, then the object id it advertises for that tip.
+const ADVERTISED_HEAD = /^ref: refs\/heads\/(.+)\tHEAD\r?$(?:\n([a-f0-9]{40,64})\tHEAD\r?$)?/mu;
+
 async function fetchRemoteDefault(
   repoRoot: string,
   options: NonNullable<Parameters<typeof runGit>[2]>,
@@ -440,9 +443,8 @@ async function fetchRemoteDefault(
     options.signal.throwIfAborted();
   }
   const advertisedOk = advertised.termination === "exit" && advertised.code === 0;
-  const advertisedBranch = advertisedOk
-    ? /^ref: refs\/heads\/(.+)\tHEAD\r?$/mu.exec(advertised.stdout)?.[1]
-    : undefined;
+  const [, advertisedBranch, advertisedCommit] =
+    (advertisedOk && ADVERTISED_HEAD.exec(advertised.stdout)) || [];
   const cachedBranch =
     cached.termination === "exit" && cached.code === 0
       ? /^refs\/remotes\/origin\/(.+)$/u.exec(cached.stdout.trim())?.[1]
@@ -460,30 +462,38 @@ async function fetchRemoteDefault(
     );
   }
   let remoteRef = `refs/remotes/origin/${branch}`;
-  const fetched = await runGit(
-    repoRoot,
-    [
-      "fetch",
-      "--no-auto-maintenance",
-      "--no-recurse-submodules",
-      "--no-tags",
-      "origin",
-      `+refs/heads/${branch}:${remoteRef}`,
-    ],
-    { ...options, timeoutMs: 60_000 },
-  );
-  if (fetched.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
-  }
-  if (options.signal?.aborted) {
-    requireGitCommandOutput("git fetch origin default branch", fetched);
-    options.signal.throwIfAborted();
-  }
-  const fetchSucceeded = fetched.termination === "exit" && fetched.code === 0;
+  // An advertised tip already tracked locally is confirmed as a fetch would confirm it,
+  // without fetch's negotiation and pack write; hydration still runs on the commit.
+  let fetchSucceeded =
+    advertisedCommit !== undefined &&
+    advertisedCommit ===
+      (await requireGit(repoRoot, ["for-each-ref", "--format=%(objectname)", remoteRef], options));
   if (!fetchSucceeded) {
-    warnings.push(commandError("git fetch origin default branch", fetched).message);
-    branch = cachedBranch ?? branch;
-    remoteRef = `refs/remotes/origin/${branch}`;
+    const fetched = await runGit(
+      repoRoot,
+      [
+        "fetch",
+        "--no-auto-maintenance",
+        "--no-recurse-submodules",
+        "--no-tags",
+        "origin",
+        `+refs/heads/${branch}:${remoteRef}`,
+      ],
+      { ...options, timeoutMs: 60_000 },
+    );
+    if (fetched.cleanup === "uncertain") {
+      throw new CommandProcessCleanupError();
+    }
+    if (options.signal?.aborted) {
+      requireGitCommandOutput("git fetch origin default branch", fetched);
+      options.signal.throwIfAborted();
+    }
+    fetchSucceeded = fetched.termination === "exit" && fetched.code === 0;
+    if (!fetchSucceeded) {
+      warnings.push(commandError("git fetch origin default branch", fetched).message);
+      branch = cachedBranch ?? branch;
+      remoteRef = `refs/remotes/origin/${branch}`;
+    }
   }
   const verified = await runGit(
     repoRoot,
