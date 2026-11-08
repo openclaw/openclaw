@@ -472,10 +472,7 @@ export function createApplicationGateway(
           sessionKey !== settings.sessionKey ||
           lastActiveSessionKey !== settings.lastActiveSessionKey
         ) {
-          updateSettings({
-            sessionKey,
-            lastActiveSessionKey,
-          });
+          updateSettings({ sessionKey, lastActiveSessionKey });
         }
         everConnected = true;
         const canvasPluginSurfaceUrl = hello.pluginSurfaceUrls?.canvas?.trim() || null;
@@ -510,6 +507,7 @@ export function createApplicationGateway(
         }
         updateAvatarContext(nextClient.hello ?? undefined);
         retireStoredGoalOperations(nextConnection.gatewayUrl, nextClient.recoveryScope);
+        credentials.acceptRecoveryScope(nextConnection.gatewayUrl, nextClient.recoveryScope);
         void deferredIntents.flush();
         setSnapshot({});
       },
@@ -588,7 +586,7 @@ export function createApplicationGateway(
             : error?.message
               ? formatUiError(error.message)
               : closeReason
-                ? `disconnected (${code}): ${closeReason}`
+                ? `${t("connection.interrupted", { code: String(code) })} ${closeReason}`
                 : t(willRetry ? "connection.interruptedRetrying" : "connection.interrupted", {
                     code: String(code),
                   }),

@@ -14,7 +14,7 @@ import {
   hasOperatorReadAccess,
   hasOperatorWriteAccess,
 } from "../../app/operator-access.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
@@ -22,17 +22,16 @@ import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
-import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
 import {
+  acceptSkillsReport,
   closeClawHubDetail,
   createSkillsChangeReloader,
   installFromClawHub,
   installSkill,
   loadClawHubDetail,
-  loadClawHubSecurityVerdicts,
   loadSkillCard,
   loadSkills,
   refreshSkills,
@@ -47,6 +46,7 @@ import {
 import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
 import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
 import { createSkillLibrary } from "./library-state.ts";
+import { SkillLibraryNavigation, SkillLibraryPageMenu } from "./library-toolbar.tsx";
 import { SkillLibrary, SkillLibraryDialogs, SkillLibraryFeedback } from "./library-view.tsx";
 import { createSkillsMutationPresentation } from "./mutation-presentation.ts";
 import { SkillsHeader } from "./skills-header.tsx";
@@ -459,10 +459,13 @@ export function SkillsPage(props: SkillsPageProps) {
     routeDataEnabled = true;
     retireSkillsReads(data);
     data.skillsLoading = false;
-    data.skillsReport = route.report;
     data.skillsError = route.error;
     if (route.report) {
-      void loadClawHubSecurityVerdicts(data, route.report);
+      acceptSkillsReport(data, route.report);
+    } else if (route.reportRead) {
+      void loadSkills(data, { reportRead: route.reportRead });
+    } else {
+      data.skillsReport = null;
     }
     if (route.clawhubRef && route.clawhubRef !== data.clawhubDetailRef) {
       openClawHubDetail(route.clawhubRef);
@@ -589,6 +592,14 @@ export function SkillsPage(props: SkillsPageProps) {
     );
   }
 
+  const libraryNavigation = {
+    onSearch: () => navigateSkills("skills"),
+    onWorkshop: () => context.navigate("skill-workshop"),
+  };
+  const libraryPageMenu = () => {
+    const menu = () => <SkillLibraryPageMenu library={library} {...libraryNavigation} />;
+    return <FloatingHeaderActions fallback={menu()}>{menu()}</FloatingHeaderActions>;
+  };
   function navigateSkills(route: "skills" | "skill-settings") {
     context.navigate(route, {
       search: data.skillsAgentId ? `?agent=${encodeURIComponent(data.skillsAgentId)}` : "",
@@ -604,6 +615,8 @@ export function SkillsPage(props: SkillsPageProps) {
       />
       <SettingsWorkspace>
         <div
+          // Bound layout work for the large installed inventory without containing discovery.
+          style={{ contain: surface() === "settings" ? "layout" : undefined }}
           id={surface() === "discovery" ? PLUGINS_HUB_PANEL_ID : undefined}
           role={surface() === "discovery" ? "tabpanel" : undefined}
           aria-labelledby={surface() === "discovery" ? "plugins-tab-skills" : undefined}
@@ -635,24 +648,12 @@ export function SkillsPage(props: SkillsPageProps) {
               ) : (
                 <SkillLibrary
                   library={library}
-                  navigationActions={
-                    <>
-                      <button type="button" class="btn" onClick={() => navigateSkills("skills")}>
-                        <Icon name="search" />
-                        {t("skillDiscovery.search")}
-                      </button>
-                      <button
-                        type="button"
-                        class="btn"
-                        onClick={() => context.navigate("skill-workshop")}
-                      >
-                        {t("pluginsPage.workshopTab")}
-                      </button>
-                    </>
-                  }
+                  pageMenu={libraryPageMenu}
+                  navigationActions={<SkillLibraryNavigation {...libraryNavigation} />}
                 />
               )
             }
+            pageMenu={surface() === "discovery" ? undefined : libraryPageMenu}
             showInventory={library.showWorkspace()}
             canUpdate={canUpdateSkills()}
             canInstall={canInstallFromClawHub()}

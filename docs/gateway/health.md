@@ -62,7 +62,9 @@ preparation clears the degraded status when all runtimes are ready.
 If a newer model-runtime refresh replaces preparation in progress, startup
 follows the admitted replacement through preparation and publication. Cancelling
 the retired acquisition does not stop the Gateway; genuine replacement failures
-still propagate.
+still propagate. A config reload that retires the plugins behind that preparation
+follows the same bounded retry. If replacements outlast those retries, the agent's
+refusal asks for a Gateway restart; it does not require database repair.
 
 Transcript projection repair runs after readiness in yielding worker-backed work.
 Pending GitHub publication recovery runs in the background and does not delay
@@ -130,6 +132,39 @@ The Gateway exposes three unauthenticated `GET`/`HEAD` check pairs:
 | `/startup`, `/startupz` | Startup sidecars and agent database inspection/preparation have settled, and the Gateway is not draining. Channel health is not consulted.                                                                        | Startup-phase monitoring and update verification. |
 | `/ready`, `/readyz`     | Startup sidecars and fresh-chat admission are ready, the Gateway is not draining, required agent databases have completed admission without failures, and configured channel accounts pass deep readiness checks. | Traffic admission and operator monitoring.        |
 
+All three check pairs share the Gateway HTTP transport; there is no separate
+always-on check listener. Connection refusal is expected before the initial bind
+and after transport closure. An in-process restart can close and reopen the
+listener while the same PID stays alive; requests racing closure can also reset.
+
+While the listener is available, the normal Control UI document and static app
+assets remain available during core startup or draining. A fresh browser loads
+the real application shell and shows its connection state while waiting for the
+Gateway. Existing conversations keep their mounted route, transcript and draft.
+Authentication failures still use the normal sign-in flow.
+
+When the app assets are unavailable, a self-contained `503` availability page
+retries automatically with bounded request timeouts and backoff. It does not require
+the app bundle or a WebSocket connection. APIs and authenticated dynamic routes
+keep their normal admission and authorization checks. Optional startup sidecars
+do not block the normal UI once core request preparation is ready.
+
+An HTTP document is not a completed WebSocket handshake: the loaded app still owns
+connection recovery and reload-required states. If the document loads but the app
+cannot mount after three recovery navigations, its fallback offers manual reload
+and wait actions. A fresh browser with no cached
+app cannot receive a Gateway page while its listener is fully stopped. An existing
+ingress can provide a retryable HTML error page for that interval; keep API and
+WebSocket handling intact, and do not label an unknown connection failure an update.
+
+Supervisors should combine HTTP checks with process and exit information, allow
+bounded startup/restart grace, and honor the process owner's shutdown budget.
+One refusal or reset during these transitions does not prove a wedged Gateway.
+Choose deployment-specific budgets and investigate persistent unavailability
+after they expire; a living PID does not justify indefinite grace. Use `/readyz`
+and normal admission for traffic; neither `/healthz` `200` nor `/startupz` `200`
+certifies readiness.
+
 The HTTP listener opens before the initial session projection is complete. During
 that build, `/healthz` can return `200`, while `/startupz` and `/readyz` remain
 pending. Other HTTP requests and WebSocket upgrades wait for the complete
@@ -140,6 +175,8 @@ on-demand skill reads still prepare the requested workspace. Readiness
 also waits for the reply and WebSocket connection modules to load, so immediate
 connections and first turns reuse the prepared runtime.
 Update verification still waits for startup completion before checking readiness.
+The later `http server listening` startup summary is not the actual bind
+timestamp.
 
 These probe paths stay at the server root even when `gateway.controlUi.basePath`
 is set. A UI base path such as `/health` does not turn its child routes into
@@ -147,13 +184,20 @@ probes: they still wait for initialization and retain their normal authenticatio
 
 `/startupz` returns `503` with `status: "starting"` while startup sidecars or agent database inspection/preparation are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. After sidecars settle, pending inspection for any agent, including an optional agent, reports `pendingReason: "agent-database-inspection"`. This lets `openclaw update` candidate verification wait within its startup budget before checking readiness. A settled inspection failure does not keep startup pending; readiness and per-agent admission report the failure.
 
-Startup admits resume inputs only for sessions explicitly marked at graceful
-shutdown, then releases their accepted queued user messages through ordinary
-admission. It does not scan orphaned execution or hold fresh chat behind a
-per-agent recovery predecessor. Database and model/plugin preparation still gate
-their own consumers.
+Startup admits one resume input for each eligible session marked at graceful
+shutdown or retaining a persisted unfinished run from the immediately preceding
+Gateway lifetime with no live owner. Older orphaned runs are settled without
+resuming them. Captured
+queued user messages then use ordinary admission. Fresh chat does not wait behind
+a per-agent recovery predecessor. Database and model/plugin preparation still
+gate their own consumers.
 
 A default or system agent database with pending startup inspection/preparation or a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending`. The HTTP listener, Control UI, and admitted agents remain available while readiness is false; pending optional agents do not hold readiness. Readiness does not wait for transcript maintenance or resumed agent work to finish. Agent-scoped `sessions.list`, plus `sessions.resolve`, `sessions.describe`, and `models.list`, wait up to 20 seconds for their selected agents to finish startup preparation, then recheck request authorization before reading. Requests targeting healthy agents proceed independently. Unscoped session lists continue returning admitted agents while other stores prepare. Writes still require completed admission. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
+
+Agents whose admission is closed by deletion appear separately in `agentDeletions`
+with code `agent-deletion`. Pending or completed deletion does not fail `ready` or
+`coreReady`, including after the agent is removed from configuration. Ordinary
+requests remain refused; pending cleanup follows the deletion journal.
 
 If a newer model-runtime publication supersedes deferred agent preparation, admission
 waits for that publication once, then retries preparation against current configuration
@@ -359,8 +403,8 @@ After one second without a heartbeat it asynchronously reads the main thread's
 permitted), I/O counters, and scheduler counters. It takes at most three snapshots,
 one second apart, while the stall is still ongoing. The `kernel` field on the
 same profile line contains only snapshots inside the reported stall interval.
-No syscall arguments, memory addresses, or user data are recorded. Unsupported
-platforms do not start this observer; no configuration is needed.
+No syscall arguments, memory addresses, or user data are recorded. Other
+platforms skip procfs sampling; no configuration is needed.
 
 `state=D` with `folio_wait` or `filemap_fault` in `wchan`/`stack` points to page
 or file-backed waits; `compact_zone` or `try_to_compact_pages` points to compaction.

@@ -17,7 +17,7 @@ import {
 } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { throwExpectedCliError } from "../cli/failure-output.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { replaceConfigFile } from "../config/config.js";
 import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";

@@ -58,6 +58,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   // The Gateway profiler tests launch these subprocess fixtures through a computed path.
   "test/scripts/fixtures/gateway-bench-cpu-usage.mjs!",
   "test/scripts/fixtures/gateway-bench-profile-startup.mjs!",
+  // The Telegram failure tests launch this isolated ingress fixture by path.
+  "test/scripts/fixtures/mantis-telegram-failure.mts!",
   // SHA-pinned dispatch tests load this admission transport by a generated file URL.
   "test/scripts/full-release-validation-at-sha.admission-fixture.mjs!",
   // The locale finalizer harness preloads this provider through NODE_OPTIONS.
@@ -74,6 +76,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/plugins/plugin-sdk-deprecated-member.test-support.ts!",
   // The existing-store Bun regression launches this source fixture directly by path.
   "src/infra/sqlite-existing-database.bun.test-support.ts!",
+  // The prepared-workspace test preloads this helper in its Node child and workers.
+  "src/node-host/node-worker-prepared-workspace.process.test-support.ts!",
   // The plugin artifact suite launches these Node tests with the native tooling preload.
   "src/cli/plugins-feature-artifact.native.test-support.ts!",
   // ExecHostTransportProofTests.swift launches this isolated native client by path.

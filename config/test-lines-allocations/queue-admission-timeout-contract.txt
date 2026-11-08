@@ -1,0 +1,2 @@
+# Compile-time regression for ignored queue timeout options and retained callback compatibility.
+19

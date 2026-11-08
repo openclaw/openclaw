@@ -1,4 +1,5 @@
 // The palette owns search/navigation; its draft reuses the canonical session owners.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
@@ -169,7 +170,6 @@ export class CommandPaletteState {
         changed: this.changed,
         updateComplete: rendered,
         onClose: () => this.closePalette(),
-        onOpen: (input) => this.openPalette(input),
         onAttachmentModeChange: () => this.scheduleSessionSearch(this.draft.message),
         onMessageChange: (query) => {
           const text = query.trim();
@@ -213,14 +213,16 @@ export class CommandPaletteState {
     const invalidation = modelCatalogEventInvalidation(event);
     const snapshot = this.context?.gateway.snapshot;
     const cron = snapshot && isCronInventoryInvalidation(event, snapshot);
-    // Palette search includes skills even when the model cache remains current.
-    if (cron || event.event === "chat.metadata.changed" || invalidation) {
-      if (invalidation === "clear") {
-        this.catalogLoad = undefined;
-        this.catalogItems = [];
-        this.settledModels = this.modelReader.snapshot;
-        this.modelItems = getCommandPaletteModelItems(this.settledModels);
-      }
+    if (invalidation === "clear") {
+      this.settledModels = this.modelReader.snapshot;
+      this.modelItems = getCommandPaletteModelItems(this.settledModels);
+    }
+    // Usage and model-only publications do not invalidate skills or plugins.
+    // ModelCatalogReader owns the independent model refresh.
+    const commandsChanged =
+      event.event === "chat.metadata.changed" &&
+      asNullableRecord(event.payload)?.commandsChanged !== false;
+    if (cron || commandsChanged) {
       if (this.open && document.visibilityState !== "hidden") {
         void this.ensureCatalogItems(true);
       } else {
@@ -385,6 +387,9 @@ export class CommandPaletteState {
     ) {
       this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
       this.mentionMenu.update(element, "trigger");
+    }
+    if (input.attachments?.length) {
+      this.draft.adoptAttachments(input.attachments);
     }
     if (input.attachmentFiles?.length) {
       this.draft.adoptAttachmentFiles(input.attachmentFiles, input.submitRequested);

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { wrapExternalContent } from "../security/external-content.js";
 import { getCodeModeToolOutcome, recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
+import { protectNetworkToolExecutionError } from "./tool-execution-error.js";
 import { reconcileToolCallExecutionParams } from "./tool-loop-call-reconciliation.js";
 import {
   UNKNOWN_TOOL_THRESHOLD,
@@ -10,7 +11,6 @@ import {
   recordToolCall,
   recordToolCallOutcome,
 } from "./tool-loop-detection.js";
-import { protectNetworkToolExecutionError } from "./tool-result-error.js";
 import { jsonResult } from "./tools/common.js";
 
 // Keep provider-send classification independent of the channel-plugin registry.

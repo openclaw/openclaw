@@ -193,6 +193,7 @@ describe("registered guest publication target discovery", () => {
       const lookup = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
       let now = Date.now();
       vi.spyOn(Date, "now").mockImplementation(() => now);
+      vi.spyOn(performance, "now").mockImplementation(() => now);
       for (let index = 0; index < 2; index++) {
         expectReply(await options(fixture), sharedOptions);
       }

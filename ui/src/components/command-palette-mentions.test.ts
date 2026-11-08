@@ -306,48 +306,28 @@ describe("command palette people mentions", () => {
     expect(f.context.sessions.createResult).not.toHaveBeenCalled();
   });
 
-  it("retains selected recipients on a rejected first turn without duplicate creation", async () => {
-    const f = await mount();
-    vi.mocked(f.context.sessions.createResult).mockResolvedValueOnce({
-      key: "agent:main:dashboard:rejected",
-      initialRun: { status: "rejected", error: "First turn rejected" },
-    });
-    await f.choose();
-    await f.send();
-    expect(f.palette.isOpen).toBe(false);
-    await openPalette(f.palette);
-    expect(f.query('[role="alert"]')?.textContent).toContain("First turn rejected");
-    expect(f.recipients()).toHaveLength(1);
-    await f.key("Escape");
-    await openPalette(f.palette);
-    expect(f.recipients()).toHaveLength(1);
-    pressKey(f.input, "Enter", { ctrlKey: true, cancelable: true });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.context.sessions.createResult).toHaveBeenCalledOnce();
-  });
-
-  it("locks recipients while submitting and never sends twice", async () => {
+  it("sends selected recipients once and frees the launcher while the start is pending", async () => {
     const f = await mount();
     const pending = createDeferred<Awaited<ReturnType<typeof requestSessionCreate>>>();
     vi.mocked(f.context.sessions.createResult).mockReturnValueOnce(pending.promise);
     await f.choose();
     await f.send();
-    // The launcher closes once create is sent; reopening shows the locked pending start.
     expect(f.palette.isOpen).toBe(false);
+    expect(vi.mocked(f.context.sessions.createResult).mock.calls[0]?.[0]?.mentions).toHaveLength(1);
     await openPalette(f.palette);
-    expect(f.input).toMatchObject({ disabled: false, readOnly: true });
-    expect(f.input.getAttribute("aria-busy")).toBe("true");
-    expect(f.query(".cmd-palette__mentions")?.hasAttribute("inert")).toBe(true);
-    f.query<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
-    await f.send();
+    // The pending start owns its recipients; the launcher is an empty, editable draft.
+    expect(f.input).toMatchObject({ disabled: false, readOnly: false, value: "" });
+    expect(f.recipients()).toHaveLength(0);
+    pressKey(f.input, "Enter", { ctrlKey: true, cancelable: true });
+    await vi.advanceTimersByTimeAsync(0);
     expect(f.context.sessions.createResult).toHaveBeenCalledOnce();
-    expect(f.recipients()).toHaveLength(1);
     pending.resolve({
       key: "agent:main:dashboard:mentioned",
       initialRun: { status: "started", runId: "mention-run" },
     });
     await vi.advanceTimersByTimeAsync(0);
-    expect(f.palette.isOpen).toBe(false);
+    // Acceptance never closes the next prompt.
+    expect(f.palette.isOpen).toBe(true);
   });
 
   it.each(["anonymous", "read-only", "session-read-only", "offline", "create-unavailable"])(

@@ -208,9 +208,13 @@ Across admitted runs, core reuses a validated projection only when a fresh read
 matches the physical session identity, transcript rewrite generation, and ordered
 store-entry IDs. The cache retains at most 16 sessions and 8 MiB of accounted
 JSON and metadata; histories above 4,096 entries or 1,024 live keys are not cached.
-Session removal and database shutdown discard retained projections. Store writes,
-branch changes, and rewrites select a new projection through the same replay and
-budget checks. Loaded values remain detached copies, and persisted bytes do not change.
+Session removal and database shutdown discard retained projections. When the
+cached IDs are a prefix of the current branch, only appended entries are replayed
+into a private copy of the projection. Divergent branches and rewrites replay
+from the beginning. Replay validates every entry's shape, keys, and provenance,
+resolves the final writes and deletes, then encodes only surviving values and
+checks the final projection's budget. Commit admission owns historical budget
+checks. Loaded values remain detached copies, and persisted bytes do not change.
 
 Only a cell that settles `completed` commits its non-empty write set. Core
 appends one `custom` entry with type `openclaw.code-mode-store` through
@@ -284,7 +288,10 @@ outputs stay `unknown`, and declarations do not grant access to additional tools
 Executable cells are plain JavaScript. Code Mode does not load a TypeScript
 compiler, strip annotations, or typecheck the program. The selected engine parses and runs
 the JavaScript directly. Tool calls still use the existing runtime input and
-output validation, policy, and approval owners. A later call can fail after
+output validation, policy, and approval owners. Local input validation keeps the
+tool's provider-neutral contract when a provider requires a projected schema;
+an explicit tool-owner execution contract still takes precedence.
+A later call can fail after
 earlier calls have produced effects, so follow the
 [recovery guidance](/tools/code-mode/quickstart#recover-from-tool-errors) before
 retrying a failed cell.

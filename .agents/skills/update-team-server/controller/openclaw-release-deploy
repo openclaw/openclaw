@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-
 serving_root="${OPENCLAW_TEAM_RELEASE_ROOT:-/opt/openclaw-team}"
 releases_root="$serving_root/releases"
 current_link="$serving_root/current"
@@ -146,6 +145,18 @@ reconcile_request=""
 reconcile_position=restored
 reconcile_evidence=""
 reconcile_stopped=0
+repair_operation=""
+repair_config_hash=""
+repair_journal_hash=""
+repair_journal=""
+repair_context=""
+repair_entry=""
+repair_drain_request=""
+repair_drain_deadline_ms=0
+repair_verification_deadline_ms=0
+last_suspension_response=""
+last_suspension_prepare_response=""
+last_suspension_response_kind=""
 
 fail() {
 	printf 'openclaw-release-deploy: %s\n' "$*" >&2
@@ -166,20 +177,13 @@ proof_json() {
 profile_command() {
 	local operation="$1" payload="$2" command_exit output mutating=0
 	((profile_owner_unsafe == 0)) || return "$profile_owner_unsafe"
-	# A pipe-backed command substitution can wait on an escaped writer after timeout dies.
-	output="$(mktemp "${TMPDIR:-/tmp}/openclaw-profile-output.XXXXXXXX" 8>&- 9>&-)" || return 1
 	case "$operation" in
 	prepare | admit | disarm | cleanup | retire | collect | close-arm | strict-observation | terminalize-arm) mutating=1 ;;
 	esac
-	if printf '%s' "$payload" | {
-		if ((mutating)); then
-			# This trusted Node keeps the flock and marks it close-on-exec before child commands.
-			env -u NODE_OPTIONS "$timeout_bin" --signal=TERM --kill-after=10s 45s \
-				"$node_bin" --no-warnings "$release_lib" startup-profile "$operation" 8>&-
-		else
-			bounded 45 "$node_bin" --no-warnings "$release_lib" startup-profile "$operation"
-		fi
-	} >"$output"; then
+	# A pipe-backed command substitution can wait on an escaped writer after timeout dies.
+	output="$(mktemp "${TMPDIR:-/tmp}/openclaw-profile-output.XXXXXXXX" 8>&- 9>&-)" || return 1
+	# The gated proof owner retains FD9; its child-command boundary closes it.
+	if printf '%s' "$payload" | bounded_proof 45 startup-profile "$operation" >"$output"; then
 		if ! profile_result="$(<"$output")"; then
 			rm -- "$output" 8>&- 9>&- || :
 			return 1
@@ -334,6 +338,15 @@ bounded() {
 	"$timeout_bin" --signal=TERM --kill-after=10s "${seconds}s" "$@" 8>&- 9>&-
 }
 
+# Only the installed, gated proof owner retains FD9. External commands still use
+# bounded(), which closes both capabilities before exec.
+bounded_proof() {
+	local seconds="$1"
+	shift
+	env -u NODE_OPTIONS "$timeout_bin" --signal=TERM --kill-after=10s "${seconds}s" \
+		"$node_bin" --no-warnings "$release_lib" "$@" 8>&-
+}
+
 runtime_command=(
 	"$runuser_bin" -u openclaw -- env
 	-u OPENCLAW_SERVICE_MARKER -u OPENCLAW_SERVICE_KIND -u OPENCLAW_GATEWAY_SERVICE_PID
@@ -465,12 +478,22 @@ try {
 }
 
 read_process_instance() {
-	local response
-	# JSON CLI failures live on stdout; report the exit without exposing the private response.
-	response="$(run_gateway "$1" gateway call system.info --params '{}' --json --timeout 30000)" || {
-		printf 'GATEWAY_RPC_FAILED method=system.info exit=%s\n' "$?" >&2
-		return 1
-	}
+	local response rpc_exit
+	# Startup uses the SDK's typed transport classification, never arbitrary CLI errors.
+	if [[ -n "${3:-}" ]]; then
+		response="$(run_marker_rpc "$1" system.info '{}' "$3")" || {
+			rpc_exit=$?
+			printf 'GATEWAY_RPC_FAILED method=system.info exit=%s\n' "$rpc_exit" >&2
+			[[ "$rpc_exit" == 78 && "$response" == RETRYABLE_READINESS_TRANSPORT ]] && return 78
+			return 1
+		}
+	else
+		# JSON CLI failures live on stdout; never expose the private response.
+		response="$(run_gateway "$1" gateway call system.info --params '{}' --json --timeout 30000)" || {
+			printf 'GATEWAY_RPC_FAILED method=system.info exit=%s\n' "$?" >&2
+			return 1
+		}
+	fi
 	proof_json suspension-process-instance "$response" "$2"
 }
 
@@ -768,6 +791,9 @@ request_suspension() {
 		printf 'DEFERRED preserve-only drain preparation unavailable or conflicting\n'
 		return 75
 	fi
+	last_suspension_response="$response"
+	last_suspension_prepare_response="$response"
+	last_suspension_response_kind=prepare
 	# An offered lease remains cleanup-only until its complete response passes.
 	retain_suspension_cleanup_offer "$response"
 	if ! parsed="$(proof_json suspension-prepare "$response")"; then
@@ -800,6 +826,8 @@ poll_suspension() {
 		[[ "$category" != retry ]] || return 76
 		return 1
 	}
+	last_suspension_response="$response"
+	last_suspension_response_kind=status
 	parsed="$(proof_json suspension-status "$response" "$held_suspension" "$suspension_expiry")" || {
 		printf 'SUSPENSION_POLL_FAILED stage=proof method=gateway.suspend.status exit=%s\n' "$?" >&2
 		return 1
@@ -835,6 +863,12 @@ prepare_suspension() {
 	fi
 	drain_budget_elapsed=0
 	request_id="team-release-$$-$(date -u +%Y%m%dT%H%M%SZ)"
+	if [[ "$mode" == retained-repair ]]; then
+		request_id="$repair_drain_request"
+		now_ms="$(proof suspension-now)"; remaining_ms=$((repair_drain_deadline_ms-now_ms))
+		((remaining_ms > 0)) || { fail 'repair original drain deadline expired'; return 1; }
+		drain_budget=$(((remaining_ms+999)/1000))
+	fi
 	request="$(proof suspension-prepare-params "$request_id")" || return 1
 	drain_deadline=$((SECONDS + drain_budget))
 	if ! request_suspension "$release" "$request"; then
@@ -1125,11 +1159,73 @@ verification_step() {
 	return "$verification_exit"
 }
 
+# Optional context is the exact canonical journal descriptor, never a permission flag.
+retained_acceptance() {
+  printf '%s' "$2" | proof retained-repair-acceptance "$1" "$serving_root" @stdin
+}
+
+retained_acceptance_field() {
+  printf '%s' "$1" | "$node_bin" -e '
+const r=JSON.parse(require("node:fs").readFileSync(0,"utf8")),key=process.argv[1];
+const v=key==="sessionId"?r.session?.sessionId:key==="instance"?r.scope.process.instance:r[key];
+if(v===undefined||v===null)process.exit(2);
+process.stdout.write(typeof v==="string"?v:JSON.stringify(v));
+' "$2"
+}
+
+retained_acceptance_binding() {
+  local context="$1" release="$2" pid="$3" generation="$4" instance="${5:-}" acceptance
+  acceptance="$(retained_acceptance prepare "$context")" || return 1
+  printf '%s' "$acceptance" | EXPECTED_RELEASE="$release" EXPECTED_PID="$pid" EXPECTED_GENERATION="$generation" EXPECTED_INSTANCE="$instance" "$node_bin" -e '
+const a=JSON.parse(require("node:fs").readFileSync(0,"utf8")),s=a.scope;
+if(a.kind!=="retained-repair-acceptance"||s.target.release!==process.env.EXPECTED_RELEASE||
+ String(s.process.pid)!==process.env.EXPECTED_PID||s.process.generation!==process.env.EXPECTED_GENERATION||
+ (process.env.EXPECTED_INSTANCE&&s.process.instance!==process.env.EXPECTED_INSTANCE))process.exit(2);
+' || return 1
+  printf '%s' "$acceptance"
+}
+
+retained_acceptance_marker() {
+  local context="$1" release="$2" scope="$3" acceptance payload remaining timeout_ms
+  acceptance="$(retained_acceptance_binding "$context" "$release" "$verified_pid" "$verified_generation" "$verified_instance")" || return 1
+  if [[ "$(retained_acceptance_field "$acceptance" status)" == PREPARED ]]; then
+    wait_for_marker_readiness "$release" "$scope" || return 1
+    remaining=$((verification_deadline - SECONDS)); ((remaining > 0)) || return 1
+    timeout_ms=$((remaining * 1000)); ((timeout_ms <= 60000)) || timeout_ms=60000
+    payload="$(retained_acceptance_field "$acceptance" creationPayload)" || return 1
+    # Only native sessions.create knows project selection. No task/message is sent here.
+    # Unknown outcome is retained. Resume rereads the exact key; no new session is minted.
+    run_marker_rpc "$release" sessions.create "$payload" "$timeout_ms" >/dev/null || return $?
+    acceptance="$(retained_acceptance_binding "$context" "$release" "$verified_pid" "$verified_generation" "$verified_instance")" || return 1
+  fi
+  [[ "$(retained_acceptance_field "$acceptance" status)" == READY || "$(retained_acceptance_field "$acceptance" status)" == VERIFIED ]] || return 1
+  printf '%s' "$acceptance"
+}
+
+retained_acceptance_receipt() {
+  local context="$1" release="$2" terminal="$3" marker_policy="$4" observed_process="$5" channels timeout_ms proof_json
+  local acceptance checkout_params checkout
+  acceptance="$(retained_acceptance check "$context")" || return 1
+  checkout_params="$(retained_acceptance_field "$acceptance" checkoutPayload)" || return 1
+  timeout_ms=$(((verification_deadline - SECONDS) * 1000)); ((timeout_ms > 0)) || return 1
+  # Original registered-project failure path; observation only, never checkout mutation.
+  checkout="$(run_gateway "$release" gateway call projects.checkoutOptions --params "$checkout_params" --json --timeout "$timeout_ms")" || return 1
+  timeout_ms=$(((verification_deadline - SECONDS) * 1000)); ((timeout_ms > 0)) || return 1
+  channels="$(run_gateway "$release" gateway call channels.status --params "{\"probe\":true,\"timeoutMs\":$timeout_ms}" --json --timeout "$timeout_ms")" || return 1
+  proof_json="$(TERMINAL_JSON="$terminal" MARKER_POLICY_JSON="$marker_policy" CHANNELS_JSON="$channels" PROCESS_JSON="$observed_process" CHECKOUT_PARAMS="$checkout_params" CHECKOUT_JSON="$checkout" "$node_bin" -e '
+process.stdout.write(JSON.stringify({reply:JSON.parse(process.env.TERMINAL_JSON),markerPolicy:JSON.parse(process.env.MARKER_POLICY_JSON),channels:JSON.parse(process.env.CHANNELS_JSON),process:JSON.parse(process.env.PROCESS_JSON),checkout:{method:"projects.checkoutOptions",params:JSON.parse(process.env.CHECKOUT_PARAMS),response:JSON.parse(process.env.CHECKOUT_JSON)}}));
+')" || return 1
+  OPENCLAW_TEAM_REPAIR_ACCEPTANCE_PROOF="$proof_json" retained_acceptance receipt "$context"
+}
 verify_convergence() {
-	local release="$1" expected_info="$2" scope="${3:-system}" expected_build channels gateway_json
+	local release="$1" expected_info="$2" scope="${3:-system}" retained_context="${4:-}" expected_build channels gateway_json
 	local observed_process health_json health_status startup_json startup_status ready_json ready_status
 	local convergence_state channel_state timeout_ms verification_result_started listener_exit
 	local -a probe_args channel_args
+	if [[ -n "$retained_context" ]]; then
+		((allow_cpu_degraded == 0)) || return 1
+		retained_acceptance check "$retained_context" >/dev/null || return 1
+	fi
 	cpu_degraded_waived=0
 	profile_convergence=""
 	expected_build="$(INFO_JSON="$expected_info" verification_step convergence.expected-build "$node_bin" -e 'process.stdout.write(JSON.parse(process.env.INFO_JSON).buildId)')" || return 1
@@ -1156,6 +1252,9 @@ const processInfo=JSON.parse(process.env.PROCESS_JSON);
 if(processInfo.pid!==Number(process.env.EXPECTED_PID)||typeof processInfo.processInstanceId!=="string"||!processInfo.processInstanceId)process.exit(2);
 process.stdout.write(processInfo.processInstanceId);
 ')" || return 1
+	if [[ -n "$retained_context" ]]; then
+		retained_acceptance_binding "$retained_context" "$release" "$verified_pid" "$verified_generation" "$verified_instance" >/dev/null || return 1
+	fi
 	verification_step convergence.healthz read_probe healthz || return 1
 	health_json="$probe_body"
 	health_status="$probe_status"
@@ -1263,13 +1362,20 @@ if(p.pid!==Number(process.env.EXPECTED_PID)||p.processInstanceId!==process.env.E
 }
 
 verify_marker() {
-	local release="$1" scope="${2:-system}"
+	local release="$1" scope="${2:-system}" retained_context="${3:-}" acceptance_json terminal_reply
 	local marker session approvals_before approvals_after reply payload run_id terminal_state marker_policy
 	local observed_process timeout_ms remaining observation_pause observation_pause_ms observation_exit
 	# Logical entries may retire while their exact transcript generation stays preserved.
 	printf '%s' "$session_witness" | verification_step marker.session-preservation proof session-preservation-verify "$release" "$release" "$state_database" >/dev/null || return 1
-	marker="TEAM_RELEASE_$(date -u +%Y%m%dT%H%M%SZ)_$$"
-	session="team-release-$marker"
+	if [[ -n "$retained_context" ]]; then
+		acceptance_json="$(retained_acceptance_marker "$retained_context" "$release" "$scope")" || return 1
+		if [[ "$(retained_acceptance_field "$acceptance_json" status)" == VERIFIED ]]; then return 0; fi
+		marker="$(retained_acceptance_field "$acceptance_json" marker)" || return 1
+		session="$(retained_acceptance_field "$acceptance_json" sessionId)" || return 1
+	else
+		marker="TEAM_RELEASE_$(date -u +%Y%m%dT%H%M%SZ)_$$"
+		session="team-release-$marker"
+	fi
 	approvals_before="$(verification_step marker.approvals-before proof approvals "$state_database" "$session")" || return 1
 	verification_step marker.approvals-empty test "$approvals_before" = 0 || {
 		fail 'verification session already has approval history'
@@ -1287,6 +1393,9 @@ process.stdout.write(JSON.stringify({model:splitTrailingAuthProfile(policy.model
 	verification_step marker.run-budget test "$remaining" -gt 0 || return 1
 	# Native ACK plus same-run observations keep proof independent of one long-lived
 	# response socket; the native idempotency key also reconciles a lost ACK.
+	if [[ -n "$retained_context" ]]; then
+		payload="$(retained_acceptance_field "$acceptance_json" payload)" || return 1
+	else
 	payload="$(MARKER="$marker" SESSION="$session" REMAINING="$remaining" "$node_bin" -e '
 const session=process.env.SESSION,agentId=JSON.parse(process.env.OPENCLAW_TEAM_OPERATOR_PROFILE).modelAgent;
 process.stdout.write(JSON.stringify({agentId,sessionId:session,
@@ -1294,11 +1403,13 @@ process.stdout.write(JSON.stringify({agentId,sessionId:session,
   message:`Output only this exact string, byte-for-byte, with no prefix or suffix: ${process.env.MARKER}`,
   timeout:Number(process.env.REMAINING),idempotencyKey:require("node:crypto").randomUUID()}));
 ')" || return 1
+	fi
 	# Native idempotency owns uncertain dispatch: reconcile only with the identical
 	# payload and live readiness, never mint another run or renew this deadline.
 	while :; do
 		timeout_ms=$((remaining * 1000)); ((timeout_ms <= 60000)) || timeout_ms=60000
 		observation_exit=0
+		if [[ -n "$retained_context" ]]; then retained_acceptance check "$retained_context" >/dev/null || return 1; fi
 		reply="$(verification_step marker.run run_marker_rpc "$release" agent "$payload" "$timeout_ms")" || observation_exit=$?
 		((observation_exit == 0)) && break
 		{ [[ "$observation_exit" == 76 && "$reply" == RETRYABLE_ADMISSION_PENDING ]] ||
@@ -1317,7 +1428,7 @@ if(reply.runId!==JSON.parse(process.env.REQUEST_JSON).idempotencyKey)process.exi
 // Native replay can acknowledge an in-flight reservation or return its terminal cache.
 if(!["accepted","in_flight","ok"].includes(reply.status)||
   (reply.agentId!==undefined&&reply.agentId!==agentId)||
-  (reply.sessionKey!==undefined&&reply.sessionKey!==`agent:${agentId}:explicit:${process.env.SESSION.toLowerCase()}`)||
+  (reply.sessionKey!==undefined&&reply.sessionKey!==JSON.parse(process.env.REQUEST_JSON).sessionKey)||
   (reply.status==="accepted"&&(reply.agentId!==agentId||reply.sessionKey===undefined)))process.exit(2);
 process.stdout.write(reply.runId);
 ')" || return 1
@@ -1353,7 +1464,7 @@ if((r.status==="pending"||r.status==="timeout")&&!r.endedAt&&!receipt&&!r.termin
   process.stdout.write("VERIFIED");
 }
 ')" || return 1
-			[[ "$terminal_state" == VERIFIED ]] && break
+			if [[ "$terminal_state" == VERIFIED ]]; then terminal_reply="$reply"; break; fi
 		fi
 		remaining=$((verification_deadline - SECONDS))
 		verification_step marker.pending-budget test "$remaining" -gt 0 || return 1
@@ -1380,6 +1491,9 @@ if(processInfo.pid!==Number(process.env.EXPECTED_PID)||processInfo.processInstan
 ' || return 1
 	verification_step marker.protected-state assert_protected_identity || return 1
 	verification_step marker.policy assert_policy || return 1
+	if [[ -n "$retained_context" ]]; then
+		retained_acceptance_receipt "$retained_context" "$release" "$terminal_reply" "$marker_policy" "$observed_process" >/dev/null || return 1
+	fi
 }
 
 load_journal_witness() {
@@ -1396,9 +1510,23 @@ wait_for_live() {
 	local release="$1" expected_info="$2" scope="${3:-system}" sleep_seconds verification_deadline convergence_exit listener_wait_logged=0
 	local verification_owned_pid="${4:-}" verification_owned_generation="${5:-}" verification_owned_scope="$scope"
 	local +x cpu_degraded_waived=0
+	local retained_context="${6:-}" acceptance_json
 	# Descriptor-less legacy recovery and no-journal checks can prove only fresh current state.
-	[[ -n "$session_witness" ]] || session_witness="$(verification_step wait-for-live.session-witness proof session-preservation-witness "$release" "$release" "$state_database")" || return 1
-	verification_deadline=$((SECONDS + verification_budget))
+	[[ -n "$retained_context" || -n "$session_witness" ]] || session_witness="$(verification_step wait-for-live.session-witness proof session-preservation-witness "$release" "$release" "$state_database")" || return 1
+	if [[ -n "$retained_context" ]]; then
+		[[ "$scope" == system && -n "$verification_owned_pid" && -n "$verification_owned_generation" ]] || return 1
+		((allow_cpu_degraded == 0)) || return 1
+		acceptance_json="$(retained_acceptance_binding "$retained_context" "$release" "$verification_owned_pid" "$verification_owned_generation")" || return 1
+		if [[ "$(retained_acceptance_field "$acceptance_json" status)" == VERIFIED ]]; then
+			verified_pid="$verification_owned_pid"; verified_generation="$verification_owned_generation"
+			verified_instance="$(retained_acceptance_field "$acceptance_json" instance)" || return 1
+			return 0
+		fi
+		session_witness="$(retained_acceptance_field "$acceptance_json" witness)" || return 1
+		verification_deadline=$((SECONDS + $(retained_acceptance_field "$acceptance_json" remainingSeconds)))
+	else
+		verification_deadline=$((SECONDS + verification_budget))
+	fi
 	while ((SECONDS < verification_deadline)); do
 		if [[ -n "$verification_owned_pid" ]]; then
 			capture_service_generation "$scope" || return 1
@@ -1407,8 +1535,8 @@ wait_for_live() {
 				return 1
 			}
 		fi
-		if verify_convergence "$release" "$expected_info" "$scope"; then
-			verify_marker "$release" "$scope" || return $?
+		if verify_convergence "$release" "$expected_info" "$scope" "$retained_context"; then
+			verify_marker "$release" "$scope" "$retained_context" || return $?
 			if ((cpu_degraded_waived == 1)); then
 				printf 'CPU_DEGRADED_OPERATOR_WAIVED scope=wait_for_live exception=performance-only sha=%s pid=%s generation=%s owner=%s final-deployment-acceptance=not-asserted\n' \
 					"$(basename "$release")" "$verified_pid" "$verified_generation" "$scope"
@@ -1918,7 +2046,14 @@ restore_pointer_topology() {
 
 on_exit() {
 	local exit_code=$? cleanup_exit
-	if [[ "$mode" == prepare-release || "$mode" == continue-frozen ]]; then exit "$exit_code"; fi
+	if [[ "$mode" == retained-repair ]]; then
+		trap - EXIT ERR
+		if ((exit_code != 0)) && [[ -n "$repair_journal" ]]; then
+			repair_step observe-failure "{\"code\":$exit_code}" || printf 'REPAIR_FAILURE retained-original=required observation-refused=1\n' >&2
+		fi
+		exit "$exit_code"
+	fi
+	if [[ "$mode" == prepare-release || "$mode" == prepare-retained-repair || "$mode" == retained-repair || "$mode" == continue-frozen ]]; then exit "$exit_code"; fi
 	# Admission failure or a lost journal receipt carries no profile cleanup authority.
 	if [[ -n "$frozen_target_sha" && -z "$held_suspension" ]] && ((rollback_armed == 0)); then exit "$exit_code"; fi
 	if [[ "$mode" == handoff-source ]]; then
@@ -2643,6 +2778,35 @@ freeze_origin_main() {
 	[[ "$frozen_main" =~ ^[a-f0-9]{40}$ ]] || fail 'frozen official origin/main is not an exact SHA'
 }
 
+prepare_retained_repair() {
+	local timer enabled active binding request operation
+	operator_check_lock held
+	assert_exclusive_owner system
+	recheck_generation system "$operator_expected_pid" "$operator_expected_generation"
+	[[ "$(read_pointer "$current_link")" == "$releases_root/$operator_expected_sha" ]] || fail 'retained repair current release changed'
+	for timer in openclaw-hourly-update.timer openclaw-nightly-update.timer; do
+		enabled="$(system_systemctl is-enabled "$timer" 2>/dev/null || true)"
+		active="$(system_systemctl is-active "$timer" 2>/dev/null || true)"
+		[[ ("$enabled" == disabled || "$enabled" == not-found) && "$active" == inactive ]] ||
+			fail 'retained repair preparation requires disabled inactive deployment timers'
+	done
+	binding="$("$node_bin" -e 'const [operation,target,current,pid,generation,journalSha256,configSha256]=process.argv.slice(1);process.stdout.write(JSON.stringify({operation,target,current,pid:Number(pid),generation,journalSha256,...(configSha256?{configSha256}:{})}));' \
+		"$repair_operation" "$requested_sha" "$operator_expected_sha" "$operator_expected_pid" "$operator_expected_generation" "$repair_journal_hash" "${repair_config_hash:-}")"
+	request="$(printf '%s' "$binding" | proof retained-repair-build request "$serving_root" @stdin)"
+	printf '%s' "$request" | proof retained-repair-build begin "$serving_root" @stdin >/dev/null
+	operation="$("$node_bin" -e 'process.stdout.write(JSON.stringify({operation:process.argv[1]}));' "$repair_operation")"
+	# Never waive the ordinary pending-journal gate: this separate owner binds it.
+	# Existing fetch/build/prewarm/seal owners run in ordinary errexit context.
+	freeze_origin_main
+	printf '%s' "$operation" | proof retained-repair-build origin "$serving_root" @stdin >/dev/null
+	# A replay may see newer official main. The original exact C remains pinned.
+	frozen_main="$requested_sha"
+	publish_release "$requested_sha" "$mirror"
+	recheck_generation system "$operator_expected_pid" "$operator_expected_generation"
+	printf '%s' "$operation" | proof retained-repair-build finish "$serving_root" @stdin
+	printf 'PREPARED sha=%s action=prepare-retained-repair restart=0 activation=0 original-journal=retained\n' "$requested_sha"
+}
+
 prepare_release() {
 	local timer enabled active prepared_info
 	[[ ! -e "$journal_file" && ! -L "$journal_file" ]] || fail 'release preparation refuses a pending activation journal'
@@ -2899,7 +3063,7 @@ handoff_target() {
 clean_candidate() {
 	local pathname="$1" parent="$2" owner="$3" group="$4" binding="$5" device inode
 	read -r device inode <<<"$binding"
-	bounded 120 "$node_bin" --no-warnings "$release_lib" clean-candidate \
+	bounded_proof 120 clean-candidate \
 		"$pathname" "$parent" "$owner" "$group" "$device" "$inode" >/dev/null
 }
 
@@ -2969,7 +3133,8 @@ publish_release() (
 	cp -a --reflink=auto "$build_directory/." "$staging"
 	chown -hR "$root_uid:$root_uid" "$staging"
 	proof manifest "$staging" "$target_sha" "$root_uid" "$frozen_main" >/dev/null
-	"$node_bin" --no-warnings "$release_lib" seal-tree "$staging" 8>&- 9>&-
+	# Sealing is a trusted proof-owner call; retain its exact deployment lock.
+	"$node_bin" --no-warnings "$release_lib" seal-tree "$staging" 8>&-
 	proof validate-release "$staging" "$target_sha" "$root_uid" sealed >/dev/null
 	[[ "$(proof stat-identity "$staging" | cut -d' ' -f1)" == "$(proof stat-identity "$releases_root" | cut -d' ' -f1)" ]] ||
 		fail 'candidate publication crosses filesystem devices'
@@ -3095,7 +3260,207 @@ process.stdout.write(/^[a-z-]{1,32}$/.test(String(status)) ? status : "unreadabl
 	done
 }
 
+repair_value() {
+	printf '%s' "$repair_context" | "$node_bin" -e 'let value=JSON.parse(require("node:fs").readFileSync(0,"utf8"));for(const key of process.argv[1].split("."))value=value?.[key];if(value===undefined)process.exit(2);process.stdout.write(typeof value==="string"?value:JSON.stringify(value));' "$1"
+}
+
+repair_load_context() {
+	repair_context="$(printf '%s' "$repair_journal" | "$node_bin" -e 'let s="";process.stdin.on("data",v=>s+=v).on("end",()=>process.stdout.write(JSON.stringify({journal:JSON.parse(s)})));' | proof retained-repair-lifecycle inspect "$serving_root" @stdin)" || return 1
+	repair_journal="$(repair_value journal)" || return 1
+	phase="$(repair_value record.phase)" || return 1
+	previous_info="$(repair_value snapshot.evidence.record.candidate)" || return 1
+	candidate_info="$(repair_value snapshot.target.release)" || return 1
+	previous_release="$releases_root/$(repair_value snapshot.evidence.record.candidate.sha)"
+	candidate_release="$releases_root/$(repair_value snapshot.request.target.sha)"
+	protected_identity="$(repair_value protectedPaths)" || return 1
+	policy_identity="$(repair_value snapshot.policy)" || return 1
+	session_witness="$(repair_value snapshot.currentWitness)" || return 1
+	# Terminal failures may precede binding or lease acquisition. Never invent those facts.
+	[[ "$phase" != REPAIR_FAILED ]] || return 0
+	if [[ "$phase" != REPAIR_PREPARED && "$phase" != REPAIR_EVIDENCE_VERIFIED ]]; then
+		suspension_pid="$(repair_value record.lifecycle.bound.owner.process.pid)" || return 1
+		suspension_generation="$(repair_value record.lifecycle.bound.owner.process.generation)" || return 1
+		suspension_instance="$(repair_value record.lifecycle.bound.owner.instance)" || return 1
+		suspension_scope=system; suspension_release="$previous_release"
+		repair_drain_request="$(repair_value record.lifecycle.bound.drain.requestId)"
+		repair_drain_deadline_ms="$(repair_value record.lifecycle.bound.drain.deadlineMs)"
+	fi
+	if [[ "$phase" != REPAIR_PREPARED && "$phase" != REPAIR_EVIDENCE_VERIFIED && "$phase" != REPAIR_BOUND ]]; then
+		held_suspension="$(repair_value record.lifecycle.suspension.id)" || return 1
+		suspension_expiry="$(repair_value record.lifecycle.suspension.expiresAtMs)" || return 1
+	fi
+}
+
+repair_step() {
+	local action="$1" extra="${2-}" input result
+	[[ -n "$extra" ]] || extra='{}'
+	input="$(REPAIR_JOURNAL="$repair_journal" REPAIR_EXTRA="$extra" "$node_bin" -e 'process.stdout.write(JSON.stringify({journal:JSON.parse(process.env.REPAIR_JOURNAL),...JSON.parse(process.env.REPAIR_EXTRA)}));')" || return 1
+	result="$(printf '%s' "$input" | proof retained-repair-lifecycle "$action" "$serving_root" @stdin)" || return 1
+	if [[ "$action" != start-dispatch ]]; then
+		repair_journal="$(printf '%s' "$result" | "$node_bin" -e 'let s="";process.stdin.on("data",v=>s+=v).on("end",()=>process.stdout.write(JSON.stringify(JSON.parse(s).journal)));')" || return 1
+	fi
+}
+
+repair_suspension_response() {
+	RESPONSE_KIND="$1" LAST_KIND="$last_suspension_response_kind" PREPARE_RESPONSE="$last_suspension_prepare_response" \
+		LAST_RESPONSE="$last_suspension_response" LEASE="$held_suspension" "$node_bin" -e '
+const response=JSON.parse(process.env.LAST_RESPONSE);
+let input;
+if(process.env.RESPONSE_KIND==="prepare") {
+  input={response:JSON.parse(process.env.PREPARE_RESPONSE)};
+  if(process.env.LAST_KIND==="status") input.statusResponse=response;
+  else if(process.env.LAST_KIND!=="prepare") process.exit(2);
+} else if(process.env.RESPONSE_KIND==="status" && process.env.LAST_KIND==="status") {
+  input={response,suspensionId:process.env.LEASE};
+} else process.exit(2);
+process.stdout.write(JSON.stringify(input));'
+}
+
+verify_retained_repair_acceptance() {
+	local started_pid started_generation acceptance receipt extra
+	started_pid="$(repair_value record.lifecycle.started.process.pid)" || return 1
+	started_generation="$(repair_value record.lifecycle.started.process.generation)" || return 1
+	# The exact durable journal—not a flag—selects strict project/model/channel proof.
+	wait_for_live "$candidate_release" "$candidate_info" system "$started_pid" "$started_generation" "$repair_journal" || return 1
+	acceptance="$(retained_acceptance check "$repair_journal")" || return 1
+	[[ "$(retained_acceptance_field "$acceptance" status)" == VERIFIED ]] || return 1
+	receipt="$(retained_acceptance_field "$acceptance" receipt)" || return 1
+	extra="$(REPAIR_ACCEPTANCE="$receipt" "$node_bin" -e 'process.stdout.write(JSON.stringify({acceptance:JSON.parse(process.env.REPAIR_ACCEPTANCE)}));')" || return 1
+	repair_step verify "$extra"
+}
+
+repair_reconcile_start() {
+	local owned_pid="" owned_generation="" owned_instance="" instance rpc_exit listener_exit
+	local now_ms remaining timeout_ms extra verification_deadline
+	while :; do
+		# Revalidate the exact journal and immutable evidence on every retry.
+		repair_load_context || return 1
+		now_ms="$(proof suspension-now)" || return 1
+		remaining=$(((repair_verification_deadline_ms-now_ms)/1000))
+		((remaining>0)) || { fail 'repair start did not reconcile before its original deadline; receipt retained'; return 1; }
+		# Round down: every RPC shares the original absolute budget, never a fresh one.
+		verification_deadline=$((SECONDS+remaining))
+		timeout_ms=$((remaining*1000)); ((timeout_ms<=10000)) || timeout_ms=10000
+		# An unclassified ownership/process failure is fatal, not startup transport.
+		capture_service_generation system || return 1
+		if [[ -z "$owned_pid" ]]; then
+			owned_pid="$service_pid"; owned_generation="$service_generation"
+		fi
+		[[ "$service_pid" == "$owned_pid" && "$service_generation" == "$owned_generation" ]] || {
+			fail 'repair successor generation changed during startup; receipt retained'; return 1;
+		}
+		rpc_exit=0
+		instance="$(read_process_instance "$candidate_release" "$owned_pid" "$timeout_ms")" || rpc_exit=$?
+		# Check the same owner even after an unavailable RPC; never adopt a replacement.
+		capture_service_generation system || return 1
+		[[ "$service_pid" == "$owned_pid" && "$service_generation" == "$owned_generation" ]] || {
+			fail 'repair successor generation changed during startup; receipt retained'; return 1;
+		}
+		if ((rpc_exit==0)); then
+			[[ -z "$owned_instance" || "$instance" == "$owned_instance" ]] || {
+				fail 'repair successor RPC instance changed during startup; receipt retained'; return 1;
+			}
+			owned_instance="$instance"
+		elif ((rpc_exit!=78)); then
+			return "$rpc_exit"
+		fi
+		# Only an absent listener is unresolved readiness; malformed/foreign listeners fail.
+		listener_exit=0
+		assert_single_listener "$owned_pid" || listener_exit=$?
+		((listener_exit==0 || listener_exit==75)) || return "$listener_exit"
+		now_ms="$(proof suspension-now)" || return 1
+		remaining=$(((repair_verification_deadline_ms-now_ms)/1000))
+		((remaining>0)) || { fail 'repair start did not reconcile before its original deadline; receipt retained'; return 1; }
+		if ((rpc_exit==0 && listener_exit==0)); then
+			capture_service_generation system || return 1
+			[[ "$service_pid" == "$owned_pid" && "$service_generation" == "$owned_generation" ]] || {
+				fail 'repair successor generation changed during startup; receipt retained'; return 1;
+			}
+			extra="$(INSTANCE="$instance" "$node_bin" -e 'process.stdout.write(JSON.stringify({instance:process.env.INSTANCE}));')" || return 1
+			# This native transition still checks claim, guard, process, invocation and listener.
+			repair_step started "$extra" || return 1
+			now_ms="$(proof suspension-now)" || return 1
+			((now_ms<repair_verification_deadline_ms)) || {
+				fail 'repair native startup proof exceeded its original deadline; receipt retained'; return 1;
+			}
+			return 0
+		fi
+		sleep 1 || return 1
+	done
+}
+
+activate_retained_repair() {
+	local initial extra instance start_exit timer enabled active
+	operator_check_lock held
+	for timer in openclaw-hourly-update.timer openclaw-nightly-update.timer; do
+		enabled="$(system_systemctl is-enabled "$timer" 2>/dev/null || true)"
+		active="$(system_systemctl is-active "$timer" 2>/dev/null || true)"
+		[[ ("$enabled" == disabled || "$enabled" == not-found) && "$active" == inactive ]] || fail 'retained repair requires disabled inactive deployment timers'
+	done
+	initial="$(proof retained-repair-entry "$repair_entry" "$serving_root" "$repair_operation" "$repair_journal_hash")" || return 1
+	repair_journal="$(printf '%s' "$initial" | "$node_bin" -e 'let s="";process.stdin.on("data",v=>s+=v).on("end",()=>process.stdout.write(JSON.stringify(JSON.parse(s).journal)));')" || return 1
+	# This branch is owned by activate_release, but never enters its v1 journal/rollback path.
+	while :; do
+		repair_load_context || return 1
+		case "$phase" in
+		REPAIR_PREPARED)
+			initial="$(printf '%s' "$repair_journal" | proof retained-repair-transaction verify "$serving_root" @stdin)" || return 1
+			repair_journal="$(printf '%s' "$initial" | "$node_bin" -e 'let s="";process.stdin.on("data",v=>s+=v).on("end",()=>process.stdout.write(JSON.stringify(JSON.parse(s).journal)));')" ;;
+		REPAIR_EVIDENCE_VERIFIED)
+			assert_protected_identity; assert_policy; assert_scheduler_owner "$previous_release"
+			run_gateway "$candidate_release" config validate >/dev/null
+			capture_generation system
+			instance="$(read_process_instance "$previous_release" "$service_pid")" || return 1
+			extra="$(INSTANCE="$instance" "$node_bin" -e 'process.stdout.write(JSON.stringify({instance:process.env.INSTANCE}));')" || return 1
+			repair_step bind "$extra" ;;
+		REPAIR_BOUND)
+			prepare_suspension "$previous_release" || return $?
+			[[ "$suspension_state" == READY && "$suspension_write_custody" == clear && "$suspension_blockers" == none ]] || fail 'repair refuses unknown custody, pending work or persistence waivers'
+			repair_step suspend "$(repair_suspension_response prepare)" ;;
+		REPAIR_SUSPENDED)
+			check_suspension || return 1
+			[[ "$suspension_state" == READY && "$suspension_write_custody" == clear && "$suspension_blockers" == none ]] || return 1
+			repair_step stop-intent "$(repair_suspension_response status)" ;;
+		REPAIR_STOP_INTENT)
+			if [[ -e "$proc_root/$suspension_pid" ]]; then
+				recheck_generation system "$suspension_pid" "$suspension_generation" || return 1
+				assert_stop_start_contract || return 1
+				arm_suspension_handoff || return 1
+				system_systemctl stop openclaw-gateway.service || return 1
+			fi
+			held_suspension=""
+			repair_step stopped ;;
+		REPAIR_STOPPED) repair_step select-intent ;;
+		REPAIR_SELECT_INTENT) repair_step select ;;
+		REPAIR_SELECTED)
+			extra="$("$node_bin" -e 'process.stdout.write(JSON.stringify({verificationSeconds:Number(process.argv[1])}));' "$verification_budget")"
+			repair_step start-intent "$extra" ;;
+		REPAIR_START_INTENT)
+			held_suspension=""
+			repair_verification_deadline_ms="$(repair_value record.lifecycle.startIntent.deadlineMs)"
+			if [[ ! -e "$serving_root/journal/repair-$repair_operation.start-dispatch.json" ]]; then
+				repair_step start-dispatch || return 1
+				start_exit=0
+				system_systemctl start openclaw-gateway.service --job-mode=fail || start_exit=$?
+				printf 'REPAIR_START_DISPATCH exit=%s repeat=forbidden\n' "$start_exit"
+			fi
+			# After an uncertain start, reconcile only this owned generation; never dispatch again.
+			repair_reconcile_start || return 1 ;;
+		REPAIR_STARTED)
+			held_suspension=""
+			repair_verification_deadline_ms="$(repair_value record.lifecycle.startIntent.deadlineMs)"
+			verify_retained_repair_acceptance || return 1 ;;
+		REPAIR_VERIFIED) held_suspension=""; repair_step complete ;;
+		REPAIR_COMPLETED)
+			held_suspension=""; printf 'REPAIR_COMPLETED operation=%s original-and-completion-receipts=retained journal=retained\n' "$repair_operation"; return 0 ;;
+		REPAIR_FAILED) fail 'repair has retained terminal failure evidence; no automatic rollback or second start'; return 1 ;;
+		*) fail 'unsupported retained repair phase'; return 1 ;;
+		esac
+	done
+}
+
 activate_release() {
+	if [[ "$mode" == retained-repair ]]; then activate_retained_repair; return $?; fi
 	local topology="$1" old_pid old_generation old_instance suspension_result predecessor_sha candidate_sha
 	local prepare_profile=0
 	local prior_current_sha=absent prior_previous_sha=absent
@@ -3145,6 +3510,9 @@ activate_release() {
 	assert_protected_identity
 	assert_policy
 	proof compatibility "$previous_release" "$candidate_release" "$state_database" >/dev/null
+	# Ordinary RPCs are fenced after preparation. Bind the pre-drain instance
+	# to the unchanged OS generation here; the fresh lease check below and
+	# generation-bound handoff before stop retain live shutdown authority.
 	assert_frozen_predecessor "$old_instance"
 	if ! check_suspension; then
 		printf 'DEFERRED preserved Gateway suspension expired during compatibility proof\n'
@@ -3163,9 +3531,15 @@ activate_release() {
 		"$prior_system_enabled" "$prior_system_active" "$prior_user_enabled" "$prior_user_active" \
 		"$held_suspension" "$suspension_expiry" "$suspension_state"
 	if [[ "$topology" == system ]]; then
-		printf '%s' "$session_witness" | proof journal-create "$@" @stdin "$runtime_target" "${native_update_root:-}" >/dev/null
+		printf '%s' "$session_witness" | proof journal-create "$@" @stdin "$runtime_target" "${native_update_root:-}" >/dev/null || {
+			printf 'JOURNAL_PUBLICATION_UNCONFIRMED proof_exit=%s journal=retained-if-present\n' "$?" >&2
+			return 1
+		}
 	else
-		proof journal-create "$@" >/dev/null
+		proof journal-create "$@" >/dev/null || {
+			printf 'JOURNAL_PUBLICATION_UNCONFIRMED proof_exit=%s journal=retained-if-present\n' "$?" >&2
+			return 1
+		}
 	fi
 	session_witness_record="$(proof journal-read "$journal_file")"
 	load_journal_witness
@@ -3353,9 +3727,9 @@ operator_assert_unchanged() {
 
 operator_assert_predecessor() {
 	local stop_budget
-	# The existing system owner must stop the whole old process group with a finite budget.
+	# Both modes kill the whole cgroup on timeout; mixed lets the main process drain first.
 	stop_budget="$(system_systemctl show openclaw-gateway.service --property=TimeoutStopUSec --value)" || return 1
-	[[ "$(system_systemctl show openclaw-gateway.service --property=KillMode --value)" == control-group &&
+	[[ "$(system_systemctl show openclaw-gateway.service --property=KillMode --value)" == @(control-group|mixed) &&
 	"$(system_systemctl show openclaw-gateway.service --property=SendSIGKILL --value)" == yes &&
 	"$stop_budget" =~ ^[1-9][0-9]*(us|ms|s|min)([[:space:]].*)?$ ]] || {
 		fail 'operator restart requires bounded system-unit process-group shutdown'
@@ -3812,6 +4186,20 @@ while (($#)); do
 		mode=handoff-source; operator_expected_sha="$2"; operator_expected_pid="$3"; operator_expected_generation="$4"
 		handoff_peer="$5"; handoff_target_sha="$6"; shift 5
 		;;
+	--activate-retained-repair | --resume-retained-repair | --retire-retained-repair)
+		[[ "$mode" == deploy && $# == 3 && "$2" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ && "$3" =~ ^[a-f0-9]{64}$ && -z "$requested_sha" ]] || fail 'retained repair requires only OPERATION and exact receipt or journal SHA256'
+		if [[ "$1" == --activate-retained-repair ]]; then repair_entry=begin; else repair_entry=resume; fi
+		mode=retained-repair; repair_operation="$2"; repair_journal_hash="$3"
+		[[ "$1" != --retire-retained-repair ]] || mode=retire-retained-repair
+		[[ "$mode" != retire-retained-repair || "$waive_terminal_persistence" == 0 ]] || fail 'retirement does not accept a persistence waiver'
+		shift 2
+		;;
+	--prepare-retained-repair)
+		[[ "$mode" == deploy && $# -ge 7 && -z "$requested_sha" ]] || fail 'retained repair preparation requires OPERATION TARGET CURRENT PID START JOURNAL_SHA256 [CONFIG_SHA256]'
+		mode=prepare-retained-repair; repair_operation="$2"; requested_sha="$3"; operator_expected_sha="$4"
+		operator_expected_pid="$5"; operator_expected_generation="$6"; repair_journal_hash="$7"; shift 6
+		if [[ "${2:-}" =~ ^[a-f0-9]{64}$ ]]; then repair_config_hash="$2"; shift; fi
+		;;
 	--prepare-release)
 		[[ "$mode" == deploy && $# -ge 2 && -z "$requested_sha" && "$2" =~ ^[a-f0-9]{40}$ ]] || fail 'release preparation requires one exact official SHA'
 		mode=prepare-release; requested_sha="$2"
@@ -3901,10 +4289,21 @@ while (($#)); do
 		# only meaningful with --interrupt-after-drain; receipted as TERMINAL_PERSISTENCE_WAIVED.
 		waive_terminal_persistence=1
 		;;
-	*) fail 'usage: openclaw-release-deploy [--continue-frozen-release TARGET_SHA MANIFEST_SHA256 CURRENT_SHA PID START|--prepare-release OFFICIAL_SHA|--switch-runtime node|bun BINARY SHA256|--migrate|--recover|--cleanup] [--reconcile-config SHA PID START CONFIG_SHA256 JOURNAL_SHA256|--reconcile-stopped-predecessor SHA CONFIG_SHA256 JOURNAL_SHA256] [--repair-worker-bootstrap SHA PID START CONFIG_SHA256 OLD_SETUP_SHA256] [--sha OFFICIAL_MAIN_SHA] [--interrupt-after-drain] [--offline-doctor-repair] [--allow-cpu-degraded] [--capture-startup-profile|--arm-steady-profile] [--capture-steady-profile OPERATION SHA PID START]' ;;
+	*) fail 'usage: openclaw-release-deploy [--retire-retained-repair OPERATION COMPLETED_JOURNAL_SHA256|--continue-frozen-release TARGET_SHA MANIFEST_SHA256 CURRENT_SHA PID START|--prepare-retained-repair OPERATION TARGET CURRENT PID START JOURNAL_SHA256 [CONFIG_SHA256]|--prepare-release OFFICIAL_SHA|--switch-runtime node|bun BINARY SHA256|--migrate|--recover|--cleanup] [--reconcile-config SHA PID START CONFIG_SHA256 JOURNAL_SHA256|--reconcile-stopped-predecessor SHA CONFIG_SHA256 JOURNAL_SHA256] [--repair-worker-bootstrap SHA PID START CONFIG_SHA256 OLD_SETUP_SHA256] [--sha OFFICIAL_MAIN_SHA] [--interrupt-after-drain] [--offline-doctor-repair] [--allow-cpu-degraded] [--capture-startup-profile|--arm-steady-profile] [--capture-steady-profile OPERATION SHA PID START]' ;;
 	esac
 	shift
 done
+
+if [[ "$mode" == retained-repair || "$mode" == retire-retained-repair ]]; then operator_check_lock before; fi
+
+if [[ "$mode" == prepare-retained-repair ]]; then
+	[[ "$repair_operation" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ &&
+		"$requested_sha" =~ ^[a-f0-9]{40}$ && "$operator_expected_sha" =~ ^[a-f0-9]{40}$ &&
+		"$requested_sha" != "$operator_expected_sha" && "$operator_expected_pid" =~ ^[1-9][0-9]*$ &&
+		"$operator_expected_generation" =~ ^[1-9][0-9]*$ && "$repair_journal_hash" =~ ^[a-f0-9]{64}$ &&
+		-z "$reconcile_config_hash" && "$start_stopped_current" == 0 ]] || fail 'invalid retained repair incident binding'
+	operator_check_lock before
+fi
 
 if [[ "$mode" == continue-frozen ]]; then
 	[[ -z "$requested_sha" && -z "$reconcile_config_hash" && "$start_stopped_current" == 0 &&
@@ -3966,7 +4365,14 @@ if [[ "$mode" == runtime ]]; then
 	operator_check_lock before
 fi
 
-exec 9>"$lock_file"
+# OPENCLAW_CONTROLLER_FD9_GATE_V1
+# Parse first so the deployment wait policy owns admission. No proof or effect
+# runs until the held lock and this executing script's inode pass the gate.
+export OPENCLAW_TEAM_LOCK_FILE="$lock_file" OPENCLAW_TEAM_RELEASE_ROOT="$serving_root" OPENCLAW_TEAM_RELEASE_LIB="$release_lib"
+[[ -f "$lock_file" && ! -L "$lock_file" ]] || exit 75
+if [[ ! -e /proc/$$/fd/9 ]]; then
+	exec 9<>"$lock_file"
+fi
 flock -n 9 || {
 	if [[ "$mode" == deploy ]]; then
 		# Maintenance joins its descendants under this same lock; let it settle.
@@ -3976,7 +4382,7 @@ flock -n 9 || {
 			printf 'DEPLOY_LOCK_UNAVAILABLE exit=%s; retry after the current owner finishes\n' "$lock_exit" >&2
 			exit "$lock_exit"
 		}
-	elif [[ "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == runtime || "$mode" == prepare-release || "$mode" == continue-frozen || "$mode" == handoff-* || -n "$reconcile_config_hash" || "$start_stopped_current" == 1 ]]; then
+	elif [[ "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == runtime || "$mode" == prepare-release || "$mode" == prepare-retained-repair || "$mode" == retained-repair || "$mode" == retire-retained-repair || "$mode" == continue-frozen || "$mode" == handoff-* || -n "$reconcile_config_hash" || "$start_stopped_current" == 1 ]]; then
 		fail 'bound maintenance action refused: canonical deployment lock is busy'
 		exit 1
 	else
@@ -3984,10 +4390,17 @@ flock -n 9 || {
 		exit 0
 	fi
 }
+read -r controller_script_device controller_script_inode < <(stat -Lc '%d %i' "/proc/$$/fd/255")
+proof controller-adoption-gate "$serving_root" "$(readlink -f "${BASH_SOURCE[0]}")" \
+	"$controller_script_device" "$controller_script_inode"
 proof maintenance-idle "$ancestor_boundary" >/dev/null ||
 	fail 'scheduled maintenance has not settled; deployment admission refused'
+if [[ "$mode" == retire-retained-repair ]]; then
+	proof retained-repair-retire "$serving_root" "$repair_operation" "$repair_journal_hash"
+	exit 0
+fi
 if [[ -n "$reconcile_config_hash" ]]; then operator_check_lock held; fi
-if [[ "$mode" != handoff-* && ( -e "$journal_file" || -L "$journal_file" ) ]]; then
+if [[ "$mode" != retained-repair && "$mode" != handoff-* && ( -e "$journal_file" || -L "$journal_file" ) ]]; then
 	handoff_pending="$(proof host-handoff status "$serving_root")"
 	[[ "$handoff_pending" != SOURCE_* && "$handoff_pending" != TARGET_* ]] ||
 		fail 'cross-host handoff is retained; resume its matching --handoff action, never ordinary deployment or rollback'
@@ -4022,6 +4435,14 @@ fi
 if [[ "$mode" == handoff-* ]]; then
 	proof migration-publication-recover "$serving_root" >/dev/null
 	handoff_target
+	exit 0
+fi
+if [[ "$mode" == retained-repair ]]; then
+	activate_release system
+	exit 0
+fi
+if [[ "$mode" == prepare-retained-repair ]]; then
+	prepare_retained_repair
 	exit 0
 fi
 if [[ "$mode" == prepare-release ]]; then

@@ -135,7 +135,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     assertMaintenance();
     return;
   }
-  const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance by ${role} process ${owner.pid}; retry when it finishes. For update progress, run \`openclaw update status --json\`.`;
+  const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance by ${role} process ${owner.pid}, started ${owner.createdAt}; retry when it finishes. For update progress, run \`openclaw update status --json\`. ${describeGatewayLockHolder(owner, ownerPath, namespace === "same" ? "live" : "unknown")}`;
   if (owner.stateOwnerKind === "schema" && owner.role === "sqlite-maintenance") {
     throw new StateDatabaseAdmissionPendingError(databasePath, maintenancePending);
   }

@@ -1,5 +1,247 @@
 # Team-scale Control UI cold-load benchmark
 
+## Firefox census
+
+The engines harness also accepts `--engines chromium,firefox`. Install the exact
+Firefox revision from the repository's Playwright dependency with
+`pnpm --dir ui exec playwright install firefox`. Use `PLAYWRIGHT_BROWSERS_PATH`
+for an existing approved browser-cache location. Do not substitute system Firefox.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium,firefox --pages --page-phases visit --viewport both \
+  --output .artifacts/firefox/routes
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium,firefox --viewport both \
+  --steps cold-boot,warm-boot,chat-typing,sidebar-toggle,sidebar-open,sidebar-close,session-switch,model-picker-first-open-search,cron-menu-open,sessions-search,streaming-645-deltas,large-transcript-open,large-transcript-fast-scroll,transcript-scroll-top \
+  --output .artifacts/firefox/interactions
+```
+
+These one-pair runs are screens, not performance evidence. Confirm any failure
+or engine/Chromium ratio above 1.3 with `--pairs 10 --configurations default,control`
+on the affected steps. The identical `control` configuration supplies the A/A
+check; positions and directions rotate. Split compound actions before attributing
+a gap. Fix validation requires 20 rotated pairs plus A/A and unchanged engines
+within the campaign's acceptance band.
+
+For the chat model picker, select `model-picker-first-open`, `model-picker-open`,
+`model-picker-search`, and `model-picker-search-paste` separately. Opening ends
+with mounted choices and focused search; paste uses one native edit, while search
+types the same query character by character. The compound
+`model-picker-first-open-search` retains the driver gaps between those phases.
+The explicit desktop `session-icon-first-custom-input` scenario prepares an empty,
+focused custom icon field and measures its first emoji input through enabled Set;
+it leaves the draft unapplied and sends no appearance mutation.
+Use a separate WebKit `--trace` run to attribute layout and the first content
+paint; application time is not a paint timestamp. `sidebar-open` and
+`sidebar-close` split one activation on desktop and mobile and await the relevant
+navigation animations.
+
+Firefox retains the same browser-local application elapsed clock and boot/route
+readiness milestones. These measure neither CPU nor paint. CPU counters, native
+traces, throttling, forced GC, and heap snapshots are unavailable in this harness;
+their options fail explicitly rather than falling back to a different clock.
+The page observer detects Layout Instability and Long Tasks support at runtime
+and records unavailable metrics as `null`, never zero. Mobile Firefox cells use
+the same narrow viewport and touch settings, but omit Playwright's unsupported
+`isMobile` emulation. Hidden-tab scenarios are skipped where native visibility
+cannot be controlled.
+
+Desktop `transcript-scroll-top` uses repeated sub-page native wheel gestures and
+reports `wheelEvents` with its result. Firefox deliberately caps a single wheel
+event to one page, so an arbitrarily large delta is not a portable jump-to-top.
+The measured journey includes the driver gaps between gestures; it is not
+single-wheel latency. Mobile retains the programmatic scrollport jump because
+Playwright's mobile WebKit driver does not support wheel input.
+
+## Native browser work and composited layers
+
+Use the same production route and interaction scenarios with `--native-audit`
+to collect Chromium native work, V8 samples, and a before/after `LayerTree`
+inventory. Run each selection at 1× and 6×; keep these diagnostic captures
+separate from uninstrumented timing comparisons.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --pages --page-phases visit,action --engines chromium --viewport both \
+  --native-audit --cpu-throttle 1 --output .artifacts/native-time/routes-1x
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --steps native-composer-keystroke,native-composer-hover \
+  --engines chromium --viewport both --native-audit --cpu-throttle 6 \
+  --output .artifacts/native-time/input-6x
+```
+
+Each observation reports exclusive style, layout, pre-paint, paint, layerization,
+commit, HTML/CSS parsing, script compilation, and GC intervals. Nested categories
+are counted once per thread. Renderer-main and other renderer threads remain
+separate. Wall durations are elapsed trace time; thread CPU is reported only
+when every overlapping event has a usable thread clock. Missing clocks are
+`null`, not zero or wall time scaled into CPU.
+
+The `(program)` breakdown intersects sample intervals with native trace slices
+on the same monotonic clock, excluding the initial profiler-start interval just
+as the CPU census does. This is correlation of sampled elapsed time, not a
+causal attribution of OS CPU. Unmatched time remains explicitly unexplained.
+Raw trace/profile data is retained in `*.native.json`; observation summaries
+also include event names for investigating unclassified work.
+
+Layer inventories include compositing reasons and computed promotion-related
+styles. The RGBA estimate is content-layer width × height × four, excluding
+scale, tiles, buffers, and GPU overhead; it is not measured GPU memory. A
+discarded screenshot requests the initial inventory on idle headless pages.
+Paint clips use layer-local coordinates and can overlap. Some Chromium builds
+update layer paint counters without emitting `layerPainted`: zero events do
+not prove no repaint. Trace `Paint` clips are recording bounds, not raster
+invalidations or proof that every pixel in that rectangle changed.
+
+## Cross-flow CPU census
+
+The opt-in `provider-model-picker-artwork-cycles` engines scenario checks the
+custom provider artwork path omitted by the ordinary model fixtures. It opens,
+filters and reopens a 1,000-model picker whose rows share one synthetic image,
+checks that the images decode and selection stays unchanged, and reports image
+requests, blob reads and object URL lifetimes. Run it against a build supporting
+custom provider artwork; its instrumented timings are not performance evidence.
+The `-12` variant uses twelve models sharing the same image, separating a small
+local-provider catalog from the 1,000-model stress case. Counts describe actual
+rendered images and distinct assets, not a thousand simultaneously visible rows.
+The `provider-model-picker-artwork-open-12` and
+`provider-model-picker-artwork-reopen-12` scenarios measure decoded-image
+readiness without the blob/object-URL probe; omit `-12` for the stress catalog.
+Compare complete base/head builds with `--compare-bundle-dir`,
+`--control-bundle-dir`, and `--pairs 20` for rotated timing and A/A controls.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --steps provider-model-picker-artwork-cycles,provider-model-picker-artwork-cycles-12 \
+  --engines chromium,webkit,firefox \
+  --viewport both --output .artifacts/provider-artwork
+```
+
+Use the cross-engine harness's Chromium-only `--cpu-profile` mode to find small
+costs shared across its existing route and interaction workloads. It uses V8
+sampling without Playwright/Timeline tracing and writes source-mapped
+`*.cpuprofile` files plus `cpu-census.json` after each completed profile.
+
+```sh
+pnpm ui:build
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --pages --page-phases visit,action --engines chromium --viewport both \
+  --cpu-profile --cpu-throttle 1 --output .artifacts/cpu-census/routes-1x
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium --viewport both --cpu-profile --cpu-throttle 6 \
+  --output .artifacts/cpu-census/interactions-6x
+```
+
+Repeat each selection at both 1× and 6× on the same production build. Use
+`--steps` for explicit-only scenarios. Keep throttle rankings separate: pooled
+self time weights the throttled run more heavily. Each report ranks every
+function and file by **self** time, with its share of all active samples, unique
+scenario/viewport/bundle flow count, and per-flow contribution. Repeated
+observations increase time without increasing flow count. File totals sum leaf
+samples rather than inclusive stacks, so a sample is never charged to both a
+caller and its callee. Failed assertions do not enter the aggregate.
+
+The denominator excludes root and idle samples. It also excludes the leading
+`(program)` interval: this harness awaits `Profiler.start` before running the
+action, and V8 charges profiler initialization to that first sample. Raw sampled,
+idle and profiler lead-in durations remain in the observation records. Later
+browser/native frames (including GC and V8's
+unattributed `(program)` bucket), Solid, application sources, other dependencies,
+automation, and unmapped frames remain separate owners. Ownership is based on
+source paths, not inferred from a caller: a WebAssembly address without a map
+remains unmapped. Generated JS without a source map also remains unmapped.
+
+Profiles identify candidates, not timing improvements or precise consumed CPU.
+Confirm any candidate in separate unprofiled, interleaved baseline/candidate
+comparisons with an A/A control, the three flows contributing most of its cost,
+and an unaffected flow. Use at least 20 pairs in Chromium and WebKit. WebKit
+acceptance uses application elapsed time, never `cpuMs`; see the Solid
+performance guide for timing, tail, and noisy-host criteria. Synthetic Gateway
+fixtures measure rendering and transport simulation, not live provider latency.
+
+## Long sessions
+
+`--long-session --transcript-messages 2000 --face chat` uses a mixed synthetic
+transcript with Markdown, code, tables, tool calls/results, and images. It adds
+switch-out/return, end-to-end scrolling, transcript search, and retained-memory
+measurements to the existing open/streaming measurements. The other session
+contains 400 messages. Run the same workload with `--transcript-messages 400`
+for the size control, and add `--streaming-reply` for bottom-follow behavior.
+Long-session mode requires `--boot-route chat` and cannot run with `--layout-matrix`.
+Open-to-interactive is `presentation.firstComposerFocusMs`: after navigation,
+Playwright waits for the active composer to be visible, enabled, and editable,
+focuses it, and verifies focus before the initial metrics settle and save.
+The init script records that real focus event; it does not focus from a rendering callback.
+
+Use `--first-load` for full-history renderer stress comparisons. The open boundary
+checks the actual loaded transcript count against the fixture (or the initial
+page size for `paging`); warm restores can otherwise contain only the latest 80
+messages. Full-history scenarios intentionally return all records in their
+synthetic startup response. Use `paging` to exercise bounded history responses.
+Switch-in also checks and records the full expected count before its measured
+callback returns; `visibleMs` remains the earlier first-row visibility time.
+
+`--long-session-scenario` selects a dedicated workload while retaining the same
+production server, browser, fixture clock, network profile, and paired-run loop:
+
+| Scenario          | Workload and assertions                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mixed` (default) | Mixed messages, session switches, local transcript search, scrolling, and memory. Supports `--streaming-reply`.                                                                                                                                                                                                                                                                                                                      |
+| `paging`          | The initial response contains at most 80 records. Upward wheel input loads older pages through the real UI owner, with exact 1,000-record/3 MiB request contracts. At 2,000 records the pages contain 80 + 1,000 + 920; at 400 they contain 80 + 320. Each response is held until its reading anchor is sampled; every sampled frame must stay within two pixels. The oldest entry must render and the exhausted sentinel disappear. |
+| `single-run`      | One dashboard prompt, assistant/tool pairs sharing one run identity, and one final answer. Records default collapsed work, expansion, scroll endpoints, collapse, DOM size, and retained heap.                                                                                                                                                                                                                                       |
+| `direct-run`      | The same single run on a direct-session key, preserving its normally expanded commentary. Records initial retention and end-to-end scrolling without requiring a disclosure.                                                                                                                                                                                                                                                         |
+
+For example, add `--long-session-scenario paging` to the mixed-workload command
+above, then run `single-run` and `direct-run` separately. Dedicated modes require
+unchanged history; streaming, live events, and the separate session-switch phase
+belong to `mixed`. Single-run modes require at least two messages. Their first and
+final entry identities must render at the scroll endpoints; DOM counts are
+measurements, so a bounded inner window can pass without mounting every message.
+Expansion/collapse timings end after the asserted disclosure/entry DOM and two
+rendering opportunities, not a compositor paint acknowledgment. Scroll trajectories
+begin with real wheel input to retire placement/follow commands through the reader-input owner.
+The fast sweep uses 60 programmatic `scrollTop` assignments and retains all 61
+sampled frames, including its raw endpoint gap. Row measurements can displace
+that synthetic target; a nonzero gap remains a reported trajectory problem.
+Endpoint completion is a separate measured phase: after two sampled settling
+frames, at most one native wheel input requests the remaining distance plus one
+viewport, followed by two more sampled frames. The final endpoint must be within
+two pixels in either direction. Endpoint misses remain in the result alongside
+their CPU, long tasks, and sampled geometry; completing collection is not an
+acceptance verdict. Score every candidate's endpoint and correction fields,
+and report baseline misses rather than discarding their attempted samples.
+This proves reader-directed completion, not
+automatic anchor recovery. One long-task observer and the CPU/wall interval cover
+hover, wheel admission, the full sweep, settling, and native completion. Reports
+keep the sweep and completion frames separate; neither phase is discarded.
+Each scroll frame retains row counts and geometric coverage. Repeated row-key
+strings are omitted to keep browser-side measurement and result serialization
+bounded. The sweep also records actual sampling start/completion times: the
+rAF-supplied timestamp precedes callback work and is not its completion boundary.
+Geometric coverage measures active row boxes, not compositor paint.
+Collapse starts
+after an unmeasured return to the disclosure, which may be unmounted while reading
+the bottom of a virtualized run. Long-task
+observers cover these actions; the paging anchor also records eight frames after
+history publication. Explicit GC and optional retained heap snapshots run outside
+the timed intervals. Deep snapshots are limited to the first sample of each
+compared bundle, and are disabled during CPU profiling. The remote profile throttles
+synthetic JSON RPC replies and HTTP independently, without modeling WebSocket
+compression or framing; snapshots from the first sample per bundle are streamed
+to count detached native nodes, while subsequent samples use GC and DOM counters.
+
+Acceptance: the 2,000-message open and switch should take at most 1.5 times the
+400-message control; fast scrolling should have no task over 50 ms or blank
+viewport; live DOM/retained heap should stay bounded by the rendered window.
+A candidate must improve an attributable CPU or latency cell by at least 5%
+without correctness regressions. Use ten serial interleaved base/head pairs,
+report median/p95/range and host load, and include base/base controls on a loaded
+host. If those controls are noisy, use twenty pairs and thread CPU plus work
+counts. Run localhost and `--network-latency-ms 100 --download-kbps 10000`
+separately; mock RPC delay uses `--latency-ms 100`. These fixtures measure the
+production renderer and synthetic transport, not real provider latency.
+
 ## Low-memory mobile profile
 
 Both `bench-control-ui-cold-load.ts` and `bench-control-ui-interactions.ts` accept
@@ -267,6 +509,21 @@ activation. CPU collection also starts before intent. Each destination still
 starts from a separately settled chat boot, so this measures first route visits,
 not direct cold route loads or retained return visits.
 
+Route captures also retain `navigation.startedMs` and
+`navigation.cpuMilliseconds`, beginning before destination revelation (for
+example, opening Pages) and ending at the same post-ready idle CPU snapshot as
+`cpuMilliseconds`. The existing activation/intent readiness and CPU fields keep
+their boundaries. Per-route CPU profiles and traces now include that destination
+revelation, marked by `critical-path:<route>:navigation`.
+
+`navigation.documentRpcs` retains the complete current-document RPC census,
+including boot and requests that finish before activation.
+`navigation.documentRpcsCapturedMs` records its separate, post-CPU snapshot time.
+Use the raw request/response times to count work overlapping the navigation or
+legacy interval; the census itself is not a filtered navigation count. A request
+may occur after the CPU interval and before that census. Older captures have no
+`navigation` record and cannot recover these wider totals from legacy RPCs.
+
 Each destination's `criticalPath[].presentation` records layout shifts from
 intent (or activation without intent) through a separate snapshot taken after
 an additional 500 ms settle. Readiness, RPC/resource capture, and CPU measurement
@@ -466,6 +723,8 @@ not qualify a product scheduling change against live behavior.
 `--latency-ms` sets the inbound message delay (default 35 ms). `--frame-gap-ms`
 sets the minimum separation between Gateway message deliveries (default 4 ms).
 Concurrent requests remain concurrent; replies share one serialized wire.
+Sequenced events retain socket order even when delayed browser callbacks overtake;
+each event still dispatches in its own task, without holding independent RPC replies.
 `--sidebar-query-latency-ms ownerFirst=400` (also `involvingMe`, `ownerCounts`, and
 `children`) overrides method latency for that sidebar query shape. Use
 `--omit-hello-self-presence --method-latency-ms users.self=900` to exercise identity
@@ -503,6 +762,15 @@ click-occlusion proof, or send admission. Sampling ends at the existing shell an
 route completion boundary; the value remains null if no eligible editor was
 observed during that window. Older captures have no such fields: preserve them
 as absent, without relabeling or retrofitting the legacy metric.
+
+`warmReload.milestones.inputReady` observes an enabled, writable hydrated chat
+textarea in the active pane. It excludes the static boot composer and unrelated
+textareas; it does not check visibility, inertness, key delivery, paint, or send
+admission. Captures from before this selector correction accepted any enabled,
+writable textarea in the active pane, including the static fallback. Preserve
+those historical values with their original definition; do not compare them as
+hydrated-composer readiness. `firstUsableComposerMs` and its kind remain the
+separate observation that includes static editing.
 
 Warm reloads also record `warmReload.milestones.firstLiveTranscript` on the first
 sample with both visible transcript rows and the pane's `transcriptReady` state.
@@ -559,6 +827,40 @@ Keep coverage captures separate from timing comparisons because instrumentation
 changes execution cost. Source maps and the exact saved bundle allow attribution
 of the unused ranges; preload transfer budgets remain the performance checker's
 authority, including assets that have not executed.
+
+Attribute that capture to emitted modules with the exact build and its source maps:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/analyze-control-ui-coverage.mts \
+  --dist dist/control-ui --coverage .artifacts/cold/run-1.coverage.json \
+  --summary .artifacts/cold/summary.json --run 1 \
+  --output .artifacts/cold/modules.json
+```
+
+The console ranks the top 30 modules by unused UTF-8 bytes; JSON retains all modules,
+per-asset totals, and unmapped bytes. Generated source-map columns and V8 ranges are
+UTF-16 offsets. Nested zero-count ranges override enclosing executed ranges, and
+byte counts come from emitted text, never `sourcesContent`. A captured loaded-byte
+count that differs from the supplied asset fails instead of silently attributing a
+wrong build.
+
+`--summary` prefers the selected run's `coverageResources` snapshot, captured at
+the coverage cutoff, to include fetched-only scripts (such as modulepreloads)
+absent from V8 coverage. Only resources with positive `decodedBytes` contribute
+complete fetched payloads; V8 entries remain included even without such a resource
+entry. Repeated URLs count once per asset, and fetched-only bytes remain explicit
+with zero observed executed bytes. The JSON and console identify this inventory as
+`coverage cutoff`. For older captures without that snapshot, the tool falls back
+to `http.waterfall` and explicitly labels the scope `whole-run (may include later
+fetches)`: those totals must not be described as readiness bytes. Without a summary,
+the scope is `V8 only` and excludes fetched-only scripts. `javaScriptResources` is
+an aggregate and cannot identify modules. Coverage indicates which ranges ran,
+not CPU cost or whether a module can safely be removed.
+Compare separate settled-readiness and `--coverage-after-ready-ms 5000` captures
+to distinguish boot-only observations from code used shortly afterward; keep the
+same route, fixture, and exact build for both. This cutoff follows the harness's
+existing content and quiet-event-queue checks, not the first enabled composer;
+idle preloads begun during that quiet window are included.
 
 On a noisy host, run an A/A control before interpreting candidate differences.
 First copy the baseline bundle to a separate directory (`cp -R <base> <control>`):
@@ -768,6 +1070,32 @@ composer input, and excludes reload and report serialization. These are sampled
 allocation estimates, not retained heap sizes or exact array counts. Collect
 timings in separate runs without allocation sampling.
 
+The cross-engine harness also accepts `--allocations --engines chromium` for any
+of its existing scenarios. It writes a source-mapped `*.heapprofile` and
+`observations.json` includes estimated bytes ranked by allocating function, file,
+and owner. `functions` counts each sample at its leaf once;
+`sourceFunctions`, file, and owner tables attribute native leaves to their nearest
+source-bearing caller without double-counting. Missing stack nodes retain an
+explicit unattributed byte count. Automation and unmapped
+frames remain visible. This samples the main isolate, not other renderer threads
+or native allocations, and includes objects collected by both kinds of GC.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium --viewport desktop --allocations \
+  --steps chat-typing,streaming-645-deltas,session-switch,settings-sections,sidebar-toggle,model-picker-search,transcript-scroll-top \
+  --output .artifacts/allocations
+```
+
+`chat-typing` enters 26 characters, `streaming-645-deltas` delivers 645 deltas
+while periodically typing, `session-switch` and `sidebar-toggle` each make a
+round trip, and `settings-sections` visits three warm routes. Normalize allocated
+bytes by those action counts; streaming bytes per delta include concurrent
+typing and fixture delivery. Run `--native-audit` separately at 1× and 6× to
+investigate GC: allocation sampling changes allocation/GC behavior and cannot
+establish a timing improvement. These synthetic flows measure renderer work,
+not live Gateway/provider latency.
+
 For concurrent paired comparisons, use separate processes and bundle directories
 with the same `--fixture-now-ms` and a future `--live-start-at-ms`, `--runs 1`, and
 distinct `--port` / `--sandbox-port` values. The start barrier supports either
@@ -799,7 +1127,28 @@ node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
   --output .artifacts/streaming-profile
 ```
 
-This workload delivers the 645-delta Markdown reply at 150 deltas/s in bursts
+To isolate the first answer token, select `--steps streaming-onset` in that
+companion. It starts from a settled active run over 2,000 rich history messages;
+`streaming-onset-short` uses 400. Onset delivers one nonempty answer delta.
+`streaming-working-preparation` instead starts from the same settled history
+without an active run, then delivers an empty first delta and ends at the new
+working-indicator mutation. This measures preparation before the answer token,
+including adoption of the run, separately from onset. It does not measure sending
+a user message. Both phases retain the pre-action transcript rows for comparison.
+The browser-local `applicationMs` ends at the matching transcript mutation;
+`eventToFrameMs` includes two subsequent animation frames, not paint. Chromium
+thread CPU includes the complete action and settlement. Use separate traced
+runs for native task attribution and untraced rotated comparisons with an
+unchanged bundle control for timing claims.
+
+For qualification, select
+`--steps streaming-onset,streaming-working-preparation,streaming-mixed-fast,session-switch,chat-typing`
+with `--compare-bundle-dir <head> --control-bundle-dir <base> --pairs 20
+--engines chromium,webkit --viewport desktop`. The control repeats the base in
+each rotated triplet. `session-switch` shows both retained 400-message transcripts
+in turn; `chat-typing` checks 26 native typed characters without sending a message.
+
+`streaming-mixed-fast` delivers the 645-delta Markdown reply at 150 deltas/s in bursts
 of five, with reasoning, 24 tool calls and results, and an image arriving midway.
 It requires `--viewport desktop`: mobile's modal navigation drawer prevents
 simultaneous composer and sidebar input.

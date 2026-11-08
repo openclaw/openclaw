@@ -2,7 +2,7 @@ import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 import {
   cardFitsWithinWorkboardContent,
@@ -31,7 +31,7 @@ suite.define(() => {
         statuses: WORKBOARD_STATUSES,
       });
       const initial = response(cards.slice(0, 1));
-      const gateway = await installMockGateway(page, {
+      const gateway = await installNativePluginMockGateway(page, {
         ...workboardUi,
         sessions: [],
         methodResponses: {
@@ -161,11 +161,62 @@ suite.define(() => {
     });
   });
 
+  it("bounds and windows Workboard columns reached through the generic Plugin route", async () => {
+    await suite.withPage({ viewport: { height: 900, width: 1440 } }, async ({ page }) => {
+      const template = createMobileScrollCards(baseTime)[0]!;
+      const cards = Array.from({ length: 60 }, (_, index) => ({
+        ...template,
+        id: `hosted-card-${index}`,
+        title: `Hosted card ${index + 1}`,
+        position: (index + 1) * 1000,
+      }));
+      const board = makeBoard("default", { total: cards.length, active: cards.length });
+      await installNativePluginMockGateway(page, {
+        ...workboardUi,
+        sessions: [],
+        methodResponses: {
+          "config.get": configSnapshot("workboard-hosted-scroll-e2e-config"),
+          "workboard.boards.list": { boards: [board] },
+          "workboard.cards.list": { boards: [board], cards, statuses: WORKBOARD_STATUSES },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}plugin?plugin=workboard&id=workboard`);
+      const content = page.locator("#control-ui-main");
+      const column = page.locator(".workboard-column--todo");
+      const viewport = column.locator(".workboard-column__cards");
+      const toolbar = page.locator(".workboard-toolbar");
+      await column.locator(".workboard-card").first().waitFor();
+      await expect.poll(() => column.locator(".workboard-card").count()).toBeLessThan(cards.length);
+      expect(
+        await viewport.evaluate((element) => ({
+          bounded: element.getBoundingClientRect().bottom <= window.innerHeight,
+          scrollable: element.scrollHeight > element.clientHeight,
+        })),
+      ).toEqual({ bounded: true, scrollable: true });
+      const initialToolbarTop = await toolbar.evaluate(
+        (element) => element.getBoundingClientRect().top,
+      );
+
+      await viewport.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      const lastCard = column.locator('[data-card-id="hosted-card-59"] .workboard-card');
+      await expect.poll(() => cardFitsWithinWorkboardContent(lastCard)).toBe(true);
+      expect(await viewport.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      expect(await content.evaluate((element) => element.scrollTop)).toBe(0);
+      expect(await toolbar.evaluate((element) => element.getBoundingClientRect().top)).toBeCloseTo(
+        initialToolbarTop,
+        0,
+      );
+    });
+  });
+
   it("scrolls every mobile column card into view while keeping the toolbar available", async () => {
     await suite.withPage({}, async ({ page }) => {
       const cards = createMobileScrollCards(baseTime);
       await page.setViewportSize({ height: 700, width: 390 });
-      await installMockGateway(page, {
+      await installNativePluginMockGateway(page, {
         ...workboardUi,
         sessions: [],
         methodResponses: {

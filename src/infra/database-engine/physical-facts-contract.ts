@@ -14,6 +14,8 @@ export type PostgresPhysicalFacts = {
   namespace: string;
   storeId: string;
   version: number;
+  /** Present only after a matching installed seal was verified or recorded. */
+  schemaHash?: string;
   capabilities: PostgresCapabilities;
   catalog: readonly PostgresCatalogFact[];
 };

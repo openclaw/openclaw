@@ -47,6 +47,7 @@ import type {
   SessionMessageCutResult,
 } from "./session-message-cut.types.js";
 import { loadSessionTranscriptEvents } from "./session-transcript-events.js";
+import { withSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import {
   markSessionTranscriptIndexDirtyInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
@@ -216,12 +217,14 @@ export async function mutateSqliteSessionAtMessage(
               sessionId: entry.sessionId,
               lifecycleRevision: entry.lifecycleRevision,
             };
-            const events = await loadSessionTranscriptEvents({
-              ...memoryScope,
-              agentId: memory.agentId,
-              storePath: memory.path,
-              sessionId: entry.sessionId,
-            });
+            const events = await withSessionTranscriptHydrationCaller("history-mutation", () =>
+              loadSessionTranscriptEvents({
+                ...memoryScope,
+                agentId: memory.agentId,
+                storePath: memory.path,
+                sessionId: entry.sessionId,
+              }),
+            );
             memory.authority.assertCurrent();
             const selected = selectSessionMessageCut(
               entry,
@@ -336,12 +339,14 @@ export async function mutateSqliteSessionAtMessage(
     );
   if (mode !== "fork" && preparedEntry) {
     if (preparedEntry.worktree) {
-      const events = await loadSessionTranscriptEvents({
-        ...params,
-        sessionKey: sourceKey,
-        storePath: resolved.path,
-        sessionId: preparedEntry.sessionId,
-      });
+      const events = await withSessionTranscriptHydrationCaller("history-mutation", () =>
+        loadSessionTranscriptEvents({
+          ...params,
+          sessionKey: sourceKey,
+          storePath: resolved.path,
+          sessionId: preparedEntry.sessionId,
+        }),
+      );
       assertCurrent();
       const selected = selectSessionMessageCut(
         preparedEntry,

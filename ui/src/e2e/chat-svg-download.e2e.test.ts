@@ -86,7 +86,7 @@ suite.define(() => {
           const outcome = Promise.race([
             page.waitForEvent("download"),
             page
-              .getByText("Could not download this image. Try again.", { exact: true })
+              .getByText("Couldn’t download this image. Try again.", { exact: true })
               .waitFor()
               .then(() => null),
           ]);

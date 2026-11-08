@@ -1,14 +1,19 @@
 /**
- * Synthetic transcript statistics owner proof; no Gateway or physical-I/O claim.
+ * Synthetic transcript statistics owner proof; no Gateway latency claim.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/usage-refresh-stats-measure.ts
  *   --root .local/2090/fixture --prepare --sessions 5000 --events 280 --body-kib 32
- * Repeat without --prepare, with --mode timing|allocation|sql and --label A1.
+ * Repeat without --prepare, with --mode timing|allocation|profile|sql and --label A1.
  * --revision pins only the statistics owner to a Git revision; shared dependencies
  * stay current. Run five counterbalanced A/A and A/B pairs in separate processes.
  * SQL mode replays captured native expanded SQL with SQLite CLI .stats, mmap off,
  * 2MiB private page cache. Page misses × 4096 are logical pager reads, not disk I/O.
  * Acceptance: identical statistics; eliminate unchanged-prefix event reads, lower
  * CPU/time beyond A/A spread; report allocation and any >20% regression separately.
+ * --cold evicts only the owned fixture file on Linux before each sample and records
+ * /proc/thread-self/io physical reads. --large-sessions 3 --large-events 20000 with
+ * --sessions 5000 --events 100 --body-kib 32 produces a >10 GiB interleaved database
+ * including three >600 MiB transcripts. --scenario append supplies the recorded
+ * checkpoint immediately before the final event, preserving exact size/count checks.
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -22,7 +27,9 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { UsageCostSqliteCheckpoint } from "../../src/infra/session-cost-usage-rollup-codec.js";
+import { readThreadDiskReadBytes } from "../../src/infra/thread-disk-io.js";
 import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { evictLinuxFilePageCache } from "../lib/linux-page-cache.ts";
 
 const { values } = parseArgs({
   options: {
@@ -31,6 +38,9 @@ const { values } = parseArgs({
     sessions: { type: "string", default: "5000" },
     events: { type: "string", default: "280" },
     "body-kib": { type: "string", default: "32" },
+    "large-sessions": { type: "string", default: "0" },
+    "large-events": { type: "string", default: "20000" },
+    cold: { type: "boolean", default: false },
     samples: { type: "string", default: "5" },
     mode: { type: "string", default: "timing" },
     label: { type: "string", default: "candidate" },
@@ -40,8 +50,9 @@ const { values } = parseArgs({
   },
 });
 assert(values.root, "--root must name a synthetic fixture directory");
-assert(["timing", "allocation", "sql"].includes(values.mode));
-assert(["stats", "unchanged", "dirty"].includes(values.scenario));
+assert(["timing", "allocation", "profile", "sql"].includes(values.mode));
+assert(["stats", "unchanged", "dirty", "append"].includes(values.scenario));
+assert(!values.cold || process.platform === "linux", "--cold requires Linux posix_fadvise");
 const positive = (value: string) => {
   const number = Number(value);
   assert(Number.isSafeInteger(number) && number > 0);
@@ -49,6 +60,10 @@ const positive = (value: string) => {
 };
 const sessions = positive(values.sessions);
 const events = positive(values.events);
+const largeSessions = Number(values["large-sessions"]);
+const largeEvents = positive(values["large-events"]);
+assert(Number.isSafeInteger(largeSessions) && largeSessions >= 0 && largeSessions <= sessions);
+assert(!largeSessions || largeEvents >= events);
 const bodyBytes = positive(values["body-kib"]) * 1024;
 const root = path.resolve(values.root);
 const manifestPath = path.join(root, "usage-refresh-stats-fixture.json");
@@ -96,6 +111,7 @@ const { withOpenClawAgentDatabaseReadOnly } =
   await import("../../src/state/openclaw-agent-db-readonly.js");
 
 const sessionId = (index: number) => `synthetic-usage-${String(index).padStart(5, "0")}`;
+type TranscriptShape = { events: number; maxSeq: number; bytes: number; lastBytes: number };
 if (values.prepare) {
   assert(!existsSync(root), "Refusing to replace an existing fixture directory");
   mkdirSync(root, { recursive: true });
@@ -121,6 +137,13 @@ if (values.prepare) {
     navigation_type,navigation_custom_type,navigation_display,message_role,
     navigation_last_type,navigation_last_custom_type,navigation_valid
   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const identity = db.prepare(`INSERT INTO transcript_event_identities
+    (session_id,event_id,seq,event_type,parent_id,created_at) VALUES(?,?,?,'message',?,?)`);
+  const active = db.prepare(`INSERT INTO session_transcript_active_events
+    (session_id,active_position,event_seq,message_position,context_eligible) VALUES(?,?,?,?,1)`);
+  const projection = db.prepare(`INSERT INTO session_transcript_index_state
+    (session_id,indexed_seq,leaf_event_id,needs_rebuild,active_event_count,active_message_count,updated_at)
+    VALUES(?,?,?,0,?,?,?)`);
   const cipher = createCipheriv(
     "aes-256-ctr",
     createHash("sha256").update("synthetic-usage-refresh-stats-v1").digest(),
@@ -128,8 +151,30 @@ if (values.prepare) {
   );
   let totalUtf8Bytes = 0;
   let compressedRows = 0;
+  let insertedRows = sessions;
+  const shapes: TranscriptShape[] = Array.from({ length: sessions }, (_, index) => ({
+    events: (index < largeSessions ? largeEvents : events) + 1,
+    maxSeq: index < largeSessions ? largeEvents : events,
+    bytes: 0,
+    lastBytes: 0,
+  }));
+  db.exec("BEGIN IMMEDIATE");
+  for (let index = 0; index < sessions; index++) {
+    const id = sessionId(index);
+    const header = JSON.stringify({
+      type: "session",
+      version: 3,
+      id,
+      timestamp: new Date(now).toISOString(),
+    });
+    const bytes = Buffer.byteLength(header);
+    insert.run(id, 0, header, now, null, bytes, null, "session", null, 0, null, "session", null, 1);
+    shapes[index]!.bytes = bytes;
+    totalUtf8Bytes += bytes;
+  }
+  db.exec("COMMIT");
   const started = performance.now();
-  for (let seq = 1; seq <= events; seq++) {
+  for (let seq = 1; seq <= Math.max(events, largeSessions ? largeEvents : 0); seq++) {
     const text = cipher
       .update(Buffer.alloc(Math.ceil((bodyBytes * 3) / 4)))
       .toString("base64")
@@ -148,11 +193,16 @@ if (values.prepare) {
     const json = JSON.stringify(event);
     const payload = prepareTranscriptPayload(db, json, event);
     assert(payload.event_zstd, "Random base64 should still produce a compressed UTF-8 payload");
-    totalUtf8Bytes += Buffer.byteLength(json) * sessions;
+    const utf8Bytes = Buffer.byteLength(json);
+    const participating = seq <= events ? sessions : largeSessions;
+    insertedRows += participating;
+    totalUtf8Bytes += utf8Bytes * participating;
     // Interleaved sessions scatter each session's B-tree payload access across the file.
-    for (let offset = 0; offset < sessions; offset += 250) {
+    for (let offset = 0; offset < participating; offset += 250) {
       db.exec("BEGIN IMMEDIATE");
-      for (let index = offset; index < Math.min(sessions, offset + 250); index++) {
+      for (let index = offset; index < Math.min(participating, offset + 250); index++) {
+        shapes[index]!.bytes += utf8Bytes;
+        shapes[index]!.lastBytes = utf8Bytes;
         const compressed = index % 2 === 1;
         insert.run(
           sessionId(index),
@@ -160,7 +210,7 @@ if (values.prepare) {
           compressed ? null : json,
           now,
           compressed ? payload.event_zstd : null,
-          Buffer.byteLength(json),
+          utf8Bytes,
           payload.navigation_json,
           payload.navigation_type,
           payload.navigation_custom_type,
@@ -171,16 +221,30 @@ if (values.prepare) {
           payload.navigation_valid,
         );
         compressedRows += Number(compressed);
+        identity.run(sessionId(index), event.id, seq, event.parentId, now);
+        active.run(sessionId(index), seq - 1, seq, seq - 1);
       }
       db.exec("COMMIT");
     }
-    if (seq % 20 === 0) {
+    if (seq % (seq <= events ? 20 : 2000) === 0) {
       console.error(
-        JSON.stringify({ preparedEvents: seq * sessions, elapsedMs: performance.now() - started }),
+        JSON.stringify({ preparedEvents: insertedRows, elapsedMs: performance.now() - started }),
       );
     }
   }
   cipher.final();
+  db.exec("BEGIN IMMEDIATE");
+  for (const [index, shape] of shapes.entries()) {
+    projection.run(
+      sessionId(index),
+      shape.maxSeq,
+      `event-${shape.maxSeq}`,
+      shape.maxSeq,
+      shape.maxSeq,
+      now,
+    );
+  }
+  db.exec("COMMIT");
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   const manifest = {
     format: "openclaw-usage-refresh-stats-v1",
@@ -191,11 +255,14 @@ if (values.prepare) {
     now,
     totalUtf8Bytes,
     compressedRows,
+    shapes,
     databaseBytes: statSync(opened.path).size,
   };
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
   await closeOpenClawAgentDatabasesAsync();
-  console.log(JSON.stringify({ prepared: manifest }));
+  console.log(
+    JSON.stringify({ prepared: { ...manifest, shapes: undefined, largeSessions, largeEvents } }),
+  );
 } else {
   const fixture: {
     format: string;
@@ -205,6 +272,7 @@ if (values.prepare) {
     databaseBytes: number;
     now: number;
     totalUtf8Bytes: number;
+    shapes: TranscriptShape[];
   } = JSON.parse(readFileSync(manifestPath, "utf8"));
   assert.equal(fixture.format, "openclaw-usage-refresh-stats-v1");
   const selected = Math.min(positive(values.selected), fixture.sessions);
@@ -212,6 +280,10 @@ if (values.prepare) {
   const samples = positive(values.samples);
   const summaries = [];
   for (let sample = 0; sample < samples; sample++) {
+    if (values.cold) {
+      assert(path.resolve(fixture.databasePath).startsWith(`${root}${path.sep}`));
+      evictLinuxFilePageCache(fixture.databasePath);
+    }
     using db = openNodeSqliteDatabase(fixture.databasePath, { readOnly: true });
     db.exec("PRAGMA cache_size=-2048; PRAGMA mmap_size=0");
     admitSqliteSchema(db);
@@ -234,30 +306,44 @@ if (values.prepare) {
       DatabaseSync.prototype.prepare = new Proxy(originalPrepare, {
         apply(prepare, receiver, args) {
           const statement: StatementSync = Reflect.apply(prepare, receiver, args);
-          statement.all = new Proxy(statement.all.bind(statement), {
-            apply(all, target, bindings) {
-              const rows = Reflect.apply(all, target, bindings);
-              if (
-                /\b(?:transcript_events|session_windows)\b/.test(statement.sourceSQL) &&
-                !/sqlite_schema|sqlite_master/.test(statement.sourceSQL)
-              ) {
-                statements.push(statement.expandedSQL);
-              }
-              return rows;
-            },
-          });
+          const capture = <T extends StatementSync["all"] | StatementSync["get"]>(read: T) =>
+            new Proxy(read, {
+              apply(execute, target, bindings) {
+                const rows = Reflect.apply(execute, target, bindings);
+                if (
+                  /\b(?:transcript_events|session_windows)\b/.test(statement.sourceSQL) &&
+                  !/sqlite_schema|sqlite_master/.test(statement.sourceSQL)
+                ) {
+                  statements.push(statement.expandedSQL);
+                }
+                return rows;
+              },
+            });
+          statement.all = capture(statement.all.bind(statement));
+          statement.get = capture(statement.get.bind(statement));
           return statement;
         },
       });
     }
-    const checkpoint: UsageCostSqliteCheckpoint = {
-      kind: "sqlite",
-      maxSeq: fixture.eventsPerSession,
-      eventCount: fixture.eventsPerSession,
-      size: fixture.totalUtf8Bytes / fixture.sessions + fixture.eventsPerSession - 1,
-      mtimeMs: fixture.now - Number(values.scenario === "dirty"),
-      anchorHash: "synthetic",
-    };
+    const { shapes } = fixture;
+    assert.equal(shapes.length, fixture.sessions, "Use a freshly prepared fixture");
+    const checkpoints = new Map(
+      ids.map((id, index) => {
+        const shape = shapes[index]!;
+        const append = Number(values.scenario === "append");
+        const checkpoint: UsageCostSqliteCheckpoint = {
+          kind: "sqlite",
+          generation: null,
+          maxSeq: shape.maxSeq - append,
+          eventCount: shape.events - append,
+          size: shape.bytes + shape.events - 1 - append * (shape.lastBytes + 1),
+          mtimeMs:
+            fixture.now - Number(values.scenario === "dirty" || values.scenario === "append"),
+          anchorHash: "synthetic",
+        };
+        return [id, checkpoint];
+      }),
+    );
     const collection = createUsageCostCollectionAccess({
       input: {
         kind: "usage-cost",
@@ -272,10 +358,9 @@ if (values.prepare) {
         archiveStorePaths: [fixture.databasePath],
         operation: { kind: "refresh", pricingFingerprint: "synthetic" },
       },
-      control: { runNativeSection: async (read) => read(), throwIfCancelled() {} },
       target: () => database,
       readStore: async (_agentId, _storePath, read) => scope.run(database, read),
-      readCheckpoint: () => checkpoint,
+      readCheckpoint: (marker) => checkpoints.get(marker.sessionId),
     });
     const markers = ids.map((id) => ({
       agentId: "main",
@@ -286,8 +371,13 @@ if (values.prepare) {
     const inspector = new Session();
     if (values.mode === "allocation") {
       await startCollectedHeapSampling(inspector, 4096);
+    } else if (values.mode === "profile") {
+      inspector.connect();
+      await inspector.post("Profiler.enable");
+      await inspector.post("Profiler.start");
     }
     const cpu = process.threadCpuUsage();
+    const readBefore = readThreadDiskReadBytes();
     const started = performance.now();
     const result =
       values.scenario === "stats"
@@ -295,15 +385,27 @@ if (values.prepare) {
         : await collection.access.readSqliteStats(markers);
     const elapsedMs = performance.now() - started;
     const used = process.threadCpuUsage(cpu);
+    const readAfter = readThreadDiskReadBytes();
     let allocatedBytes: number | undefined;
+    let cpuProfilePath: string | undefined;
     if (values.mode === "allocation") {
       const { profile } = await inspector.post("HeapProfiler.stopSampling");
       allocatedBytes = sumSampledHeapBytes(profile.head);
       inspector.disconnect();
+    } else if (values.mode === "profile") {
+      const { profile } = await inspector.post("Profiler.stop");
+      cpuProfilePath = path.join(root, `${values.label}-${sample}.cpuprofile`);
+      writeFileSync(cpuProfilePath, JSON.stringify(profile));
+      inspector.disconnect();
     }
     assert.equal(result.length, selected);
-    assert(result.every((row) => row?.eventCount === fixture.eventsPerSession));
-    assert(result.every((row) => row?.sizeBytes === checkpoint.size));
+    assert(result.every((row, index) => row?.eventCount === shapes[index]!.events));
+    assert(result.every((row, index) => row?.maxSeq === shapes[index]!.maxSeq));
+    assert(
+      result.every(
+        (row, index) => row?.sizeBytes === shapes[index]!.bytes + shapes[index]!.events - 1,
+      ),
+    );
     DatabaseSync.prototype.prepare = originalPrepare;
     scope.close();
     let pager: { pageMisses: number; logicalBytes: number; plans: string } | undefined;
@@ -334,6 +436,9 @@ if (values.prepare) {
       elapsedMs,
       cpuMs: (used.user + used.system) / 1000,
       allocatedBytes,
+      cpuProfilePath,
+      readBytes:
+        readBefore !== undefined && readAfter !== undefined ? readAfter - readBefore : undefined,
       digest: createHash("sha256")
         .update(
           JSON.stringify(
@@ -358,8 +463,9 @@ if (values.prepare) {
       scenario: values.scenario,
       sourceSha256,
       revision: values.revision ?? "working-tree",
-      fixture,
+      fixture: { ...fixture, shapes: undefined },
       selected,
+      pageCacheCold: values.cold,
       hostLoad: loadavg(),
       node: process.version,
       samples: summaries,

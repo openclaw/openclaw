@@ -4,7 +4,6 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { countRunningBackgroundProcesses } from "../agents/bash-process-observation.js";
 import { getSubagentChildControllerSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
@@ -25,22 +24,24 @@ import {
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
 
-export function resolveGatewaySessionBackgroundProcessCount(params: {
+export function prepareGatewaySessionBackgroundProcessScope(params: {
   cfg: OpenClawConfig;
   key: string;
   agentId: string;
-  sessionId?: string;
-}): number | undefined {
-  const canonicalKey = resolveSessionStoreKey({
-    cfg: params.cfg,
-    sessionKey: params.key,
-    storeAgentId: params.agentId,
-  });
-  const count = countRunningBackgroundProcesses({
-    scopeKeys: [canonicalKey, params.key, ...(params.sessionId ? [params.sessionId] : [])],
+  entry?: Pick<SessionEntry, "sessionId">;
+}) {
+  return {
+    scopeKeys: [
+      resolveSessionStoreKey({
+        cfg: params.cfg,
+        sessionKey: params.key,
+        storeAgentId: params.agentId,
+      }),
+      params.key,
+      params.entry?.sessionId ?? "",
+    ],
     agentId: params.agentId,
-  });
-  return count > 0 ? count : undefined;
+  };
 }
 
 export function matchesSessionArchiveFilter(

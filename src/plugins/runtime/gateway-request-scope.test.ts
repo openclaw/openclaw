@@ -117,34 +117,6 @@ describe("gateway request scope", () => {
     expect(runtimeScope.getGatewayContextResolver(owner)).toBe(resolver);
   });
 
-  it("matches nested Gateway bindings without invoking execution resolvers", async () => {
-    const gateway = vi.fn(() => TEST_SCOPE.context);
-    const first = vi.fn(() => undefined);
-    const second = vi.fn(() => undefined);
-    const otherGateway = vi.fn(() => TEST_SCOPE.context);
-    runtimeScope.bindGatewayContextResolver(first, gateway);
-    runtimeScope.bindGatewayContextResolver(second, first);
-    const owner = {};
-    runtimeScope.bindGatewayContextResolver(owner, second);
-
-    expect(runtimeScope.hasGatewayContextOwner(owner, gateway)).toBe(true);
-    expect(runtimeScope.hasGatewayContextOwner(owner, otherGateway)).toBe(false);
-    for (const resolver of [gateway, first, second, otherGateway]) {
-      expect(resolver).not.toHaveBeenCalled();
-    }
-  });
-
-  it("retains terminal Gateway lifetime independently of another resolver", async () => {
-    const first = () => TEST_SCOPE.context;
-    const second = () => TEST_SCOPE.context;
-    const lifetime = runtimeScope.getGatewayContextLifetime(first);
-    lifetime.abort();
-
-    expect(runtimeScope.getGatewayContextLifetime(first)).toBe(lifetime);
-    expect(runtimeScope.getGatewayContextLifetime(first).signal.aborted).toBe(true);
-    expect(runtimeScope.getGatewayContextLifetime(second).signal.aborted).toBe(false);
-  });
-
   it("drops generation ownership for re-admission and restores the caller afterward", async () => {
     const generation = await import("./generation-scope.js");
     const { getCurrentPluginMetadataSnapshot } =

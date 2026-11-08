@@ -87,7 +87,7 @@ function resolvePluginToolLoadState(params: {
   toolAllowlist?: string[];
   toolDenylist?: string[];
   allowGatewaySubagentBinding?: boolean;
-  hasAuthForProvider?: (providerId: string) => boolean;
+  hasAuthForProvider?: OpenClawPluginToolContext["hasAuthForProvider"];
   env?: NodeJS.ProcessEnv;
   preparedRuntime?: PreparedPluginToolRuntime;
 }) {
@@ -206,7 +206,7 @@ type PluginToolResolutionParams = {
   toolDenylist?: string[];
   suppressNameConflicts?: boolean;
   allowGatewaySubagentBinding?: boolean;
-  hasAuthForProvider?: (providerId: string) => boolean;
+  hasAuthForProvider?: OpenClawPluginToolContext["hasAuthForProvider"];
   env?: NodeJS.ProcessEnv;
   runtimeRegistry?: PluginRegistry;
   preparedRuntime?: PreparedPluginToolRuntime;

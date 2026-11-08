@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { serialize } from "node:v8";
 import { deflateRawSync } from "node:zlib";
 import {
@@ -23,8 +22,11 @@ import {
 } from "./local-workspace-cas.kernel.js";
 import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
 import {
+  prepareLocalWorkspaceArchive,
+  localWorkspaceManifestDocument as manifestDocument,
   parseLocalWorkspaceSourcePaths,
   selectLocalWorkspaceCanonicalPaths,
+  readLocalWorkspaceGitExclusions,
 } from "./local-workspace-inventory.js";
 import {
   createLocalWorkspaceManifestTree,
@@ -32,8 +34,10 @@ import {
   updateLocalWorkspaceManifestTree,
   type LocalWorkspaceManifestChange,
   type LocalWorkspaceManifestNode,
+  type LocalWorkspaceManifestRecord,
 } from "./local-workspace-manifest-tree.js";
 import type {
+  LocalWorkspaceCheckpointReceipt,
   LocalWorkspaceManifestMutation,
   LocalWorkspaceManifestScan,
   LocalWorkspaceManifestValue,
@@ -42,12 +46,7 @@ import type {
 } from "./local-workspace-store.types.js";
 import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
-import {
-  parseWorkerWorkspaceManifest,
-  serializeWorkerWorkspaceManifest,
-  type WorkerWorkspaceManifest,
-  type WorkspaceManifestPathPolicy,
-} from "./workspace-manifest.js";
+import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
@@ -59,6 +58,7 @@ export type LocalWorkspaceBaselineDocument = {
 
 export type LocalWorkspaceManifestAction =
   | { kind: "scan" | "probe"; target: "canonical" | "projection"; canonicalRoot: string }
+  | { kind: "archive"; canonicalRoot: string; archiveRoot: string; snapshotCommit: string }
   | { kind: "materialize" }
   | { kind: "convert" }
   | { kind: "repair"; canonicalRoot: string }
@@ -81,6 +81,7 @@ export type LocalWorkspaceManifestInput = {
   id: string;
   revision: number;
   action: LocalWorkspaceManifestAction;
+  knownTreeRoot?: string;
 };
 
 /** Capture owner rows synchronously; filesystem discovery runs after this read scope closes. */
@@ -93,6 +94,12 @@ export function readLocalWorkspaceManifestRows(
 
 function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceManifestInput) {
   const query = getNodeSqliteKysely<DB>(db);
+  const target =
+    input.action.kind === "scan" || input.action.kind === "probe"
+      ? input.action.target
+      : input.action.kind === "archive"
+        ? "canonical"
+        : undefined;
   const row = executeSqliteQueryTakeFirstSync(
     db,
     query
@@ -106,9 +113,16 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
         "baseline_ref",
         "tree_root_digest",
         "source_paths_digest",
-        "canonical_fingerprints",
-        "projection_fingerprints",
         "pending_ref",
+      ])
+      // Keep the snapshot shape without materializing fingerprints this action never consumes.
+      .select((eb) => [
+        (target === "projection" ? eb.ref("canonical_fingerprints") : eb.val(null)).as(
+          "canonical_fingerprints",
+        ),
+        (target === "canonical" ? eb.ref("projection_fingerprints") : eb.val(null)).as(
+          "projection_fingerprints",
+        ),
       ])
       .$if(input.action.kind === "repair", (builder) => builder.select("checkpoint_json"))
       .where("worktree_id", "=", input.id),
@@ -118,6 +132,13 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
   }
   if (row.source_paths_digest) {
     row.source_paths_json = readLocalWorkspaceSourcePaths(db, row.source_paths_digest);
+  }
+  if (
+    row.tree_root_digest &&
+    input.knownTreeRoot === localWorkspaceDigestReference(row.tree_root_digest) &&
+    ["scan", "probe", "materialize", "archive"].includes(input.action.kind)
+  ) {
+    return { row, records: undefined };
   }
   let records: string[] = [];
   const replacing =
@@ -140,33 +161,6 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
     }
   }
   return { row, records };
-}
-
-function manifestDocument(
-  nodes: Iterable<LocalWorkspaceManifestNode>,
-  baseCommit: string,
-  retained?: string[],
-  pathPolicy: WorkspaceManifestPathPolicy = "current",
-) {
-  const manifest: WorkerWorkspaceManifest = {
-    version: 1,
-    baseCommit,
-    entries: [],
-    directories: [],
-    ...(retained ? { buildCacheInputs: retained } : {}),
-  };
-  for (const node of nodes) {
-    if (node.type === "directory") {
-      manifest.directories!.push(node.path);
-    } else {
-      manifest.entries.push(node);
-    }
-  }
-  const rawManifest = serializeWorkerWorkspaceManifest(manifest, pathPolicy);
-  return {
-    rawManifest,
-    manifestRef: `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`,
-  };
 }
 
 function prepareUpdate(
@@ -199,9 +193,14 @@ function prepareUpdate(
 export async function executeLocalWorkspaceManifestRead(
   snapshot: ReturnType<typeof readLocalWorkspaceManifestRows>,
   action: LocalWorkspaceManifestAction,
+  preparedRecords?: Map<string, LocalWorkspaceManifestRecord>,
 ): Promise<LocalWorkspaceManifestValue> {
   const { row } = snapshot;
-  const baselineRecords = decodeLocalWorkspaceTree(snapshot.records, !row.tree_root_digest);
+  if (!preparedRecords && !snapshot.records) {
+    throw new Error("Local workspace prepared baseline is unavailable");
+  }
+  const baselineRecords =
+    preparedRecords ?? decodeLocalWorkspaceTree(snapshot.records!, !row.tree_root_digest);
   // The computation owns this snapshot; release text before retaining the tree across filesystem IO.
   snapshot.records = [];
   if (action.kind === "repair") {
@@ -214,9 +213,15 @@ export async function executeLocalWorkspaceManifestRead(
     const retained = buildCacheInputPaths(parseLocalWorkspaceSourcePaths(row.source_paths_json));
     // A pending receipt can name an intact result after both live sides have
     // moved beyond the baseline. Its saved delta can reconstruct the merge base.
-    const checkpoint = row.checkpoint_json
-      ? (JSON.parse(row.checkpoint_json) as LocalWorkspaceManifestCheckpoint) // SAFETY: Owner-written checkpoint.
+    const receipt = row.checkpoint_json
+      ? (JSON.parse(row.checkpoint_json) as LocalWorkspaceCheckpointReceipt) // SAFETY: Owner-written checkpoint.
       : undefined;
+    const checkpoint =
+      receipt?.kind === "rejected"
+        ? receipt.checkpoint
+          ? (JSON.parse(receipt.checkpoint) as LocalWorkspaceManifestCheckpoint) // SAFETY: Preserved owner-written checkpoint.
+          : undefined
+        : receipt;
     const documents = checkpoint
       ? [
           parseWorkerWorkspaceManifest(
@@ -281,7 +286,7 @@ export async function executeLocalWorkspaceManifestRead(
           if (candidate !== "projection") {
             canonicalPaths ??= await selectLocalWorkspaceCanonicalPaths({
               root,
-              admittedPaths: row.source_paths_json,
+              admittedPaths: parseLocalWorkspaceSourcePaths(row.source_paths_json),
               baselinePaths,
               assertCurrent: () => undefined,
             });
@@ -518,9 +523,10 @@ export async function executeLocalWorkspaceManifestRead(
   }
 
   // The host index is authoritative for every operation. Guest Git metadata is never read.
+  const target = action.kind === "archive" ? "canonical" : action.target;
   const canonicalPaths = await selectLocalWorkspaceCanonicalPaths({
     root: action.canonicalRoot,
-    admittedPaths: row.source_paths_json,
+    admittedPaths: parseLocalWorkspaceSourcePaths(row.source_paths_json),
     // This read has no effects; the lease owner revalidates before using its result.
     assertCurrent: () => undefined,
   });
@@ -533,11 +539,9 @@ export async function executeLocalWorkspaceManifestRead(
     if (node.type === "directory") {
       preserveDirectories.add(entryPath);
     }
-    if (action.target === "projection") {
-      canonicalPaths.add(entryPath);
-    }
+    canonicalPaths.add(entryPath);
   }
-  const fingerprintTarget = action.target === "canonical" ? "projection" : "canonical";
+  const fingerprintTarget = target === "canonical" ? "projection" : "canonical";
   const previousFingerprints =
     fingerprintTarget === "canonical" ? row.canonical_fingerprints : row.projection_fingerprints;
   const seen = new Set<string>();
@@ -555,9 +559,17 @@ export async function executeLocalWorkspaceManifestRead(
   const changedDuringProbe = new Error("Workspace changed during reuse probe");
   try {
     await scanActualWorkspaceManifest({
-      root: action.target === "canonical" ? row.projection_path : action.canonicalRoot,
+      root: target === "canonical" ? row.projection_path : action.canonicalRoot,
       baseCommit: row.base_commit,
-      includePaths: action.target === "projection" ? canonicalPaths : undefined,
+      includePaths: target === "projection" ? canonicalPaths : undefined,
+      gitIgnore:
+        target === "canonical"
+          ? await readLocalWorkspaceGitExclusions(
+              action.canonicalRoot,
+              row.projection_path,
+              canonicalPaths,
+            )
+          : undefined,
       preserveDirectories,
       buildCacheInputs: new Set(retained),
       reuseFile: fingerprintScan.reuseFile,
@@ -589,6 +601,21 @@ export async function executeLocalWorkspaceManifestRead(
       changes.push({ path: entryPath });
     }
   }
+  if (action.kind === "archive") {
+    // The accepted tree owns membership. Verify live bytes in the worker without
+    // serializing that tree just to parse and validate it again on the host.
+    if (changes.length) {
+      throw new Error("Local workspace changed before archive capture");
+    }
+    return await prepareLocalWorkspaceArchive({
+      root: action.archiveRoot,
+      snapshotCommit: action.snapshotCommit,
+      records,
+      baseCommit: row.base_commit,
+      buildCacheInputs: retained,
+    });
+  }
+
   const inspected = new Set<string>();
   for (const change of changes) {
     inspected.add(change.path);

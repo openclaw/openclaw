@@ -95,16 +95,13 @@ function addRetainedWindowSessionReferences(
   }
 }
 
-/** Session ids protected by live node state. */
-export function readReferencedSessionIds(
+/** Reference rows shared by reclamation and deterministic window rehoming. */
+function* readSessionNodeReferences(
   database: Pick<OpenClawAgentDatabase, "db">,
-  excludedSessionKeys: ReadonlySet<string> = new Set(),
+  excludedSessionKeys: ReadonlySet<string>,
   candidateSessionIds?: readonly string[],
-  diskBudget?: { preserveRecentMs?: number | null },
-): Set<string> {
-  if (candidateSessionIds?.length === 0) {
-    return new Set();
-  }
+  ordered = false,
+): Generator<{ sessionKey: string; sessionId: string }> {
   const db = getSessionKysely(database.db);
   const postgres = isPostgresSqlConnection(database.db);
   // Only push down keys unchanged by Node/SQLite text conversion; retain exact membership below.
@@ -114,6 +111,8 @@ export function readReferencedSessionIds(
   let query = db
     .selectFrom("session_nodes")
     .select(["current_session_id", "session_key"])
+    .$if(ordered, (builder) => builder.select("updated_at"))
+    .$if(ordered && postgres, (builder) => builder.orderBy("session_key", "asc"))
     .$if(excludedKeys.length > 0, (builder) =>
       builder.where("session_key", "not in", sqliteStringSet(excludedKeys)),
     );
@@ -143,7 +142,12 @@ export function readReferencedSessionIds(
   const referenceQuery = db
     .with(
       (cte) => cte("projected_nodes").materialized(),
-      () => query.select(sessionReferenceProjection),
+      // Deletion validates optional references against the stored timestamp. Plain
+      // rows protect only their raw current ID; exceptional rows use the parser.
+      () =>
+        query.select((eb) =>
+          sessionReferenceProjection(ordered ? eb.ref("updated_at") : undefined),
+        ),
     )
     .with(
       (cte) => cte("reference_nodes").materialized(),
@@ -153,13 +157,15 @@ export function readReferencedSessionIds(
     .selectFrom("reference_nodes")
     .leftJoin(sessionReferenceAtoms, (join) => join.on(sessionReferenceAtomPath))
     .select(["current_session_id", "session_key", "reference.atom", "reference.fullkey"])
+    .$if(ordered, (builder) => builder.select("updated_at"))
     .select(
       /* kysely-allow-raw: only exceptional rows cross into JS as entry JSON. */ sql<
         string | null
       >`CASE WHEN "references" IS NULL THEN (SELECT entry_json FROM session_nodes WHERE session_nodes.session_key = reference_nodes.session_key) END`.as(
         "entry_json",
       ),
-    );
+    )
+    .$if(ordered, (builder) => builder.orderBy("session_key", "asc"));
   // PostgreSQL uses the canonical entry parser; the native JSON projection is SQLite-specific.
   const rows = iterateSqliteQuerySync(
     database.db,
@@ -167,23 +173,16 @@ export function readReferencedSessionIds(
       ? query.select((eb) => ["entry_json", eb.val(null).as("atom"), eb.val(null).as("fullkey")])
       : referenceQuery,
   );
-  const sessionIds = new Set<string>();
-  const candidates = candidateSessionIds ? new Set(candidateSessionIds) : undefined;
-  const addReference = (sessionId: string) => {
-    if (!candidates || candidates.has(sessionId)) {
-      sessionIds.add(sessionId);
-    }
-  };
   for (const row of rows) {
     if (excludedSessionKeys.has(row.session_key)) {
       continue;
     }
-    addReference(row.current_session_id);
+    yield { sessionKey: row.session_key, sessionId: row.current_session_id };
     if (row.entry_json !== null) {
       const entry = parseSessionEntryJson({ ...row, entry_json: row.entry_json });
       if (entry) {
         for (const sessionId of collectSessionStateIdsForEntry(entry)) {
-          addReference(sessionId);
+          yield { sessionKey: row.session_key, sessionId };
         }
       }
     } else if (
@@ -195,8 +194,58 @@ export function readReferencedSessionIds(
     ) {
       const sessionId = row.atom.trim();
       if (sessionId) {
-        addReference(sessionId);
+        yield { sessionKey: row.session_key, sessionId };
       }
+    }
+  }
+}
+
+/** First surviving logical owner in SQLite's canonical key order for each generation. */
+export function readSessionReferenceOwners(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  excludedSessionKeys: ReadonlySet<string>,
+  candidateSessionIds: readonly string[],
+): Map<string, string> {
+  const pending = new Set(candidateSessionIds);
+  const owners = new Map<string, string>();
+  if (pending.size === 0) {
+    return owners;
+  }
+  for (const { sessionKey, sessionId } of readSessionNodeReferences(
+    database,
+    excludedSessionKeys,
+    candidateSessionIds,
+    true,
+  )) {
+    if (pending.delete(sessionId)) {
+      owners.set(sessionId, sessionKey);
+      if (pending.size === 0) {
+        break;
+      }
+    }
+  }
+  return owners;
+}
+
+/** Session ids protected by live node state. */
+export function readReferencedSessionIds(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  excludedSessionKeys: ReadonlySet<string> = new Set(),
+  candidateSessionIds?: readonly string[],
+  diskBudget?: { preserveRecentMs?: number | null },
+): Set<string> {
+  if (candidateSessionIds?.length === 0) {
+    return new Set();
+  }
+  const sessionIds = new Set<string>();
+  const candidates = candidateSessionIds ? new Set(candidateSessionIds) : undefined;
+  for (const { sessionId } of readSessionNodeReferences(
+    database,
+    excludedSessionKeys,
+    candidateSessionIds,
+  )) {
+    if (!candidates || candidates.has(sessionId)) {
+      sessionIds.add(sessionId);
     }
   }
   addRetainedWindowSessionReferences(

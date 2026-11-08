@@ -13,7 +13,7 @@ import {
   resolveVitestPretestBuildMode,
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { resolveLocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
 import { createGatewayServerIsolatedVitestConfig } from "../vitest/vitest.gateway-server-isolated.config.ts";
@@ -187,6 +187,7 @@ describe("test-projects args", () => {
         "node",
         ...(maglev === "0" ? ["--no-maglev"] : []),
         "--no-concurrent-sparkplug",
+        "--js-base-64",
         resolveVitestCliEntry(),
         ...(watch ? [] : ["run"]),
         "--config",
@@ -253,6 +254,7 @@ describe("test-projects args", () => {
     ["test/scripts/mac-elevation-artifact.test.ts", "tooling"],
     ["src/utils.test.ts", "unit-fast-fake-timers"],
     ["extensions/google/embedding-provider.test.ts", "extension-database-workers"],
+    ["test/decision-baseten-admission.integration.test.ts", "infra"],
     ["src/acp/translator.stop-reason.test.ts", "infra"],
     ["src/acp/control-plane/manager.test.ts", "infra"],
     ["src/agents/tools/message-tool.scheduled-lifetime.test.ts", "infra"],

@@ -51,6 +51,7 @@ function resolveTerminalNodeExecutable(env: NodeJS.ProcessEnv): string {
 
 export type TerminalPtySpawnParams = {
   executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   file: string;
   args: string[];
   cwd?: string;
@@ -85,7 +86,10 @@ export async function spawnTerminalPty(
   assertCurrent();
   const needsNodeFlowControl =
     process.versions.bun && process.platform !== "win32" && !bunTerminalHasFlowControl();
-  const execCgroup = params.executionIntent === "agent-tool" ? getAgentExecCgroup() : undefined;
+  const execCgroup =
+    params.executionIntent === "agent-tool"
+      ? getAgentExecCgroup(params.executionScopeKey)
+      : undefined;
   const canIsolate = execCgroup && (needsNodeFlowControl || resolveNodeRuntimeExecutable());
   if (execCgroup && !canIsolate) {
     process.emitWarning(

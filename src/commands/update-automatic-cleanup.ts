@@ -48,7 +48,7 @@ export async function cleanupCompletedUpdateRecovery(
     const ownCaptureReleased = isNeverActivatedFailedUpdate(run);
     const io = createConfigIO({ env, observe: false, pluginValidation: "core-only" });
     const readConfig = () => io.readSourceConfigBestEffort();
-    const preview = inspectSessionSqliteRecovery({ cfg: await readConfig(), env });
+    const preview = await inspectSessionSqliteRecovery({ cfg: await readConfig(), env });
     assertCurrent();
     const report = await retireOwnedSessionSqliteRecovery(
       {

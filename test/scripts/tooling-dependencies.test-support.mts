@@ -9,6 +9,8 @@ export function installLineCapToolingFixture(checkout: string) {
     "check-line-cap-ratchet.mts",
     "windows-cmd-helpers.mjs",
     "lib/check-limits.mts",
+    "lib/release-context.mjs",
+    "lib/release-version.mjs",
     "lib/direct-run.mjs",
     "lib/local-check-runtime.mts",
     "lib/managed-child-process.mts",

@@ -11,12 +11,10 @@ import type {
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 
 registerSettingsEnglish();
 
@@ -24,6 +22,8 @@ export type ModelProvidersData = {
   authStatus: ModelAuthStatusResult | null;
   /** Operation diagnostics; picker facts are owned by the shared catalog store. */
   providerOutcomes: ModelCatalogProviderOutcome[];
+  pendingProviders: readonly string[];
+  catalogRequestFailed: boolean;
   catalogError: string | null;
   providerUsage: UsageSummary | null;
   providerUsageFailed: boolean;
@@ -36,6 +36,8 @@ type RequestResult<T> = { ok: true; result: T } | { ok: false; error: unknown };
 export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   authStatus: null,
   providerOutcomes: [],
+  pendingProviders: [],
+  catalogRequestFailed: false,
   catalogError: null,
   providerUsage: null,
   providerUsageFailed: false,
@@ -57,10 +59,10 @@ function settleRequest<T>(promise: Promise<T>): Promise<RequestResult<T>> {
   );
 }
 
-export async function loadModelProvidersData(
+export function startModelProvidersData(
   client: GatewayBrowserClient,
   opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
-): Promise<ModelProvidersData> {
+) {
   const loadConfiguredCatalog = (refresh = false) =>
     settleRequest(
       loadModelCatalog(client, {
@@ -79,29 +81,42 @@ export async function loadModelProvidersData(
         refreshResult.ok ? refreshResult : loadConfiguredCatalog(),
       )
     : loadConfiguredCatalog();
-  const [authStatus, catalog, refreshResult] = await Promise.all([
-    authStatusLoad,
-    catalogLoad,
-    catalogRefresh ?? Promise.resolve(undefined),
-  ]);
-  return {
+  const auth = authStatusLoad.then((authStatus) => ({
     authStatus: authStatus.ok ? authStatus.result : null,
-    providerOutcomes: catalog.ok ? (catalog.result.providerOutcomes ?? []) : [],
-    catalogError:
-      refreshResult && !refreshResult.ok
-        ? errorMessage(refreshResult.error)
-        : catalog.ok
-          ? catalogDiscoveryError(catalog.result)
-          : errorMessage(catalog.error),
-    providerUsage: null,
-    providerUsageFailed: false,
     updatedAt: Date.now(),
-    // Auth status is the primary provider list; its failure is the only one
-    // worth surfacing as a page-level error.
+    // Auth status is the primary provider list; catalog failure is sectional.
     error: authStatus.ok
       ? (authStatus.result.unavailable?.message ?? null)
       : errorMessage(authStatus.error),
-  };
+  }));
+  const catalog = Promise.all([catalogLoad, catalogRefresh ?? Promise.resolve(undefined)]).then(
+    ([result, refreshResult]): ModelProvidersCatalogData => ({
+      providerOutcomes: result.ok ? (result.result.providerOutcomes ?? []) : [],
+      pendingProviders: result.ok ? (result.result.pendingProviders ?? []) : [],
+      catalogRequestFailed: !result.ok || (refreshResult !== undefined && !refreshResult.ok),
+      catalogError:
+        refreshResult && !refreshResult.ok
+          ? errorMessage(refreshResult.error)
+          : result.ok
+            ? catalogDiscoveryError(result.result)
+            : errorMessage(result.error),
+    }),
+  );
+  return { auth, catalog };
+}
+
+export type ModelProvidersCatalogData = Pick<
+  ModelProvidersData,
+  "providerOutcomes" | "pendingProviders" | "catalogRequestFailed" | "catalogError"
+>;
+
+export async function loadModelProvidersData(
+  client: GatewayBrowserClient,
+  opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
+): Promise<ModelProvidersData> {
+  const read = startModelProvidersData(client, opts);
+  const [auth, catalog] = await Promise.all([read.auth, read.catalog]);
+  return { ...EMPTY_MODEL_PROVIDERS_DATA, ...auth, ...catalog };
 }
 
 /** Names the providers whose listing failed, so the warning points at its cause. */
