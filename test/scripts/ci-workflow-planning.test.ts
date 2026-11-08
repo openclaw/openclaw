@@ -131,7 +131,44 @@ describe("PostgreSQL conformance selection", () => {
       shard: "${{ matrix.shard }}",
     });
     expect(workflow.jobs["ci-gate"].needs).toContain("postgres-conformance");
+    const smoke = requiredWorkflowStep(job.steps, "Run PostgreSQL 16 Gateway cron smoke");
+    expect(smoke.uses).toBe(conformance.uses);
+    expect(smoke.with).toEqual({
+      image:
+        "pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a",
+      target: "src/gateway/server-database-engine.postgres.test.ts",
+    });
   });
+
+  it.each([
+    ["", "", []],
+    ["2/3", "", ["--shard", "2/3"]],
+    [
+      "",
+      "gateway fixtures/cron.postgres.test.ts",
+      ["--", "gateway fixtures/cron.postgres.test.ts"],
+    ],
+  ])(
+    "forwards the conformance shard %j and target %j as separate arguments",
+    (shard, target, args) => {
+      const action = parse(readFileSync(".github/actions/postgres-conformance/action.yml", "utf8"));
+      const step = requiredWorkflowStep(action.runs.steps, "Run PostgreSQL conformance");
+      const result = runWorkflowShellScript(`node() { printf '<%s>\\n' "$@"; }\n${step.run}`, {
+        env: { ...process.env, CONFORMANCE_SHARD: shard, CONFORMANCE_TARGET: target },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim().split("\n")).toEqual(
+        [
+          "scripts/test-database-conformance.mjs",
+          "--engine",
+          "postgres",
+          "--connection",
+          "postgresql://postgres@127.0.0.1:5432/postgres",
+          ...args,
+        ].map((arg) => `<${arg}>`),
+      );
+    },
+  );
 
   it("qualifies pg17 daily and pg16/pg18 weekly in three shards each on main", () => {
     const workflow = parse(
@@ -211,6 +248,16 @@ describe("PostgreSQL conformance selection", () => {
     [["extensions/workboard/README.md", "extensions/workboard/src/store.ts"], true],
     [["extensions/workboard/test/fixtures/README.md", "src/utils/absolute-deadline.test.ts"], true],
     [["src/infra/database-engine/open.ts"], true],
+    ...[
+      "src/cron/store/row-codec.ts",
+      "src/cron/store/runtime-rows.kernel.ts",
+      "src/cron/store/run-finalization.worker.ts",
+      "src/cron/service.ts",
+      "src/cron/service/ops-run.ts",
+      "src/gateway/server-methods/cron.ts",
+      "src/gateway/server-methods/cron-add.ts",
+      "src/gateway/server-methods/cron-run.ts",
+    ].map((file): [string[], boolean] => [[file], true]),
     [["src/commands/doctor-database-port-migrations.ts"], true],
     [["src/infra/database-engine/matrix-roots.postgres.test.ts"], true],
     [["src/infra/database-engine/deleted.test.ts"], true],

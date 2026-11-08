@@ -42,8 +42,8 @@ const RETRYABLE_STATUSES = new Set([408, 409, 425, 429]);
 
 /**
  * Classifies a failed Discovery call: no HTTP status (network) or 5xx is transient.
- * `stale_snapshot` is final: Discovery already holds a snapshot at least as new, and
- * resending the same one cannot change that.
+ * `stale_snapshot` skips immediate retries: Discovery already holds a snapshot at
+ * least as new. The publication owner still schedules the next regular re-sign.
  */
 export function isRetryableDiscoveryError(error: unknown): boolean {
   // SAFETY: error is a thrown value; reading an optional code property of an object is checked by ===.

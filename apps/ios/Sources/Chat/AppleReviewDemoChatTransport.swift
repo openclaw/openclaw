@@ -532,7 +532,7 @@ private actor LocalFixtureChatStore {
     private let fixture: LocalChatFixture
     private var messages: [OpenClawChatMessage]
     private var modelID: String
-    private var thinkingLevel = "auto"
+    private var thinkingLevel: String?
     private var fastMode: OpenClawChatFastMode?
     private var verboseLevel: String?
     private var permissionMode: OpenClawChatPermissionMode? = .guarded
@@ -829,6 +829,12 @@ private actor LocalFixtureChatStore {
             errorMessage: nil)))
     }
 
+    private var selectedModelProvider: String {
+        self.fixture.additionalModels.first {
+            $0.selectionID == self.modelID || $0.modelID == self.modelID
+        }?.provider ?? self.fixture.modelProvider
+    }
+
     func sessions() throws -> OpenClawChatSessionsListResponse {
         var entry = OpenClawChatSessionEntry(
             key: fixture.sessionKey,
@@ -844,7 +850,7 @@ private actor LocalFixtureChatStore {
             verboseLevel: self.verboseLevel,
             totalTokens: 24000,
             totalTokensFresh: true,
-            modelProvider: self.fixture.modelProvider,
+            modelProvider: self.selectedModelProvider,
             model: self.modelID,
             contextTokens: 128_000,
             thinkingLevels: Self.thinkingLevels,
@@ -886,7 +892,7 @@ private actor LocalFixtureChatStore {
         self.messages = Self.seedMessages(fixture: self.fixture)
         self.reactionOverrides.removeAll()
         self.modelID = self.fixture.modelID
-        self.thinkingLevel = "auto"
+        self.thinkingLevel = nil
         self.fastMode = nil
         self.verboseLevel = nil
         self.permissionMode = .guarded
@@ -909,7 +915,7 @@ private actor LocalFixtureChatStore {
             self.modelID = model ?? self.fixture.modelID
         }
         if let thinkingLevel = patch.thinkingLevel {
-            self.thinkingLevel = thinkingLevel ?? "auto"
+            self.thinkingLevel = thinkingLevel
         }
         if let fastMode = patch.fastMode {
             self.fastMode = fastMode
@@ -925,7 +931,7 @@ private actor LocalFixtureChatStore {
         }
         return OpenClawChatModelPatchResult(
             key: key,
-            modelProvider: self.fixture.modelProvider,
+            modelProvider: self.selectedModelProvider,
             model: self.modelID,
             thinkingLevel: self.thinkingLevel,
             thinkingLevels: Self.thinkingLevels,
@@ -1213,6 +1219,11 @@ private actor LocalFixtureChatStore {
                         name: "exec",
                         arguments: AnyCodable(["command": "printf ready"])),
                     OpenClawChatMessageContent(
+                        type: "tool_result",
+                        content: AnyCodable([["type": "text", "text": "ready"]]),
+                        id: "fixture-exec",
+                        name: "exec"),
+                    OpenClawChatMessageContent(
                         type: "toolCall",
                         id: "fixture-no-result",
                         name: "exec",
@@ -1226,13 +1237,6 @@ private actor LocalFixtureChatStore {
                 timestamp: now + 1,
                 transcriptMessageID: "fixture-step-call",
                 stopReason: "toolUse"),
-            OpenClawChatMessage(
-                role: "toolResult",
-                content: [OpenClawChatMessageContent(type: "text", text: "ready")],
-                timestamp: now + 2,
-                transcriptMessageID: "fixture-step-result",
-                toolCallId: "fixture-exec",
-                toolName: "exec"),
             OpenClawChatMessage(
                 role: "toolResult",
                 content: [OpenClawChatMessageContent(type: "text", text: "complete")],

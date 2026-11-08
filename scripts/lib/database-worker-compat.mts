@@ -608,7 +608,7 @@ export function inspectDatabaseWorkerBoundaries(
   });
   session.checkpoint?.("sources-registration");
   if (validateCredentialWriters) {
-    violations.push(...inspectPersonalCredentialWriters(sources, checker));
+    violations.push(...inspectPersonalCredentialWriters(sources, checker, symbolsAt));
     session.checkpoint?.("credential-writers");
   }
   // Follow named kernels from the reviewed boundaries. A symbol reference from
