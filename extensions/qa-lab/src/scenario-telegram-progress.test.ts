@@ -54,19 +54,17 @@ ${intermediate}`,
 }
 
 describe("Telegram progress scenario observer", () => {
-  it.each(["Exec: running", "Last activity: Exec"])(
-    "accepts bounded work status %s",
-    async (status) => {
-      await expect(observeProgress(status)).resolves.toMatchObject({ status: "pass" });
-    },
-  );
+  it.each(["🛠️ Exec running", "🛠️ Exec"])("accepts bounded work status %s", async (status) => {
+    await expect(observeProgress(status)).resolves.toMatchObject({ status: "pass" });
+  });
 
   it.each([
     "COMMAND_SECRET",
     "🛠️ Exec COMMAND_SECRET",
-    "Exec: running COMMAND_SECRET",
-    "Exec: completed",
-    "Last activity: Exec private-output",
+    "🛠️ Exec running COMMAND_SECRET",
+    "🛠️ Exec completed",
+    "🛠️ Exec private-output",
+    "🛠️ Exec running\n🛠️ Exec",
   ])("rejects detailed or unbounded tool text %s", async (status) => {
     await expect(observeProgress(status)).rejects.toThrow("omitted toolProgress");
   });
