@@ -353,15 +353,87 @@ if (endpoint === "repos/openclaw/openclaw/actions/jobs/2/logs") {
     },
   );
 
-  it("grants the Kova leaf only for the operator-named version", () => {
-    const failed = (key: string) =>
-      child(key, {
-        conclusion: "failure",
-        jobs: [job("Kova mock provider performance", 1)],
+  it.each<[string, string, string, boolean, boolean]>([
+    ["2026.11.1", "productPerformance", "failure", false, true],
+    ["2026.11.2", "productPerformance", "failure", false, true],
+    ["2026.11.3", "productPerformance", "failure", false, false],
+    ["2026.11.2", "releaseChecksCandidate", "failure", false, false],
+    ["2026.11.2", "productPerformance", "cancelled", false, false],
+    ["2026.11.2", "productPerformance", "timed_out", false, false],
+    ["2026.11.2", "productPerformance", "failure", true, false],
+  ])(
+    "Kova waiver: %s / %s / %s / extra failure %s / expected pass %s",
+    (version, role, conclusion, extraFailure, expectedPass) => {
+      const observed = child(role, {
+        conclusion,
         status: "completed",
+        jobs: [
+          job("Kova mock provider performance", 1, { conclusion }),
+          ...(extraFailure ? [job("Correctness integrity", 2)] : []),
+        ],
       });
-    expect(terminalPolicyPass(failed("productPerformance"), "2026.11.1")).toBe(true);
-    expect(terminalPolicyPass(failed("productPerformance"), "2026.11.2")).toBe(false);
+      expect(terminalPolicyPass(observed, version)).toBe(expectedPass);
+      expect(observed.jobs[0]).toMatchObject({ conclusion });
+    },
+  );
+
+  it("waives only the reviewed 2026.9.37 performance attempt and retains other blockers", () => {
+    const performance = child("productPerformance", {
+      runId: "42361846301",
+      runAttempt: 1,
+      conclusion: "failure",
+      status: "completed",
+      jobs: [job("Kova mock provider performance", 128371812752)],
+    });
+    expect(terminalPolicyPass(performance, "2026.9.37")).toBe(true);
+    expect(performance.jobs).toContainEqual(expect.objectContaining({ conclusion: "failure" }));
+    for (const changed of [
+      { runId: "42361846302" },
+      { runId: undefined },
+      { runAttempt: 2 },
+      { runAttempt: undefined },
+      { key: "normalCi" },
+      { jobs: [] },
+      { jobs: [job("Other performance job", 1)] },
+      { jobs: [job("Kova mock provider performance", 1), job("Evidence integrity", 2)] },
+      ...["cancelled", "timed_out", "skipped"].map((conclusion) => ({
+        jobs: [job("Kova mock provider performance", 1, { conclusion })],
+      })),
+      { jobs: [job("Kova mock provider performance", 1, { status: "in_progress" })] },
+    ]) {
+      expect(terminalPolicyPass({ ...performance, ...changed }, "2026.9.37")).toBe(false);
+    }
+    expect(terminalPolicyPass(performance, "2026.9.38")).toBe(false);
+    const decision = classifyReleaseSnapshot({
+      children: [
+        performance,
+        child("normalCi", {
+          status: "completed",
+          conclusion: "failure",
+          jobs: [job("checks-windows-node-test-5", 2), job("ios-build (tests)", 3)],
+        }),
+        child("releaseChecksCandidate", {
+          status: "completed",
+          conclusion: "failure",
+          jobs: [job("Run Docker release-path validation / Docker E2E (core)", 4)],
+        }),
+      ],
+      targetVersion: "2026.9.37",
+    });
+    expect(decision.state).toBe("blocked_complete");
+    expect(decision.blockers.map((blocker) => blocker.job)).toEqual([
+      "checks-windows-node-test-5",
+      "ios-build (tests)",
+      "Run Docker release-path validation / Docker E2E (core)",
+    ]);
+    expect(decision.waivers).toEqual([
+      expect.objectContaining({
+        targetVersion: "2026.9.37",
+        runId: "42361846301",
+        runAttempt: 1,
+        reason: expect.stringContaining("2026-11-07 at 17:08 UTC"),
+      }),
+    ]);
   });
 
   it("does not accept a waived leaf without its required aggregate", async () => {

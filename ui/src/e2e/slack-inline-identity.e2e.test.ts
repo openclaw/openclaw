@@ -10,6 +10,10 @@ import {
   withTranscriptWriteSequence,
 } from "../../../src/config/sessions/session-accessor.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
+import {
+  connectGatewayClient,
+  disconnectGatewayClient,
+} from "../../../src/gateway/test-helpers.e2e.ts";
 import { linkUserChannelIdentity } from "../../../src/state/user-channel-identities.ts";
 import {
   setDisplayName,
@@ -112,8 +116,6 @@ suite.define(() => {
             },
           },
         });
-        // Compile the inline Gateway's history adapter before the browser assertion deadline.
-        await import("../../../src/config/sessions/session-history-worker-runtime.ts");
         const { startGatewayServer } = await import("../../../src/gateway/server.js");
         gateway = await startGatewayServer(port, {
           auth: { mode: "trusted-proxy", trustedProxy },
@@ -129,6 +131,19 @@ suite.define(() => {
           expectDefined(proxy.resolvedUrls?.local[0], "Slack proof proxy URL"),
         );
         gatewayUrl.protocol = "ws:";
+        // Warm the real history projection before the browser assertion deadline.
+        const historyClient = await connectGatewayClient({
+          url: gatewayUrl.href,
+          origin: new URL(suite.server.baseUrl).origin,
+          clientName: "openclaw-control-ui",
+          mode: "ui",
+          scopes: ["operator.read"],
+        });
+        try {
+          await historyClient.request("chat.history", { sessionKey, limit: 1 });
+        } finally {
+          await disconnectGatewayClient(historyClient);
+        }
         await suite.withPage(
           { viewport: { width: 1440, height: 1000 }, locale: "en-US" },
           async ({ page }) => {

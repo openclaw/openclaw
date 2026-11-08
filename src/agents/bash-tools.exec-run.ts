@@ -43,6 +43,7 @@ import {
   resolveExecNotificationDefaults,
   resolvePreparedExecEnvironment,
 } from "./bash-tools.exec-request-preparation.js";
+import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PENDING_MAX_OUTPUT,
@@ -65,11 +66,7 @@ import {
   resolveExecElevatedMode,
   resolveExecHost,
 } from "./bash-tools.exec-target.js";
-import type {
-  ExecToolApprovalReview,
-  ExecToolDefaults,
-  ExecToolDetails,
-} from "./bash-tools.exec-types.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { createExecSchema, execSchema } from "./bash-tools.schemas.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
@@ -429,7 +426,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           execParams: params,
           host,
           sandbox,
-          containerWorkdir,
           channelContext: defaults?.channelContext,
           subagentExecution,
           defaultPathPrepend,

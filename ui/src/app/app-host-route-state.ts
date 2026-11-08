@@ -52,7 +52,7 @@ export function selectShellRouteState(routerState: RouterState<RouteId>): ShellR
     sessionUrlPending:
       routerState.pendingMatches.length > 0 ||
       Boolean(committedSession?.canonicalLocationReady) ||
-      committedSession?.sessionResolutionFromCache === "snapshot",
+      Boolean(committedSession?.sessionResolutionFromCache),
   };
 }
 

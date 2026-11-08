@@ -2,6 +2,7 @@ import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
+import { getMessageDerivations } from "../../../lib/chat/message-derivations.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import {
@@ -47,7 +48,6 @@ import { CHAT_TRANSCRIPT_ESTIMATED_ROW_PX } from "./chat-transcript-session.ts";
 import type { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 
 type ChatRenderItem = SystemEventRenderItem;
-const COMPLETED_FRAME_ROW_MESSAGE_LIMIT = 1;
 
 type TranscriptChain = Readonly<{
   searchActive: boolean;
@@ -302,13 +302,13 @@ function estimateMessageGroupSize(group: MessageGroup): number | undefined {
 
 // Loaded history messages are immutable. Fingerprint each once, rather than
 // reserializing every loaded row whenever an older page rebuilds the index.
-const messageRevisions = new WeakMap<object, string>();
 function messageRevision(message: object): string {
-  let revision = messageRevisions.get(message);
+  const facts = getMessageDerivations(message);
+  let revision = facts.revision;
   if (revision === undefined) {
     const identity = nativeHistoryMessageIdentity(message) ?? JSON.stringify(message);
     revision = `${identity.length}:${fnv1aUtf16(identity)}`;
-    messageRevisions.set(message, revision);
+    facts.revision = revision;
   }
   return revision;
 }
@@ -334,15 +334,16 @@ export function projectTranscriptIndex(
   return indexes(chain, cacheKey, (): TranscriptIndex => {
     // Smaller transcripts scroll more cheaply without repeatedly mounting fragments.
     let sourceCount = 0;
-    const windowCompletedFrames = chain.transcriptItems.some((item) => {
+    const prepareIdleFrameFragments = chain.transcriptItems.some((item) => {
       for (const group of chatItemGroups(item)) {
         sourceCount += group.messages.length;
-        if (sourceCount > 256) {
+        if (sourceCount > 512) {
           return true;
         }
       }
       return false;
     });
+    const windowCompletedFrames = sourceCount > 256;
     const loadedReplySources = new Map<string, LoadedReplySource>();
     const messageRowKeysById = new Map<string, string>();
     const transcriptMessageKeys = new Map<string, string>();
@@ -389,13 +390,14 @@ export function projectTranscriptIndex(
     for (const item of chain.transcriptItems) {
       const rendered =
         windowCompletedFrames && item.kind === "agent-run-frame"
-          ? completedFrameRows(item, expandedToolCards)
+          ? completedFrameRows(item, expandedToolCards, prepareIdleFrameFragments ? 1 : 2)
           : [item];
       for (const rowItem of rendered) {
         // Rich work sources include their Markdown and paired tool output.
-        // Only split runs need advance materialization. Ordinary rows already
-        // fit the virtual window; retaining them duplicates mixed-session DOM.
-        const retainDom = rowItem.kind === "agent-run-frame" && Boolean(rowItem.fragment);
+        // Medium histories warm data while idle and retain visited fragments.
+        // Larger split runs also materialize unseen rows while idle.
+        const fragment = rowItem.kind === "agent-run-frame" && Boolean(rowItem.fragment);
+        const retainDom = fragment;
         const estimatedSize =
           rowItem.kind === "agent-run-frame" && rowItem.fragment
             ? rowItem.parts.reduce(
@@ -409,7 +411,12 @@ export function projectTranscriptIndex(
             : rowItem.kind === "group"
               ? estimateMessageGroupSize(rowItem)
               : undefined;
-        rows.push({ ...row(rowItem), estimatedSize, retainDom, prewarm: rowItem.kind === "group" });
+        rows.push({
+          ...row(rowItem),
+          estimatedSize,
+          retainDom,
+          prewarm: rowItem.kind === "group" || (fragment && !prepareIdleFrameFragments),
+        });
       }
       if (item.kind === "work-group" && expandedToolCards.get(item.key)) {
         for (const group of item.groups) {
@@ -487,6 +494,7 @@ export function projectTranscriptIndex(
 function completedFrameRows(
   frame: AgentRunFrameRenderItem,
   expanded: ReadonlyMap<string, boolean>,
+  messageLimit: number,
 ): AgentRunFrameRenderItem[] {
   // Without an answer, the summary keeps the original row through disclosure changes.
   if (frame.outcome.kind !== "completed" || !frame.outcome.actionOwner) {
@@ -530,17 +538,9 @@ function completedFrameRows(
   };
   const append = (part: AgentRunFrameRenderItem["parts"][number]): void => {
     // Paired tool results can leave an entire run in one assistant group.
-    if (
-      part.kind === "group" &&
-      part.role === "assistant" &&
-      part.messages.length > COMPLETED_FRAME_ROW_MESSAGE_LIMIT
-    ) {
-      for (
-        let offset = 0;
-        offset < part.messages.length;
-        offset += COMPLETED_FRAME_ROW_MESSAGE_LIMIT
-      ) {
-        const messages = part.messages.slice(offset, offset + COMPLETED_FRAME_ROW_MESSAGE_LIMIT);
+    if (part.kind === "group" && part.role === "assistant" && part.messages.length > messageLimit) {
+      for (let offset = 0; offset < part.messages.length; offset += messageLimit) {
+        const messages = part.messages.slice(offset, offset + messageLimit);
         append(
           Object.assign({}, part, {
             key: offset === 0 ? part.key : `group:${part.role}:${messages[0]!.key}`,
@@ -551,7 +551,7 @@ function completedFrameRows(
       return;
     }
     const weight = chatItemGroups(part).reduce((total, group) => total + group.messages.length, 0);
-    if (count + weight > COMPLETED_FRAME_ROW_MESSAGE_LIMIT) {
+    if (count + weight > messageLimit) {
       finishChunk();
     }
     pending.push(part);

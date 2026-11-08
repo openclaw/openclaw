@@ -308,12 +308,12 @@ async function waitForReachableControlUiDocument(
   isCurrent: () => boolean,
   signal?: AbortSignal,
 ): Promise<boolean> {
-  const deadline = Date.now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
+  const deadline = performance.now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
   for (let attempt = 0; ; attempt += 1) {
     if (signal?.aborted || !isCurrent()) {
       return false;
     }
-    const remaining = deadline - Date.now();
+    const remaining = deadline - performance.now();
     if (attempt > 0 && remaining <= 0) {
       return false;
     }
@@ -329,7 +329,7 @@ async function waitForReachableControlUiDocument(
     if (reachable) {
       return true;
     }
-    const remainingWait = deadline - Date.now();
+    const remainingWait = deadline - performance.now();
     if (remainingWait <= 0) {
       return false;
     }

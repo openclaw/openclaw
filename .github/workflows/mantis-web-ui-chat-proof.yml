@@ -120,7 +120,7 @@ jobs:
     if: ${{ needs.resolve_request.outputs.should_run == 'true' && inputs.request_id == '' }}
     permissions:
       contents: read
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 60
     outputs:
       artifact_name: ${{ steps.prepare_evidence.outputs.artifact_name }}
@@ -276,7 +276,7 @@ jobs:
   run_request_proof:
     name: Run request-bound web chat proof
     needs: [admit_bound_request, validate_candidate]
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       contents: read
