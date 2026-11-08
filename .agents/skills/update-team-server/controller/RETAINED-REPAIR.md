@@ -66,6 +66,18 @@ still have the witnessed physical identity; an absent file also requires
 databases, and an unexplained disappearance remain refusals. Preparation and
 later repair checks consume the same native evidence; they never manufacture it.
 
+The native deletion journal records initial intent in `created_at` and completion
+as `cleanup_completed`; it has no completion timestamp. Recovery can finish an
+older intent after activation. An older intent therefore cannot establish the
+ordering needed for the deletion exemption, but it does not reject preservation
+through an exact archive. In the unchanged witnessed database, the ordinary
+continuity check still accepts each saved session, window key and generation
+whose nonempty encoded archive has a supported encoding and matching SHA-256.
+Missing or corrupt archives remain refusals when the deletion exemption is
+unavailable. Archive creation and publication timestamps are not deletion
+completion timestamps; neither filesystem modification time nor a later
+observation of `cleanup_completed` establishes that ordering.
+
 Rewrite generations are random tokens, not ordered counters. For fix-forward
 from the still-selected failed candidate, preparation also accepts its
 post-incident rewrites: the database device/inode, session ID and window key
