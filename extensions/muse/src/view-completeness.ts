@@ -30,7 +30,7 @@ export async function observeMuseViewCompleteness({
   ) {
     assertCurrent();
     const message =
-      "Muse finished this turn, but OpenClaw could not recover part of its activity history. Some tool activity may be missing.";
+      "Muse finished this turn, but OpenClaw could not recover part of its activity history. Some tool activity may be missing. Verify the task's result before repeating it.";
     logger?.warn(message);
     await emitAgentHarnessAttemptEvent(
       params,

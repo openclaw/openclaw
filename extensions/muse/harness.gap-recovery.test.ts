@@ -45,7 +45,7 @@ type PeerReceipt =
 
 const fixture = fileURLToPath(new URL("./src/test-support/gap-muse.mjs", import.meta.url));
 const warning =
-  "Muse finished this turn, but OpenClaw could not recover part of its activity history. Some tool activity may be missing.";
+  "Muse finished this turn, but OpenClaw could not recover part of its activity history. Some tool activity may be missing. Verify the task's result before repeating it.";
 let workspace: string;
 let runtime: MuseRuntime | undefined;
 let harness: ReturnType<typeof createMuseAgentHarness>;
