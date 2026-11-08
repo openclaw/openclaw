@@ -456,6 +456,12 @@ Changed-owner Node rows use existing file/group timing evidence with a
 150-test-second admission target and the existing 130-row PR cap. Complete files,
 standard configs, and worker policies remain intact; predicted test seconds
 are separate from measured CI wall time.
+Private-QA direct targets can share up to 196 predicted test seconds when the
+same execution policy already selects a slower target. This reserves 104 seconds
+for preparation within a 300-second job budget without increasing the policy's
+longest predicted test row. Repacking must reduce total jobs without adding jobs
+to either private-QA policy. The 12-target limit and hourly reservations remain
+unchanged.
 Compatible selected serial jobs share setup after singleton worker limits are
 fixed. Combined jobs retain the shortest contributing timeout and the existing
 test-work budget; complete and scheduled plans keep their original layout.
