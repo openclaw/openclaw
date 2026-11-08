@@ -13,6 +13,7 @@ import {
   canonicalPluginsRouteLocation,
   pluginSettingsNeedsSchema,
   pluginsRouteLocation,
+  type PluginsCatalogRead,
   type PluginsRouteData,
 } from "./route-data.ts";
 
@@ -45,20 +46,18 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
       const gatewaySnapshot = gateway.snapshot;
       const client = gatewaySnapshot.client;
       // Keep inventory concurrent with lazy delivery without holding page adoption.
-      const catalogRead =
+      let catalogRead: PluginsCatalogRead | undefined;
+      if (
         options.shouldRun() &&
         gatewaySnapshot.phase === "connected" &&
         client &&
         hasOperatorReadAccess(gatewaySnapshot.hello?.auth ?? null)
-          ? {
-              gateway,
-              gatewaySnapshot,
-              result: loadPluginCatalog(client).then(
-                (value) => ({ ok: true as const, value }),
-                (error: unknown) => ({ ok: false as const, error }),
-              ),
-            }
-          : undefined;
+      ) {
+        const result = loadPluginCatalog(client);
+        // Navigation can retire this route before the page adopts its read.
+        void result.catch(() => {});
+        catalogRead = { gateway, gatewaySnapshot, result };
+      }
       return {
         location,
         catalogRead,

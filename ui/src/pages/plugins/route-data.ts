@@ -14,7 +14,7 @@ import type { PluginListResult } from "../../lib/plugins/index.ts";
 export type PluginsCatalogRead = {
   gateway: ApplicationContext["gateway"];
   gatewaySnapshot: ApplicationGatewaySnapshot;
-  result: Promise<{ ok: true; value: PluginListResult } | { ok: false; error: unknown }>;
+  result: Promise<PluginListResult>;
 };
 
 export type PluginsRouteData = {

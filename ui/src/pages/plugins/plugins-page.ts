@@ -246,14 +246,11 @@ export function createPluginsPage(options: {
         return client.request<PluginListResult>("plugins.list", {}, { signal });
       }
       const result = await prepared;
-      if (!result.ok) {
-        throw result.error;
-      }
       // A plugin publication can overtake the preload while the page module loads.
-      if (pluginGeneration !== undefined && (result.value.generation ?? -1) < pluginGeneration) {
+      if (pluginGeneration !== undefined && (result.generation ?? -1) < pluginGeneration) {
         return client.request<PluginListResult>("plugins.list", {}, { signal });
       }
-      return result.value;
+      return result;
     },
     onComplete: (result) => {
       replaceResult(result);
