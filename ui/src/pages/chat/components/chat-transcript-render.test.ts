@@ -589,68 +589,6 @@ describe("chat transcript rendering", () => {
     }
   });
 
-  it("keeps retained attachment actions on the current pane callbacks", async () => {
-    const previous = vi.fn();
-    const current = vi.fn();
-    // Only the tool has a run ID; its narration remains an independent retained row.
-    const source = message("assistant", [
-      {
-        type: "attachment_error",
-        attachment: { code: "file-too-large", kind: "document", label: "orders-large.zip" },
-      },
-      { type: "toolCall", id: "read-file", runId: "tools", name: "read", arguments: {} },
-    ]);
-    const output = (text: string) =>
-      message("toolResult", text, 2_000, {
-        runId: "tools",
-        toolCallId: "read-file",
-        toolName: "read",
-        __openclawToolStreamLive: true,
-      });
-    const props = threadProps(
-      "unframed-file-actions",
-      "agent:main:main",
-      [source, output("First output")],
-      {
-        runId: "tools",
-        runActive: true,
-        runWorking: true,
-        showToolCalls: true,
-        currentAgentId: "main",
-        onFindWorkspaceFile: previous,
-      },
-    );
-    const { container, rerender } = await mountThread(props);
-    const find = () => requireElement(container, ".chat-assistant-attachment-card__action");
-    await waitForSolid(() => expect(find().textContent).toContain("Find in Files"));
-    expect(find().closest(".chat-agent-run-body")).toBeNull();
-    find().click();
-    const target = { name: "orders-large.zip", sessionKey: props.sessionKey, agentId: "main" };
-    expect(previous).toHaveBeenCalledExactlyOnceWith(target);
-
-    props.onFindWorkspaceFile = current;
-    rerender();
-    await flushDeferredRowPrune();
-    find().click();
-    expect(current).toHaveBeenCalledExactlyOnceWith(target);
-    expect(previous).toHaveBeenCalledOnce();
-
-    props.messages = [source, output("Second output")];
-    rerender();
-    await flushDeferredRowPrune();
-    find().click();
-    expect(current).toHaveBeenCalledTimes(2);
-
-    const retainedButton = find();
-    props.onFindWorkspaceFile = undefined;
-    rerender();
-    await flushDeferredRowPrune();
-    retainedButton.click();
-    container.querySelector<HTMLElement>(".chat-assistant-attachment-card__action")?.click();
-    expect(current).toHaveBeenCalledTimes(2);
-    expect(previous).toHaveBeenCalledOnce();
-  });
-
   it.each([
     { path: "skills/review/SKILL.md", key: "click" },
     { path: "qa241-unicode/emoji-🌱.md", key: "click" },
