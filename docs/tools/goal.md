@@ -80,20 +80,20 @@ Token budget: 12k/50k
 Commands: /goal edit <objective>, /goal pause, /goal complete, /goal clear
 ```
 
-| Command                                             | Effect                                                                   |
-| --------------------------------------------------- | ------------------------------------------------------------------------ |
-| `/goal` or `/goal status`                           | Show the current goal.                                                   |
-| `/goal start <objective>`                           | Create a new goal for the current session.                               |
-| `/goal set <objective>`, `/goal create <objective>` | Aliases for `start`.                                                     |
-| `/goal <objective>`                                 | Also creates a new goal (any text that is not a recognized action word). |
-| `/goal edit <objective>`                            | Reword the current objective; status and token accounting stay put.      |
-| `/goal pause [note]`                                | Pause an active goal.                                                    |
-| `/goal resume [note]`                               | Resume a paused, blocked, limited, or completed goal.                    |
-| `/goal complete [note]`                             | Mark the goal achieved.                                                  |
-| `/goal done [note]`                                 | Alias for `complete`.                                                    |
-| `/goal block [note]`                                | Mark the goal blocked.                                                   |
-| `/goal blocked [note]`                              | Alias for `block`.                                                       |
-| `/goal clear`                                       | Remove the goal from the session.                                        |
+| Command                                             | Effect                                                                       |
+| --------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `/goal` or `/goal status`                           | Show the current goal.                                                       |
+| `/goal start <objective>`                           | Create a new goal for the current session.                                   |
+| `/goal set <objective>`, `/goal create <objective>` | Aliases for `start`.                                                         |
+| `/goal <objective>`                                 | Also creates a new goal (any text that is not a recognized action word).     |
+| `/goal edit <objective>`                            | Reword the current objective; status and token accounting stay put.          |
+| `/goal pause [note]`                                | Pause an active goal.                                                        |
+| `/goal resume [note]`                               | Resume a paused, limited, or completed goal. A blocked goal requires a note. |
+| `/goal complete [note]`                             | Mark the goal achieved.                                                      |
+| `/goal done [note]`                                 | Alias for `complete`.                                                        |
+| `/goal block [note]`                                | Mark the goal blocked.                                                       |
+| `/goal blocked [note]`                              | Alias for `block`.                                                           |
+| `/goal clear`                                       | Remove the goal from the session.                                            |
 
 Only one goal can exist on a session at a time. In the Control UI, submitting
 a new objective through `/goal <objective>` or the Goal composer asks whether
@@ -129,8 +129,8 @@ In textual CLI/TUI commands, starting a second goal still fails with
   objective and records the error as a status note; sending an ordinary message
   does not automatically resume the goal. Errors that recover through a retry
   do not pause it.
-- `blocked`: the agent or operator reported a real blocker. `/goal resume`
-  makes it active again when new information or state is available.
+- `blocked`: the agent or operator reported a real blocker. `/goal resume <what changed>`
+  makes it active again. An empty `/goal resume` leaves the goal blocked.
 - `budget_limited`: the configured token budget was reached. `/goal resume`
   restarts pursuit from the same objective with a fresh budget window.
 - `usage_limited`: reserved for a future usage-limit stop state. `/goal
