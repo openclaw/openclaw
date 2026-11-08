@@ -1,0 +1,3 @@
+# Guard the retained onboarding-to-Chat frame and its inner canvas at three widths.
+# Adapt coupled drag, preview, contrast, hit-test, and content-only capture geometry.
+118

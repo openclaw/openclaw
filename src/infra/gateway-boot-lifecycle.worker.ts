@@ -1,11 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  updateConfigMachineStateInDatabase,
+  writeConfigMachineStateInDatabase,
+} from "../state/config-machine-state-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import type {
   GatewayBootLifecycleCompletion,
+  GatewayBootLifecycleStart,
   GatewayRestartResumeWindow,
+  GatewayRestartResumeWindows,
 } from "./gateway-boot-lifecycle.js";
 import {
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
@@ -13,21 +19,37 @@ import {
   buildGatewayCrashLoopBreakerDecision,
   GATEWAY_SIGNAL_REPEAT_WINDOW_MS,
   inspectGatewayCrashLoopBreakerInDatabase,
+  readGatewayCrashStateInDatabase,
 } from "./gateway-boot-lifecycle.kernel.js";
+import {
+  GATEWAY_CRASH_STATE_KEY,
+  type GatewayCrashEvidence,
+  type GatewayCrashRecord,
+  type GatewayRunMetadata,
+} from "./gateway-crash.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 
-type GatewayBootLifecycleDatabase = Pick<DB, "gateway_boot_lifecycle">;
+type GatewayBootLifecycleDatabase = Pick<DB, "gateway_boot_lifecycle" | "agent_databases">;
 
 // Keep forensic history longer than the crash-loop window.
 const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
+const RESTART_RECOVERY_KEY = "gateway.restartRecovery";
 const gatewayLifecycleLog = createSubsystemLogger("gateway/lifecycle");
 
 export const gatewayBootOperations = {
-  "gatewayBoot.begin": (nowMs: number, context) => {
+  "gatewayBoot.begin": (
+    input: {
+      nowMs: number;
+      metadata: GatewayRunMetadata;
+      previousOwner?: { pid: number; heartbeatAt?: number };
+    },
+    context,
+  ): GatewayBootLifecycleStart & { crashes?: GatewayCrashRecord[] } => {
+    const { nowMs, metadata, previousOwner } = input;
     let decision = buildGatewayCrashLoopBreakerDecision({ uncleanBoots: 0 });
     try {
       decision = inspectGatewayCrashLoopBreakerInDatabase(context.open().db, nowMs);
@@ -43,11 +65,11 @@ export const gatewayBootOperations = {
         : undefined;
     const id = randomUUID();
     try {
-      const restartResumeWindow = runOpenClawStateWriteTransaction(({ db }) => {
+      const recorded = runOpenClawStateWriteTransaction(({ db }) => {
         const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
         const boots = kysely
           .selectFrom("gateway_boot_lifecycle")
-          .select(["pid", "started_at_ms", "outcome", "startup_reason"]);
+          .select(["boot_id", "pid", "started_at_ms", "outcome", "startup_reason", "reason"]);
         const predecessor = executeSqliteQueryTakeFirstSync(
           db,
           boots.orderBy("started_at_ms", "desc").limit(1),
@@ -78,6 +100,32 @@ export const gatewayBootOperations = {
           }
           window = { startedAt: previous.started_at_ms, endedAt: nowMs };
         }
+        const crashState = readGatewayCrashStateInDatabase(db);
+        let previousCrash: GatewayCrashRecord | undefined;
+        // Reuse this boot's recovery window; retained agent windows may predate a clean boot.
+        if (predecessor && (window || predecessor.outcome === "startup_failed")) {
+          const run =
+            crashState.active?.bootId === predecessor.boot_id ? crashState.active : undefined;
+          const heartbeat =
+            previousOwner?.pid === predecessor.pid ? previousOwner.heartbeatAt : undefined;
+          previousCrash = {
+            ...run,
+            bootId: predecessor.boot_id,
+            pid: predecessor.pid,
+            startedAtMs: window?.startedAt ?? predecessor.started_at_ms,
+            detectedAtMs: nowMs,
+            ...(predecessor.reason ? { reason: predecessor.reason } : {}),
+            lastHeartbeatAtMs:
+              heartbeat !== undefined &&
+              heartbeat >= (window?.startedAt ?? predecessor.started_at_ms) &&
+              heartbeat <= nowMs
+                ? heartbeat
+                : undefined,
+          };
+          crashState.recent = [previousCrash, ...crashState.recent].slice(0, 10);
+        }
+        crashState.active = { ...metadata, bootId: id };
+        writeConfigMachineStateInDatabase(db, GATEWAY_CRASH_STATE_KEY, crashState);
         // Read the predecessor before pruning: a long-running boot can exceed retention.
         executeSqliteQuerySync(
           db,
@@ -97,15 +145,81 @@ export const gatewayBootOperations = {
             reason: null,
           }),
         );
-        return window;
+        // Registration precedes every durable run, including shared stores and refused schemas.
+        // Keep exact intervals until that physical agent completes recovery, across clean boots.
+        const owners = executeSqliteQuerySync(
+          db,
+          kysely.selectFrom("agent_databases").select("agent_id").distinct(),
+        ).rows;
+        const restartResumeWindows =
+          updateConfigMachineStateInDatabase<GatewayRestartResumeWindows>(
+            db,
+            RESTART_RECOVERY_KEY,
+            (pending = {}) => {
+              const retained = Object.fromEntries<GatewayRestartResumeWindow[]>(
+                owners.flatMap(({ agent_id: agentId }) => {
+                  const windows = Object.hasOwn(pending, agentId) ? pending[agentId]! : [];
+                  if (window) {
+                    const last = windows.at(-1);
+                    if (last && last.endedAt === window.startedAt) {
+                      last.endedAt = window.endedAt;
+                    } else {
+                      windows.push(window);
+                    }
+                  }
+                  return windows.length ? [[agentId, windows]] : [];
+                }),
+              );
+              return Object.keys(retained).length ? retained : undefined;
+            },
+            nowMs,
+          );
+        return {
+          restartResumeWindow: window,
+          restartResumeWindows,
+          previousCrash,
+          crashes: crashState.recent,
+        };
       }, context.stateOptions());
-      return { decision, id, ...(restartResumeWindow ? { restartResumeWindow } : {}) };
+      return { decision, id, ...recorded };
     } catch (err) {
       // A failed history append must not discard an already-tripped breaker decision.
       gatewayLifecycleLog.warn(`failed to persist gateway boot start; fail-open: ${String(err)}`);
       return { decision, id: undefined };
     }
   },
+  "gatewayBoot.recoveredAgent": (input: { agentId: string; through: number }, context) =>
+    runOpenClawStateWriteTransaction(({ db }) => {
+      updateConfigMachineStateInDatabase<GatewayRestartResumeWindows>(
+        db,
+        RESTART_RECOVERY_KEY,
+        (pending) => {
+          if (!pending || !Object.hasOwn(pending, input.agentId)) {
+            return pending;
+          }
+          const remaining = pending[input.agentId]?.filter(
+            (window) => window.endedAt > input.through,
+          );
+          if (remaining?.length) {
+            pending[input.agentId] = remaining;
+          } else {
+            delete pending[input.agentId];
+          }
+          return Object.keys(pending).length ? pending : undefined;
+        },
+        Date.now(),
+      );
+    }, context.stateOptions()),
+  "gatewayBoot.enrichCrash": (input: { bootId: string; evidence: GatewayCrashEvidence }, context) =>
+    runOpenClawStateWriteTransaction(({ db }) => {
+      const state = readGatewayCrashStateInDatabase(db);
+      const crash = state.recent.find((record) => record.bootId === input.bootId);
+      if (crash) {
+        Object.assign(crash, input.evidence);
+        writeConfigMachineStateInDatabase(db, GATEWAY_CRASH_STATE_KEY, state);
+      }
+      return { crash, crashes: state.recent };
+    }, context.stateOptions()),
   "gatewayBoot.complete": (
     input: {
       bootId: string;
@@ -164,6 +278,11 @@ export const gatewayBootOperations = {
         }
       }
       const recoveredBootId = randomUUID();
+      const crashState = readGatewayCrashStateInDatabase(db);
+      if (crashState.active && crashState.active.bootId === input.bootId) {
+        crashState.active.bootId = recoveredBootId;
+        writeConfigMachineStateInDatabase(db, GATEWAY_CRASH_STATE_KEY, crashState);
+      }
       executeSqliteQuerySync(
         db,
         kysely.insertInto("gateway_boot_lifecycle").values({

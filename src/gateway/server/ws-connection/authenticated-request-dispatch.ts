@@ -38,6 +38,7 @@ import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { errorShapeFromError } from "../../error-shape.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
 import { hasCurrentRemoteControlUiIngress } from "../../ingress-attribution.js";
+import { isOpenClawIdTunnelPrincipalCurrent } from "../../openclaw-id/tunnel-principal.js";
 import {
   GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
   hasCurrentGatewayOperatorAccess,
@@ -228,6 +229,16 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     );
     const remoteIngress = client.remoteControlUiIngress;
     const hasCurrentIngress = () => {
+      const principal = client.internal?.openclawIdPrincipal;
+      if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+        invalidateGatewayPolicyClient(client, {
+          reason: "openclaw-id-authority-changed",
+          code: 4001,
+          message: "OpenClaw ID membership changed",
+          close: () => close(4001, "OpenClaw ID membership changed"),
+        });
+        return false;
+      }
       if (hasCurrentRemoteControlUiIngress(remoteIngress)) {
         return true;
       }
@@ -460,6 +471,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         } finally {
           // ws queues frames in order: send the result before starting its close handshake.
           policyResponse?.finish();
+          if (
+            client.connect.role === "node" &&
+            asOptionalRecord(error?.details)?.code === "PAIRING_CHANGED" &&
+            context.nodeRegistry.get(client.connect.device?.id ?? client.connect.client.id)
+              ?.connId !== client.connId
+          ) {
+            // A failed lookup or same-connection promotion can also reject an RPC.
+            // Retire only a connection that no longer owns the registered node.
+            setCloseCause("node-pairing-changed", { method: req.method });
+            close(4001, "node pairing changed; reconnect");
+          }
         }
       };
 

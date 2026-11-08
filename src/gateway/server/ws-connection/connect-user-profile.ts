@@ -7,6 +7,7 @@ import { resolveCanonicalTailscaleProfileId } from "../../../state/user-profile-
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
+  ensureCanonicalUserProfileForOpenClawIdIdentity,
   ensureCanonicalUserProfileForTailscaleIdentity,
 } from "../../../state/user-profile-writes.js";
 import { adoptTailscaleProfileAvatar } from "../../../state/user-profiles.js";
@@ -312,6 +313,10 @@ export async function resolveGatewayConnectProfileAdmission(params: {
     const options = { assertCurrent: params.assertCurrent };
     const ensureStartedAt = performance.now();
     context.setConnectPhase?.("profile-ensure");
+    const member =
+      state.authMethod === "trusted-proxy" && state.authResult.openclawId?.kind === "member"
+        ? state.authResult.openclawId
+        : undefined;
     if (personalProfileId) {
       context.setConnectPhase?.("profile-authority");
     }
@@ -325,14 +330,19 @@ export async function resolveGatewayConnectProfileAdmission(params: {
       : await (async () => {
           const profile = ownerProfileExpected
             ? await ensureCanonicalGatewayOwnerProfile(resolveHostAccountName, options)
-            : params.resolveAuthenticatedGitHubIdentity
-              ? await params.resolveAuthenticatedGitHubIdentity()
-              : state.authResult.tailscaleIdentity
-                ? await ensureCanonicalUserProfileForTailscaleIdentity(
-                    state.authResult.tailscaleIdentity,
-                    options,
-                  )
-                : await ensureCanonicalUserProfileForEmail(authenticatedUserId!, options);
+            : member
+              ? await ensureCanonicalUserProfileForOpenClawIdIdentity(
+                  { accountId: member.accountId },
+                  options,
+                )
+              : params.resolveAuthenticatedGitHubIdentity
+                ? await params.resolveAuthenticatedGitHubIdentity()
+                : state.authResult.tailscaleIdentity
+                  ? await ensureCanonicalUserProfileForTailscaleIdentity(
+                      state.authResult.tailscaleIdentity,
+                      options,
+                    )
+                  : await ensureCanonicalUserProfileForEmail(authenticatedUserId!, options);
           params.assertCurrent?.();
           context.recordAttachTiming?.("profileEnsureMs", ensureStartedAt);
           context.setConnectPhase?.("profile-authority");

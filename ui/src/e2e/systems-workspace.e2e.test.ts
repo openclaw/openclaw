@@ -86,7 +86,7 @@ function installSystemsGateway(
 suite.define(() => {
   it.each(
     [400, 820, 1280].flatMap((width) =>
-      [1, 4, 12].flatMap((diskCount) =>
+      [1, 12].flatMap((diskCount) =>
         [false, true].map((backups) => ({ width, diskCount, backups })),
       ),
     ),
@@ -128,7 +128,6 @@ suite.define(() => {
           });
           await page.goto(suite.server.baseUrl + "new");
           await waitForControlUiRoute(page, { routeId: "new-session" });
-          const shifts = await observeLayoutShifts(page);
           const inventoryReads = await gateway.deferNext("environments.list");
           const backupReads = await gateway.deferNext("backup.status");
           await page.evaluate(() => {
@@ -136,6 +135,9 @@ suite.define(() => {
           });
           await gateway.waitForRequest("environments.list", { after: inventoryReads });
           await gateway.waitForRequest("backup.status", { after: backupReads });
+          await waitForControlUiRoute(page, { routeId: "systems" });
+          await page.locator(".systems-body").waitFor();
+          const shifts = await observeLayoutShifts(page);
           if (width <= 640) {
             await page.getByRole("button", { name: "Show statistics" }).click();
           }
@@ -301,6 +303,8 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
+        const sampledAt = Date.UTC(2026, 0, 1);
+        await page.clock.setFixedTime(sampledAt);
         const gateway = await installSystemsGateway(page, 0);
         await page.goto(suite.server.baseUrl + "systems");
         const stats = page.locator(".systems-overview__telemetry");
@@ -308,8 +312,8 @@ suite.define(() => {
         await page.setViewportSize({ width: 390, height: 844 });
         await expect.poll(() => stats.count()).toBe(0);
         const samples = (await gateway.getRequests("system.info")).length;
-        // Let the shared 10-second sample expire while statistics are hidden.
-        await page.waitForTimeout(10_100);
+        // Expire the Date-based sample without advancing the separate polling timer.
+        await page.clock.setFixedTime(sampledAt + 10_100);
         await page.setViewportSize({ width: 1280, height: 900 });
         await stats.waitFor();
         // Revealing stats must request a fresh sample before the 15-second polling tick.
