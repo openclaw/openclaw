@@ -645,6 +645,16 @@ describe("Muse native MSP harness", () => {
     );
   });
 
+  it("reports typed Muse quota exhaustion with a rate-limit status and reset time", async () => {
+    const { run } = setup();
+    const result = await run({ prompt: "quota" });
+    expectFailure(
+      result,
+      "Muse usage limit reached (tierLimit); resets at 2030-01-02T03:04:00.000Z",
+    );
+    expect(terminal(result)).toMatchObject({ error: { cause: { status: 429 } } });
+  });
+
   it("treats an unlimited Gateway budget as no deadline and bounds the approval wait", async () => {
     const { params, run } = setup();
     const result = await run({ prompt: "approval", timeoutMs: 2 ** 31 });

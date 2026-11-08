@@ -51,6 +51,11 @@ export type MuseHarnessOptions = {
   logger?: Pick<PluginLogger, "warn">;
 };
 
+// MSP's typed quota class; the status lets the host fail over without parsing Muse's wording.
+class MuseQuotaError extends Error {
+  readonly status = 429;
+}
+
 /** Configuration Muse cannot honor; the message is safe and actionable for the chat user. */
 function museRefusal(message: string): AgentHarnessPreflightError {
   return new AgentHarnessPreflightError(message, { scope: "harness", userMessage: message });
@@ -515,6 +520,11 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         }
         if (result.outcome.params.terminal === "failed") {
           const turnError = result.outcome.params.error;
+          if (turnError?.quota) {
+            throw new MuseQuotaError(
+              `Muse usage limit reached (${turnError.quota.limitKind}); resets at ${new Date(turnError.quota.resetsAtMs).toISOString()}. ${turnError.message}`,
+            );
+          }
           throw new Error(
             turnError?.kind === "authRequired"
               ? `Muse Code is not signed in on the Gateway host (${turnError.message}). Run \`muse login\` there, or set META_API_KEY for the Gateway.`
@@ -580,7 +590,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       const terminal = failureMessage
         ? agentHarnessAttemptTerminal.setFailure(interruption, {
             source: "prompt",
-            error: new Error(failureMessage),
+            error: new Error(failureMessage, { cause: failure }),
           })
         : interruption;
       const lastAssistant = messages.findLast((message) => message.role === "assistant");
