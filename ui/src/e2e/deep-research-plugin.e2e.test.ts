@@ -86,6 +86,26 @@ const partial = {
   limitations: ["Model support is fallible and does not establish truth."],
 };
 type FixtureJob = typeof running | typeof partial;
+// A saved deep_research start result carrying the plugin's transcript card descriptor.
+const researchToolResult = {
+  role: "toolResult",
+  toolName: "deep_research",
+  toolCallId: "research-call",
+  content: [{ type: "text", text: "Deep research running: Gathering evidence (round 1)" }],
+  details: {
+    pluginView: {
+      type: "plugin_view",
+      pluginId: "deep-research",
+      viewId: "research-job",
+      version: 1,
+      toolName: "deep_research",
+      toolCallId: "research-call",
+      summary: "Deep research running: Gathering evidence (round 1)",
+      payload: { jobId: id },
+    },
+  },
+  timestamp,
+};
 const list = (job?: FixtureJob) => ({
   version: 1,
   sessionId: "ui-generation",
@@ -100,6 +120,73 @@ const read = (job: FixtureJob) => ({
 });
 
 suite.define(() => {
+  it("renders the transcript card, keeps action errors visible and opens the report it names", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, reducedMotion: "reduce", serviceWorkers: "block" },
+      async ({ page }) => {
+        const gateway = await installNativePluginMockGateway(page, {
+          nativePlugins: [
+            {
+              pluginId: "deep-research",
+              rootDir: resolve("extensions/deep-research"),
+              source: "./browser/index.tsx",
+              inlineViews: [{ id: "research-job", label: "Deep research", version: 1 }],
+            },
+          ],
+          historyMessages: [researchToolResult],
+          communityInvite: false,
+          assistantAgentId: "main",
+          defaultAgentId: "main",
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            ...["list", "read", "cancel", "resume"].map(method),
+          ],
+          methodResponses: {
+            [method("list")]: {
+              __mockError: { code: "UNAVAILABLE", message: "Research jobs are unavailable." },
+            },
+            [method("read")]: read(running),
+            [method("cancel")]: {
+              __mockError: { code: "UNAVAILABLE", message: "Research service is restarting." },
+            },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const card = page.locator('[data-plugin-inline-view="research-call"] .deep-research-card');
+        // A failed first read explains itself instead of showing a bare summary.
+        await pw(card.getByRole("alert")).toHaveText("Research jobs are unavailable.");
+        await gateway.setMethodResponse(method("list"), list(running));
+        await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
+        await pw(card.getByRole("status")).toHaveText("Researching");
+        await pw(card.locator('[aria-current="step"]')).toHaveText("Gather");
+        await card.getByRole("button", { name: "Cancel", exact: true }).click();
+        await gateway.waitForRequest(method("cancel"), { match: { jobId: id } });
+        // A rejected action stays explained on the card that issued it.
+        await pw(card.getByRole("alert")).toHaveText("Research service is restarting.");
+        await pw(card.getByRole("button", { name: "Cancel", exact: true })).toBeEnabled();
+        await gateway.setMethodResponse(method("list"), list(partial));
+        await gateway.setMethodResponse(method("read"), read(partial));
+        await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
+        await pw(card.getByRole("status")).toHaveText("Partial report");
+        await pw(card.locator(".deep-research-card__meta")).toHaveText(
+          "1 source · 1 finding · 1 open gap",
+        );
+        const screenshot = await takeControlUiScreenshotFrame(page, card, [card], {
+          animations: "disabled",
+          scrollTo: card,
+        });
+        writeFileSync(resolve(suite.artifactDir, "card-partial.png"), screenshot.png);
+        await card.getByRole("button", { name: "Read report", exact: true }).click();
+        const pane = page.locator(".deep-research-pane");
+        await pw(pane.getByRole("button", { name: "Report", exact: true })).toHaveAttribute(
+          "aria-pressed",
+          "true",
+        );
+        await pw(pane.getByRole("heading", { name: question, exact: true })).toBeVisible();
+      },
+    );
+  }, 90_000);
+
   it("restores uncertain starts only for the same account after a native remount", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const questionA = "Private question belonging to A";

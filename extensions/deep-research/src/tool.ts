@@ -3,13 +3,14 @@ import type {
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
+import { RESEARCH_INLINE_VIEW } from "../api.js";
 import { researchToolDefinition, researchToolSchema } from "./contract.js";
 import type { ResearchJobs } from "./jobs.js";
 import { managedClient } from "./managed.js";
 import { parseValue } from "./validation.js";
 
 // The whole start/resume envelope stays under the 32 KiB nested tool-activity limit, with headroom
-// for invocation provenance; beyond that limit the transcript replaces it with an omission notice.
+// for invocation provenance; beyond that limit the transcript drops the inline card.
 const RESULT_ENVELOPE_BYTES = 24_000;
 
 export function createResearchTool(
@@ -73,16 +74,29 @@ export function createResearchTool(
         if (input.action !== "start" && input.action !== "resume") {
           return jsonResult(status);
         }
-        // Start/resume results stay compact; `result` returns retained source text.
+        // Starting or resuming work shows its job card where the call happened. The result stays
+        // compact so transcripts keep the card; `result` returns retained source text.
+        const view = api.inlineView(
+          RESEARCH_INLINE_VIEW.id,
+          { jobId: job.id },
+          {
+            version: RESEARCH_INLINE_VIEW.version,
+            summary: `Deep research ${job.state}: ${job.progress}`,
+          },
+        );
         const hint = 'Call action "result" with this jobId for the complete retained result.';
-        const withResult = jsonResult({
+        const envelope = (body: Record<string, unknown>) => ({
+          content: [{ type: "text" as const, text: JSON.stringify(body, null, 2) }],
+          details: { ...body, ...view.details },
+        });
+        const withResult = envelope({
           ...status,
           result: compactResult(job.result),
           fullResult: hint,
         });
         return Buffer.byteLength(JSON.stringify(withResult)) <= RESULT_ENVELOPE_BYTES
           ? withResult
-          : jsonResult({ ...status, fullResult: hint });
+          : envelope({ ...status, fullResult: hint });
       });
     },
   };
