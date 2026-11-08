@@ -13896,6 +13896,8 @@ describe("shared test-source check execution", () => {
   };
 
   it.each([
+    ["test/scripts/ci-check-plan.test.ts", "config/test-lines-allocations/example.txt"],
+    ["test/example.test.ts", "config/test-lines-allocations/example.txt"],
     [
       "extensions/codex/src/session-catalog-index.test.ts",
       "extensions/codex/src/session-catalog-rollouts.test.ts",
@@ -13927,7 +13929,11 @@ describe("shared test-source check execution", () => {
     expect(manifest.status, manifest.output).toBe(0);
     const input = readJsonOutput(manifest.outputs, "check_plan_input_json");
     expect(input.preserveFullChecks).toBe(false);
-    expect(input.typeGraphBoundaryOwner).toBe("additional-checks");
+    expect(input.typeGraphBoundaryOwner).toBe(
+      changedPaths.every((file) => file.startsWith("extensions/"))
+        ? "additional-checks"
+        : "check-plan",
+    );
     const rows = readJsonOutput(manifest.checkPlanOutputs, "check_matrix").include;
     expect(
       rows.flatMap((row: { type_graph_names_json?: string }) =>
@@ -13956,6 +13962,7 @@ describe("shared test-source check execution", () => {
 
   it.each([
     ["test/helpers/shared.ts"],
+    ["test/scripts/ci-check-plan.test.ts", "scripts/generate-kysely-types.mts"],
     ["src/shared.test-support.d.ts"],
     ["src/shared.test-support.ts", "src/runtime.ts"],
     [
