@@ -43,7 +43,8 @@ const suite = createControlUiE2eSuite({
 // First visits must not regain the removed request wave or eager Markdown reader.
 const readyWindowRequestLimits = {
   skills: 28,
-  "skill-settings": 28,
+  // The three Settings sidebar assets can settle before page readiness on Linux.
+  "skill-settings": 31,
   plugins: 56,
   "plugin-settings": 59,
 };
@@ -135,8 +136,10 @@ suite.define(() => {
           readyAssets.map((asset) => asset.name).join("\n"),
         ).toBeLessThanOrEqual(readyWindowRequestLimits[route]);
 
-        if (route === "skills") {
+        if (route === "skills" || route === "skill-settings") {
           expect(readerRequests).toBe(0);
+        }
+        if (route === "skills") {
           const held = await holdModuleResponse(page, reader);
           try {
             await page
