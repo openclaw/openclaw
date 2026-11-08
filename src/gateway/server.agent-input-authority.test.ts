@@ -498,7 +498,10 @@ describe("spawn input ownership transfer", () => {
       });
       try {
         const sending = send(
-          () => ({ ...caller(admitted, parentKey), personalToolParticipants: participants }),
+          () => ({
+            ...expectDefined(caller(admitted, parentKey), "Expected admitted peer caller"),
+            personalToolParticipants: participants,
+          }),
           {
             agentSessionKey: parentKey,
             agentChannel: "webchat",
