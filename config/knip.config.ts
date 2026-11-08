@@ -142,6 +142,8 @@ const repositoryScriptEntries = [
   "scripts/lib/usage-bench-observer.mjs!",
   // scripts/README.md invokes the Chromium/WebKit companion with shared scenarios.
   "scripts/bench-control-ui-engines.ts!",
+  // The event-load guide invokes the isolated Gateway wire fixture directly.
+  "scripts/bench-control-ui-event-load-wire.ts!",
   // Its companion guide invokes the same-document aged-tab census by path.
   "scripts/bench-control-ui-aged-tab.ts!",
   "scripts/bench-control-ui-aged-tab-compare.ts!",
@@ -477,6 +479,7 @@ const repositoryScriptEntries = [
   // worktree.sh invokes explicit, supervised checkout-file salvage by path.
   "scripts/pr-lib/review-transition-recovery.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
+  "scripts/pr-lib/dependency-hold-release.mjs!",
   // worktree.sh launches the locked cold-worktree adapter by path.
   "scripts/pr-lib/worktree-provision.mts!",
   "scripts/pre-commit/filter-staged-files.mjs!",

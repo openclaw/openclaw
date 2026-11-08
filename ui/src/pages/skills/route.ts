@@ -26,6 +26,7 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
       let error: string | null = null;
       let selectedAgentId: string | null = null;
       let report: SkillsRouteData["report"] = null;
+      let reportRead: SkillsRouteData["reportRead"];
       if (gatewaySnapshot.phase === "connected" && client) {
         try {
           const loadedAgentsList = await agents.ensureList();
@@ -37,7 +38,11 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
         } catch (err) {
           error = formatUiError(err);
         }
-        if (selectedAgentId) {
+        if (selectedAgentId && surface === "discovery") {
+          reportRead = loadSkillStatusReport(client, selectedAgentId);
+          // A preload can be abandoned before a view adopts its failure.
+          void reportRead.catch(() => undefined);
+        } else if (selectedAgentId) {
           try {
             report = (await loadSkillStatusReport(client, selectedAgentId)) ?? null;
           } catch (err) {
@@ -52,6 +57,7 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
         selectedAgentId,
         selectionIntentRevision,
         report,
+        reportRead,
         error,
         clawhubRef,
       };

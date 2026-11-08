@@ -237,6 +237,7 @@ export async function loadSkills(
   state: SkillsState,
   options?: {
     clearMessages?: boolean;
+    reportRead?: Promise<SkillStatusReport | undefined>;
     operation?: Exclude<SkillOperation, null>;
   },
 ) {
@@ -267,7 +268,7 @@ export async function loadSkills(
   state.skillsLoading = true;
   state.skillsError = null;
   try {
-    const res = await loadSkillStatusReport(client, agentId);
+    const res = await (options?.reportRead ?? loadSkillStatusReport(client, agentId));
     if (!isCurrent()) {
       return;
     }

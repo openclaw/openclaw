@@ -126,6 +126,12 @@ Session-only connections receive the same read-safe repository identity for
 projects they can already discover, without repository URLs, credentials, or host
 checkout paths. This label does not grant access to private repository content.
 
+Without `operator.write` (for example the `guest` and `contributor` roles), the
+picker lists only agent workspaces and saved projects backed by public GitHub
+repositories, and it hides GitHub search and repository URL entry. A saved
+selection the Gateway no longer lists falls back to the agent workspace. See [Operator scopes](/gateway/operator-scopes) for the exact
+rules.
+
 ## Create a nested session
 
 Right-click a session in the sidebar and choose **New child session** to open an

@@ -21,7 +21,7 @@ const MAX_SUMMARY_ROWS = 128;
 export function sanitizeDiagnosticCpuProfile(
   profile: Profiler.Profile,
   packageRoot: string | null,
-  { startBlockedMs }: { startBlockedMs: number },
+  { durationMs, startBlockedMs }: { durationMs: number; startBlockedMs: number },
 ) {
   assertProfile(profile.samples !== undefined && profile.timeDeltas !== undefined);
   if (profile.nodes.length > MAX_NODES || profile.samples.length > MAX_SAMPLES) {
@@ -43,7 +43,7 @@ export function sanitizeDiagnosticCpuProfile(
   });
   const result = {
     requestedDurationMs: DURATION_MS,
-    actualDurationMs: (profile.endTime - profile.startTime) / 1_000,
+    actualDurationMs: durationMs,
     startBlockedMs,
     samplingIntervalMicros: INTERVAL_MICROS,
     sampleLossCount: null,
