@@ -298,14 +298,31 @@ export class ChatTranscriptRenderer {
     const release = () => {
       this.layoutEffects.delete(effect);
     };
-    this.lifecycle.afterCommit(() => {
-      // Nested row islands finish their commits before initial geometry is read.
-      queueMicrotask(() => {
+    this.lifecycle.afterCommit((done) => {
+      let cancelled = false;
+      const measure = () => {
         release();
-        if (this.isPresented()) {
+        if (!cancelled && this.isPresented()) {
           effect();
         }
-      });
+        done();
+      };
+      // The initial measurement ladder otherwise constructs all visible rows
+      // in one microtask chain. Let the browser run between measurement steps.
+      // SAFETY: scheduler.yield is an optional browser scheduling capability.
+      const browser = globalThis as typeof globalThis & {
+        scheduler?: { yield?: () => Promise<void> };
+      };
+      if (this.accepted?.initialPositionPending() && browser.scheduler?.yield) {
+        void browser.scheduler.yield().then(measure);
+      } else {
+        // Nested row islands finish their commits before geometry is read.
+        queueMicrotask(measure);
+      }
+      return () => {
+        cancelled = true;
+        release();
+      };
     }, release);
   }
 
