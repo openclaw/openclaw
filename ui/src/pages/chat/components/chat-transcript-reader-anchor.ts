@@ -65,8 +65,8 @@ export class TranscriptReaderAnchor {
     private readonly onRowsMeasured: () => void,
   ) {}
 
-  /** Native receipts and the active range must describe the same measurement batch. */
-  readonly rowsMeasured = (indexes?: readonly number[]): boolean => {
+  /** Manual measurement needs mounted rows; native following also needs matching size receipts. */
+  readonly rowsMeasured = (indexes?: readonly number[], requireNativeSize = true): boolean => {
     const { virtualizer } = this.host;
     const rows = virtualizer.getVirtualItems();
     const required = indexes?.map((index) => rows.find((row) => row.index === index)) ?? rows;
@@ -85,7 +85,8 @@ export class TranscriptReaderAnchor {
       }
       const height = row && this.heights.get(row);
       return (
-        row?.isConnected === true && height !== undefined && Math.abs(height - item.size) < 0.5
+        row?.isConnected === true &&
+        (!requireNativeSize || (height !== undefined && Math.abs(height - item.size) < 0.5))
       );
     });
   };

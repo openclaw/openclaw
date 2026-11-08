@@ -63,7 +63,10 @@ export class TranscriptInitialRange {
     ) => number,
     private readonly afterCommit: (effect: () => void) => void,
     private readonly measureRows: () => boolean,
-    private readonly rowsMeasured: (indexes: readonly number[]) => boolean,
+    private readonly rowsMeasured: (
+      indexes: readonly number[],
+      requireNativeSize?: boolean,
+    ) => boolean,
     private readonly prewarmRow?: (index: number, mode: MarkdownPrewarmMode) => boolean | undefined,
     private readonly invalidatePreparation: () => void = invalidate,
   ) {
@@ -272,7 +275,7 @@ export class TranscriptInitialRange {
       }
       // Measuring a shorter tail expands the destination without moving the reader range.
       this.refresh();
-      const measured = this.rowsMeasured(this.endIndexes());
+      const measured = this.rowsMeasured(this.endIndexes(), native);
       // Smooth scrolling can skip a destination's resize after row splitting.
       // Replay its measurement only while the native receipts disagree.
       if (((!native || !measured) && this.measureRows()) || !measured) {
