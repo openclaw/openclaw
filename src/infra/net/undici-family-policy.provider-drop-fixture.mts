@@ -1,8 +1,13 @@
-// Child of the provider attempt test. The parent loads a connect interposer that
-// drops the IPv4 handshake for OPENCLAW_DROP_PORT; this process makes the request.
+// Child of the provider attempt test.
+// Darwin: the parent interposes connect(2) and leaves the IPv4 socket unconnected.
+// Linux: this process runs in a private net namespace and drops the real SYN, so
+// the socket stays in SYN_SENT until Node's attempt timer starts IPv6.
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import http from "node:http";
 import { registerHooks } from "node:module";
 import type { AddressInfo, Socket } from "node:net";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { Model } from "../../llm/types.js";
 
@@ -47,6 +52,95 @@ const { buildGuardedModelFetch } = await import("../../agents/provider-transport
 const { attachProviderAuthAuthority } = await import("../../plugins/provider-auth-authority.js");
 const { resolveUndiciAutoSelectFamilyConnectOptions } = await import("./undici-family-policy.js");
 
+function executable(name: string): string | undefined {
+  const dirs = `${process.env.PATH ?? ""}:/sbin:/usr/sbin:/bin:/usr/bin`.split(":");
+  for (const dir of dirs) {
+    if (!dir) {
+      continue;
+    }
+    const candidate = path.join(dir, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // Try the next directory.
+    }
+  }
+  return undefined;
+}
+
+function installIpv4Drop(port: number): void {
+  const iptables = executable("iptables");
+  if (iptables) {
+    execFileSync(iptables, [
+      "-I",
+      "OUTPUT",
+      "-p",
+      "tcp",
+      "-d",
+      "127.0.0.1",
+      "--dport",
+      String(port),
+      "-j",
+      "DROP",
+    ]);
+    return;
+  }
+  const nft = executable("nft");
+  if (!nft) {
+    throw new Error("Linux drop fixture needs iptables or nft");
+  }
+  execFileSync(nft, ["add", "table", "ip", "familydrop"]);
+  execFileSync(nft, [
+    "add",
+    "chain",
+    "ip",
+    "familydrop",
+    "output",
+    "{ type filter hook output priority 0 ; policy accept ; }",
+  ]);
+  execFileSync(nft, [
+    "add",
+    "rule",
+    "ip",
+    "familydrop",
+    "output",
+    "ip",
+    "daddr",
+    "127.0.0.1",
+    "tcp",
+    "dport",
+    String(port),
+    "drop",
+  ]);
+}
+
+function ipv4SynSent(port: number): boolean {
+  const remote = `0100007F:${port.toString(16).padStart(4, "0")}`.toUpperCase();
+  let text: string;
+  try {
+    text = fs.readFileSync("/proc/net/tcp", "utf8");
+  } catch {
+    return false;
+  }
+  for (const line of text.split("\n").slice(1)) {
+    const fields = line.trim().split(/\s+/);
+    if (fields[2]?.toUpperCase() === remote && fields[3] === "02") {
+      return true;
+    }
+  }
+  return false;
+}
+
+const netnsDrop = process.env.OPENCLAW_DROP_MODE === "netns";
+if (netnsDrop) {
+  const ip = executable("ip");
+  if (!ip) {
+    throw new Error("Linux drop fixture needs iproute2");
+  }
+  execFileSync(ip, ["link", "set", "lo", "up"]);
+}
+
 const server = http.createServer((_request, response) => {
   response.end("ok");
 });
@@ -59,6 +153,9 @@ await new Promise<void>((resolve) => {
 });
 const port = (server.address() as AddressInfo).port;
 process.env.OPENCLAW_DROP_PORT = String(port);
+if (netnsDrop) {
+  installIpv4Drop(port);
+}
 
 const baseUrl = `http://fixture.test:${port}/v1`;
 const model = attachProviderAuthAuthority(
@@ -81,11 +178,22 @@ const model = attachProviderAuthAuthority(
 );
 
 const started = performance.now();
+let synSentAt: number | undefined;
+const synPoll = netnsDrop
+  ? setInterval(() => {
+      if (synSentAt === undefined && ipv4SynSent(port)) {
+        synSentAt = performance.now();
+      }
+    }, 5)
+  : undefined;
 try {
   const response = await buildGuardedModelFetch(model)(`${baseUrl}/models`);
   const body = await response.text();
   if (body !== "ok") {
     throw new Error(`unexpected provider body: ${body}`);
+  }
+  if (synPoll) {
+    clearInterval(synPoll);
   }
   process.stdout.write(
     `${JSON.stringify({
@@ -93,9 +201,13 @@ try {
       elapsedMs: Math.round(performance.now() - started),
       attemptTimeoutMs:
         resolveUndiciAutoSelectFamilyConnectOptions()?.autoSelectFamilyAttemptTimeout ?? null,
+      pendingMs: synSentAt === undefined ? null : Math.round(performance.now() - synSentAt),
     })}\n`,
   );
 } catch (error) {
+  if (synPoll) {
+    clearInterval(synPoll);
+  }
   const cause = error as { code?: string; cause?: { code?: string }; message?: string };
   process.stdout.write(
     `${JSON.stringify({

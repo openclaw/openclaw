@@ -22,14 +22,14 @@ import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-pol
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const dropFixtureSupported = process.platform === "darwin" || process.platform === "linux";
 
-// Drops one IPv4 destination port inside the child process. Returning
-// EINPROGRESS without calling the kernel leaves the handshake unanswered, so
-// Node's attempt timer — not the host route — decides when IPv6 starts.
-const DROP_CONNECT_C = `#define _GNU_SOURCE
-#include <arpa/inet.h>
+// Darwin only. kqueue does not treat this unconnected socket as ready, so
+// Node's attempt timer is what starts IPv6. Linux cannot use the same return:
+// epoll reports EPOLLHUP for a socket left in TCP_CLOSE, and libuv then
+// completes the connect because SO_ERROR is zero. Linux drops the real SYN
+// inside a private network namespace instead.
+const DROP_CONNECT_C = `#include <arpa/inet.h>
 #include <errno.h>
 #include <stdlib.h>
-#ifdef __APPLE__
 #include <netinet/in.h>
 #include <sys/socket.h>
 static int drop_connect(int fd, const struct sockaddr *addr, socklen_t len) {
@@ -48,27 +48,6 @@ static int drop_connect(int fd, const struct sockaddr *addr, socklen_t len) {
   __attribute__((used)) static struct { const void *repl; const void *orig; } \\
   _interpose_##_orig __attribute__((section("__DATA,__interpose"))) = { &_repl, &_orig };
 DYLD_INTERPOSE(drop_connect, connect)
-#else
-#include <dlfcn.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-int connect(int fd, const struct sockaddr *addr, socklen_t len) {
-  static int (*real_connect)(int, const struct sockaddr *, socklen_t);
-  if (!real_connect) {
-    real_connect = (int (*)(int, const struct sockaddr *, socklen_t))dlsym(RTLD_NEXT, "connect");
-  }
-  if (addr && addr->sa_family == AF_INET) {
-    const struct sockaddr_in *in = (const struct sockaddr_in *)addr;
-    const char *port_env = getenv("OPENCLAW_DROP_PORT");
-    unsigned port = port_env ? (unsigned)strtoul(port_env, 0, 10) : 0;
-    if (ntohl(in->sin_addr.s_addr) == 0x7F000001u && port && ntohs(in->sin_port) == port) {
-      errno = EINPROGRESS;
-      return -1;
-    }
-  }
-  return real_connect(fd, addr, len);
-}
-#endif
 `;
 
 const HOSTNAME = "fixture.test";
@@ -224,52 +203,68 @@ it.skipIf(isWSL2Sync())("reaches IPv6 when the IPv4 address refuses the connecti
 it.skipIf(isWSL2Sync() || !dropFixtureSupported)(
   "reaches IPv6 after the attempt budget when the IPv4 handshake is dropped",
   () => {
-    const root = tempDirs.make("family-drop-");
-    const source = path.join(root, "drop-connect.c");
-    const library = path.join(
-      root,
-      process.platform === "darwin" ? "drop-connect.dylib" : "drop-connect.so",
+    const fixture = fileURLToPath(
+      new URL("./undici-family-policy.provider-drop-fixture.mts", import.meta.url),
     );
-    fs.writeFileSync(source, DROP_CONNECT_C);
-    execFileSync(
-      "cc",
-      process.platform === "darwin"
-        ? ["-dynamiclib", "-O2", source, "-o", library]
-        : ["-shared", "-fPIC", "-O2", source, "-o", library, "-ldl"],
-    );
-    const child = spawnSync(
-      process.execPath,
-      [
+    const cwd = fileURLToPath(new URL("../../..", import.meta.url));
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      OPENCLAW_DEBUG_PROXY_ENABLED: "0",
+      OPENCLAW_PROXY_ACTIVE: "0",
+      http_proxy: "",
+      https_proxy: "",
+    };
+    delete env.LD_PRELOAD;
+    delete env.DYLD_INSERT_LIBRARIES;
+    let command = process.execPath;
+    let args = ["--import", "tsx", fixture];
+    if (process.platform === "darwin") {
+      const root = tempDirs.make("family-drop-");
+      const source = path.join(root, "drop-connect.c");
+      const library = path.join(root, "drop-connect.dylib");
+      fs.writeFileSync(source, DROP_CONNECT_C);
+      execFileSync("cc", ["-dynamiclib", "-O2", source, "-o", library]);
+      env.DYLD_INSERT_LIBRARIES = library;
+      env.OPENCLAW_DROP_MODE = "interpose";
+    } else {
+      // A private net namespace keeps the OUTPUT drop off the host. Root can
+      // enter it directly; other users map themselves to root inside it.
+      command = "unshare";
+      args = [
+        ...(process.getuid?.() === 0 ? [] : ["--map-root-user"]),
+        "--net",
+        "--",
+        process.execPath,
         "--import",
         "tsx",
-        fileURLToPath(new URL("./undici-family-policy.provider-drop-fixture.mts", import.meta.url)),
-      ],
-      {
-        cwd: fileURLToPath(new URL("../../..", import.meta.url)),
-        encoding: "utf8",
-        timeout: 15_000,
-        env: {
-          ...process.env,
-          [process.platform === "darwin" ? "DYLD_INSERT_LIBRARIES" : "LD_PRELOAD"]: library,
-          OPENCLAW_DEBUG_PROXY_ENABLED: "0",
-          OPENCLAW_PROXY_ACTIVE: "0",
-          http_proxy: "",
-          https_proxy: "",
-        },
-      },
-    );
+        fixture,
+      ];
+      env.OPENCLAW_DROP_MODE = "netns";
+    }
+    const child = spawnSync(command, args, {
+      cwd,
+      encoding: "utf8",
+      timeout: 15_000,
+      env,
+    });
     const output = `${child.stdout ?? ""}\n${child.stderr ?? ""}`;
-    if (child.status !== 0) {
-      throw new Error(output);
+    if (child.error || child.status !== 0) {
+      throw new Error(child.error?.message ?? output);
     }
     const result = JSON.parse(child.stdout.trim()) as {
       status: number;
       elapsedMs: number;
       attemptTimeoutMs: number;
+      pendingMs: number | null;
     };
     expect(result.attemptTimeoutMs).toBe(1_000);
     expect(result.status).toBe(200);
     expect(result.elapsedMs).toBeGreaterThanOrEqual(result.attemptTimeoutMs - 100);
     expect(result.elapsedMs).toBeLessThan(8_000);
+    // Linux must show the IPv4 socket still in SYN_SENT, then wait out the
+    // attempt timer. An immediate epoll completion never produces that wait.
+    if (process.platform === "linux") {
+      expect(result.pendingMs).toBeGreaterThanOrEqual(result.attemptTimeoutMs - 150);
+    }
   },
 );
