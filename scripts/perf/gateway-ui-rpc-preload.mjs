@@ -1,8 +1,10 @@
+import childProcess from "node:child_process";
 import { createHash } from "node:crypto";
 // Private benchmark instrumentation; opt-in setup retains only synthetic Cron binding metadata.
 import { channel } from "node:diagnostics_channel";
 import { writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { Socket } from "node:net";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -25,6 +27,36 @@ if (
 function installObserver() {
   let active;
   let inspector;
+  if (process.env.OPENCLAW_BENCH_SERVER_PROFILE === "1") {
+    const spawn = childProcess.spawn;
+    childProcess.spawn = function (...args) {
+      const captured = active;
+      if (!captured?.captureProcesses) {
+        return Reflect.apply(spawn, this, args);
+      }
+      const startedAt = performance.now();
+      const child = Reflect.apply(spawn, this, args);
+      // Only executable basenames leave the child; arguments and environment may contain secrets.
+      const event = {
+        source: "node.child_process",
+        operation: path.basename(args[0]),
+        startMs: startedAt - captured.startedAt,
+      };
+      captured.events.push(event);
+      child.once("error", (error) => {
+        if (typeof error.code === "string" && /^[A-Z0-9_]{1,32}$/.test(error.code)) {
+          event.errorCode = error.code;
+        }
+      });
+      child.once("close", (code, signal) => {
+        event.durationMs = performance.now() - startedAt;
+        event.exitCode = code;
+        event.signal = signal;
+      });
+      return child;
+    };
+    syncBuiltinESMExports();
+  }
   const numericFields = [
     "durationMs",
     "elapsedMs",
@@ -216,6 +248,7 @@ function installObserver() {
           Socket.prototype.write = countOps ? countedWrite : write;
           active = {
             events: [],
+            ...(message.captureProcesses ? { captureProcesses: true } : {}),
             rpc:
               typeof message.method === "string"
                 ? { method: message.method, receivedCount: 0 }
