@@ -88,6 +88,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/pages/plugins/catalog-grid.tsx":
+    case "ui/src/pages/plugins/plugin-card.tsx":
+      // Catalogs already load both; a lazy skill reader must not split their first visit.
+      return "plugin-catalog-runtime";
     case "ui/src/components/sandbox-host.ts":
     case "ui/src/lib/widget-sandbox-host.ts":
     case "ui/src/lib/reactive/window-message.ts":

@@ -161,3 +161,17 @@ control bundle options. Retain at least 20 rotated pairs plus A/A across the
 required engines and viewports before accepting a performance change. Record
 host load, median, p95 and spread; do not interpret an effect smaller than A/A
 variation as a win. Keep reports under `.artifacts/`, outside committed source.
+
+The synchronous owner diagnostic runs separately from browser presentation:
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs \
+  scripts/perf/session-held-list-measure.ts --mode capability
+```
+
+It retains two overlapping lists at 1,000 and 5,000 rows. Its full and patch
+events include the browser producer's `permissionMode: null` clearing receipt;
+omitting that field skips permission reconciliation and understates owner cost.
+Initial list rows stay canonical. Parsing, row reconstruction and synchronous
+owner timings exclude socket delivery, sidebar and Sessions-page projections,
+and Solid/DOM work. These diagnostics cannot replace browser acceptance.

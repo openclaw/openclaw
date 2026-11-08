@@ -76,7 +76,12 @@ export class TranscriptReaderAnchor {
       }
       const row = virtualizer.elementsCache.get(item.key);
       if (row?.dataset.preparedRow === "true") {
-        return indexes === undefined;
+        if (indexes === undefined) {
+          return true;
+        }
+        if (row.dataset.preparingRow !== "true") {
+          return false;
+        }
       }
       const height = row && this.heights.get(row);
       return (
@@ -137,7 +142,7 @@ export class TranscriptReaderAnchor {
         const row = entry.target;
         return row instanceof HTMLElement &&
           row.isConnected &&
-          row.dataset.preparedRow !== "true" &&
+          (row.dataset.preparedRow !== "true" || row.dataset.preparingRow === "true") &&
           element.contains(row)
           ? [{ entry, row, top: row.getBoundingClientRect().top }]
           : [];
@@ -173,6 +178,9 @@ export class TranscriptReaderAnchor {
         virtualizer.itemSizeCache.get(key) ??
         virtualizer.options.estimateSize(virtualizer.indexFromElement(row));
       this.heights.set(row, height);
+      if (row.dataset.preparedRow === "true") {
+        continue;
+      }
       const delta = height - previous;
       const previousTop = top - moved;
       moved += delta;

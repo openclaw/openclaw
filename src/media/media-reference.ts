@@ -1,6 +1,6 @@
 import path from "node:path";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
-import { realpathViaExistingPrefix } from "../infra/path-existence.js";
+import { realpathViaExistingPrefix } from "../infra/path-containment.js";
 import { relativePathEscapesRoot } from "../infra/path-guards.js";
 import { maybeLocalPathFromSource } from "./inbound-media-path.js";
 import {
