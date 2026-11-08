@@ -1,7 +1,15 @@
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const { readCommand, dead } = vi.hoisted(() => ({ readCommand: vi.fn(), dead: vi.fn() }));
+const { readCommand, dead, spawn } = vi.hoisted(() => ({
+  readCommand: vi.fn(),
+  dead: vi.fn(),
+  spawn: vi.fn(),
+}));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawnSync: spawn,
+}));
 vi.mock("@openclaw/proc-safe/inspect", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/proc-safe/inspect")>()),
   readProcessCommand: readCommand,
@@ -24,6 +32,7 @@ afterEach(() => {
 
 beforeEach(() => {
   dead.mockReset().mockReturnValue(false);
+  spawn.mockReset().mockReturnValue({ status: 1, stdout: "" });
   readCommand.mockReset().mockImplementation(() => {
     throw new ProcSafeError("access-denied", "Process arguments denied");
   });
@@ -107,6 +116,36 @@ it.each(["layout-mismatch", "incomplete", "helper-unavailable"] as const)(
     });
     dead.mockReturnValue(true);
     expect(() => readDarwinProcessCommand(12, "different")).toThrow(error);
+  },
+);
+
+it.each([
+  { code: "layout-mismatch", image: "mdworker", owner: "same", redacted: true },
+  { code: "incomplete", image: "mdworker", owner: undefined, redacted: true },
+  { code: "layout-mismatch", image: "node", owner: "same", redacted: false },
+  { code: "layout-mismatch", image: "bun", owner: "same", redacted: false },
+  { code: "layout-mismatch", image: "openclaw-gateway", owner: "same", redacted: false },
+  { code: "layout-mismatch", image: "", owner: "same", redacted: false },
+] as const)(
+  "classifies a $code argument image by its $image kernel image",
+  ({ code, image, owner, redacted }) => {
+    // mdworker's private no-read-procargs entitlement leaves a misaligned argv.
+    const error = new ProcSafeError(code, "invalid Darwin argument alignment");
+    readCommand.mockImplementation(() => {
+      throw error;
+    });
+    spawn.mockReturnValue({ status: image ? 0 : 1, stdout: image ? `${image}\n` : "" });
+    const inspect = () => readDarwinProcessCommand(992, owner);
+    if (redacted) {
+      expect(inspect()).toEqual({
+        argvUnavailable: true,
+        executable: image,
+        ...(owner ? { owner } : {}),
+      });
+    } else {
+      expect(inspect).toThrow(error);
+    }
+    expect(spawn).toHaveBeenCalledWith("/bin/ps", ["-o", "ucomm=", "-p", "992"], expect.anything());
   },
 );
 
