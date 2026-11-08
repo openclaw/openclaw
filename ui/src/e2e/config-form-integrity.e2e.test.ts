@@ -126,7 +126,7 @@ suite.define(() => {
       const rawOnly = page.locator(".settings-row").filter({
         has: page.locator(".settings-row__title").getByText("Agent code mode", { exact: true }),
       });
-      await revealControl(rawOnly);
+      await revealControl(rawOnly, ["Tools"]);
       expect(await rawOnly.textContent()).toContain("Unsupported schema node. Use Raw mode.");
       expect(await rawOnly.locator("input,select,textarea").count()).toBe(0);
 

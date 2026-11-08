@@ -233,6 +233,23 @@ describe("Control UI performance budgets", () => {
     ).toEqual(["assets/index-abc.css", "assets/index-abc.js", "assets/runtime-def.js"]);
   });
 
+  it("caps inline document bytes alongside the external startup assets", () => {
+    const { distDir } = createStartupFixture();
+    const metrics = collectMetrics(distDir);
+    expect(metrics.document).toEqual({
+      rawBytes: Buffer.byteLength(startupHtml),
+      gzipBytes: gzipSync(startupHtml).byteLength,
+    });
+    expect(
+      evaluateBudgets(metrics, { ...CONTROL_UI_PERFORMANCE_BUDGETS, documentGzipBytes: 1 }),
+    ).toContainEqual({
+      metric: "document gzip",
+      actual: metrics.document.gzipBytes,
+      limit: 1,
+      unit: "bytes",
+    });
+  });
+
   it("counts identity bytes for each missing compression sidecar", () => {
     const { distDir } = createStartupFixture();
     fs.unlinkSync(path.join(distDir, "assets/index-a.js.gz"));

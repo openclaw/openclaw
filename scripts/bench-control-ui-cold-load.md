@@ -83,6 +83,19 @@ invalidations or proof that every pixel in that rectangle changed.
 
 ## Cross-flow CPU census
 
+The opt-in `provider-model-picker-artwork-cycles` engines scenario checks the
+custom provider artwork path omitted by the ordinary model fixtures. It opens,
+filters and reopens a 1,000-model picker whose rows share one synthetic image,
+checks that the images decode and selection stays unchanged, and reports image
+requests, blob reads and object URL lifetimes. Run it against a build supporting
+custom provider artwork; its instrumented timings are not performance evidence.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --steps provider-model-picker-artwork-cycles --engines chromium,webkit,firefox \
+  --viewport both --output .artifacts/provider-artwork
+```
+
 Use the cross-engine harness's Chromium-only `--cpu-profile` mode to find small
 costs shared across its existing route and interaction workloads. It uses V8
 sampling without Playwright/Timeline tracing and writes source-mapped
@@ -1058,7 +1071,28 @@ node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
   --output .artifacts/streaming-profile
 ```
 
-This workload delivers the 645-delta Markdown reply at 150 deltas/s in bursts
+To isolate the first answer token, select `--steps streaming-onset` in that
+companion. It starts from a settled active run over 2,000 rich history messages;
+`streaming-onset-short` uses 400. Onset delivers one nonempty answer delta.
+`streaming-working-preparation` instead starts from the same settled history
+without an active run, then delivers an empty first delta and ends at the new
+working-indicator mutation. This measures preparation before the answer token,
+including adoption of the run, separately from onset. It does not measure sending
+a user message. Both phases retain the pre-action transcript rows for comparison.
+The browser-local `applicationMs` ends at the matching transcript mutation;
+`eventToFrameMs` includes two subsequent animation frames, not paint. Chromium
+thread CPU includes the complete action and settlement. Use separate traced
+runs for native task attribution and untraced rotated comparisons with an
+unchanged bundle control for timing claims.
+
+For qualification, select
+`--steps streaming-onset,streaming-working-preparation,streaming-mixed-fast,session-switch,chat-typing`
+with `--compare-bundle-dir <head> --control-bundle-dir <base> --pairs 20
+--engines chromium,webkit --viewport desktop`. The control repeats the base in
+each rotated triplet. `session-switch` shows both retained 400-message transcripts
+in turn; `chat-typing` checks 26 native typed characters without sending a message.
+
+`streaming-mixed-fast` delivers the 645-delta Markdown reply at 150 deltas/s in bursts
 of five, with reasoning, 24 tool calls and results, and an image arriving midway.
 It requires `--viewport desktop`: mobile's modal navigation drawer prevents
 simultaneous composer and sidebar input.
