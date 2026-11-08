@@ -152,15 +152,6 @@ describe("collectPackageDistImports", () => {
       'import("./same.mjs")',
       ...statements.slice(4).map((statement) => statement.slice(0, -1)),
     ]);
-    const rejected: PackageDistImportOccurrence[] = [];
-    expect(() =>
-      collectPackageDistImports({
-        files: ["dist/invalid.mjs"],
-        readText: () => 'import "./seen.mjs"; const =;',
-        onImportOccurrence: (occurrence) => rejected.push(occurrence),
-      }),
-    ).toThrow(SyntaxError);
-    expect(rejected).toEqual([]);
   });
 
   it("carries raw string import specifiers without adding templates, require calls, or URLs", () => {
@@ -404,8 +395,16 @@ new URL("../outside.cjs", import.meta.url);`,
 });
 
 describe("check-package-dist-imports", () => {
-  it("resolves Control UI import maps while retaining missing-file checks", () => {
-    const root = packageFixture({
+  it("resolves Control UI import maps while retaining occurrence provenance and missing-file checks", () => {
+    const statements = [
+      'import "./_1___.js";',
+      'export * from "./_1___.js";',
+      'import("./_1___.js?rev=1");',
+      'require("./_1___.js");',
+      'new URL("./_1___.js", import.meta.url);',
+    ] as const;
+    const appSource = `// 😀\n${statements.join("\n")}`;
+    const sources: Record<string, string> = {
       "control-ui/index.html":
         '<head><script type="importmap" data-cfasync="false">' +
         JSON.stringify({
@@ -415,22 +414,72 @@ describe("check-package-dist-imports", () => {
           },
         }) +
         "</script></head>",
-      "control-ui/assets/app.js": 'import "./_1___.js";\n',
+      "control-ui/assets/app.js": appSource,
+      "control-ui/assets/_1___.js": "export {};\n",
       "control-ui/assets/shared-12345678.js": "export {};\n",
       "control-ui/assets/shared-12345678.css": "body {}\n",
-    });
+      "index.js": 'import "./control-ui/assets/_1___.js";',
+    };
+    const occurrences: PackageDistImportOccurrence[] = [];
+    const collect = () =>
+      collectPackageDistImports({
+        files: Object.keys(sources).map((file) => `dist/${file}`),
+        readText: (file) => sources[file.slice("dist/".length)]!,
+        onImportOccurrence: (occurrence) => occurrences.push(occurrence),
+      });
+    const mapped = "dist/control-ui/assets/shared-12345678.js";
+    const physical = "dist/control-ui/assets/_1___.js";
+    expect(collect().map(({ importedPath }) => importedPath)).toEqual([
+      mapped,
+      "dist/control-ui/assets/shared-12345678.css",
+      mapped,
+      mapped,
+      mapped,
+      physical,
+      physical,
+      physical,
+    ]);
+    expect(
+      occurrences.map(({ kind, specifier, importedPath }) => [kind, specifier, importedPath]),
+    ).toEqual([
+      ["static-import", "./_1___.js", mapped],
+      ["static-export", "./_1___.js", mapped],
+      ["dynamic-import", "./_1___.js?rev=1", mapped],
+      ["require", "./_1___.js", physical],
+      ["import-meta-url", "./_1___.js", physical],
+      ["static-import", "./control-ui/assets/_1___.js", physical],
+    ]);
+    expect(occurrences[0]?.start).toBe(6);
+    expect(
+      occurrences.map(({ importerPath, start, end }) =>
+        sources[importerPath.slice("dist/".length)]!.slice(start, end),
+      ),
+    ).toEqual([
+      ...statements.slice(0, 2),
+      ...statements.slice(2).map((statement) => statement.slice(0, -1)),
+      sources["index.js"],
+    ]);
+    sources["control-ui/assets/app.js"] = `${appSource}\nconst =;`;
+    occurrences.length = 0;
+    expect(collect).toThrow(SyntaxError);
+    expect(occurrences).toEqual([]);
+    sources["control-ui/assets/app.js"] = appSource;
+
+    const root = packageFixture(sources);
     const check = () => runCheck([root]);
     const complete = check();
     expect(complete.status, complete.stderr).toBe(0);
     expect(complete.stdout).toContain("OpenClaw package dist import closure passed.");
 
-    writeFileSync(join(root, "dist/index.js"), 'import "./control-ui/assets/_1___.js";');
+    unlinkSync(join(root, physical));
     const outsideUi = check();
     expect(outsideUi.status).toBe(1);
+    expect(outsideUi.stderr).toContain(`dist/control-ui/assets/app.js imports missing ${physical}`);
     expect(outsideUi.stderr).toContain(
       "dist/index.js imports missing dist/control-ui/assets/_1___.js",
     );
     unlinkSync(join(root, "dist/index.js"));
+    writeFileSync(join(root, "dist/control-ui/assets/app.js"), statements[0]);
     for (const extension of ["js", "css"]) {
       const target = `dist/control-ui/assets/shared-12345678.${extension}`;
       unlinkSync(join(root, target));
