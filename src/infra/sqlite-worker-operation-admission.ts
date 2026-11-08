@@ -19,6 +19,8 @@ import {
   readSqliteWorkerMonotonicNs,
   SqliteWorkerError,
   type SqliteWorkerAdmissionRequest,
+  type SqliteWorkerAdmissionHandler as AdmissionHandler,
+  type SqliteWorkerDatabaseAuthority as DatabaseAuthority,
   type SqliteWorkerExecutionAuthority,
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
@@ -58,18 +60,6 @@ const REFUSED = 2;
 const TIMED_OUT = 3;
 
 type AdmissionFailureSource = "authority" | "domain" | "protocol";
-type DatabaseAuthority = {
-  /** Canonical identity captured when the database owner was admitted. */
-  databasePath: string;
-  databaseIdentity?: SqliteWorkerRequest["databaseIdentity"];
-  /** Only the broker can identify an initial open of its captured primary database. */
-  coldOpenPath?: string;
-  assertRequest?(): void;
-  assertAccess(): void;
-  assertCreate?(databasePath: string): void;
-  acquireSchema(): { assertCurrent(): void; release(): void };
-};
-
 export type SqliteWorkerOperationAdmission = SqliteWorkerNativeSettlementOwner & {
   readonly port: MessagePort;
   requestClass?: string; // Broker-owned telemetry, never authority.
@@ -140,11 +130,6 @@ export function observeSqliteWorkerCommittedFacts(
   }
   bind(observer);
 }
-
-type AdmissionHandler = (
-  request: SqliteWorkerAdmissionRequest,
-  grant: (beforeRelease?: () => void) => boolean,
-) => void;
 
 /** The optional continuation runs under live host authority before releasing the native writer. */
 export const createSqliteWorkerOperationAdmission = (
@@ -335,8 +320,8 @@ function createOperationAdmission(
             create = true;
           }
         }
-        if (create) {
-          assertRelayCreation?.();
+        if (create && assertRelayCreation) {
+          currentCallbacks.inOwnerContext(assertRelayCreation);
         }
         if (closed) {
           throw new SqliteWorkerError("SQLite worker admission is closed", "closed");
@@ -397,7 +382,9 @@ function createOperationAdmission(
       } catch (error) {
         const cursor = databaseAdmissionCursors.get(admission);
         if (cursor) {
-          cursor.cursor = cursor.reset();
+          cursor.cursor = currentCallbacks
+            ? currentCallbacks.inOwnerContext(() => cursor.reset())
+            : cursor.reset();
         } else {
           databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
         }
@@ -493,7 +480,9 @@ function createOperationAdmission(
     const request: SqliteWorkerAdmissionRequest = { stage: message.stage, facts: message.facts };
     try {
       // A queued fact may describe an earlier COMMIT; observing it never grants more work.
-      currentCallbacks?.inOwnerContext(() => observeRequest?.(request));
+      if (observeRequest) {
+        currentCallbacks?.inOwnerContext(observeRequest, request);
+      }
     } catch (error) {
       refuse(decision, error, "domain");
       return;
@@ -623,13 +612,20 @@ function createOperationAdmission(
   const receiveInOwnerContext = (message: unknown) =>
     callbacks ? callbacks.inOwnerContext(receive, message) : receive(message);
   port1.on("message", receiveInOwnerContext).unref();
+  const drain = (first: ReturnType<typeof receiveMessageOnPort>) => {
+    for (let queued = first; queued; queued = receiveMessageOnPort(port1)) {
+      receive(queued.message);
+    }
+  };
   const service = () => {
     // Observers may inspect retained facts without recursively publishing the next receipt.
     if (observingCommit) {
       return;
     }
-    for (let queued = receiveMessageOnPort(port1); queued; queued = receiveMessageOnPort(port1)) {
-      receiveInOwnerContext(queued.message);
+    const queued = receiveMessageOnPort(port1);
+    if (queued) {
+      // Callbacks restore this frame; each message still rechecks live authority.
+      return callbacks ? callbacks.inOwnerContext(drain, queued) : drain(queued);
     }
   };
   const admission: SqliteWorkerOperationAdmission = {
