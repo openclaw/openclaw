@@ -41,11 +41,11 @@ it("still resolves an explicit crash-observed target to its own error path", asy
   });
 });
 
-it("falls back to a healthy tab when the sticky target was observed crashed", async () => {
+it("keeps the sticky crash-observed target so its own error surfaces", async () => {
   const ops = selection("http://127.0.0.1:19106", [tab("CRASHED"), tab("HEALTHY")], "CRASHED");
   markBrowserTargetCrashed("http://127.0.0.1:19106", "CRASHED");
 
   await expect(ops.ensureTabAvailable(undefined)).resolves.toMatchObject({
-    targetId: "HEALTHY",
+    targetId: "CRASHED",
   });
 });

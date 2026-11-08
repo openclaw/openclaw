@@ -167,9 +167,11 @@ export function createProfileSelectionOps({
         : new Error(formatErrorMessage(lastListError));
     }
 
-    // Prefer a healthy tab for implicit selection; an explicit target still reaches
-    // the crash guidance instead of silently switching pages.
-    if (targetId === undefined) {
+    const stickyTargetId = runtime.lastTargetId ?? undefined;
+    // Prefer a healthy tab only for a first implicit selection. An explicit target and
+    // the sticky identity stay on their own tab, so a crash-observed page surfaces its
+    // tab-scoped guidance instead of silently retargeting a close, navigation, or action.
+    if (targetId === undefined && stickyTargetId === undefined) {
       const healthyCandidates = candidates.filter(
         (tab) => !isBrowserTargetCrashed(profile.cdpUrl, tab.targetId),
       );
@@ -178,17 +180,12 @@ export function createProfileSelectionOps({
       }
     }
 
-    const stickyTargetId = runtime.lastTargetId ?? undefined;
     // Sticky selection is an identity promise: a missing target requires a fresh
-    // explicit choice. A crash-observed sticky target instead falls back to a
-    // healthy page so the dead tab cannot wedge implicit selection.
+    // explicit choice.
     const chosen = targetId
       ? resolveBrowserTabOrThrow(targetId, candidates)
       : stickyTargetId
-        ? (candidates.find((tab) => tab.targetId === stickyTargetId) ??
-          (isBrowserTargetCrashed(profile.cdpUrl, stickyTargetId)
-            ? (candidates.find((tab) => (tab.type ?? "page") === "page") ?? candidates.at(0))
-            : undefined))
+        ? candidates.find((tab) => tab.targetId === stickyTargetId)
         : (candidates.find((tab) => (tab.type ?? "page") === "page") ?? candidates.at(0));
 
     if (!chosen) {

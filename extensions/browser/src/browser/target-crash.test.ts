@@ -50,6 +50,21 @@ describe("browser target crash state", () => {
     ).toBeNull();
   });
 
+  it("keeps page-script errors that merely contain crash words", () => {
+    // A healthy page may throw these exact strings; they are not transport frames.
+    expect(toBrowserTargetCrashedError(new Error("target crashed"))).toBeNull();
+    expect(toBrowserTargetCrashedError(new Error("Error: target crashed"))).toBeNull();
+    expect(toBrowserTargetCrashedError(new Error("renderer crashed while loading"))).toBeNull();
+  });
+
+  it("does not translate a page-script error into crash guidance", () => {
+    const res = fakeResponse();
+
+    handleRouteError(res as unknown as BrowserResponse, new Error("target crashed"));
+
+    expect(res.status).not.toHaveBeenCalledWith(409);
+  });
+
   it("returns a 409 with new-tab guidance instead of browser-wide unavailability", () => {
     const res = fakeResponse();
 
