@@ -90,6 +90,13 @@ export class SwarmActivityTracker {
   }
 
   decorate(result: SessionsListResult | null): SessionsListResult | null {
+    if (
+      this.phaseByChild.size === 0 &&
+      this.latestLogByGroup.size === 0 &&
+      this.phaseRankByGroupPhase.size === 0
+    ) {
+      return result;
+    }
     return mapSessionResultRows(result, (row): GatewaySessionRow => {
       const phase = this.phaseByChild.get(row.key) ?? row.swarmPhase;
       const groupId = row.swarmGroupId?.trim();

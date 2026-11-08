@@ -9,6 +9,7 @@ import {
   normalizeAgentId,
   resolveUiConversationIdentity,
   resolveUiSelectedGlobalAgentId,
+  type UiSessionDefaultsHost,
 } from "./session-key.ts";
 import { prepareSessionDeferredMutation } from "./session-mutation-operations.ts";
 import type {
@@ -77,8 +78,12 @@ export function createSessionDeletions(host: DeletionHost) {
   // Canonical generation and request order outlive an individual mutation,
   // including rollback. Retired IDs share this owner with the active claim.
   const deletions = new Map<string, DeletionOwner>();
-  const prepareIdentity = () => {
-    const snapshot = host.snapshot();
+  let identityRouting: string | undefined;
+  let rowIdentities = new WeakMap<
+    GatewaySessionRow,
+    { key: string; agentId?: string; identity: string }
+  >();
+  const prepareIdentity = (snapshot: UiSessionDefaultsHost = host.snapshot()) => {
     const selectedAgentId = resolveUiSelectedGlobalAgentId(snapshot);
     return (key: string, agentId?: string | null) => {
       const canonical = resolveUiConversationIdentity(snapshot, key, agentId);
@@ -86,6 +91,39 @@ export function createSessionDeletions(host: DeletionHost) {
     };
   };
   const identity = (key: string, agentId?: string | null) => prepareIdentity()(key, agentId);
+  const prepareRowIdentity = (owner: { scope: SessionListScope }) => {
+    const snapshot: UiSessionDefaultsHost = host.snapshot();
+    const agents = snapshot.agentsList;
+    const defaults = snapshot.hello?.snapshot?.sessionDefaults;
+    // Wrappers change on unrelated Gateway publications; only routing facts invalidate rows.
+    const routing = JSON.stringify([
+      snapshot.assistantAgentId,
+      agents != null,
+      agents?.defaultId,
+      agents?.mainKey,
+      agents?.scope,
+      defaults !== undefined,
+      defaults?.defaultAgentId,
+      defaults?.mainKey,
+      defaults?.mainSessionKey,
+    ]);
+    if (identityRouting !== routing) {
+      identityRouting = routing;
+      rowIdentities = new WeakMap();
+    }
+    const rows = rowIdentities;
+    const identify = prepareIdentity(snapshot);
+    return (row: GatewaySessionRow) => {
+      const agentId = row.agentId ?? owner.scope.agentId;
+      const previous = rows.get(row);
+      if (previous?.key === row.key && previous.agentId === agentId) {
+        return previous.identity;
+      }
+      const resolved = identify(row.key, agentId);
+      rows.set(row, { key: row.key, agentId, identity: resolved });
+      return resolved;
+    };
+  };
   const find = (owner: DeletionOwner | undefined, sessionId?: string) => {
     for (const deletion of owner?.records ?? []) {
       if (sessionId && deletion.sessionId === sessionId) {
@@ -350,7 +388,7 @@ export function createSessionDeletions(host: DeletionHost) {
       }
       // A projection shares one snapshot of alias defaults; the next projection
       // prepares them again so reconnects never retain stale session identities.
-      const identify = prepareIdentity();
+      const identify = prepareRowIdentity(owner);
       let rows = result.sessions;
       for (const [id, generation] of deletions) {
         for (const deletion of generation.records) {
@@ -359,7 +397,7 @@ export function createSessionDeletions(host: DeletionHost) {
             deletion.phase === "rollback" &&
             generation.active === deletion &&
             saved &&
-            !rows.some((row) => identify(row.key, row.agentId ?? owner.scope.agentId) === id)
+            !rows.some((row) => identify(row) === id)
           ) {
             if (rows === result.sessions) {
               rows = rows.slice();
@@ -369,8 +407,7 @@ export function createSessionDeletions(host: DeletionHost) {
         }
       }
       const sessions = rows.filter((row, index) => {
-        const agentId = row.agentId ?? owner.scope.agentId;
-        const generation = deletions.get(identify(row.key, agentId));
+        const generation = deletions.get(identify(row));
         if (!acceptsGeneration(generation, row.sessionId)) {
           return false;
         }

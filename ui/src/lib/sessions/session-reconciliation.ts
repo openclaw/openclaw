@@ -506,7 +506,6 @@ export function createSessionReconciliation(host: Host) {
         (info) =>
           deletions.acceptsGeneration(info.key, info.sessionId, info.agentId ?? ownerAgentId),
       );
-      roster.observations.inherit(result.result, current, ownerAgentId);
       if (!admittedRosterResult && result.admittedRow) {
         // Roster admission owns claim policy before descriptor-only evidence.
         const { result: _result, ...facts } = result;

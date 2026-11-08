@@ -186,7 +186,6 @@ export function createSessionCapability(
     // Preserve receipts before a pending intent makes another tracked copy.
     roster.observations.inherit(annotated, projected);
     const decorated = deletions.apply(mutations.applyRows(annotated, owner.scope.agentId), owner);
-    roster.observations.inherit(decorated, result);
     return decorated;
   };
 
@@ -252,7 +251,6 @@ export function createSessionCapability(
         mutations.observeArchiveRead(row);
       }
       const projected = permissions.reconcileList(admitted, revision, agentId);
-      roster.observations.inherit(projected, admitted);
       for (const row of admitted?.sessions ?? []) {
         mutations.observePendingFields(
           row,

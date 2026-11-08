@@ -6,6 +6,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
+import { SwarmActivityTracker } from "./swarm-activity.ts";
 
 it("keeps chronological phase and log annotations across canonical refreshes", async () => {
   vi.useFakeTimers();
@@ -96,4 +97,27 @@ it("keeps chronological phase and log annotations across canonical refreshes", a
     status: "done",
   });
   expect(phase("older")).toBeUndefined();
+});
+
+it("does not visit held rows when no swarm annotations exist", () => {
+  let visited = 0;
+  const row: GatewaySessionRow = {
+    get key() {
+      visited++;
+      return "agent:main:subagent:worker";
+    },
+    kind: "direct",
+    swarmGroupId: "group",
+  };
+  const result = sessionsResult([row]);
+  const tracker = new SwarmActivityTracker();
+  expect(tracker.decorate(result)).toBe(result);
+  expect(visited).toBe(0);
+  tracker.observe({ swarmGroupId: "group", kind: "log", text: "Working" });
+  expect(tracker.decorate(result)?.sessions[0]?.swarmLog).toBe("Working");
+  expect(visited).toBeGreaterThan(0);
+  tracker.clear();
+  visited = 0;
+  expect(tracker.decorate(result)).toBe(result);
+  expect(visited).toBe(0);
 });
