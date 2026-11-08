@@ -13,7 +13,7 @@ import { redactSecrets } from "../logging/redact.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveConfigAuditStoreEnv } from "./config-journal-snapshot.js";
 import type { ConfigHealthFingerprint } from "./io.health-state.types.js";
-import type { ConfigWriteAuditOrigin } from "./io.types.js";
+import type { ConfigWriteAuditActor, ConfigWriteAuditOrigin } from "./io.types.js";
 import { resolveStateDir } from "./paths.js";
 import { redactSensitiveArgv } from "./redact-argv.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
@@ -287,7 +287,8 @@ export function createConfigWriteAuditRecordBase(params: {
   previousMetadata: ConfigAuditStatMetadata;
   changedPathCount: number | null | undefined;
   changedPaths?: readonly string[];
-  origin?: ConfigWriteAuditOrigin;
+  /** Who and what caused the write; both keys stay absent when neither is known. */
+  attribution?: { origin?: ConfigWriteAuditOrigin; actor?: ConfigWriteAuditActor };
   hasMetaBefore: boolean;
   hasMetaAfter: boolean;
   gatewayModeBefore: string | null;
@@ -323,7 +324,8 @@ export function createConfigWriteAuditRecordBase(params: {
     previousGid: params.previousMetadata.gid,
     changedPathCount: typeof params.changedPathCount === "number" ? params.changedPathCount : null,
     ...(params.changedPaths ? { changedPaths: capConfigAuditPaths(params.changedPaths) } : {}),
-    ...(params.origin ? { origin: params.origin } : {}),
+    ...(params.attribution?.origin ? { origin: params.attribution.origin } : {}),
+    ...(params.attribution?.actor ? { actor: params.attribution.actor } : {}),
     hasMetaBefore: params.hasMetaBefore,
     hasMetaAfter: params.hasMetaAfter,
     gatewayModeBefore: params.gatewayModeBefore,

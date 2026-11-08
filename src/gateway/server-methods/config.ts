@@ -555,6 +555,7 @@ async function commitConfigRestartWrite(params: {
   const writeResult = await commitGatewayConfigWriteOrRespond({
     snapshot,
     writeOptions,
+    actor: resolveControlPlaneActor(params.client),
     nextConfig: params.writeConfig,
     context: params.context,
     disconnectSharedAuthClients,
@@ -739,7 +740,7 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(true, result, undefined);
     },
   ),
-  "config.set": async ({ params, respond, context }) => {
+  "config.set": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
@@ -771,6 +772,7 @@ export const configHandlers: GatewayRequestHandlers = {
     const writeResult = await commitGatewayConfigWriteOrRespond({
       snapshot,
       writeOptions,
+      actor: resolveControlPlaneActor(client),
       nextConfig: parsed.writeConfig,
       context,
       respond,

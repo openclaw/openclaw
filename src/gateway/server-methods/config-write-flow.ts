@@ -29,7 +29,11 @@ import { isRecord } from "../../utils.js";
 import { resolveGatewayAuth } from "../auth.js";
 import { buildGatewayReloadPlan, isNoopGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
-import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
+import {
+  formatControlPlaneActor,
+  resolveControlPlaneActor,
+  type ControlPlaneActor,
+} from "../control-plane-audit.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { resolveSharedGatewaySessionGeneration } from "../server/ws-shared-generation.js";
 import { parseRestartRequestParams } from "./restart-request.js";
@@ -229,6 +233,8 @@ export function shouldAwaitGatewayConfigApplication(params: {
 export async function commitGatewayConfigWrite(params: {
   snapshot: ConfigWriteSnapshot;
   writeOptions: ConfigWriteOptions;
+  /** Identity of the client on whose behalf this RPC writes; the Gateway process is the writer. */
+  actor?: ControlPlaneActor;
   nextConfig: OpenClawConfig;
   context?: GatewayRequestContext;
   disconnectSharedAuthClients?: boolean;
@@ -250,6 +256,7 @@ export async function commitGatewayConfigWrite(params: {
       {
         ...params.writeOptions,
         auditOrigin: "config-rpc",
+        ...(params.actor ? { auditActor: params.actor } : {}),
         runtimeRefresh: {
           ...params.writeOptions.runtimeRefresh,
           includeAuthStoreRefs: false,

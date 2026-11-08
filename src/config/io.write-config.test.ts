@@ -2614,3 +2614,28 @@ itWithHome("journals offline edits before replacing the slot", async (home) => {
   );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+// io.write.ts is the only place the audit actor reaches the journal: the record builder accepts it
+// and the RPC layer supplies it, but a dropped line here silently publishes records with no caller
+// while every unit above this seam still passes.
+itWithHome("persists the audit actor on the config.write journal record", async (home) => {
+  await seed(home, gatewayAt(19000));
+  const io = fastIO(home);
+  const actor = {
+    actor: "openclaw-control-ui",
+    deviceId: "device-7",
+    clientIp: "10.0.0.7",
+    connId: "conn-9",
+  };
+  await io.writeConfigFile(gatewayAt(19001), { auditOrigin: "config-rpc", auditActor: actor });
+  const [newest] = auditRecords(home, {}).slice(-1);
+  expect(requireRecord(newest, "audit record").actor).toEqual(actor);
+});
+
+itWithHome("omits the actor key from the journal when no client asked", async (home) => {
+  await seed(home, gatewayAt(19000));
+  const io = fastIO(home);
+  await io.writeConfigFile(gatewayAt(19001), { auditOrigin: "cli" });
+  const [newest] = auditRecords(home, {}).slice(-1);
+  expect(Object.hasOwn(requireRecord(newest, "audit record"), "actor")).toBe(false);
+});

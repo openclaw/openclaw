@@ -61,7 +61,7 @@ it("strips an audit-proven generated fallback row and rematerializes catalog cap
           changedPaths: ["reasoning", "input", "cost", "maxTokens"].map(
             (field) => `models.providers.openai.models[0].${field}`,
           ),
-          origin: "doctor",
+          attribution: { origin: "doctor" },
           hasMetaBefore: true,
           hasMetaAfter: true,
           gatewayModeBefore: "local",
