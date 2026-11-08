@@ -42,13 +42,13 @@ import type {
   EmbeddedSandboxInfo,
 } from "./embedded-agent-runner/types.js";
 import { MAX_OWNER_PROMPT_CONTENT_BYTES, resolveOwnerPromptNumbers } from "./owner-display.js";
-import { filterProjectScopedCuratedContextFiles } from "./project-memory-bootstrap.js";
 import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 import {
   buildProjectContextSection,
   isBootstrapContextFile,
-  prepareContextFilesForPrompt,
+  prepareSystemPromptContextFiles,
+  projectStableContextFiles,
 } from "./system-prompt-context-files.js";
 import type {
   ProviderSystemPromptContribution,
@@ -72,7 +72,13 @@ import {
   buildToolCallStyleSection,
   normalizeProviderPromptBlock,
 } from "./system-prompt-policy-sections.js";
-import { blindRuntime, blindWorkspace, buildRuntimeLine } from "./system-prompt-runtime.js";
+import {
+  blindRuntime,
+  blindWorkspace,
+  buildDirectorySection,
+  buildModelIdentityPromptLine,
+  buildRuntimeLine,
+} from "./system-prompt-runtime.js";
 import { buildSkillsSection } from "./system-prompt-skills.js";
 import {
   buildSystemPromptToolLines,
@@ -92,6 +98,8 @@ import {
   buildWatchedSessionsPromptLines,
   type PreparedWatchedSessionsPrompt,
 } from "./watched-sessions-prompt.js";
+
+export { buildModelIdentityPromptLine } from "./system-prompt-runtime.js";
 
 type OwnerIdDisplay = "raw" | "hash";
 
@@ -214,14 +222,6 @@ function formatFullAccessBlockedReason(reason?: EmbeddedFullAccessBlockedReason)
 
 const MODEL_IDENTITY_PREFIX = "Current model identity:";
 
-export function buildModelIdentityPromptLine(model?: string): string | undefined {
-  const trimmed = model?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return `${MODEL_IDENTITY_PREFIX} ${trimmed}. If asked what model you are, answer with this value for the current run.`;
-}
-
 export function appendModelIdentitySystemPrompt(params: {
   systemPrompt: string;
   model?: string;
@@ -262,6 +262,7 @@ export function appendModelIdentitySystemPrompt(params: {
 
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
+  canonicalWorkspaceDir?: string;
   runtimeCwd?: string;
   reasoningLevel?: ReasoningLevel;
   /** Config-derived availability of the owner /restart and /update commands. */
@@ -478,13 +479,13 @@ export function buildAgentSystemPrompt(params: {
     params.fsWorkspaceOnly === true
       ? `tools.fs.workspaceOnly ON: outputs that file tools need to read or write later stay in ${hasSeparateRuntimeCwd ? "working directory" : "workspace"}, preferably \`.openclaw/tmp/\`. Keep TMPDIR, TMP, and TEMP at their inherited system paths; native tools need short temporary paths for Unix sockets.`
       : "";
-  const directorySection = hasSeparateRuntimeCwd
-    ? [
-        "## Directory Roles",
-        `Working directory: ${sanitizeForPromptLiteral(runtimeCwd)} (tools and deliverables).`,
-        `Agent workspace: ${sanitizedWorkspaceDir} (AGENTS.md/SOUL.md, other agent instructions, MEMORY.md/memory only; use absolute paths).`,
-      ]
-    : ["## Workspace", `Working directory: ${displayWorkspaceDir}`];
+  const directorySection = buildDirectorySection({
+    hasSeparateRuntimeCwd,
+    runtimeCwd,
+    sanitizedWorkspaceDir,
+    displayWorkspaceDir,
+    blind: runtimeInfo?.blind,
+  });
   const careSection = buildCareSection({
     controlToolsAvailable: availableTools.has("openclaw") || availableTools.has("gateway"),
   });
@@ -528,18 +529,18 @@ export function buildAgentSystemPrompt(params: {
       });
   const workspaceNotes = normalizeStringEntries(params.workspaceNotes);
 
-  const preparedContextFiles = prepareContextFilesForPrompt(
-    filterProjectScopedCuratedContextFiles({
-      contextFiles: params.contextFiles,
-      activeProjectKeys: params.activeProjectKeys,
-    }).filter((file) => file.path.trim().length > 0),
-  );
-  // Cache keys and bootstrap checks retain the original ordered file objects.
-  const contextFiles = preparedContextFiles.map(({ file }) => file);
+  const preparedContextFiles = prepareSystemPromptContextFiles({
+    contextFiles: params.contextFiles,
+    activeProjectKeys: params.activeProjectKeys,
+    workspaceDir: sanitizedWorkspaceDir,
+    canonicalWorkspaceDir: params.canonicalWorkspaceDir,
+  });
   const bootstrapSystemPromptSections = buildBootstrapSystemPromptSection({
     bootstrapMode: params.bootstrapMode,
     bootstrapCompleted: params.bootstrapCompleted,
-    bootstrapContextInjected: contextFiles.some((file) => isBootstrapContextFile(file.path)),
+    bootstrapContextInjected: preparedContextFiles.some(({ file }) =>
+      isBootstrapContextFile(file.path),
+    ),
   });
   const bootstrapTruncationNotice = params.bootstrapTruncationNotice?.trim();
   if (bootstrapTruncationNotice) {
@@ -556,11 +557,10 @@ export function buildAgentSystemPrompt(params: {
       executionBias: providerSectionOverrides.execution_bias,
       providerStablePrefix,
       reasoningHint,
-      directorySection,
       workspaceOnlyGuidance,
       workspaceNotes,
       bootstrapSystemPromptSections,
-      stableContextFiles: contextFiles,
+      stableContextFiles: projectStableContextFiles(preparedContextFiles),
     }),
   );
   const stablePrefix = cacheStablePromptPrefix(stablePrefixCacheKey, () => {
@@ -572,7 +572,6 @@ export function buildAgentSystemPrompt(params: {
       ...buildPromisedWorkPromptSection(),
       providerStablePrefix,
       ...buildRuntimeContextSection(),
-      ...directorySection,
       workspaceOnlyGuidance,
       ...workspaceNotes,
       "",
@@ -852,6 +851,7 @@ export function buildAgentSystemPrompt(params: {
   // Watched sessions change rarely but per-session; keep them below the cache
   // boundary so the shared stable prefix stays byte-identical across sessions.
   lines.push(...buildWatchedSessionsPromptLines(params.preparedWatchedSessions));
+  lines.push(...directorySection, "");
 
   lines.push(
     "## Runtime",
