@@ -283,6 +283,65 @@ describe("abort detection", () => {
     expect(isAbortRequestText("/abort")).toBe(false);
   });
 
+  it("recognizes existing abort words with multilingual terminal punctuation", () => {
+    for (const word of [
+      "stop",
+      "esc",
+      "abort",
+      "exit",
+      "interrupt",
+      "detente",
+      "deten",
+      "detén",
+      "arrete",
+      "arrête",
+      "停止",
+      "停下来",
+      "暂停",
+      "やめて",
+      "止めて",
+      "रुको",
+      "توقف",
+      "стоп",
+      "остановись",
+      "останови",
+      "остановить",
+      "прекрати",
+      "halt",
+      "anhalten",
+      "aufhören",
+      "hoer auf",
+      "stopp",
+      "pare",
+      "stop openclaw",
+      "openclaw stop",
+      "stop action",
+      "stop current action",
+      "stop run",
+      "stop current run",
+      "stop agent",
+      "stop the agent",
+      "stop don't do anything",
+      "stop dont do anything",
+      "stop do not do anything",
+      "stop doing anything",
+      "do not do that",
+      "please stop",
+      "stop please",
+    ]) {
+      expect(isAbortRequestText(word)).toBe(true);
+      expect(isAbortRequestText(word + "！？…,，。;；:：'’”)]}")).toBe(true);
+    }
+  });
+
+  it("checks long punctuation runs without stalling", () => {
+    const punctuation = "!".repeat(40_000);
+    const started = performance.now();
+    expect(isAbortRequestText(punctuation + "a")).toBe(false);
+    expect(isAbortRequestText("stop" + punctuation)).toBe(true);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
   it("treats numeric message IDs at or before cutoff as stale", () => {
     expect(
       shouldSkipMessageByAbortCutoff({
