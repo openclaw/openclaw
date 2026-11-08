@@ -47,7 +47,16 @@ export function isSignalReactionMessage(
     normalizeOptionalString(reaction.targetAuthor) ||
     normalizeOptionalString(reaction.targetAuthorUuid),
   );
-  return Boolean(emoji && typeof timestamp === "number" && timestamp > 0 && hasTarget);
+  return Boolean(
+    emoji &&
+    emoji.length <= 100 &&
+    typeof timestamp === "number" &&
+    Number.isSafeInteger(timestamp) &&
+    timestamp > 0 &&
+    hasTarget &&
+    (reaction.targetAuthor?.length ?? 0) <= 100 &&
+    (reaction.targetAuthorUuid?.length ?? 0) <= 100,
+  );
 }
 
 export function shouldEmitSignalReactionNotification(params: {
@@ -87,16 +96,4 @@ export function shouldEmitSignalReactionNotification(params: {
     return isSignalSenderAllowed(sender, allowlist);
   }
   return true;
-}
-
-export function buildSignalReactionSystemEventText(params: {
-  emojiLabel: string;
-  actorLabel: string;
-  messageId: string;
-  targetLabel?: string;
-  groupLabel?: string;
-}) {
-  const base = `Signal reaction added: ${params.emojiLabel} by ${params.actorLabel} msg ${params.messageId}`;
-  const withTarget = params.targetLabel ? `${base} from ${params.targetLabel}` : base;
-  return params.groupLabel ? `${withTarget} in ${params.groupLabel}` : withTarget;
 }

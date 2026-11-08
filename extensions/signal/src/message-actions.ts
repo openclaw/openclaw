@@ -5,11 +5,13 @@ import {
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type { ReactionReplyReceipt } from "openclaw/plugin-sdk/channel-feedback";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "./accounts.js";
 import { normalizeSignalReactionRecipient } from "./normalize.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
+import { getSignalRuntime } from "./runtime.js";
 import { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
 
 const providerId = "signal";
@@ -122,15 +124,53 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         throw new Error(`Emoji required to ${remove ? "remove" : "add"} reaction.`);
       }
       const mutateReaction = remove ? removeReactionSignal : sendReactionSignal;
-      await mutateReaction(recipient ?? "", timestamp, emoji, {
-        cfg,
-        accountId: account.accountId,
-        groupId,
-        targetAuthor,
-        targetAuthorUuid,
-        ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
+      const send = () =>
+        mutateReaction(recipient ?? "", timestamp, emoji, {
+          cfg,
+          accountId: account.accountId,
+          groupId,
+          targetAuthor,
+          targetAuthorUuid,
+          ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
+        });
+      const key = readStringParam(params, "idempotencyKey");
+      if (!key) {
+        // Existing direct CLI callers without an occurrence key retain their API.
+        await send();
+        return jsonResult({ ok: true, [remove ? "removed" : "added"]: emoji });
+      }
+      const { runReactionReplyWithReceipt } = await import("openclaw/plugin-sdk/channel-feedback");
+      const receipt = await runReactionReplyWithReceipt({
+        store: getSignalRuntime().state.openKeyedStoreV2<
+          ReactionReplyReceipt<Awaited<ReturnType<typeof send>>>
+        >({
+          namespace: "reaction-replies.v1",
+          maxEntries: 5000,
+          overflowPolicy: "reject-new",
+        }),
+        key,
+        identity: JSON.stringify([
+          account.accountId,
+          recipientTarget,
+          timestamp,
+          targetAuthor,
+          targetAuthorUuid,
+          emoji,
+          Boolean(remove),
+        ]),
+        assertAuthority: () => assertDirectAdapterHandoff?.(),
+        send,
+        isConfirmed: (result) => result.ok,
       });
-      return jsonResult({ ok: true, [remove ? "removed" : "added"]: emoji });
+      return jsonResult(
+        receipt.state === "confirmed"
+          ? {
+              ok: true,
+              [remove ? "removed" : "added"]: emoji,
+              reactionReceipt: { state: receipt.state },
+            }
+          : { ok: false, deliveryStatus: receipt.state, reactionReceipt: { state: receipt.state } },
+      );
     }
 
     throw new Error(`Action ${action} not supported for ${providerId}.`);

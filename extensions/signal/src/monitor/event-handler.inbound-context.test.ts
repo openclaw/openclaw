@@ -901,14 +901,40 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      "Signal reaction added: +1 by Alice msg 1700000000000 from +15550001111 in Test Group id:g1",
-      {
-        sessionKey: "agent:main:signal:group:g1",
-        contextKey: "signal:reaction:added:1700000000000:+15550001111:+1:g1",
+    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+    expect(requireCapturedContext()).toMatchObject({
+      SessionKey: "agent:main:signal:group:g1",
+      CommandAuthorized: false,
+      Reaction: {
+        conversationId: "g1",
+        action: "added",
+        target: { messageId: "1700000000000", authorId: "+15550001111" },
       },
-    );
+    });
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+  });
+
+  it("drops reaction context with unsafe timestamps or oversized identity/emoji fields", async () => {
+    const handler = createTestHandler({ reactionMode: "all" });
+    for (const extra of [
+      { targetSentTimestamp: Number.MAX_SAFE_INTEGER + 1 },
+      { targetAuthor: "x".repeat(101) },
+      { emoji: "x".repeat(101) },
+      { groupInfo: { groupId: "x".repeat(257) } },
+    ]) {
+      await handler(
+        createSignalReceiveEvent({
+          reactionMessage: {
+            emoji: "👍",
+            targetAuthor: "+15550002222",
+            targetSentTimestamp: 1700000000000,
+            ...extra,
+          },
+        }),
+      );
+    }
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
   it("checks approval reactions before dropping defaultTo-only senders at the generic access gate", async () => {

@@ -122,6 +122,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/signal/src/monitor.attachment-base64.test.ts",
   "extensions/signal/src/monitor.tool-result.autostart.test.ts",
   "extensions/signal/src/signal-ingress.approval-reaction-replay.test.ts",
+  "extensions/signal/src/signal-ingress.reaction-conversation.test.ts",
   "extensions/signal/src/signal-ingress.test.ts",
   "extensions/sms/src/ingress-spool.test.ts",
   "extensions/synology-chat/src/webhook-ingress.test.ts",

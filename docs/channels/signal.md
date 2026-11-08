@@ -416,6 +416,23 @@ Config:
   - `minimal`/`extensive` enables agent reactions and sets the guidance level.
 - Per-account overrides: `channels.signal.accounts.<id>.actions.reactions`, `channels.signal.accounts.<id>.reactionLevel`.
 
+## Incoming reaction conversations
+
+`reactionNotifications` and the existing sender/group access rules govern
+authorized add/remove reactions. They enter the routed conversation as
+`room_event` observations with the original target identity and permitted saved
+text. The agent may remain silent or use the message tool to respond. A reaction
+is not task acceptance or approval; the native approval controls below retain
+their separate authorization.
+
+The sender and transport timestamp identify each occurrence. Durable ingress
+suppresses retained replays, including after monitor replacement; self and
+sync/history events do not create new conversation turns. Keyed outbound
+reactions retain transport receipts, so a confirmed reply is not resent and an
+uncertain or interrupted send needs reconciliation. The receipt namespace rejects
+new entries at 5,000 rows instead of evicting dedupe evidence. See
+[conversational reactions](/plugins/sdk-channel-plugins#conversational-reactions).
+
 ## Approval reactions
 
 Signal exec and plugin approval prompts use the top-level `approvals.exec` and `approvals.plugin` routing blocks. Signal has no `channels.signal.execApprovals` block.

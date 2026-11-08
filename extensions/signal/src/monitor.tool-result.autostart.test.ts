@@ -538,11 +538,21 @@ describe("monitor tool results", () => {
       await receiveSingleEnvelope(
         reaction(targetAuthor, { targetAuthorUuid: "123e4567-e89b-12d3-a456-426614174000" }),
       );
-      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-        expect.stringContaining("Signal reaction added"),
-        expect.objectContaining({ sessionKey: "agent:main:main" }),
-      );
-      expectNoReplyDeliveryOrRouteUpdate();
+      expect(reply).toHaveBeenCalledOnce();
+      expect(reply.mock.calls[0]?.[0]).toMatchObject({
+        SessionKey: "agent:main:main",
+        CommandAuthorized: false,
+        InboundEventKind: "room_event",
+        Reaction: {
+          channel: "signal",
+          accountId: "default",
+          action: "added",
+          actorId: "+15550001111",
+          target: { messageId: "2" },
+        },
+      });
+      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
       expect(pair).not.toHaveBeenCalled();
     },
   );
