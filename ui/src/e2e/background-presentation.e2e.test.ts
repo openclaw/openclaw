@@ -103,8 +103,8 @@ suite.define(() => {
               return {
                 left: b.left,
                 right: b.right,
-                canvasLeft: c.left,
-                canvasRight: c.right,
+                canvasLeft: c.left + canvas.clientLeft,
+                canvasRight: c.left + canvas.clientLeft + canvas.clientWidth,
                 fade:
                   Number.parseFloat(
                     background.style.getPropertyValue("--session-background-fade-end"),
@@ -180,9 +180,11 @@ suite.define(() => {
           await peek.waitFor();
           await page.locator("[data-background-preview-canvas] img").waitFor({ state: "visible" });
           const preview = await page.locator("[data-background-preview-canvas]").boundingBox();
-          const canvasBounds = await page.locator(".content").boundingBox();
+          const canvasBounds = await page.locator(".content").evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            return { x: bounds.left + element.clientLeft, y: bounds.top + element.clientTop };
+          });
           expect(preview).not.toBeNull();
-          expect(canvasBounds).not.toBeNull();
           expect(Math.abs(preview!.x - canvasBounds!.x)).toBeLessThan(1);
           expect(Math.abs(preview!.y - canvasBounds!.y)).toBeLessThan(1);
           expect(await slider.evaluate((element) => element === document.activeElement)).toBe(true);
