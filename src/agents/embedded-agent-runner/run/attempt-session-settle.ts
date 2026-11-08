@@ -4,6 +4,7 @@ import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtim
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
+import { isAgentRunRestartAbortReason } from "../../run-termination.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { clearToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
@@ -120,6 +121,11 @@ export async function cleanupEmbeddedAttemptSessionPhase(
   let cleanupError: unknown;
   try {
     try {
+      // The prompt's abort race can finish before the provider's terminal write.
+      // Restart already joins this source; keep its transcript writer open too.
+      if (isAgentRunRestartAbortReason(attempt.abortSignal?.reason)) {
+        await input.buildAbortSettlePromise();
+      }
       if (input.trajectoryRecorder && !input.trajectoryEndRecorded) {
         const sessionEndData = {
           status: initialState.promptError

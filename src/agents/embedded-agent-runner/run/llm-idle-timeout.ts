@@ -23,6 +23,7 @@ import type { SessionControllerWatchdogAttempt } from "../../../sessions/session
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
 import { getLastToolActivityMs, onToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
+import { isAgentRunRestartAbortReason } from "../../run-termination.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
@@ -400,7 +401,8 @@ export function streamWithIdleTimeout(
         let rejectIdleTimeout: ((error: Error) => void) | undefined;
         const pendingAborts = new Set<(error: Error) => void>();
         const abortIteration = () => {
-          if (sourceSignal) {
+          // Restart already retains the producer; consume its terminal partial reply.
+          if (sourceSignal && !isAgentRunRestartAbortReason(sourceSignal.reason)) {
             for (const reject of pendingAborts) {
               reject(createAbortableError(sourceSignal));
             }
@@ -531,12 +533,12 @@ export function streamWithIdleTimeout(
                     pendingAborts.add(reject);
                   }
                   armTimer(false);
-                  // Cancellation rejects this wait synchronously, before a provider's
+                  // Ordinary cancellation rejects this wait before a provider's
                   // mirrored-signal rejection can replace the caller's abort reason.
                   pendingNext = streamIterator.next();
                   void pendingNext.then(resolve, reject);
                   if (sourceSignal?.aborted) {
-                    reject(createAbortableError(sourceSignal));
+                    abortIteration();
                   }
                 },
               );
