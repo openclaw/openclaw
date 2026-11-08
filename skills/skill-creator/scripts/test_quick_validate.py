@@ -25,6 +25,15 @@ class TestQuickValidate(TestCase):
         content = "---\r\nname: crlf-skill\r\ndescription: ok\r\n---\r\n# Skill\r\n"
         self.assertTrue(*self.validate_content(content))
 
+    def test_reports_non_utf8_skill_md(self):
+        (self.skill_dir / "SKILL.md").write_bytes(
+            b"---\nname: invalid-utf8\ndescription: ok \xff\n---\n"
+        )
+        self.assertEqual(
+            quick_validate.validate_skill(self.skill_dir),
+            (False, "SKILL.md must be UTF-8 text"),
+        )
+
     def test_rejects_missing_frontmatter_closing_fence(self):
         content = "---\nname: bad-skill\ndescription: missing end\n# no closing fence\n"
         self.assertEqual(self.validate_content(content), (False, "Invalid frontmatter format"))

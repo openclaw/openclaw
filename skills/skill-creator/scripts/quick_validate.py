@@ -90,6 +90,8 @@ def validate_skill(skill_path):
 
     try:
         content = skill_md.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        return False, "SKILL.md must be UTF-8 text"
     except OSError as e:
         return False, f"Could not read SKILL.md: {e}"
 
