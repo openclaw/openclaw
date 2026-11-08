@@ -349,6 +349,10 @@ The repository fingerprint is the first 16 hexadecimal characters of a SHA-256 h
 
 OpenClaw creates branch `openclaw/<name>` at the requested base ref. Without a base ref, repositories with an `origin` remote discover and fetch its default branch, reusing a successful preparation for up to 30 seconds across nearby creates. When `origin` still advertises the commit already tracked by the remote default ref, OpenClaw uses it without fetching. To use a freshly fetched commit immediately, fetch it and select its explicit base ref. If the fetch fails, it uses the last-fetched remote default and logs a warning with the Git failure reason. When `origin` is configured, OpenClaw never substitutes local `HEAD`; if no remote default is available, repair `origin` or choose an explicit base ref. When no `origin` remote is configured, OpenClaw instead uses the primary checkout's current `HEAD` commit, including a detached `HEAD`, without remote discovery, fetching, or local fast-forwarding. Remote options such as `remote.origin.prune` alone do not prevent this local-HEAD path. Concurrent creates share that local base decision, record `HEAD` as the base ref, and log `local HEAD (no origin remote)` with the chosen SHA and commit age. A local default branch is fast-forwarded when it is a strict ancestor of the selected remote commit and the clean primary checkout is on that branch. Dirty, diverged, sparse, locked, separately checked-out, and detached checkouts are preserved. An active Git rebase, am, or bisect in the primary checkout also defers local advancement. Linked-checkout operations defer advancement only when they reserve the default branch, including a rebase that names it in `--update-refs`; unrelated operations do not block it. Creation logs identify the worktree and session owner, chosen base SHA, commit age, and fetch outcome; commits older than seven days produce a warning. An explicitly requested base must resolve to a commit; OpenClaw never substitutes another base for it. Git first registers the branch without materializing files, preserving its normal upstream-tracking rules. OpenClaw then captures that branch's commit and uses it for the size estimate, source template, and checkout. Later changes to the source ref cannot switch the files being written or reuse a smaller commit's allowance.
 
+When refreshing a changed default branch, OpenClaw negotiates from its previous
+remote-tracking commit to avoid advertising unrelated session histories. A new
+default branch without a tracked commit uses ordinary Git negotiation.
+
 When a session starts from a GitHub URL and its explicit base is missing locally,
 OpenClaw refreshes the managed clone from its recorded remote before resolving
 the base again. This refresh accepts complete ref inventories up to 8 MiB, both
@@ -998,6 +1002,33 @@ create a new card to start from a different base. Reusing the same ref, or omitt
 it, does not refresh the checkout when a branch name advances.
 
 For a workspace-bound caller, `path` and the repository root must exactly match the target agent workspace. Workboard then runs directly in that directory and records a directory workspace instead of host-materializing a managed worktree. The target must use a writable, non-shared Docker sandbox for the same workspace, its live container hash must match the requested mounts and policy, and it must not expose elevated execution, host control, host-wide sessions, persisted host/node execution, or unclassified plugin and MCP tools. If the target policy or live container is broader, dispatch leaves the card unclaimed and reports the incompatible state.
+
+## Shared clone history
+
+Managed project preparation, clone reuse, and refresh warn when the base has
+shallow history and continue without automatic repair. The same condition is
+visible in `openclaw doctor`. Run `openclaw doctor --fix` during a maintenance
+window: fetching full history retains `blob:none` and existing objects, but can
+take minutes while holding the project checkout lifecycle lease. Ordinary
+preparation never starts that repair. Operator-registered repositories keep
+their own history policy.
+
+Doctor fetches the registry's recorded repository URL through the same isolated
+transport as managed refresh, ignoring checkout `origin`, URL rewrites, and
+credential helpers. It has no admitted Control UI/Gateway credential context and
+does not borrow tokens from configuration or the environment. Authentication
+failure leaves history shallow and reports that the operator must use an approved
+authenticated unshallow under the checkout lifecycle lease. Git cannot prompt;
+the explicit maintenance fetch has a 30-minute timeout. The shallow boundary is
+removed only after complete history arrives, with Git's shallow lock held for
+the maintenance operation. A shallow upstream leaves the original boundary intact.
+
+Linked worktrees share the base's shallow boundary. Do not run `git fetch` or
+`git pull` with `--depth`, `--shallow-since`, or `--shallow-exclude` in a managed
+base or its linked worktrees. Fetch the required ref without a depth limit;
+Git retains the configured blob filter. Git has no repository setting that
+prevents an explicit depth fetch, so an already-running agent can still make
+the shared clone shallow until an operator repairs it.
 
 ## Related
 
