@@ -13,6 +13,7 @@ import { createGatewayMetadataObserver } from "../app/gateway-observers.ts";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createRouteLoaderOptions } from "../test-helpers/route-loader-options.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -25,6 +26,7 @@ import {
   mountPage as mountModelProvidersPage,
   unmountPage as unmountModelProvidersPage,
 } from "./model-providers/model-providers-page.test-support.tsx";
+import { pages as skillsPages } from "./skills/route.ts";
 import { SkillsPage } from "./skills/skills-page.tsx";
 import type { SkillsRouteData } from "./skills/view-types.ts";
 import { createReport, createSkill } from "./skills/view.test-support.ts";
@@ -130,6 +132,7 @@ function contextWithClient(
     agentsList?: unknown;
     ensureList?: () => Promise<unknown>;
     selectedAgentId?: string | null;
+    scopes?: readonly string[];
   } = {},
 ) {
   const source = createApplicationGateway();
@@ -137,7 +140,7 @@ function contextWithClient(
     ...source.gateway.snapshot,
     client,
     phase: options.connected ? "connected" : "stopped",
-    hello: gatewayHelloForMethods([]),
+    hello: gatewayHelloForMethods([], options.scopes),
     sessionKey: "main",
   });
   const subscribe = () => () => undefined;
@@ -181,7 +184,7 @@ function contextWithClient(
       publish({
         ...gateway.snapshot,
         phase: connected ? "connected" : "stopped",
-        hello: connected ? gatewayHelloForMethods([]) : gateway.snapshot.hello,
+        hello: connected ? gatewayHelloForMethods([], options.scopes) : gateway.snapshot.hello,
       });
     },
     reconnect() {
@@ -222,7 +225,11 @@ function skillReport(
   return createReport([createSkill({ name, skillKey: name, ...overrides })]);
 }
 
-function mountSkillsPage(context: ApplicationContext, gatewaySnapshot = context.gateway.snapshot) {
+function mountSkillsPage(
+  context: ApplicationContext,
+  gatewaySnapshot = context.gateway.snapshot,
+  loadedRouteData?: SkillsRouteData,
+) {
   const provider = createSolidApplicationContextProvider(context);
   const routeData: SkillsRouteData = {
     gateway: context.gateway,
@@ -230,7 +237,9 @@ function mountSkillsPage(context: ApplicationContext, gatewaySnapshot = context.
     agents: context.agents,
     selectedAgentId: context.settingsAgentSelection.state.selectedId,
     selectionIntentRevision: context.settingsAgentSelection.intentRevision,
+    statusRead: null,
     error: null,
+    ...loadedRouteData,
   };
   const mounted = mountSolid(
     () => createComponent(SkillsPage, { routeData, surface: "settings" }),
@@ -370,6 +379,54 @@ it("discards Model Providers work from a replaced source that reuses its client"
   await drainPageUpdates(page);
   expect(providerNames()).toContain("Fresh provider");
   expect(providerNames()).not.toContain("Retired provider");
+});
+
+it.each(["resolve", "reject"])(
+  "adopts the Skills page while its route-prepared inventory read will %s",
+  async (outcome) => {
+    const pending = deferred<ReturnType<typeof skillReport>>();
+    const { client, request } = skillsClient({ "skills.status": () => pending.promise });
+    const context = contextWithClient(client, {
+      connected: true,
+      agentsList: mainAgents,
+      selectedAgentId: "main",
+    });
+    const route = await skillsPages[1].loader!(
+      context,
+      createRouteLoaderOptions({ pathname: "/skills/settings", search: "", hash: "" }),
+    );
+    expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" });
+    const mounted = mountSkillsPage(context, context.gateway.snapshot, route);
+    const input = mounted.find('input[name="skills-filter"]') as HTMLInputElement;
+    input.value = "prepared";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await waitForSolid(() => expect(input.value).toBe("prepared"));
+    expect(mounted.text()).toContain("Loading");
+    if (outcome === "resolve") {
+      pending.resolve(skillReport("Prepared skill"));
+      await waitForSolid(() => expect(mounted.text()).toContain("Prepared skill"));
+    } else {
+      pending.reject(new Error("Inventory unavailable"));
+      await waitForSolid(() => expect(mounted.text()).toContain("Inventory unavailable"));
+    }
+    expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(1);
+  },
+);
+
+it("does not prepare Skills inventory without operator read access", async () => {
+  const { client, request } = skillsClient({ "skills.status": () => skillReport("Private skill") });
+  const context = contextWithClient(client, {
+    connected: true,
+    agentsList: mainAgents,
+    selectedAgentId: "main",
+    scopes: ["operator.sessions.read"],
+  });
+  const route = await skillsPages[1].loader!(
+    context,
+    createRouteLoaderOptions({ pathname: "/skills/settings", search: "", hash: "" }),
+  );
+  mountSkillsPage(context, context.gateway.snapshot, route);
+  await waitForSolid(() => expect(request).not.toHaveBeenCalled());
 });
 
 it("loads skills from cloned route scope and retires verdicts across disconnect and replacement", async () => {

@@ -1,6 +1,10 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
 
+export type SkillStatusReportResult =
+  | { ok: true; report: SkillStatusReport | undefined }
+  | { ok: false; error: unknown };
+
 export async function loadSkillStatusReport(
   client: GatewayBrowserClient,
   agentId: string,

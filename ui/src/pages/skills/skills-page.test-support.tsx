@@ -120,6 +120,7 @@ export function mountSkills(
     agents,
     selectedAgentId: "main",
     selectionIntentRevision: selection.intentRevision,
+    statusRead: null,
     error: null,
     ...initialRoute,
   };

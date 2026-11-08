@@ -1,7 +1,9 @@
 import { definePage, type RouteLoaderOptions } from "@openclaw/uirouter";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
 import type { SkillsRouteData } from "./view-types.ts";
 
 function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discovery" | "settings") {
@@ -36,12 +38,29 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
           error = formatUiError(err);
         }
       }
+      // Metadata-only snapshots preserve the transport while inventory overlaps lazy page code.
+      const current = gateway.snapshot;
+      const statusRead =
+        client &&
+        selectedAgentId &&
+        options.shouldRun() &&
+        current.phase === "connected" &&
+        current.client === client &&
+        current.hello === gatewaySnapshot.hello &&
+        hasOperatorReadAccess(current.hello?.auth ?? null) &&
+        selectionOwner.intentRevision === selectionIntentRevision
+          ? loadSkillStatusReport(client, selectedAgentId).then(
+              (report) => ({ ok: true as const, report }),
+              (error: unknown) => ({ ok: false as const, error }),
+            )
+          : null;
       return {
         gateway,
         gatewaySnapshot,
         agents,
         selectedAgentId,
         selectionIntentRevision,
+        statusRead,
         error,
         clawhubRef,
       };

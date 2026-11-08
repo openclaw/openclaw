@@ -1,2 +1,2 @@
-# Skills pending-inventory scope and truthful first-load rendering regression.
-37
+# Skills pending-inventory scope, truthful loading, and route-prepared read regression.
+102

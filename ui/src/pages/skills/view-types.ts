@@ -9,6 +9,7 @@ import type {
   loadClawHubDetail,
   SkillsState,
 } from "../../lib/skills/index.ts";
+import type { SkillStatusReportResult } from "../../lib/skills/status-report.ts";
 
 export type SkillsRouteData = {
   gateway: ApplicationContext["gateway"];
@@ -16,6 +17,7 @@ export type SkillsRouteData = {
   agents: ApplicationContext["agents"];
   selectedAgentId: string | null;
   selectionIntentRevision: number;
+  statusRead: Promise<SkillStatusReportResult> | null;
   error: string | null;
   clawhubRef?: string;
 };
