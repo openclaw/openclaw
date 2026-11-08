@@ -1,29 +1,31 @@
-import { listen } from "./reactive/listener.ts";
-
 export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (value: T) => void) {
   let moduleLoad: Promise<T> | null = null;
   let active = false;
-  let onlineRetryAttempted = false;
-  let stopOnline: (() => void) | undefined;
+
+  const requireActive = () => {
+    if (!active) {
+      throw new DOMException("Idle import disposed", "AbortError");
+    }
+  };
 
   const run = (): Promise<T> => {
-    moduleLoad ??= importModule()
+    // Recovery is already resident when the app mounts these idle consumers;
+    // keep it out of the earlier connection bundle that also shares this loader.
+    moduleLoad ??= import("../app/stale-chunk-reload.ts")
+      .then(({ retryControlUiImport }) => {
+        return retryControlUiImport(() => {
+          requireActive();
+          return importModule();
+        });
+      })
       .then((value) => {
-        stopOnline?.();
+        requireActive();
         onLoaded?.(value);
         return value;
       })
       .catch((error: unknown) => {
         // A failed chunk fetch must not pin a rejected promise forever.
         moduleLoad = null;
-        if (!active) {
-          throw error;
-        }
-        stopOnline = listen(window, "online", start, { once: true });
-        if (navigator.onLine && !onlineRetryAttempted) {
-          onlineRetryAttempted = true;
-          scheduleIdle();
-        }
         throw error;
       });
     return moduleLoad;
@@ -42,23 +44,17 @@ export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (
     }
   };
 
-  const activate = () => {
-    active = true;
-    onlineRetryAttempted = false;
-  };
-
   return {
     schedule: (): void => {
-      activate();
+      active = true;
       scheduleIdle();
     },
     load: (): Promise<T> => {
-      activate();
+      active = true;
       return run();
     },
     dispose: () => {
       active = false;
-      stopOnline?.();
     },
   };
 }

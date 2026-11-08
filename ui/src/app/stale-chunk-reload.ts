@@ -47,8 +47,7 @@ type RecoveryState = {
 
 const recoveryByStorage = new WeakMap<object, RecoveryState>();
 const unavailableStorage = {};
-let routeReachability: Promise<boolean> | undefined;
-const routeImportErrors = new WeakSet<Error>();
+let importReachability: Promise<boolean> | undefined;
 // A shared probe can release automatic and manual recovery in the same microtask.
 // Admit one navigation before either path can replace the guard or reload.
 let inFlightDocumentProbe: Promise<boolean> | null = null;
@@ -58,7 +57,16 @@ export function isStaleChunkImportError(error: unknown): error is Error {
   return error instanceof Error && MODULE_IMPORT_ERROR_PATTERN.test(error.message);
 }
 
-/** Keep a cold route pending through an outage, then retry its actual import. */
+function waitForImportReachability(): Promise<boolean> {
+  return (importReachability ??= waitForReachableControlUiDocument(
+    { timeoutMs: Infinity },
+    () => true,
+  ).finally(() => {
+    importReachability = undefined;
+  }));
+}
+
+/** Keep an import pending through an outage, then retry before considering a stale build. */
 export async function retryControlUiImport<T>(
   load: () => T | Promise<T>,
   signal?: AbortSignal,
@@ -69,14 +77,7 @@ export async function retryControlUiImport<T>(
     if (!isStaleChunkImportError(error)) {
       throw error;
     }
-    routeImportErrors.add(error);
-    routeReachability ??= waitForReachableControlUiDocument(
-      { timeoutMs: Infinity },
-      () => true,
-    ).finally(() => {
-      routeReachability = undefined;
-    });
-    await routeReachability;
+    await waitForImportReachability();
     signal?.throwIfAborted();
     // Vite marks CSS preloads seen before they finish; retrying that import can
     // mount an unstyled page. Its error surface must use guarded document recovery.
@@ -85,14 +86,7 @@ export async function retryControlUiImport<T>(
     }
     // Chromium can retain the first failed import in its module map. A persistent
     // failure now reaches the route error surface and its guarded reload owner.
-    try {
-      return await trackForegroundActivity(Promise.resolve(load()));
-    } catch (retryError) {
-      if (isStaleChunkImportError(retryError)) {
-        routeImportErrors.add(retryError);
-      }
-      throw retryError;
-    }
+    return await trackForegroundActivity(Promise.resolve(load()));
   }
 }
 
@@ -100,6 +94,18 @@ export function reloadControlUiDocument(url = new URL(window.location.href)): vo
   // The pre-app mount recovery strips this one-shot cache buster before bootstrap.
   url.searchParams.set("openclaw_mount_recovery", String(Date.now()));
   window.location.replace(url.href);
+}
+
+function controlUiDocumentUrl(): string {
+  // Probe the serving document without session query data.
+  const url = new URL(window.location.href);
+  const [routeBasePath, resourceBasePath] = resolveControlUiPaths(url.pathname);
+  // Vite serves its own document while Gateway resources use the development proxy.
+  const documentBasePath = configuredUiDevGateway() ? routeBasePath : resourceBasePath;
+  url.pathname = `${documentBasePath}/index.html`;
+  url.search = "";
+  url.hash = "";
+  return url.href;
 }
 
 function probeControlUiDocument(): Promise<boolean> {
@@ -110,15 +116,7 @@ function probeControlUiDocument(): Promise<boolean> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), DOCUMENT_PROBE_TIMEOUT_MS);
     try {
-      // Session links reject HEAD; probe the serving document without session query data.
-      const url = new URL(window.location.href);
-      const [routeBasePath, resourceBasePath] = resolveControlUiPaths(url.pathname);
-      // Vite serves its own document while Gateway resources use the development proxy.
-      const documentBasePath = configuredUiDevGateway() ? routeBasePath : resourceBasePath;
-      url.pathname = `${documentBasePath}/index.html`;
-      url.search = "";
-      url.hash = "";
-      const response = await fetch(url.href, {
+      const response = await fetch(controlUiDocumentUrl(), {
         method: "HEAD",
         cache: "no-store",
         signal: controller.signal,
@@ -417,32 +415,25 @@ export async function retryStaleChunkReloadWhenReachable(
   return true;
 }
 
-/**
- * Caught lazy-surface failures still need recovery. Give route imports the
- * rejection microtasks to claim their errors before starting global recovery.
- */
+/** Classify caught failures by the serving build, including exhausted background retries. */
 export function installStaleChunkReloadListener(): () => void {
-  const pending = new Set<ReturnType<typeof setTimeout>>();
+  let recovery: Promise<unknown> | undefined;
   const onPreloadError = (event: Event & { payload?: unknown }) => {
-    const payload = event.payload;
-    if (!isStaleChunkImportError(payload)) {
+    if (!isStaleChunkImportError(event.payload) || recovery) {
       return;
     }
-    const timer = setTimeout(() => {
-      pending.delete(timer);
-      if (!routeImportErrors.has(payload)) {
-        void scheduleStaleChunkReload();
-      }
-    }, 0);
-    pending.add(timer);
+    // Share one decision, including errors from loading the recovery chunk itself.
+    recovery = waitForImportReachability()
+      .then(() => import("./stale-import-recovery.runtime.ts"))
+      .then(
+        ({ recoverUnclaimedImport }) => recoverUnclaimedImport(controlUiDocumentUrl()),
+        () => scheduleStaleChunkReload(),
+      )
+      .finally(() => {
+        recovery = undefined;
+      });
   };
-  const stopPreloadError = listen(window, "vite:preloadError", onPreloadError);
-  return () => {
-    stopPreloadError();
-    for (const timer of pending) {
-      clearTimeout(timer);
-    }
-  };
+  return listen(window, "vite:preloadError", onPreloadError);
 }
 
 export function installMissingStylesheetRecovery(): () => void {

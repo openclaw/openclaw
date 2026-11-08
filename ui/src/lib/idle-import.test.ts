@@ -21,49 +21,66 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  idleImport.dispose();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("createIdleImport", () => {
+  it.each([false, true])(
+    "waits out an import outage without retrying a disposed owner (%s)",
+    async (dispose) => {
+      const probe = vi.fn().mockRejectedValue(new TypeError("offline"));
+      vi.stubGlobal("fetch", probe);
+      importModule.mockRejectedValueOnce(
+        new TypeError("Failed to fetch dynamically imported module"),
+      );
+      idleImport.schedule();
+      await vi.advanceTimersByTimeAsync(500);
+      await vi.dynamicImportSettled();
+      expect(importModule).toHaveBeenCalledOnce();
+      expect(onLoaded).not.toHaveBeenCalled();
+      if (dispose) {
+        idleImport.dispose();
+      }
+      probe.mockResolvedValue(new Response(null, { status: 200 }));
+      window.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.dynamicImportSettled();
+      expect(importModule).toHaveBeenCalledTimes(dispose ? 1 : 2);
+      expect(onLoaded).toHaveBeenCalledTimes(dispose ? 0 : 1);
+    },
+  );
+
   it("waits for the idle schedule before importing", async () => {
     idleImport.schedule();
     expect(importModule).not.toHaveBeenCalled();
     expect(requestIdleCallback).toHaveBeenCalledWith(expect.any(Function), { timeout: 3000 });
     await vi.runAllTimersAsync();
+    await vi.dynamicImportSettled();
     expect(importModule).toHaveBeenCalledTimes(1);
     expect(onLoaded).toHaveBeenCalledWith(loadedModule);
   });
 
-  it.each([true, false])("retries a failed import (initially online: %s)", async (online) => {
-    vi.spyOn(navigator, "onLine", "get").mockReturnValue(online);
-    importModule.mockRejectedValueOnce(new Error("transient"));
-    idleImport.schedule();
-    await vi.runAllTimersAsync();
-    if (!online) {
-      expect(importModule).toHaveBeenCalledTimes(1);
-      window.dispatchEvent(new Event("online"));
-      await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledWith(loadedModule));
-    }
-    expect(importModule).toHaveBeenCalledTimes(2);
-    expect(onLoaded).toHaveBeenCalledWith(loadedModule);
-  });
-
-  it("removes its online retry listener when disposed", async () => {
-    importModule.mockRejectedValue(new Error("offline"));
-    const removeEventListener = vi.spyOn(window, "removeEventListener");
-    idleImport = createIdleImport(importModule);
-
-    await expect(idleImport.load()).rejects.toThrow("offline");
-    idleImport.dispose();
-    window.dispatchEvent(new Event("online"));
-    await Promise.resolve();
-
-    expect(removeEventListener.mock.calls).toContainEqual(
-      expect.arrayContaining(["online", expect.any(Function)]),
+  it("resumes its pending import when reactivated during an outage", async () => {
+    const probe = vi.fn().mockRejectedValue(new TypeError("offline"));
+    vi.stubGlobal("fetch", probe);
+    importModule.mockRejectedValueOnce(
+      new TypeError("Failed to fetch dynamically imported module"),
     );
-    expect(importModule).toHaveBeenCalledTimes(1);
+    idleImport.schedule();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.dynamicImportSettled();
+    expect(importModule).toHaveBeenCalledOnce();
+    idleImport.dispose();
+    idleImport.schedule();
+    probe.mockResolvedValue(new Response(null, { status: 200 }));
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.dynamicImportSettled();
+    expect(importModule).toHaveBeenCalledTimes(2);
+    expect(onLoaded).toHaveBeenCalledExactlyOnceWith(loadedModule);
   });
 
   it("shares and retains a successful module promise", async () => {

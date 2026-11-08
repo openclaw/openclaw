@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { closeContext } from "./login-gate-e2e.test-support.ts";
 
@@ -12,6 +13,70 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("retries a background import after an unchanged Gateway returns without replacing the document", async () => {
+    const context = await suite.browser.newContext({ serviceWorkers: "block" });
+    const page = await context.newPage();
+    const refreshModule = controlUiE2eBuiltModuleRequest("ui/src/app/sw-refresh.runtime.ts");
+    let reachable = true;
+    let refreshes = 0;
+    let documents = 0;
+    await page.exposeFunction("recordWorkerRefresh", () => refreshes++);
+    await page.addInitScript(() => {
+      // The imported capability's update call proves it ran; foreground activity
+      // tracking also reads registrations and cannot stand in for that proof.
+      Object.defineProperty(navigator.serviceWorker, "getRegistration", {
+        value: async () => ({
+          installing: null,
+          waiting: null,
+          active: null,
+          update: () =>
+            (window as Window & { recordWorkerRefresh: () => Promise<void> }).recordWorkerRefresh(),
+        }),
+      });
+    });
+    page.on("request", (request) => {
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+        documents++;
+      }
+    });
+    await page.route(refreshModule, (route) =>
+      reachable ? route.fallback() : route.abort("connectionrefused"),
+    );
+    await page.route("**/index.html", (route) =>
+      reachable ? route.fallback() : route.abort("connectionrefused"),
+    );
+    const gateway = await installMockGateway(page);
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const composer = page.locator(".new-session-page__message");
+      await composer.fill("Keep this draft through the restart");
+      const timeOrigin = await page.evaluate(() => performance.timeOrigin);
+      reachable = false;
+      await gateway.setOnline(false);
+      const failedImport = page.waitForEvent("requestfailed", {
+        predicate: (request) => refreshModule.test(request.url()),
+      });
+      const failedProbe = page.waitForEvent("requestfailed", {
+        predicate: (request) => new URL(request.url()).pathname === "/index.html",
+      });
+      await page.evaluate(() => window.dispatchEvent(new Event("online")));
+      await Promise.all([failedImport, failedProbe]);
+      expect(documents).toBe(1);
+      reachable = true;
+      await gateway.setOnline(true);
+      // A retry must execute the deferred capability in the original document;
+      // merely suppressing the reload would strand the failed background work.
+      await expect
+        .poll(() => (documents > 1 ? "reloaded" : refreshes > 0 ? "refreshed" : "waiting"))
+        .toBe("refreshed");
+      expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
+      expect(await composer.inputValue()).toBe("Keep this draft through the restart");
+      expect(documents).toBe(1);
+    } finally {
+      await closeContext(context);
+    }
+  });
+
   it("cache-busts stale-build recovery on a first dashboard navigation", async () => {
     const context = await suite.browser.newContext({
       serviceWorkers: "block",
@@ -63,6 +128,43 @@ suite.define(() => {
       await page.locator("openclaw-app-shell").waitFor();
       expect(await page.locator("openclaw-login-gate").count()).toBe(0);
       await expect.poll(() => page.url()).toBe(target.href);
+    } finally {
+      await closeContext(context);
+    }
+  });
+
+  it("stops retired recovery imports when a private draft blocks document replacement", async () => {
+    const context = await suite.browser.newContext({ serviceWorkers: "block" });
+    const page = await context.newPage();
+    const refreshModule = controlUiE2eBuiltModuleRequest("ui/src/app/sw-refresh.runtime.ts");
+    const recoveryModule = controlUiE2eBuiltModuleRequest(
+      "ui/src/app/stale-import-recovery.runtime.ts",
+    );
+    let retired = false;
+    let recoveries = 0;
+    await page.route(refreshModule, (route) =>
+      retired ? route.fulfill({ status: 404, body: "retired" }) : route.fallback(),
+    );
+    await page.route(recoveryModule, (route) => {
+      recoveries++;
+      return route.fulfill({ status: 404, body: "retired" });
+    });
+    await installMockGateway(page);
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.getByRole("switch", { name: "Incognito", exact: true }).click();
+      const composer = page.locator(".new-session-page__message");
+      await composer.fill("Keep this draft until I choose to reload");
+      const timeOrigin = await page.evaluate(() => performance.timeOrigin);
+      retired = true;
+      await page.evaluate(() => window.dispatchEvent(new Event("online")));
+      await expect.poll(() => recoveries).toBeGreaterThanOrEqual(1);
+      // A recursive preload error would otherwise repeatedly request the retired chunk.
+      await page.waitForTimeout(100);
+      // The original failure and its retry may each finish one recovery attempt.
+      expect(recoveries).toBeLessThanOrEqual(2);
+      expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
+      expect(await composer.inputValue()).toBe("Keep this draft until I choose to reload");
     } finally {
       await closeContext(context);
     }

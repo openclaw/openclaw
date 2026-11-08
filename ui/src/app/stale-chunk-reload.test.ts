@@ -131,7 +131,14 @@ describe("isStaleChunkImportError", () => {
         expect(reload).not.toHaveBeenCalled();
         expect(replace).not.toHaveBeenCalled();
         expect(load).toHaveBeenCalledOnce();
-        probe.mockResolvedValue(new Response(null, { status: 200 }));
+        probe.mockImplementation(
+          async (_input, init) =>
+            new Response(
+              init?.method === "HEAD"
+                ? null
+                : `<script>globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO=${JSON.stringify(CONTROL_UI_BUILD_INFO)};</script>`,
+            ),
+        );
         window.dispatchEvent(new Event("online"));
         await vi.advanceTimersByTimeAsync(1);
         await expect(completion).resolves.toBe(persistent ? true : "loaded");
@@ -811,21 +818,53 @@ describe("retryStaleChunkReloadWhenReachable", () => {
 });
 
 describe("installStaleChunkReloadListener", () => {
-  it("recovers caught lazy-surface failures when the document is reachable, not evaluation errors", async () => {
-    const replace = stubDocumentNavigation();
-    const fetchMock = stubDocumentFetch(new Response(null, { status: 200 }));
-    const uninstall = installStaleChunkReloadListener();
-    try {
-      dispatchPreloadError(new Error("boom in module evaluation"));
-      expect(fetchMock).not.toHaveBeenCalled();
-      dispatchPreloadError(new Error("Importing a module script failed."));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(replace).toHaveBeenCalledOnce();
-      expect(fetchMock).toHaveBeenCalledOnce();
-    } finally {
-      uninstall();
-    }
-  });
+  it.each([
+    { changed: false, retry: false },
+    { changed: true, retry: false },
+    { changed: false, retry: true },
+    { changed: true, retry: true },
+  ])(
+    "recovers background imports by build identity (changed: $changed, retried: $retry)",
+    async ({ changed, retry }) => {
+      const replace = stubDocumentNavigation();
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockRejectedValueOnce(new TypeError("offline"))
+        .mockImplementation(
+          async (_input, init) =>
+            new Response(
+              init?.method === "HEAD"
+                ? null
+                : `<script>globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO=${JSON.stringify({ buildId: changed ? "updated-build" : CONTROL_UI_BUILD_INFO.buildId })};</script>`,
+            ),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const uninstall = installStaleChunkReloadListener();
+      try {
+        dispatchPreloadError(new Error("boom in module evaluation"));
+        expect(fetchMock).not.toHaveBeenCalled();
+        const error = new Error("Importing a module script failed.");
+        const load = vi.fn(async () => {
+          dispatchPreloadError(error);
+          throw error;
+        });
+        const completion = retry
+          ? retryControlUiImport(load).catch(() => undefined)
+          : load().catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.dynamicImportSettled();
+        expect(replace).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1_000);
+        await completion;
+        await vi.advanceTimersByTimeAsync(1);
+        await vi.dynamicImportSettled();
+        expect(replace).toHaveBeenCalledTimes(changed ? 1 : 0);
+        expect(load).toHaveBeenCalledTimes(retry ? 2 : 1);
+      } finally {
+        uninstall();
+      }
+    },
+  );
 });
 
 describe("installMissingStylesheetRecovery", () => {
