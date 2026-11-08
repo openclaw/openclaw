@@ -11,7 +11,7 @@ import {
   type MailboxMessage,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { applyMailboxMessage, startMailboxReader } from "./mailbox-reader.js";
-import { linkedClaw } from "./openclaw-id.test-support.js";
+import { linkedClaw, redemptionMail } from "./openclaw-id.test-support.js";
 
 const rootMail: MailboxMessage = {
   message_id: "m1",
@@ -76,6 +76,75 @@ describe("mailbox reader callbacks", () => {
       detail: "expected seq 3",
     });
     expect(client.ackMail).toHaveBeenCalledWith("c1", "2");
+  });
+
+  it("settles unsupported node mail before acknowledging and saving its cursor", async () => {
+    const node = await generateEd25519Signer();
+    const message: MailboxMessage = {
+      ...rootMail,
+      from: {
+        ...rootMail.from,
+        account_id: null,
+        email: null,
+        display_name: null,
+        device_fp: await fingerprint(formatEd25519PublicKey(node.publicKey)),
+      },
+      payload: {
+        kind: "node_redemption",
+        redemption: await signStatement(
+          "NodeRedemption",
+          {
+            claw_id: "a".repeat(32),
+            invite_id: "b".repeat(32),
+            peer_key: formatIrohEndpointKey(node.publicKey),
+            requested_at: 0,
+            proof: "0".repeat(64),
+            description: { display_name: "node", platform: "linux", commands: [], caps: [] },
+          },
+          node,
+        ),
+      },
+    };
+    const order: string[] = [];
+    const { promise, resolve } = Promise.withResolvers<void>();
+    const submit = vi.fn();
+    const redeem = vi.fn();
+    const onRefused = vi.fn(async () => {
+      order.push("refused");
+    });
+    reader = startMailboxReader({
+      clawId: "c1",
+      cursor: null,
+      client: {
+        receiveMail: vi
+          .fn()
+          .mockResolvedValueOnce({ messages: [message], cursor: "2" })
+          .mockImplementation(() => new Promise(() => {})),
+        ackMail: async () => {
+          order.push("ack");
+        },
+      } as never,
+      sink: {
+        submit,
+        redeem,
+        saveCursor: async () => {
+          order.push("cursor");
+          resolve();
+        },
+      },
+      onEffects: vi.fn(),
+      onRefused,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+    await promise;
+    expect(onRefused).toHaveBeenCalledExactlyOnceWith(message, {
+      ok: false,
+      code: "unsupported",
+      detail: "node enrollment is not enabled in this Gateway",
+    });
+    expect(order).toEqual(["refused", "ack", "cursor"]);
+    expect(submit).not.toHaveBeenCalled();
+    expect(redeem).not.toHaveBeenCalled();
   });
 
   it("applies nothing from a batch that arrives after stop", async () => {
@@ -148,6 +217,46 @@ describe("mailbox reader callbacks", () => {
       stop.signal,
     );
     expect(submit).toHaveBeenCalledTimes(1);
+  });
+});
+
+it("settles accountless member redemptions as refused without blocking the next valid message", async () => {
+  const { message } = await redemptionMail({
+    clawId: "a".repeat(32),
+    inviteId: "b".repeat(32),
+    proofKey: new Uint8Array(32),
+    accountId: "acct-bob",
+    email: "bob@example.test",
+  });
+  const accountless: MailboxMessage = {
+    ...message,
+    from: {
+      ...message.from,
+      account_id: null,
+      email: null,
+      display_name: null,
+      device_fp: "fp:node",
+    },
+  };
+  const refused = {
+    ok: false,
+    code: "audience_mismatch",
+    detail: "redeeming account is not the invite audience",
+  };
+  const accepted = { ok: true as const, status: "pending" as const, events: [] };
+  const redeem = vi.fn(async () => accepted);
+  const submit = vi.fn();
+  const settle = vi.fn(async () => {});
+  expect(await applyMailboxMessage(accountless, { redeem, submit }, settle)).toEqual([refused]);
+  expect(settle).toHaveBeenCalledWith(refused);
+  expect(redeem).not.toHaveBeenCalled();
+  expect(submit).not.toHaveBeenCalled();
+  expect(await applyMailboxMessage(message, { redeem, submit }, settle)).toEqual([accepted]);
+  expect(redeem).toHaveBeenCalledExactlyOnceWith(message.payload.redemption, {
+    account_id: "acct-bob",
+    email: "bob@example.test",
+    display_name: "Bob",
+    location_hint: message.location_hint,
   });
 });
 
