@@ -258,6 +258,7 @@ export abstract class MemoryManagerSyncBase {
   ): Promise<T>;
   protected abstract getIndexConcurrency(): number;
   protected abstract pruneEmbeddingCacheIfNeeded(recount?: boolean): Promise<void>;
+  protected abstract retirePublishedEmbeddingCacheRows(writtenSince: number): Promise<void>;
   protected abstract resetProviderInitializationForRetry(): void;
   protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
   protected abstract indexFile(entry: MemoryIndexEntry, source: MemorySource): Promise<void>;

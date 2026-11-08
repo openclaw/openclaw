@@ -1,9 +1,11 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   hasNonTextEmbeddingParts,
   type EmbeddingInput,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
@@ -20,6 +22,7 @@ import type { MemoryIndexWorkItem, MemorySemanticProviderGeneration } from "./ma
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
+const log = createSubsystemLogger("memory");
 
 export type MemoryEmbeddingCacheCandidate = {
   chunk: IndexedMemoryChunk;
@@ -64,6 +67,37 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       ))
     ) {
       await yieldToEventLoop();
+    }
+  }
+
+  /**
+   * After a successful publication, drop cache rows written since `writtenSince` whose
+   * exact vector the published memory index now serves. Optional cleanup: a failure is
+   * logged and never reaches publication or retry state.
+   */
+  protected async retirePublishedEmbeddingCacheRows(writtenSince: number): Promise<void> {
+    const identity = (this.syncProviderGeneration?.identities ??
+      this.resolveProviderIndexIdentities())[0];
+    if (!this.cache.enabled || !identity) {
+      return;
+    }
+    const database = this.database;
+    const assertCurrent = () => {
+      if (this.closed || !database.isOpen || this.database !== database) {
+        throw new Error("Memory database owner closed or changed before write admission");
+      }
+    };
+    try {
+      let after: Awaited<ReturnType<typeof database.retireEmbeddingCache>> = null;
+      do {
+        after = await database.retireEmbeddingCache(
+          { identity, writtenSince, ...(after ? { after } : {}) },
+          assertCurrent,
+        );
+        await yieldToEventLoop();
+      } while (after && !this.closing);
+    } catch (err) {
+      log.warn(`memory embedding cache duplicate cleanup skipped: ${formatErrorMessage(err)}`);
     }
   }
 

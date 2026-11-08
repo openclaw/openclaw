@@ -123,9 +123,14 @@ describe("memory rebuild cache reuse", () => {
       }
       await manager.sync({ reason: "cli", force: true });
       const writer = memoryIndexFixtureWriter(manager);
-      writer.exec(`DELETE FROM memory_embedding_cache WHERE hash IN (
-        SELECT hash FROM memory_index_chunks WHERE path < 'memory/04.md'
-      ); UPDATE memory_embedding_cache SET updated_at = 1;`);
+      // The rebuild retired its own published duplicates; restore rows an older build kept.
+      writer.exec(`INSERT INTO memory_embedding_cache
+          (provider, model, provider_key, hash, embedding, dims, updated_at)
+        SELECT json_extract(meta.value, '$.provider'), chunk.model,
+          json_extract(meta.value, '$.providerKey'), chunk.hash, chunk.embedding,
+          length(chunk.embedding) / 8, 1
+        FROM memory_index_chunks AS chunk, memory_index_meta AS meta
+        WHERE meta.key = 'memory_index_meta_v1' AND chunk.path >= 'memory/04.md'`);
       const insert = writer.prepare(`INSERT INTO memory_embedding_cache
         (provider, model, provider_key, hash, embedding, dims, updated_at)
         SELECT provider, model, provider_key, ?, ?, 4, ? FROM memory_embedding_cache LIMIT 1`);
@@ -227,6 +232,10 @@ describe("memory rebuild cache reuse", () => {
     // Full rebuilds may use twice the cap; every commit must stay within its
     // budget, and completion restores the normal cap.
     harness.dirty = true;
+    if (mode === "full") {
+      // Keep this rebuild's rows so the cap, not duplicate retirement, settles them.
+      vi.spyOn(MemoryIndexDatabase.prototype, "retireEmbeddingCache").mockResolvedValue(null);
+    }
     await memoryManager.sync({ reason: "cli", force: mode === "full" });
 
     expect(interceptedPaths.length).toBeGreaterThan(0);

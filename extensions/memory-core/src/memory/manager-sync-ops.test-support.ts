@@ -24,6 +24,7 @@ export abstract class MemorySyncTestHarness extends MemoryManagerSyncOps {
   protected resolveProviderIndexIdentities = () => [];
   protected withTimeout = async <T>(promise: Promise<T>): Promise<T> => await promise;
   protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
+  protected async retirePublishedEmbeddingCacheRows(): Promise<void> {}
   protected resetProviderInitializationForRetry(): void {}
   protected assertRequiredProviderAvailable(): void {}
 
