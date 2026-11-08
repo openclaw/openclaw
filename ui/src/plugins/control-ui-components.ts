@@ -260,6 +260,28 @@ export function createControlUiComponents(options: {
         },
       }),
     ),
+    mountInlineAlert: component(
+      "openclaw-plugin-inline-alert",
+      () => import("./control-ui-inline-alert.tsx"),
+      (next, current) => ({
+        "prop:alert": {
+          ...next,
+          action: next.action && {
+            ...next.action,
+            onSelect: () => {
+              current();
+              next.action?.onSelect();
+            },
+          },
+          onDismiss:
+            next.onDismiss &&
+            (() => {
+              current();
+              next.onDismiss?.();
+            }),
+        },
+      }),
+    ),
     mountSessionSummary: component(
       "openclaw-plugin-session-summary",
       () => import("./control-ui-session-summary.tsx"),

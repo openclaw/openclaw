@@ -346,6 +346,13 @@ options, a selected `value`, an `accessibleLabel`, and an `onSelect` callback.
 With `searchable: true`, lists longer than eight options show a search field.
 The picker matches option labels, values, and descriptions.
 
+Use `mountInlineAlert` for errors, warnings, and notes inside a plugin page so they
+match the host's inline alerts. Pass a `tone` (`danger`, `warning`, `info`, or
+`success`), a plain-language `message`, and optionally a `title`, an `action`
+such as Retry, and `onDismiss`. Put raw failure text in `detail`: the host
+redacts it and keeps it collapsed under **Show details** with a Copy button, so
+the message can stay short, for example “Couldn’t load the pool. Try again.”
+
 ### Dock a conversation
 
 Check `host.dock` before offering a dock action. From a mounted view, use
