@@ -2591,6 +2591,8 @@ jobs:
         id: ui_bun
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && contains(fromJSON('["bun-all","dual-all"]'), needs.preflight.outputs.ui_test_runtime_policy) }}
         uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
 
       - name: Lint Control UI window.open usage
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && matrix.shard == 1 }}
@@ -2702,6 +2704,9 @@ jobs:
           requirements="$(node --input-type=module <<'NODE'
           import { existsSync } from "node:fs";
           import { resolve } from "node:path";
+          const { loadPatternListFromEnv, matchesVitestGlob } = await import("./test/vitest/vitest.pattern-file.ts");
+          const selectedPatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE");
+          const isSelected = (file) => selectedPatterns === null || selectedPatterns.some((pattern) => matchesVitestGlob(file, resolve(pattern)));
           const webkitSuites = new Set([
             resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts"),
             resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
@@ -2710,11 +2715,12 @@ jobs:
             resolve("ui/src/e2e/logs-scroll.e2e.test.ts"),
             resolve("ui/src/e2e/chat-history-reading-stability.e2e.test.ts"),
             resolve("ui/src/e2e/chat-loading-animation-retention.e2e.test.ts"),
-          ].filter(existsSync));
+          ].filter((file) => existsSync(file) && isSelected(file)));
           const runtimeSuite = resolve("ui/src/e2e/stale-build-recovery.production.e2e.test.ts");
+          const hasRuntimeSuite = existsSync(runtimeSuite) && isSelected(runtimeSuite);
           let requiresWebkit = false;
           let requiresRuntime = false;
-          if (webkitSuites.size > 0 || existsSync(runtimeSuite)) {
+          if (webkitSuites.size > 0 || hasRuntimeSuite) {
             const { createVitest } = await import("vitest/node");
             const vitest = await createVitest({
               config: "test/vitest/vitest.ui-e2e.config.ts",
@@ -3278,6 +3284,13 @@ jobs:
           dependency-cache: *trusted_dependency_cache
           restore-test-caches: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (matrix.task == 'bundled-protocol' || matrix.task == 'contracts-plugins-ci-routing' || matrix.task == 'ci-routing' || matrix.task == 'bun-launcher') && 'true' || 'false' }}
 
+      - name: Setup pinned Bun parity runtime
+        id: bun_setup
+        if: startsWith(matrix.task, 'release-lint-')
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
@@ -3774,6 +3787,8 @@ jobs:
       - name: Setup pinned Bun test runtime
         if: matrix.requires_bun == true
         uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
@@ -4083,6 +4098,13 @@ jobs:
           install-bun: "false"
           dependency-cache: *trusted_dependency_cache
 
+      - name: Setup pinned Bun parity runtime
+        id: bun_setup
+        if: matrix.task == 'lint'
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
         if: matrix.task == 'lint' && (needs.preflight.outputs.runner_profile != 'hybrid' || needs.preflight.outputs.frozen_target == 'true')
@@ -4107,7 +4129,7 @@ jobs:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
 
       - name: Run changed lint
-        if: ${{ !cancelled() && steps.check_setup.outcome == 'success' && matrix.task == 'lint' && (needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json) }}
+        if: ${{ !cancelled() && steps.check_setup.outcome == 'success' && steps.bun_setup.outcome == 'success' && matrix.task == 'lint' && (needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json) }}
         env:
           NARROW_CHECK_PATHS_JSON: ${{ needs.preflight.outputs.narrow_check_paths_json }}
           CI_LINT_SELECTION_JSON: ${{ (needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json) }}
@@ -4128,7 +4150,7 @@ jobs:
           CHANGED_LINT
 
       - name: Run check shard
-        if: ${{ !cancelled() && (steps.check_setup.outcome == 'success' || steps.npm-lock-scope.outputs.skip == 'true') && (matrix.task != 'lint' || !(needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json)) }}
+        if: ${{ !cancelled() && (steps.check_setup.outcome == 'success' || steps.npm-lock-scope.outputs.skip == 'true') && (matrix.task != 'lint' || steps.bun_setup.outcome == 'success') && (matrix.task != 'lint' || !(needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json)) }}
         env:
           SKIP_NPM_LOCK: ${{ steps.npm-lock-scope.outputs.skip }}
           FROZEN_TARGET: *frozen_target
@@ -4463,6 +4485,12 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-node-env
         with: *semantic_node_inputs
 
+      - name: Setup pinned Bun parity runtime
+        id: bun_setup
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+
       - name: Cache extension package boundary artifacts for hosted core lint
         id: sdk-boundary-cache
         if: (needs.preflight.outputs.shared_sdk_declarations != 'true' || matrix.requires_sdk_declarations != true) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate
@@ -4528,7 +4556,7 @@ jobs:
           finish_static_checks
 
       - name: Run shared central lint
-        if: ${{ !cancelled() && matrix.shared_central_lint_selection_json }}
+        if: ${{ !cancelled() && steps.bun_setup.outcome == 'success' && matrix.shared_central_lint_selection_json }}
         env:
           NARROW_CHECK_PATHS_JSON: ${{ needs.preflight.outputs.narrow_check_paths_json }}
           CI_LINT_SELECTION_JSON: ${{ matrix.shared_central_lint_selection_json }}
@@ -4579,6 +4607,12 @@ jobs:
           semantic-checks: "true"
           cache-mode: *cache_mode
           install-bun: "false"
+
+      - name: Setup pinned Bun parity runtime
+        id: bun_setup
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
 
       - name: Restore extension package boundary artifacts
         id: sdk-boundary-cache
@@ -4701,6 +4735,13 @@ jobs:
           base-sha: ${{ needs.preflight.outputs.diff_head_revision }}
           fetch-ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && format('refs/pull/{0}/merge', inputs.pull_request_number) || github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
       - *semantic_node_setup_step
+
+      - name: Setup pinned Bun parity runtime
+        id: bun_setup
+        if: matrix.group == 'boundaries'
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: *cache_mode
 
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
@@ -4846,6 +4887,12 @@ jobs:
         with:
           image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
           shard: ${{ matrix.shard }}
+      - name: Run PostgreSQL 16 Gateway cron smoke
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && matrix.shard == '1/3' && steps.node_setup.outcome == 'success' }}
+        uses: ./.ci-harness/.github/actions/postgres-conformance
+        with:
+          image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
+          target: src/gateway/server-database-engine.postgres.test.ts
 
   check-docs:
     permissions:
@@ -4859,8 +4906,15 @@ jobs:
       - *linux_node_checkout_step
       - *linux_node_setup_step
 
+      - name: Setup pinned Bun parity runtime
+        id: bun_setup
+        if: needs.preflight.outputs.run_format_check == 'true'
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: *cache_mode
+
       - name: Check formatting
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_format_check == 'true' }}
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && steps.bun_setup.outcome == 'success' && needs.preflight.outputs.run_format_check == 'true' }}
         run: pnpm format:check
 
       - name: Check AGENTS.md bootstrap size
@@ -6024,6 +6078,7 @@ jobs:
             -only-testing:OpenClawTests/TalkRealtimeConsultCancellationTests \
             -only-testing:OpenClawTests/TalkRealtimeTranscriptWriteQueueTests \
             -only-testing:OpenClawTests/TalkModeManagerTests \
+            -only-testing:OpenClawTests/TalkTranscriptCompletionTests \
             -only-testing:OpenClawTests/ManagedDocumentEnvelopeTests \
             -only-testing:OpenClawTests/IOSMediaArtifactLoaderTests \
             -only-testing:OpenClawTests/OpenClawTypographyTests \
@@ -6149,6 +6204,7 @@ jobs:
             -only-testing:OpenClawWatchTests/WatchSpeechPlaybackTests
             -only-testing:OpenClawWatchTests/WatchRealtimeMediaTests
             -only-testing:OpenClawWatchTests/WatchGatewayConfigurationTests
+            -only-testing:OpenClawWatchTests/WatchTypographyTests
           )
           run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchBuild.log xcodebuild \
             "${xcodebuild_args[@]}" "${test_args[@]}" build-for-testing

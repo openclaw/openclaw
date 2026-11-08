@@ -106,6 +106,8 @@ const SPAWN_OPERATIONS = {
   "workspace.manifest.tree-input": "workspace.manifest",
   "workspace.manifest.remote-capture": "workspace.manifest",
   "workspace.reconcile.preflight": "workspace.manifest",
+  "workspace.reconcile.patch": "workspace.manifest",
+  "workspace.reconcile.diff": "workspace.manifest",
 } satisfies Record<keyof GitWorkerOperations, GitProcessOperation>;
 
 function runtime(): GitWorkerRuntime {

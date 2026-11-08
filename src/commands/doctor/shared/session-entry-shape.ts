@@ -1,5 +1,6 @@
 import {
   asNonNegativeFiniteNumber,
+  parseDateStringTimestampMs,
   parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
 } from "@openclaw/normalization-core/number-coercion";
@@ -26,11 +27,29 @@ import {
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { hasAgentRunContextExecutionOwner } from "../../../infra/agent-run-registry.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
+import {
+  hasValidIsoCalendarComponents,
+  isOffsetlessIsoDateTime,
+} from "../../../shared/iso-time.js";
 
 export type SessionEntryStateRepair = {
   entry: Record<string, unknown>;
   numericChanges?: SessionEntryNumericSnapshot;
+  repairedIsoEndedAt?: boolean;
 };
+
+function parseLegacyIsoEndedAt(value: string): number | undefined {
+  const fraction = /\.(\d+)(?:[Zz]|[+-]\d{2}:?\d{2})$/.exec(value)?.[1];
+  // Require an explicit instant and preserve precision when converting to epoch milliseconds.
+  if (
+    !hasValidIsoCalendarComponents(value) ||
+    isOffsetlessIsoDateTime(value) ||
+    /[1-9]/.test(fraction?.slice(3) ?? "")
+  ) {
+    return undefined;
+  }
+  return parseDateStringTimestampMs(value);
+}
 
 /** A dead owner is not proof that its custody belongs to this recovery cycle. */
 export function inspectLegacyRestartTombstone(
@@ -243,6 +262,7 @@ export function migrateLegacySessionEntryState(
 ): SessionEntryStateRepair {
   const next = { ...value };
   const numericChanges: SessionEntryNumericSnapshot = {};
+  let repairedIsoEndedAt = false;
   if (hasLegacySessionProviderState(value)) {
     for (const [legacy, current] of LEGACY_SESSION_PROVIDER_FIELDS) {
       if (typeof value[current] !== "string" && typeof value[legacy] === "string") {
@@ -304,10 +324,14 @@ export function migrateLegacySessionEntryState(
     if (typeof candidate !== "string") {
       continue;
     }
-    const number =
+    let number =
       field === "spawnDepth"
         ? parseStrictNonNegativeInteger(candidate)
         : parseStrictFiniteNumber(candidate);
+    if (number === undefined && field === "endedAt") {
+      number = parseLegacyIsoEndedAt(candidate);
+      repairedIsoEndedAt = number !== undefined;
+    }
     if (number !== undefined) {
       next[field] = number;
       numericChanges[field] = number;
@@ -316,6 +340,7 @@ export function migrateLegacySessionEntryState(
   return {
     entry: migrateLegacySessionRunOutcome(next, updatedAt, options),
     numericChanges,
+    repairedIsoEndedAt,
   };
 }
 

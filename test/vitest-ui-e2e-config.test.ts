@@ -34,12 +34,13 @@ const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
 const serialGatewayFiles =
-  `chat-provider-failure-cause chat-steer-deferred-custody chat-steer-send-now deepseek-search desktop-resize plugin-inline-view session-management.new-nested`
+  `chat-provider-failure-cause chat-steer-deferred-custody chat-steer-send-now deepseek-search desktop-resize gateway-fresh-visit plugin-inline-view session-management.new-nested`
     .split(/\s+/u)
     .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
     .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
 const sharedSerialGatewayFiles = [
   "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
+  "ui/src/e2e/guest-typing.real-gateway.e2e.test.ts",
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",
 ];
 const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecycle.real-gateway
@@ -59,7 +60,6 @@ const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecyc
   control-ui-auth-transports cron-duration-save.real-gateway cron-human-owner.real-gateway
   device-alias-rename.real-gateway device-platform-family.real-gateway logs-lifecycle model-api-keys.real-gateway
   model-catalog-partial-refresh.real-gateway model-connection-check.real-gateway
-  model-providers-fresh-install.real-gateway
   model-add-provider-to-chat.real-gateway
   model-key-save-check.real-gateway
   model-provider-remove-in-use.real-gateway
@@ -502,7 +502,7 @@ describe("Control UI E2E resource ownership", () => {
         ].toSorted((left, right) => left.file.localeCompare(right.file)),
       );
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(61);
+      expect(parallel).toHaveLength(60);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {

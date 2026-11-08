@@ -871,8 +871,17 @@ export async function runWorkspaceManifestProgram(
     }
     const ignoredPaths = await initializeBuildCacheInputs();
     assertManifestCurrent();
-    if (eligibleOnly) {
+    // Git owns input eligibility, including authenticated staged inputs. Results
+    // additionally retain authored artifacts without enrolling unrelated ignored files.
+    if (eligibleOnly || requestedBaseCommit) {
       for (const relative of await eligiblePaths(ignoredPaths)) addWithParents(relative);
+      if (!eligibleOnly) {
+        const absolute = path.join(root, ".artifacts");
+        const stats = fs.lstatSync(absolute, { throwIfNoEntry: false });
+        if (stats && (!stats.isDirectory() || walk(".artifacts"))) {
+          recordNode(".artifacts", absolute, stats);
+        }
+      }
     } else {
       walk("");
     }
