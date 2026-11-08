@@ -1,2 +1,2 @@
-# Regression: sibling live tools reuse fixed transcript placement work.
-38
+# Regression: sibling tools share placement with scoped run/input cache identities.
+81
