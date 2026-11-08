@@ -21,6 +21,10 @@
   --list-row-min-height: 48px;
   --list-row-padding: var(--space-3) var(--space-4);
   --list-row-icon-size: 15px;
+  --chrome-icon-size: 14px;
+  /* Lucide draws on a 24 grid, so these strokes render at 1px at their icon size. */
+  --list-row-icon-stroke: 1.6px;
+  --chrome-icon-stroke: calc(12px / 7);
   --list-row-title-weight: 500;
   --surface-hover-amount: 6%;
   --surface-selected-amount: 8%;
@@ -39,7 +43,10 @@
   --card-highlight: rgba(255, 255, 255, 0.04);
   --popover: #191c24;
   --popover-foreground: #f0f0f2;
+  --chat-send-bg: var(--primary);
   --chat-send-foreground: var(--primary-foreground);
+  --chat-send-hover-bg: color-mix(in srgb, var(--primary) 86%, var(--text-strong));
+  --chat-send-active-bg: var(--primary-active);
   --chat-composer-surface: var(--popover);
   /* Composer controls take their ink from the composer's own surface rather
      than the canvas. Built-in dark themes lift that surface well above the
@@ -85,8 +92,9 @@
   --sidebar-rail-control-color: var(--icon-interactive);
   --sidebar-toolbar-action-opacity: 1;
   --sidebar-rail-action-bg: var(--accent);
+  --sidebar-rail-action-foreground: var(--accent-foreground);
   --sidebar-rail-action-hover-bg: var(--accent-hover);
-  --sidebar-rail-action-active-bg: color-mix(in srgb, var(--accent) 90%, var(--text));
+  --sidebar-rail-action-active-bg: var(--accent-active);
 
   /* GitHub references share an opaque neutral surface; only their ink carries status. */
   --github-item-bg: color-mix(in srgb, var(--text) 6%, var(--bg));
@@ -134,6 +142,7 @@
   --accent-muted: #ff5c5c;
   --accent-subtle: rgba(255, 92, 92, 0.1);
   --accent-foreground: #0e1015;
+  --accent-active: var(--accent);
   --accent-glow: rgba(255, 92, 92, 0.2);
   --inbox-attention: #e5243b;
   --inbox-attention-foreground: #ffffff;
@@ -164,6 +173,7 @@
   /* Imported palettes supply a fill/ink pair, not a hover pair. Keep their
      contrast intact; built-in palettes override with audited hover colors. */
   --primary-hover: var(--primary);
+  --primary-active: var(--primary);
   --primary-foreground: #ffffff;
 
   --secondary: #161920;
@@ -305,6 +315,7 @@
   --control-ui-input-text-size: max(16px, calc(14px * var(--control-ui-text-scale)));
   --field-padding-inline: 10px;
   --field-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  --composer-radius: calc(20px * var(--openclaw-corner-radius-scale));
   --field-font-size: var(--control-ui-text-sm);
   --field-bg: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
   --field-border: color-mix(in srgb, var(--border) 70%, transparent);
@@ -369,16 +380,17 @@
   --spinner-trace-stroke: 1.75px;
   --spinner-trace-dash: 26 74;
 
-  /* One profile for every scroll surface: 12px hit target, 6px visible thumb
-     (transparent border + content-box clip). Derived from --muted so every
-     theme family and both modes follow with no override. scrollbar-color is a
-     real property, not a token, but it lives here (not a second :root block)
-     to satisfy no-duplicate-selectors; it also inherits into shadow roots. */
+  /* One profile for every scroll surface, thumb only: faint at rest, a step
+     stronger while the pointer is over the scroller, clearly visible on the
+     thumb itself or while dragging. 12px hit target, 6px visible thumb
+     (transparent border + content-box clip); compact surfaces (menus,
+     popovers, phone widths) swap in the 8px/4px pair. Derived from --muted so
+     every theme family and both modes follow with no override. */
   --scrollbar-size: 12px;
-  --scrollbar-thumb-inset: 3px;
-  --scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
+  --scrollbar-size-compact: 8px;
+  --scrollbar-thumb: color-mix(in srgb, var(--muted) 10%, transparent);
+  --scrollbar-thumb-near: color-mix(in srgb, var(--muted) 16%, transparent);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--muted) 64%, transparent);
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 
   /* Corner-scale signal: whatever the @supports block below sets this to,
      tests and other introspection can read it to learn the active multiplier
@@ -387,9 +399,9 @@
      inherit the widened surface treatment (excluded selectors, the tokens
      exported to embedded MCP apps in mcp-app-theme.ts). */
   --openclaw-corner-radius-scale: 1;
-  /* Theme-facing composer corner family; themes may pick e.g. `scoop scoop round round`.
-     Engines without corner-shape keep the circular radius. */
-  --chat-composer-corner-shape: superellipse(1.5);
+  /* Circular defaults avoid the reported WebKit 27.3 superellipse paint failure.
+     Themes can still override this shared corner family for the input and its notices. */
+  --chat-composer-corner-shape: round;
 
   /* Menu steps sit on the --radius-* chain so themes keep their corner character;
      near-square themes pin them. Shared knobs keep transient menus from drifting. */
@@ -464,7 +476,7 @@
   --safe-area-right: env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left: env(safe-area-inset-left, 0px);
-  --shell-viewport-base: 100vh;
+  --shell-viewport-base: 100dvh;
   --shell-safe-area-bottom: var(--safe-area-bottom);
   --shell-canvas-height: min(
     var(--shell-viewport-base),
@@ -485,8 +497,14 @@
   color-scheme: dark;
 }
 
-/* Menu actions follow the platform 44px touch-target contract for coarse pointers. */
+/* Touch menu rows sit one step above the 38px touch controls; phones keep their taller rows. */
 @media (pointer: coarse) {
+  :root {
+    --menu-item-height: 40px;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 640px) {
   :root {
     --menu-item-height: 44px;
   }
@@ -542,7 +560,6 @@
   .exec-approval-list.exec-approval-list,
   .login-gate__card.login-gate__card,
   .card.card,
-  .settings-group.settings-group,
   .option-card__choice.option-card__choice {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
@@ -572,13 +589,19 @@
     :is(.chat-thread, .chat-session-rail__thread)
     .chat-group.user
     :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
-    > :is(.chat-text, .chat-message-disclosure) {
+    > .chat-text,
+  :where(:root:not([data-theme="crt"], [data-theme="crt-light"]))
+    :is(.chat-thread, .chat-session-rail__thread)
+    .chat-group.user
+    :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
+    > .chat-message-disclosure {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
 
-  .option-card.option-card {
-    border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  .option-card.option-card,
+  .settings-group.settings-group {
+    border-radius: var(--composer-radius);
     corner-shape: superellipse(1.5);
   }
 
@@ -898,9 +921,6 @@
 
 * {
   box-sizing: border-box;
-  /* scrollbar-width doesn't inherit (unlike scrollbar-color above), so every
-     element needs its own declaration to stay off the wider UA default. */
-  scrollbar-width: thin;
 }
 
 .sr-only,
@@ -1017,12 +1037,6 @@ openclaw-plugin-contributions {
   display: contents;
 }
 
-@supports (height: 100dvh) {
-  :root {
-    --shell-viewport-base: 100dvh;
-  }
-}
-
 @media (display-mode: standalone) {
   html,
   body {
@@ -1079,7 +1093,6 @@ a:where(
     .settings-row__value,
     .memory-page__link,
     .portals-preview__notice-url,
-    .settings-account,
     .transcripts-back,
     .chat-text a,
     .chat-thinking a,
@@ -1143,7 +1156,31 @@ textarea,
   color: var(--selection-fg);
 }
 
-/* Canonical scrollbar for every light-DOM scroll surface, including owned overlays. */
+/* Canonical scrollbar for every light-DOM scroll surface, including owned overlays.
+   Phone widths and touch pointers use the compact pair everywhere. */
+@media (max-width: 640px), (pointer: coarse) {
+  :root {
+    --scrollbar-size: var(--scrollbar-size-compact);
+  }
+}
+
+/* Engines with ::-webkit-scrollbar get all three levels from the pseudo
+   elements below. Chromium ignores those pseudo elements on any element whose
+   scrollbar-width or scrollbar-color is not auto, so the standard properties
+   are only set where the pseudo elements don't exist (Firefox). There the
+   container-hover level is the closest stand-in: Firefox can't target the
+   thumb, but it darkens a hovered or dragged thumb on its own. */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+    scrollbar-width: thin;
+  }
+
+  *:hover {
+    scrollbar-color: var(--scrollbar-thumb-near) transparent;
+  }
+}
+
 ::-webkit-scrollbar {
   width: var(--scrollbar-size);
   height: var(--scrollbar-size);
@@ -1157,17 +1194,35 @@ textarea,
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   background-clip: content-box;
-  border: var(--scrollbar-thumb-inset) solid transparent;
+  /* One size controls the 2:1 hit-area/thumb ratio; explicit inset overrides still win. */
+  border: var(--scrollbar-thumb-inset, calc(var(--scrollbar-size) / 4)) solid transparent;
   border-radius: var(--radius-full);
+}
+
+@property --scrollbar-hover {
+  syntax: "<integer>";
+  inherits: false;
+  initial-value: 0;
+}
+
+/* Chromium re-resolves scrollbar parts only when the scroller's own style
+   changes, and a pseudo-element-only :hover rule doesn't count. This
+   non-inherited flag changes the hovered element alone, so the container
+   level below repaints without restyling descendants. */
+:hover {
+  --scrollbar-hover: 1;
 }
 
 /* :hover::-webkit-scrollbar-thumb (container hover) is safe here because html,
    body set overflow: clip above, so the document itself never scrolls and the
    always-true html:hover/body:hover can't hover a document scrollbar. */
-::-webkit-scrollbar-thumb:hover,
 :hover::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb-hover);
-  background-clip: content-box;
+  background-color: var(--scrollbar-thumb-near);
+}
+
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 @keyframes rise {
@@ -1277,7 +1332,8 @@ textarea,
   content: "";
   /* Keep the highlight offscreen when accessibility modes disable the sweep. */
   transform: translateX(-100%);
-  animation: shimmer var(--skeleton-duration) var(--skeleton-easing) infinite;
+  animation: var(--skeleton-animation, shimmer) var(--skeleton-duration) var(--skeleton-easing)
+    infinite;
   will-change: transform;
 }
 
@@ -1316,15 +1372,16 @@ textarea,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    /* A positive duration enables the default transition-property: all, even
-       on static controls. Keep reduced-motion updates immediate instead. */
+    /* Avoid WebKit transition work on static elements. Authored property lists
+       still win; the duration reset keeps their reduced-motion updates immediate. */
+    transition-property: none;
     transition-duration: 0ms !important;
     scroll-behavior: auto !important;
   }
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 

@@ -171,6 +171,8 @@ describe("OpenClaw shell context lifecycle", () => {
     }));
     const restoreDialog = installDialogPolyfill();
     const runtime = bootstrapApplication();
+    // Hold route readiness after connection so this still exercises a late-mounted shell.
+    runtime.context.gateway.snapshot.phase = "connected";
     const shell = createShellOwner();
     shell.runtime = runtime;
     document.body.append(shell.element);
@@ -192,7 +194,9 @@ describe("OpenClaw shell context lifecycle", () => {
       await settleShell(shell);
       const toast = shell.toastElement as HTMLElementTagNameMap["openclaw-toast-host"];
       expect(toast.parentElement).toBe(shell.navDrawerElement);
-      expect(showToast({ message: "Drawer result", durationMs: 60_000 })).toBe(true);
+      expect(showToast({ severity: undefined, message: "Drawer result", durationMs: 60_000 })).toBe(
+        true,
+      );
       await toast.updateComplete;
       await vi.dynamicImportSettled();
       flush();
@@ -200,7 +204,9 @@ describe("OpenClaw shell context lifecycle", () => {
       modal = document.createElement("openclaw-modal-dialog");
       document.body.append(modal);
       await modal.updateComplete;
-      expect(showToast({ message: "Modal result", durationMs: 60_000 })).toBe(true);
+      expect(showToast({ severity: undefined, message: "Modal result", durationMs: 60_000 })).toBe(
+        true,
+      );
       await toast.updateComplete;
       expect(toast.parentElement).toBe(modal.getOverlayContainer());
 
@@ -725,6 +731,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     const shell = testShell({
       navigation: { snapshot: { navCollapsed: false }, update: vi.fn() },
     });
+    shell.routeState = { routeId: "chat" };
     Object.defineProperty(shell.elements, "commandPalette", {
       configurable: true,
       value: { isConnected: true, isOpen: false, openPalette, togglePalette: vi.fn() },

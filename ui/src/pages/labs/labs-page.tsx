@@ -11,6 +11,7 @@ import {
   onSettled,
 } from "solid-js";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
+import { ErrorDetails } from "../../components/config-error.tsx";
 import {
   LearnMoreLink,
   SettingsPage,
@@ -25,8 +26,6 @@ import {
   currentConfigObject,
   resolveEditableSnapshotConfig,
 } from "../../lib/config/config-state-model.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
@@ -264,8 +263,7 @@ export function LabsPage() {
             title={props.feature.title()}
             description={
               <>
-                {props.feature.description()}
-                <br />
+                {props.feature.description()}{" "}
                 <span role="status">
                   {t(
                     config.read().state.configLoading
@@ -273,14 +271,16 @@ export function LabsPage() {
                       : "labsPage.decisionAssistance.unavailable",
                   )}
                 </span>
-                <button
-                  class="btn btn--sm"
-                  disabled={!config.read().state.connected || config.read().state.configLoading}
-                  onClick={() => void context.runtimeConfig.refresh()}
-                >
-                  {t("labsPage.decisionAssistance.refresh")}
-                </button>
               </>
+            }
+            control={
+              <button
+                class="btn btn--sm"
+                disabled={!config.read().state.connected || config.read().state.configLoading}
+                onClick={() => void context.runtimeConfig.refresh()}
+              >
+                {t("labsPage.decisionAssistance.refresh")}
+              </button>
             }
           />
         ) : (
@@ -308,23 +308,6 @@ export function LabsPage() {
                   <>
                     <br />
                     {t("labsPage.decisionAssistance.optedIn")}
-                  </>
-                ) : null}{" "}
-                <a
-                  href={props.feature.docsUrl}
-                  target={EXTERNAL_LINK_TARGET}
-                  rel={buildExternalLinkRel()}
-                >
-                  {t("labsPage.documentation")}
-                </a>
-                {featureState().overridden ? (
-                  <>
-                    <br />
-                    {t("configForm.defaultValue", {
-                      value: featureState().defaultEnabled
-                        ? t("common.enabled")
-                        : t("common.disabled"),
-                    })}
                   </>
                 ) : null}
               </>
@@ -373,24 +356,22 @@ export function LabsPage() {
         title={t("tabs.labs")}
         subtitle={
           <>
-            {t("labsPage.intro")}{" "}
+            {t("subtitles.labs")}{" "}
             <LearnMoreLink url="https://docs.openclaw.ai/concepts/experimental-features" />
           </>
         }
       />
       <SettingsWorkspace>
         <SettingsPage>
-          <SettingsSection
-            title={t("labsPage.sectionTitle")}
-            description={t("labsPage.sectionDescription")}
-          >
+          <SettingsSection description={t("labsPage.sectionDescription")}>
             <For each={LAB_FEATURES}>{(feature) => <FeatureRow feature={feature} />}</For>
             <Loading on={receipt()}>
               <Errored
                 fallback={(error) => (
                   <SettingsRow
+                    role="alert"
                     title={t("labsPage.saveErrorTitle")}
-                    description={<span role="alert">{formatUiError(error())}</span>}
+                    description={<ErrorDetails error={error()} />}
                   />
                 )}
               >

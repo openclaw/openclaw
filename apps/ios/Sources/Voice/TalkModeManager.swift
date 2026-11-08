@@ -1312,19 +1312,28 @@ final class TalkModeManager {
         }
     }
 
+    /// Device capture stays compiled for simulator builds so dead-code scans index it.
+    private static var isSimulator: Bool {
+        #if targetEnvironment(simulator)
+        true
+        #else
+        false
+        #endif
+    }
+
     private func startRecognition(pttCaptureId: String? = nil) throws {
         self.stopRecognition()
         let recognitionGeneration = self.recognitionGeneration
-        #if targetEnvironment(simulator)
-        if self.allowSimulatorCapture {
-            self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-            self.recognitionRequest?.shouldReportPartialResults = true
-            return
+        if Self.isSimulator {
+            if self.allowSimulatorCapture {
+                self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
+                self.recognitionRequest?.shouldReportPartialResults = true
+                return
+            }
+            throw NSError(domain: "TalkMode", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Talk mode is not supported on the iOS simulator",
+            ])
         }
-        throw NSError(domain: "TalkMode", code: 2, userInfo: [
-            NSLocalizedDescriptionKey: "Talk mode is not supported on the iOS simulator",
-        ])
-        #endif
 
         let resolvedSpeech = TalkSpeechLocale.makeRecognizer(
             gatewaySelection: self.gatewaySpeechLocaleID)
@@ -2536,6 +2545,7 @@ final class TalkModeManager {
         return self.closeRealtimeVoiceSessions(owners)
     }
 
+    @discardableResult
     private func closeRealtimeVoiceSessions(_ owners: [TalkRealtimeVoiceSessionOwner]) -> Task<Void, Never> {
         let transcriptStore = self.realtimeTranscriptStore
         return Task { @MainActor in

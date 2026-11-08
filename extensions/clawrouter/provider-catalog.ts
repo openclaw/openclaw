@@ -4,9 +4,11 @@ import {
   getCachedLiveProviderModelRows,
   loadBundledModelIdentityFactsResolver,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
+import {
+  MISTRAL_MODEL_TRANSPORT_PATCH,
+  XAI_TOOL_MODEL_COMPAT,
+  type ModelDefinitionConfig,
+  type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asFiniteNumberInRange,
@@ -16,6 +18,10 @@ import {
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeClawRouterRootUrl } from "./base-url.js";
+import {
+  readClawRouterCapabilityOffers,
+  type ClawRouterCapabilityOffer,
+} from "./capability-offers.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { CLAWROUTER_ROUTE_METADATA_KEY as ROUTE_METADATA_KEY } from "./provider-policy-api.js";
 
@@ -64,6 +70,7 @@ type CatalogProvider = {
   routes: CatalogRoute[];
   models: unknown[];
   hostedWebSearchModels: Set<string>;
+  httpOffers: ClawRouterCapabilityOffer[];
 };
 
 type RouteMetadata = {
@@ -87,12 +94,20 @@ export function normalizeClawRouterReasoningEfforts(
   return efforts.length > 0 ? efforts : undefined;
 }
 
-function readCatalogRows(body: unknown): readonly unknown[] {
-  const providers = asOptionalRecord(body)?.providers;
+function readCatalogRows(body: unknown, baseUrl: string): readonly unknown[] {
+  const catalog = asOptionalRecord(body);
+  const providers = catalog?.providers;
   if (!Array.isArray(providers)) {
     throw new Error("ClawRouter catalog response must contain providers[]");
   }
-  return providers;
+  const offers =
+    catalog?.version === "clawrouter.client-catalog.v1"
+      ? readClawRouterCapabilityOffers(body, baseUrl)
+      : [];
+  return providers.map((provider) => ({
+    provider,
+    httpOffers: offers.filter((offer) => offer.providerId === asOptionalRecord(provider)?.id),
+  }));
 }
 
 function parseCatalogRoute(value: unknown): CatalogRoute | undefined {
@@ -130,21 +145,55 @@ function parseCatalogInput(value: unknown): Array<"text" | "image"> | undefined 
 }
 
 function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
-  const row = asOptionalRecord(value);
+  // SAFETY: readCatalogRows constructs every cached row with its parsed HTTP-offer array.
+  const envelope = value as { provider: unknown; httpOffers: ClawRouterCapabilityOffer[] };
+  const row = asOptionalRecord(envelope.provider);
   const id = normalizeOptionalString(row?.id);
   const nativeBaseUrl = normalizeOptionalString(row?.nativeBaseUrl);
-  if (!id || !nativeBaseUrl || !nativeBaseUrl.startsWith("/v1/native/")) {
+  const isFusion = id === "clawrouter" && nativeBaseUrl === "/v1" && row?.openaiCompatible === true;
+  if (!id || !nativeBaseUrl || (!nativeBaseUrl.startsWith("/v1/native/") && !isFusion)) {
     return undefined;
   }
+  const models = Array.isArray(row?.models) ? row.models : [];
+  // Fusion has no native proxy. Only its credential-scoped unified offer is executable.
+  const fusionGranted =
+    isFusion &&
+    row?.allowed === true &&
+    row.executable === true &&
+    Array.isArray(row.offers) &&
+    row.offers.some((offerValue) => {
+      const offer = asOptionalRecord(offerValue);
+      return (
+        offer?.modelId === "clawrouter/fusion" &&
+        offer.endpoint === "chat_completions" &&
+        offer.transport === "http" &&
+        offer.routeKind === "unified" &&
+        offer.route === "/v1/chat/completions" &&
+        offer.eligible === true
+      );
+    });
   return {
     id,
     displayName: normalizeOptionalString(row?.displayName) ?? id,
     openaiCompatible: row?.openaiCompatible === true,
     nativeBaseUrl,
+    httpOffers: envelope.httpOffers,
     routes: Array.isArray(row?.routes)
       ? row.routes.map(parseCatalogRoute).filter((route): route is CatalogRoute => Boolean(route))
       : [],
-    models: Array.isArray(row?.models) ? row.models : [],
+    models: isFusion
+      ? models.filter((modelValue) => {
+          const model = asOptionalRecord(modelValue);
+          return (
+            fusionGranted &&
+            model?.id === "clawrouter/fusion" &&
+            model.upstream === "clawrouter/fusion" &&
+            Array.isArray(model.capabilities) &&
+            model.capabilities.length === 1 &&
+            model.capabilities[0] === "llm.chat"
+          );
+        })
+      : models,
     hostedWebSearchModels: new Set(
       (Array.isArray(row?.offers) ? row.offers : []).flatMap((offerValue) => {
         const offer = asOptionalRecord(offerValue);
@@ -179,7 +228,7 @@ type ResolveNativeModelFacts = Awaited<ReturnType<typeof loadBundledModelIdentit
 
 // Upstream catalogs whose first-party model facts are qualified for routed rows. A row
 // inherits only when its upstream id and wire API match the bundled native row exactly.
-const NATIVE_MODEL_FACT_PROVIDERS = new Set(["openai", "anthropic"]);
+const NATIVE_MODEL_FACT_PROVIDERS = new Set(["openai", "anthropic", "cohere"]);
 // Catalog providers whose id differs from the bundled provider serving the same native API.
 const BUNDLED_CATALOG_PROVIDER_IDS = new Map([["google-gemini", "google"]]);
 
@@ -216,7 +265,69 @@ function buildRoutedModel(
   let upstreamModel: string | undefined;
   let endpoint: string | undefined;
 
-  if (provider.openaiCompatible && capabilities.includes("llm.responses")) {
+  if (
+    provider.id === "xai" &&
+    capabilities.includes("llm.responses") &&
+    !provider.httpOffers.some(
+      (offer) =>
+        offer.routeKind === "unified" &&
+        offer.model?.id === id &&
+        offer.requestFormat === "openai.responses" &&
+        offer.responseFormat === "openai.responses" &&
+        offer.methods.includes("POST"),
+    )
+  ) {
+    return undefined;
+  }
+
+  const cohereChat =
+    provider.id === "cohere" && capabilities.includes("llm.chat")
+      ? provider.httpOffers.find(
+          (offer) =>
+            offer.routeKind === "native" &&
+            offer.model?.id === id &&
+            offer.requestFormat === "openai.chat_completions" &&
+            offer.responseFormat === "openai.chat_completions" &&
+            offer.methods.includes("POST") &&
+            offer.url.endsWith("/chat/completions"),
+        )
+      : undefined;
+  if (
+    provider.id === "vercel-ai-gateway" &&
+    id === "vercel-ai-gateway/anthropic/claude-sonnet-4.6"
+  ) {
+    // Frozen Vercel row uses the native Anthropic SDK, even when Chat is also
+    // offered. The SDK appends /v1/messages; the older /messages route cannot
+    // serve it. Require the key's exact mapped native offer, without Chat fallback.
+    const messages =
+      upstream === "anthropic/claude-sonnet-4.6" &&
+      capabilities.includes("llm.messages") &&
+      provider.httpOffers.find(
+        (offer) =>
+          offer.routeKind === "native" &&
+          offer.endpoint === "messages" &&
+          offer.model?.id === id &&
+          offer.model.upstream === upstream &&
+          offer.requestFormat === "anthropic.messages" &&
+          offer.responseFormat === "anthropic.messages" &&
+          offer.methods.includes("POST") &&
+          offer.url === `${rootUrl}/v1/native/vercel-ai-gateway/v1/messages`,
+      );
+    if (!messages) {
+      return undefined;
+    }
+    api = "anthropic-messages";
+    endpoint = messages.endpoint;
+    baseUrl = messages.url.slice(0, -"/v1/messages".length);
+    upstreamModel = upstream;
+  } else if (cohereChat) {
+    api = "openai-completions";
+    baseUrl = cohereChat.url.slice(0, -"/chat/completions".length);
+    upstreamModel = upstream;
+  } else if (provider.id === "cohere") {
+    // Native v2 is a different wire contract; it must not acquire a compatibility alias.
+    return undefined;
+  } else if (provider.openaiCompatible && capabilities.includes("llm.responses")) {
     api = "openai-responses";
     endpoint = "responses";
     baseUrl = `${rootUrl}/v1`;
@@ -286,6 +397,15 @@ function buildRoutedModel(
   // Service catalog facts win over inherited native defaults.
   const compat = {
     ...nativeFacts?.compat,
+    // OpenAI Responses normalizes omitted strictness into required tool fields.
+    // Advertise support so the compatible-route policy emits explicit strict=false.
+    ...(provider.id === "openai" && api === "openai-responses" ? { supportsStrictMode: true } : {}),
+    ...(provider.id === "mistral" && api === "openai-completions"
+      ? { ...MISTRAL_MODEL_TRANSPORT_PATCH, supportsReasoningEffort: false }
+      : {}),
+    ...(provider.id === "xai"
+      ? { ...XAI_TOOL_MODEL_COMPAT, supportsReasoningEffort: Boolean(supportedReasoningEfforts) }
+      : {}),
     ...(supportedReasoningEfforts
       ? { supportsReasoningEffort: true, supportedReasoningEfforts }
       : {}),
@@ -382,7 +502,7 @@ export async function buildClawRouterProviderConfig(params: {
     endpoint: `${rootUrl}/v1/catalog`,
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
-    readRows: readCatalogRows,
+    readRows: (body) => readCatalogRows(body, `${rootUrl}/v1`),
     ttlMs: CATALOG_CACHE_TTL_MS,
     auditContext: "clawrouter-model-discovery",
   });

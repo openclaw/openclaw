@@ -110,7 +110,8 @@ export function insertYamlOcPath(
 }
 
 function stringifyDoc(doc: Document.Parsed, raw: string): string {
-  return doc.toString().replace(/\n/g, sourceLineEnding(raw));
+  const bom = raw.startsWith("\uFEFF") ? "\uFEFF" : "";
+  return bom + doc.toString().replace(/\n/g, sourceLineEnding(raw));
 }
 
 function formatInsertionMarker(

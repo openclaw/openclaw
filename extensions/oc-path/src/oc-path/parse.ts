@@ -13,7 +13,7 @@
 
 import MarkdownIt, { type MarkdownIt as MarkdownItParser } from "markdown-it";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { isScalar, parseDocument } from "yaml";
+import { isMap, isScalar, LineCounter, parseDocument, stringify } from "yaml";
 import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
 import { slugify } from "./slug.js";
 
@@ -77,16 +77,73 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
   if (closeIndex === -1) {
     return null;
   }
+  const frontmatter = lines.slice(1, closeIndex);
+  const lineCounter = new LineCounter();
+  // Keep the final newline so YAML owns multiline folding and chomping.
+  const doc = parseDocument(frontmatter.join("\n") + "\n", {
+    prettyErrors: false,
+    lineCounter,
+  });
   const entries: FrontmatterEntry[] = [];
-  for (const [offset, line] of lines.slice(1, closeIndex).entries()) {
+  if (doc.errors.length === 0 && isMap(doc.contents)) {
+    for (const { key, value } of doc.contents.items) {
+      if (!isScalar(key) || !key.range) {
+        continue;
+      }
+      const keyLine = lineCounter.linePos(key.range[0]).line;
+      const source = expectDefined(frontmatter.at(keyLine - 1), "frontmatter key source line");
+      const match = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/.exec(source);
+      if (match !== null) {
+        const capture = expectDefined(match[2], "frontmatter value capture").trim();
+        entries.push({
+          key: expectDefined(match[1], "frontmatter key capture"),
+          value:
+            isScalar(value) && typeof value.value === "string"
+              ? value.value
+              : // capture is empty (block value starts below); out-of-scope anchors stay alias text
+                capture === "" && !isScalar(value)
+                ? stringify(value, { verifyAliasOrder: false }).trimEnd()
+                : unquote(capture),
+          line: keyLine + 1,
+        });
+      }
+    }
+    return { entries, endLine: closeIndex };
+  }
+  // Malformed, hand-authored frontmatter retains the tolerant line reader.
+  for (const [offset, line] of frontmatter.entries()) {
     const m = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/.exec(line);
     if (m !== null) {
       const key = expectDefined(m[1], "frontmatter key capture");
-      const value = expectDefined(m[2], "frontmatter value capture");
-      entries.push({ key, value: unquote(value.trim()), line: offset + 2 });
+      const capture = expectDefined(m[2], "frontmatter value capture").trim();
+      const value =
+        capture === "" || BLOCK_SCALAR_HEADER_RE.test(capture)
+          ? (readIndentedValue(frontmatter, offset) ?? unquote(capture))
+          : unquote(capture);
+      entries.push({ key, value, line: offset + 2 });
     }
   }
   return { entries, endLine: closeIndex };
+}
+
+const BLOCK_SCALAR_HEADER_RE = /^[|>](?:[+-]?\d*|\d*[+-]?)\s*(?:#.*)?$/;
+
+// Reparse the key line plus its indented continuation: unquote("|") parses to
+// "", dropping block scalars and block collections when the document has errors.
+function readIndentedValue(lines: readonly string[], keyIndex: number): string | undefined {
+  const rest = lines.slice(keyIndex + 1);
+  const stop = rest.findIndex((next) => next !== "" && !/^\s/.test(next));
+  const tail = stop === -1 ? rest : rest.slice(0, stop);
+  const doc = parseDocument(`${lines[keyIndex]}\n${tail.join("\n")}\n`, { prettyErrors: false });
+  const value =
+    doc.errors.length === 0 && isMap(doc.contents) ? doc.contents.items[0]?.value : null;
+  if (isScalar(value)) {
+    return typeof value.value === "string" ? value.value : "";
+  }
+  // The reparsed slice cannot see anchors on sibling keys; keep alias text.
+  return value === null || value === undefined
+    ? undefined
+    : stringify(value, { verifyAliasOrder: false }).trimEnd();
 }
 
 function unquote(value: string): string {

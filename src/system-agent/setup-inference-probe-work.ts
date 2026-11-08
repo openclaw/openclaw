@@ -3,8 +3,6 @@ import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SetupInferenceFailureStatus } from "./setup-inference-core.js";
 
-export const SETUP_INFERENCE_TEST_MAX_TOKENS = 256;
-
 export type SetupTurnFailure = {
   ok: false;
   status: SetupInferenceFailureStatus;

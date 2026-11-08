@@ -63,11 +63,12 @@ it.each([
     }
     return { executable, argv: Object.freeze(argv), environment: {} };
   });
-  if (unknown) {
-    expect(() => readDarwinProcessCommand(12, "same")).toThrow(incomplete);
-  } else {
-    expect(readDarwinProcessCommand(12, "same")).toEqual({ argv, executable });
-  }
+  // A JS runtime keeps its argv; only the marker decision stays unknown.
+  expect(readDarwinProcessCommand(12, "same")).toEqual({
+    argv,
+    executable,
+    ...(unknown ? { serviceMarkerUnavailable: true } : {}),
+  });
   expect(readDarwinProcessCommand(12, "same", { serviceMarker: false })).toEqual({
     argv,
     executable,

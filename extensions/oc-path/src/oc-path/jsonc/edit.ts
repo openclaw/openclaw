@@ -7,6 +7,7 @@ import {
   parseTree,
 } from "jsonc-parser/lib/esm/main.js";
 import { OcPathEditError } from "../edit-error.js";
+import { emitJsoncObjectEntries, guardedJsoncKeyPath } from "../emit.js";
 import type { OcPath } from "../oc-path.js";
 import { splitOcPathSlots } from "../oc-path.js";
 import { guardSentinel } from "../sentinel.js";
@@ -68,6 +69,7 @@ export function insertJsoncOcPath(
     ) {
       throw new OcPathEditError("unresolved");
     }
+    guardedJsoncKeyPath(indexOrKey, `oc://${[parentPath.file, ...target.path].join("/")}`);
   } else if (target.value.kind !== "array") {
     throw new OcPathEditError("unresolved");
   }
@@ -133,9 +135,9 @@ function jsoncValueToJson(value: JsoncValue, guardPath: string): unknown {
     return value.items.map((item, index) => jsoncValueToJson(item, `${guardPath}/${index}`));
   }
   return Object.fromEntries(
-    value.entries.map((entry) => [
+    emitJsoncObjectEntries(value.entries, guardPath, (entry, path) => [
       entry.key,
-      jsoncValueToJson(entry.value, `${guardPath}/${entry.key}`),
+      jsoncValueToJson(entry.value, path),
     ]),
   );
 }

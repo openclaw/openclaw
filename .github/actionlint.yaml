@@ -6,7 +6,10 @@ self-hosted-runner:
     # GitHub's hosted Xcode labels are not yet in actionlint's built-in inventory.
     - xcode-27
     - xcode-27-xlarge
+    # Boat build qualification
+    - boat-xlarge
     # Blacksmith CI runners
+    - blacksmith-2vcpu-ubuntu-2404
     - blacksmith-4vcpu-ubuntu-2404
     - blacksmith-8vcpu-ubuntu-2404
     - blacksmith-8vcpu-windows-2025

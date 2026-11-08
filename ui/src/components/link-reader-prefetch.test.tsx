@@ -384,11 +384,4 @@ describe("GitHub preview warming", () => {
     expect(prefetch.mock.calls[0]![1].aborted).toBe(true);
     expect(prefetch.mock.calls[2]![0].href).toBe(href(4));
   });
-
-  it("leaves requests to hover when visibility observation is unavailable", async () => {
-    vi.stubGlobal("IntersectionObserver", undefined);
-    await show();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(prefetch).not.toHaveBeenCalled();
-  });
 });

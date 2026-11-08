@@ -191,7 +191,8 @@ compaction or reset boundary. It preserves
 tool-result ownership and rejects a limit that cannot retain the newest complete
 frame or required boundary. Stored transcripts stay unchanged. Omitting `limits`
 keeps the full selected context. Async reads retain admission, anchor, and
-cancellation checks.
+cancellation checks. Background model views should pass bounded limits, because an
+unbounded read of a very large session can exhaust the transcript worker.
 
 For a temporary model-only view, callers may explicitly add
 `toolResultOverflow: "omit"` to `limits`. Under byte pressure, the reader replaces

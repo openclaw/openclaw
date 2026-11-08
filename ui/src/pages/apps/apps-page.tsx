@@ -107,26 +107,25 @@ export function AppsPage(props: { appSearch?: string }) {
         )
       : null;
   return (
-    <openclaw-apps-page>
-      <HubPageHeader active="apps" wide docsUrl="https://docs.openclaw.ai/platforms" />
+    <openclaw-apps-page class={{ "mcp-app-workspace": Boolean(appRoute()) }}>
       <Show
         when={appRoute()}
         fallback={
-          <SettingsWorkspace>
-            <McpAppCatalog surface="global" />
-            <Apps
-              onNavigate={(route) => context.navigate(route)}
-              macGatewayLaunchUrl={macGatewayLaunchUrl()}
-              onPairDevice={
-                canPairDevice() ? () => void context.overlays.openDevicePairSetup() : undefined
-              }
-            />
-          </SettingsWorkspace>
+          <>
+            <HubPageHeader active="apps" wide docsUrl="https://docs.openclaw.ai/platforms" />
+            <SettingsWorkspace>
+              <McpAppCatalog surface="global" />
+              <Apps
+                onNavigate={(route) => context.navigate(route)}
+                macGatewayLaunchUrl={macGatewayLaunchUrl()}
+                onPairDevice={
+                  canPairDevice() ? () => void context.overlays.openDevicePairSetup() : undefined
+                }
+              />
+            </SettingsWorkspace>
+          </>
         }
       >
-        <button class="btn" onClick={() => context.navigate("apps")}>
-          {t("mcpApp.close")}
-        </button>
         <Errored
           fallback={(error, reset) => (
             <>

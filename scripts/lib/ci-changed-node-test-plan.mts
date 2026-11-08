@@ -48,6 +48,7 @@ import {
   normalizeSingletonNodeTestJob,
   nodeTestConfigRequiresCanonicalMetadata,
   resolveCanonicalNodeTestConfig,
+  resolveCompleteCanonicalNodeTestConfig,
   isCanonicalNodeTestConfig,
   isRuntimeTestFileIncluded,
   SOURCE_CHANNEL_TEST_POLICY,
@@ -98,6 +99,7 @@ type ChangedTargetValidation = {
   baseRef?: string;
   onFallback?: PlanDiagnostic;
   selectionMode?: "full" | "aggressive";
+  adaptiveMarkdown?: boolean;
   onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
 };
 const CHANGED_FILE_SECONDS_HINTS = new Map<string, number>([
@@ -234,6 +236,7 @@ const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
 const PR_NODE_TEST_SECONDS = 150;
+const CHANGED_PRIVATE_QA_JOB_SECONDS = 300;
 // Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
 // processes starve each other on 4-vCPU runners and push otherwise healthy
 // integration tests past the global timeout.
@@ -409,6 +412,20 @@ const protectedRuntimeTestFiles = new Set(PR_PROTECTED_RUNTIME_TEST_FILES);
 // opt-in scripts/control-ui-retention census, keep their own config and command.
 const CHANGED_TEST_ROOTS = ["src", "test", "extensions", "packages", "ui"];
 
+function isIndependentMarkdownCompanion(file: string, cwd: string): boolean {
+  // Canonical inventories resolve against the process root, even for explicit targets.
+  if (
+    path.resolve(cwd) !== process.cwd() ||
+    !isTestFileTarget(file) ||
+    !lstatSync(path.resolve(cwd, file), { throwIfNoEntry: false })?.isFile()
+  ) {
+    return false;
+  }
+  const config = resolveCompleteCanonicalNodeTestConfig(file, buildVitestRunPlans([file], cwd));
+  // Companions must execute outside the Markdown worker.
+  return config !== undefined && config !== "test/vitest/vitest.markdown.config.ts";
+}
+
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
 export function resolveChangedNodeTestTargets(
   changedPaths: string[],
@@ -427,6 +444,9 @@ export function resolveChangedNodeTestTargets(
     boundedOwners: true,
     baseRef: options.baseRef,
     aggressive: aggressive ? { maxDirectImporters: 20, maxDirectoryTests: 30 } : undefined,
+    adaptiveMarkdown: options.adaptiveMarkdown
+      ? { isIndependentCompanion: (file) => isIndependentMarkdownCompanion(file, cwd) }
+      : undefined,
     combineSiblingWithImportGraph: true,
     resolveAliases: true,
     runtimeOnly: true,
@@ -538,6 +558,13 @@ export function resolveChangedNodeTestTargets(
     const selectedSet = new Set(selected);
     const explained = new Set<string>();
     for (const selection of selections) {
+      if (selection.rule === "adaptive-qualified-unchanged") {
+        const targets = selection.targets.filter((file) => !selectedSet.has(file));
+        if (targets.length > 0) {
+          options.onSelection({ ...selection, targets });
+        }
+        continue;
+      }
       const targets = [
         ...new Set(selection.targets.flatMap((target) => expanded.get(target) ?? [target])),
       ].filter((file) => selectedSet.has(file));
@@ -670,22 +697,61 @@ function createChangedTargetShards(
         inheritedPolicies.set(target, policy);
       }
     }
+    // Amortize private QA preparation only within an already selected slow
+    // policy's envelope, and reserve the build inside the 300-second job budget.
+    const policySeconds = new Map<string, number>();
+    for (const { target } of targets) {
+      const policy = inheritedPolicies.get(target)!;
+      if (policy.mode === "private-qa") {
+        const key = JSON.stringify(policy);
+        policySeconds.set(
+          key,
+          Math.max(
+            policySeconds.get(key) ?? PR_NODE_TEST_SECONDS,
+            Math.min(
+              costOf(target),
+              CHANGED_PRIVATE_QA_JOB_SECONDS - VITEST_PRETEST_BUILD_SECONDS["private-qa"],
+            ),
+          ),
+        );
+      }
+    }
     // Longest-first placement avoids stranding a slow target with cheap neighbors.
-    const bins: { targets: typeof targets; seconds: number; policy: string }[] = [];
-    for (const entry of targets.toSorted((a, b) => costOf(b.target) - costOf(a.target))) {
-      const cost = costOf(entry.target);
-      const policy = JSON.stringify(inheritedPolicies.get(entry.target));
-      const bin = bins.find(
-        (candidate) =>
-          candidate.policy === policy &&
-          candidate.targets.length < CHANGED_NODE_TEST_TARGETS_PER_JOB &&
-          candidate.seconds + cost <= PR_NODE_TEST_SECONDS,
-      );
-      if (bin) {
-        bin.targets.push(entry);
-        bin.seconds += cost;
-      } else {
-        bins.push({ targets: [entry], seconds: cost, policy });
+    const sortedTargets = targets.toSorted((a, b) => costOf(b.target) - costOf(a.target));
+    const pack = (limits?: ReadonlyMap<string, number>) => {
+      const bins: { targets: typeof targets; seconds: number; policy: string }[] = [];
+      for (const entry of sortedTargets) {
+        const cost = costOf(entry.target);
+        const policy = JSON.stringify(inheritedPolicies.get(entry.target));
+        const bin = bins.find(
+          (candidate) =>
+            candidate.policy === policy &&
+            candidate.targets.length < CHANGED_NODE_TEST_TARGETS_PER_JOB &&
+            candidate.seconds + cost <= (limits?.get(policy) ?? PR_NODE_TEST_SECONDS),
+        );
+        if (bin) {
+          bin.targets.push(entry);
+          bin.seconds += cost;
+        } else {
+          bins.push({ targets: [entry], seconds: cost, policy });
+        }
+      }
+      return bins;
+    };
+    let bins = pack();
+    if (policySeconds.size > 0) {
+      const packed = pack(policySeconds);
+      // First-fit placement can need more bins at a larger capacity. Retain the
+      // original plan unless fewer jobs are needed and neither QA policy grows.
+      if (
+        packed.length < bins.length &&
+        [...policySeconds.keys()].every(
+          (policy) =>
+            packed.filter((bin) => bin.policy === policy).length <=
+            bins.filter((bin) => bin.policy === policy).length,
+        )
+      ) {
+        bins = packed;
       }
     }
     targetChunks.push(...bins.map((bin) => bin.targets));
@@ -976,6 +1042,85 @@ function boundChangedNodeRows(
     });
 }
 
+/** Share setup without changing the mandatory boundary suite or any child process. */
+export function packChangedNodeBoundary(shards: ChangedNodeTestShard[]): ChangedNodeTestShard[] {
+  const boundary = shards.find(
+    (shard) =>
+      shard.checkName === "checks-node-changed-boundary" &&
+      shard.configs.length === 1 &&
+      shard.configs[0] === BOUNDARY_NODE_TEST_CONFIG &&
+      !shard.groups &&
+      !shard.targets &&
+      !shard.includePatterns &&
+      !shard.requiresDist &&
+      !shard.pretestBuildMode,
+  );
+  if (!boundary) {
+    return shards;
+  }
+  // All 97 observed boundary test steps fit 73s, including both runtimes.
+  // Reserve 90s and retain the ordinary 150s selected-row budget.
+  const boundarySeconds = 90;
+  const recipient = shards
+    .filter(
+      (shard) =>
+        shard !== boundary &&
+        shard.runner === boundary.runner &&
+        shard.planConcurrency === 1 &&
+        !shard.requiresDist &&
+        !shard.pretestBuildMode &&
+        !shard.targets &&
+        Object.entries(shard.env ?? {}).every(
+          ([key, value]) => key === "OPENCLAW_VITEST_MAX_WORKERS" && value === "2",
+        ) &&
+        !shard.timeoutMinutes &&
+        shard.groups?.length &&
+        shard.groups.length < 10 &&
+        shard.groups.every(
+          (group) =>
+            !group.requiresDist &&
+            !group.pretestBuildMode &&
+            group.configs.length === 1 &&
+            group.configs[0] === "test/vitest/vitest.tooling.config.ts",
+        ) &&
+        (shard.predictedTestSeconds ?? shard.predictedSeconds ?? Infinity) + boundarySeconds <=
+          PR_NODE_TEST_SECONDS,
+    )
+    .toSorted(
+      (a, b) =>
+        (a.predictedTestSeconds ?? a.predictedSeconds!) -
+        (b.predictedTestSeconds ?? b.predictedSeconds!),
+    )[0];
+  if (!recipient) {
+    return shards;
+  }
+  const predictedTestSeconds =
+    (recipient.predictedTestSeconds ?? recipient.predictedSeconds!) + boundarySeconds;
+  return shards.flatMap((shard) =>
+    shard === boundary
+      ? []
+      : shard === recipient
+        ? [
+            {
+              ...recipient,
+              // Run the fixed gate first; each config still gets its own process.
+              groups: [
+                {
+                  configs: boundary.configs,
+                  requiresDist: false,
+                  runner: boundary.runner,
+                  shard_name: boundary.shardName,
+                },
+                ...recipient.groups!,
+              ],
+              predictedSeconds: predictedTestSeconds,
+              predictedTestSeconds,
+            },
+          ]
+        : [shard],
+  );
+}
+
 /**
  * Builds bounded PR jobs from precise changed-test targets.
  * Missing input is an error for the caller; changed inputs never widen to a full suite.
@@ -1224,7 +1369,9 @@ export function createChangedNodeTestShards(
     ...boundaryShards,
   ];
   // Covered source targets keep build-artifacts ownership even with no Node rows.
-  const bounded = boundChangedNodeRows(shards, selectedTargets, options.runnerBackend, cwd);
+  const bounded = packChangedNodeBoundary(
+    boundChangedNodeRows(shards, selectedTargets, options.runnerBackend, cwd),
+  );
   // Time-based splitting must not make an admitted owner plan exceed the matrix
   // budget. Retain its compact rows, including plugin work, without widening scope.
   const cap = options.compactNodeJobCap;

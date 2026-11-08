@@ -23,9 +23,9 @@ const toolSkillUseScope = resolveGlobalSingleton(
 
 /** Recorder bound to one tool call's run facts; closed once that call settles. */
 export function createToolSkillUseRecorder(record: (match: SkillUsageMatch) => void) {
-  let open = true;
+  let recordMatch: typeof record | undefined = record;
   const recorder: ToolSkillUseRecorder = (use) => {
-    if (!open) {
+    if (!recordMatch) {
       return false;
     }
     const skillFile = path.isAbsolute(use.skillFile)
@@ -34,7 +34,7 @@ export function createToolSkillUseRecorder(record: (match: SkillUsageMatch) => v
     if (!skillFile || path.basename(skillFile) !== "SKILL.md") {
       throw new Error(`Skill usage needs an absolute SKILL.md path: ${use.skillFile}`);
     }
-    record({
+    recordMatch({
       skillFile,
       skillName: use.skillName,
       skillSource: use.skillSource ?? "unknown",
@@ -45,7 +45,8 @@ export function createToolSkillUseRecorder(record: (match: SkillUsageMatch) => v
   return {
     run: <T>(run: () => T): T => toolSkillUseScope.run(recorder, run),
     close: () => {
-      open = false;
+      // Detached resources can retain this scope after the tool call settles.
+      recordMatch = undefined;
     },
   };
 }
