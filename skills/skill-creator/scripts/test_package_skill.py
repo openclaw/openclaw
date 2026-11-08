@@ -22,13 +22,9 @@ package_skill = package_skill_module.package_skill
 
 class TestPackageSkillSecurity(TestCase):
     def setUp(self):
-        self.temp_dir = Path(tempfile.mkdtemp(prefix="test_skill_"))
-
-    def tearDown(self):
-        import shutil
-
-        if self.temp_dir.exists():
-            shutil.rmtree(self.temp_dir)
+        directory = tempfile.TemporaryDirectory(prefix="test_skill_")
+        self.addCleanup(directory.cleanup)
+        self.temp_dir = Path(directory.name)
 
     def create_skill(self, name="test-skill"):
         skill_dir = self.temp_dir / name
@@ -37,13 +33,13 @@ class TestPackageSkillSecurity(TestCase):
         (skill_dir / "script.py").write_text("print('ok')\n")
         return skill_dir
 
-    def test_packages_normal_files(self):
+    def test_packages_regular_entry_and_rejects_linked_entry(self):
         skill_dir = self.create_skill("normal-skill")
+        nested = skill_dir / "lib" / "helpers"
+        nested.mkdir(parents=True)
+        (nested / "util.py").write_text("def run():\n    return 1\n")
         out_dir = self.temp_dir / "out"
-        out_dir.mkdir()
-
         result = package_skill(str(skill_dir), str(out_dir))
-
         self.assertIsNotNone(result)
         skill_file = out_dir / "normal-skill.skill"
         self.assertTrue(skill_file.exists())
@@ -51,52 +47,64 @@ class TestPackageSkillSecurity(TestCase):
             names = set(archive.namelist())
         self.assertIn("normal-skill/SKILL.md", names)
         self.assertIn("normal-skill/script.py", names)
-
-    def test_skips_symlink_to_external_file(self):
-        skill_dir = self.create_skill("symlink-file-skill")
-        outside = self.temp_dir / "outside-secret.txt"
-        outside.write_text("super-secret\n")
-        link = skill_dir / "loot.txt"
-        out_dir = self.temp_dir / "out"
-        out_dir.mkdir()
-
+        self.assertIn("normal-skill/lib/helpers/util.py", names)
+        original = skill_file.read_bytes()
+        entry = skill_dir / "SKILL.md"
+        target = skill_dir / "instructions.md"
+        entry.rename(target)
         try:
-            link.symlink_to(outside)
+            entry.symlink_to(target)
         except (OSError, NotImplementedError):
             self.skipTest("symlink unsupported on this platform")
+        for destination in (out_dir, self.temp_dir / "fresh"):
+            with self.subTest(destination=destination.name):
+                self.assertIsNone(package_skill(str(skill_dir), str(destination)))
+                self.assertEqual(skill_file.read_bytes(), original)
+                self.assertFalse((self.temp_dir / "fresh" / "normal-skill.skill").exists())
 
-        result = package_skill(str(skill_dir), str(out_dir))
-        self.assertIsNotNone(result)
-        skill_file = out_dir / "symlink-file-skill.skill"
-        self.assertTrue(skill_file.exists())
-        with zipfile.ZipFile(skill_file, "r") as archive:
-            names = set(archive.namelist())
-        self.assertIn("symlink-file-skill/SKILL.md", names)
-        self.assertIn("symlink-file-skill/script.py", names)
-        self.assertNotIn("symlink-file-skill/loot.txt", names)
+    def test_failed_write_preserves_output_and_cleans_staging(self):
+        skill_dir = self.create_skill("failed-skill")
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                out_dir = self.temp_dir / str(existing)
+                out_dir.mkdir()
+                archive = out_dir / "failed-skill.skill"
+                if existing:
+                    self.assertIsNotNone(package_skill(str(skill_dir), str(out_dir)))
+                    original = archive.read_bytes()
 
-    def test_skips_symlink_directory(self):
-        skill_dir = self.create_skill("symlink-dir-skill")
-        outside_dir = self.temp_dir / "outside"
-        outside_dir.mkdir()
-        (outside_dir / "secret.txt").write_text("secret\n")
-        link = skill_dir / "docs"
-        out_dir = self.temp_dir / "out"
-        out_dir.mkdir()
+                with patch.object(zipfile.ZipFile, "write", side_effect=OSError("disk full")):
+                    self.assertIsNone(package_skill(str(skill_dir), str(out_dir)))
 
-        try:
-            link.symlink_to(outside_dir, target_is_directory=True)
-        except (OSError, NotImplementedError):
-            self.skipTest("symlink unsupported on this platform")
+                self.assertEqual(list(out_dir.iterdir()), [archive] if existing else [])
+                if existing:
+                    self.assertEqual(archive.read_bytes(), original)
 
-        result = package_skill(str(skill_dir), str(out_dir))
-        self.assertIsNotNone(result)
-        skill_file = out_dir / "symlink-dir-skill.skill"
-        with zipfile.ZipFile(skill_file, "r") as archive:
-            names = set(archive.namelist())
-        self.assertIn("symlink-dir-skill/SKILL.md", names)
-        self.assertIn("symlink-dir-skill/script.py", names)
-        self.assertNotIn("symlink-dir-skill/docs/secret.txt", names)
+    def test_skips_external_symlinks(self):
+        for directory in (False, True):
+            with self.subTest(directory=directory):
+                name = f"symlink-{directory}-skill"
+                skill_dir = self.create_skill(name)
+                outside = self.temp_dir / f"outside-{directory}"
+                if directory:
+                    outside.mkdir()
+                (outside / "secret.txt" if directory else outside).write_text("secret\n")
+                link = skill_dir / "loot"
+                out_dir = self.temp_dir / f"out-{directory}"
+                out_dir.mkdir()
+                try:
+                    link.symlink_to(outside, target_is_directory=directory)
+                except (OSError, NotImplementedError):
+                    self.skipTest("symlink unsupported on this platform")
+
+                self.assertIsNotNone(package_skill(str(skill_dir), str(out_dir)))
+                skill_file = out_dir / f"{name}.skill"
+                self.assertTrue(skill_file.exists())
+                with zipfile.ZipFile(skill_file, "r") as archive:
+                    names = set(archive.namelist())
+                self.assertIn(f"{name}/SKILL.md", names)
+                self.assertIn(f"{name}/script.py", names)
+                self.assertNotIn(f"{name}/loot" + ("/secret.txt" if directory else ""), names)
 
     def test_rejects_resolved_path_outside_skill_root(self):
         skill_dir = self.create_skill("escape-skill")
@@ -115,22 +123,6 @@ class TestPackageSkillSecurity(TestCase):
 
         self.assertIsNone(result)
 
-    def test_allows_nested_regular_files(self):
-        skill_dir = self.create_skill("nested-skill")
-        nested = skill_dir / "lib" / "helpers"
-        nested.mkdir(parents=True, exist_ok=True)
-        (nested / "util.py").write_text("def run():\n    return 1\n")
-        out_dir = self.temp_dir / "out"
-        out_dir.mkdir()
-
-        result = package_skill(str(skill_dir), str(out_dir))
-
-        self.assertIsNotNone(result)
-        skill_file = out_dir / "nested-skill.skill"
-        with zipfile.ZipFile(skill_file, "r") as archive:
-            names = set(archive.namelist())
-        self.assertIn("nested-skill/lib/helpers/util.py", names)
-
     def test_skips_output_archive_when_output_dir_is_skill_dir(self):
         skill_dir = self.create_skill("self-output-skill")
 
@@ -141,9 +133,7 @@ class TestPackageSkillSecurity(TestCase):
         self.assertTrue(skill_file.exists())
         with zipfile.ZipFile(skill_file, "r") as archive:
             names = set(archive.namelist())
-        self.assertIn("self-output-skill/SKILL.md", names)
-        self.assertIn("self-output-skill/script.py", names)
-        self.assertNotIn("self-output-skill/self-output-skill.skill", names)
+        self.assertEqual(names, {"self-output-skill/SKILL.md", "self-output-skill/script.py"})
 
     def test_archive_entry_order_is_deterministic(self):
         skill_dir = self.create_skill("order-skill")

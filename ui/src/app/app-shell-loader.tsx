@@ -2,6 +2,7 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { Errored, Loading, lazy, onSettled } from "solid-js";
 import { LazyViewError } from "../components/solid/lazy-view-error.tsx";
 import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
+import { yieldAfterLayout } from "../lib/layout-frame.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { OpenClawShellProps } from "./app-host.tsx";
 import { bootComposerElement } from "./boot-composer.ts";
@@ -12,12 +13,20 @@ import {
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
 
-const LazyShell = lazy(() => import("./app-host.tsx"), { export: "OpenClawShell" });
-
 type ShellLoaderProps = OpenClawShellProps & { fallback: SolidJSX.Element };
 
 /** Sign-in and standalone documents never acquire the workspace shell's graph. */
 export function ShellLoader(props: ShellLoaderProps): SolidJSX.Element {
+  const LazyShell = lazy(
+    async () => {
+      const shell = await import("./app-host.tsx");
+      if (!props.runtime.warmBoot) {
+        await yieldAfterLayout();
+      }
+      return { OpenClawShell: shell.OpenClawShell };
+    },
+    { export: "OpenClawShell" },
+  );
   return (
     <Errored fallback={(error, reset) => <ShellLoadError error={error()} reset={reset} />}>
       <Loading fallback={props.fallback}>

@@ -38,6 +38,7 @@ import {
   proveArchivedInputRetention,
   proveLastFileDirectoryRetention,
 } from "./local-workspace-directory-retention.test-support.js";
+import { proveGitIgnoredWorkspaceOutputs } from "./local-workspace-generated-paths.test-support.js";
 import {
   expectMissing,
   observeAcknowledgedUpdate,
@@ -54,6 +55,7 @@ import {
   proveWorkerOwnedArchive,
 } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
+import { proveRejectedWorkspaceCheckpoint } from "./local-workspace-recovery.test-support.js";
 import {
   proveConcurrentWorkspacePreparation,
   proveColdPreparationCapacityIsolation,
@@ -182,6 +184,11 @@ afterEach(async () => {
 });
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
+
+it.each(["canonical", "projection"] as const)(
+  "quarantines rejected checkpoints while allowing new agent work: %s",
+  (target) => proveRejectedWorkspaceCheckpoint(owner, target),
+);
 
 it("reuses warm workspaces and reconciles edits", () => proveWarmWorkspaceReuse(owner));
 
@@ -418,6 +425,9 @@ it.each([false, true])(
     await proveAcceptedInventoryRecovery(owner, retainedMembership);
   },
 );
+
+it("checkpoints Git changes without ignored build outputs or guest Git metadata", () =>
+  proveGitIgnoredWorkspaceOutputs(owner, root));
 
 it("never admits nested host secrets after guest de-ignore", async () => {
   const prefix = "nested/";

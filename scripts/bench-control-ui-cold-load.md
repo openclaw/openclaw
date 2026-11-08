@@ -24,6 +24,19 @@ check; positions and directions rotate. Split compound actions before attributin
 a gap. Fix validation requires 20 rotated pairs plus A/A and unchanged engines
 within the campaign's acceptance band.
 
+For the chat model picker, select `model-picker-first-open`, `model-picker-open`,
+`model-picker-search`, and `model-picker-search-paste` separately. Opening ends
+with mounted choices and focused search; paste uses one native edit, while search
+types the same query character by character. The compound
+`model-picker-first-open-search` retains the driver gaps between those phases.
+The explicit desktop `session-icon-first-custom-input` scenario prepares an empty,
+focused custom icon field and measures its first emoji input through enabled Set;
+it leaves the draft unapplied and sends no appearance mutation.
+Use a separate WebKit `--trace` run to attribute layout and the first content
+paint; application time is not a paint timestamp. `sidebar-open` and
+`sidebar-close` split one activation on desktop and mobile and await the relevant
+navigation animations.
+
 Firefox retains the same browser-local application elapsed clock and boot/route
 readiness milestones. These measure neither CPU nor paint. CPU counters, native
 traces, throttling, forced GC, and heap snapshots are unavailable in this harness;
@@ -89,10 +102,19 @@ filters and reopens a 1,000-model picker whose rows share one synthetic image,
 checks that the images decode and selection stays unchanged, and reports image
 requests, blob reads and object URL lifetimes. Run it against a build supporting
 custom provider artwork; its instrumented timings are not performance evidence.
+The `-12` variant uses twelve models sharing the same image, separating a small
+local-provider catalog from the 1,000-model stress case. Counts describe actual
+rendered images and distinct assets, not a thousand simultaneously visible rows.
+The `provider-model-picker-artwork-open-12` and
+`provider-model-picker-artwork-reopen-12` scenarios measure decoded-image
+readiness without the blob/object-URL probe; omit `-12` for the stress catalog.
+Compare complete base/head builds with `--compare-bundle-dir`,
+`--control-bundle-dir`, and `--pairs 20` for rotated timing and A/A controls.
 
 ```sh
 node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
-  --steps provider-model-picker-artwork-cycles --engines chromium,webkit,firefox \
+  --steps provider-model-picker-artwork-cycles,provider-model-picker-artwork-cycles-12 \
+  --engines chromium,webkit,firefox \
   --viewport both --output .artifacts/provider-artwork
 ```
 
@@ -805,6 +827,40 @@ Keep coverage captures separate from timing comparisons because instrumentation
 changes execution cost. Source maps and the exact saved bundle allow attribution
 of the unused ranges; preload transfer budgets remain the performance checker's
 authority, including assets that have not executed.
+
+Attribute that capture to emitted modules with the exact build and its source maps:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/analyze-control-ui-coverage.mts \
+  --dist dist/control-ui --coverage .artifacts/cold/run-1.coverage.json \
+  --summary .artifacts/cold/summary.json --run 1 \
+  --output .artifacts/cold/modules.json
+```
+
+The console ranks the top 30 modules by unused UTF-8 bytes; JSON retains all modules,
+per-asset totals, and unmapped bytes. Generated source-map columns and V8 ranges are
+UTF-16 offsets. Nested zero-count ranges override enclosing executed ranges, and
+byte counts come from emitted text, never `sourcesContent`. A captured loaded-byte
+count that differs from the supplied asset fails instead of silently attributing a
+wrong build.
+
+`--summary` prefers the selected run's `coverageResources` snapshot, captured at
+the coverage cutoff, to include fetched-only scripts (such as modulepreloads)
+absent from V8 coverage. Only resources with positive `decodedBytes` contribute
+complete fetched payloads; V8 entries remain included even without such a resource
+entry. Repeated URLs count once per asset, and fetched-only bytes remain explicit
+with zero observed executed bytes. The JSON and console identify this inventory as
+`coverage cutoff`. For older captures without that snapshot, the tool falls back
+to `http.waterfall` and explicitly labels the scope `whole-run (may include later
+fetches)`: those totals must not be described as readiness bytes. Without a summary,
+the scope is `V8 only` and excludes fetched-only scripts. `javaScriptResources` is
+an aggregate and cannot identify modules. Coverage indicates which ranges ran,
+not CPU cost or whether a module can safely be removed.
+Compare separate settled-readiness and `--coverage-after-ready-ms 5000` captures
+to distinguish boot-only observations from code used shortly afterward; keep the
+same route, fixture, and exact build for both. This cutoff follows the harness's
+existing content and quiet-event-queue checks, not the first enabled composer;
+idle preloads begun during that quiet window are included.
 
 On a noisy host, run an A/A control before interpreting candidate differences.
 First copy the baseline bundle to a separate directory (`cp -R <base> <control>`):
