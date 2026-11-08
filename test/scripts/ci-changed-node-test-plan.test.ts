@@ -314,6 +314,7 @@ it.each(
     ["ui/src/test-helpers/control-ui-e2e.test.ts"],
     ["ui/src/app/gateway-store.test-support.ts"],
     ["ui/src/styles/cursor-policy.browser.test.ts"],
+    ["ui/src/pages/channels/view.detail.browser.test.tsx"],
     ["ui/src/pages/activity/../activity/activity-page.test.ts"],
   ].map((paths) => ({ paths })),
 )("retains UI E2E for protected or unresolved inputs $paths", ({ paths }) => {
