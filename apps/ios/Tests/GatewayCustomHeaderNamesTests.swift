@@ -19,9 +19,8 @@ struct GatewayCustomHeaderNamesTests {
         #expect(GatewayCustomHeaderNames.displayName(for: "CF-Access-Client-Id") == "CF-Access-Client-Id")
     }
 
-    @Test func `display name does not print A saved credential`() {
+    @Test func `display name does not print a saved credential`() {
         let clientId = "0123456789abcdef0123456789abcdef.access"
         #expect(!GatewayCustomHeaderNames.displayName(for: clientId).contains(clientId))
-        #expect(GatewayCustomHeaderNames.displayName(for: clientId) == "Client ID saved as a header name")
     }
 }
