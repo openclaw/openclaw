@@ -59,6 +59,10 @@ describe("screen tool", () => {
 
   it("exposes GitHub identity settings only for a capable Control UI", () => {
     const tool = createScreenTool({ githubIdentitySettingsAvailable: true });
+    expect(
+      createScreenTool({ agentSessionKey: "other-session", githubIdentitySettingsAvailable: true })
+        .parameters,
+    ).toBe(tool.parameters);
 
     expect(tool.parameters).toMatchObject({
       properties: { action: { enum: expect.arrayContaining(["github_identity_settings"]) } },

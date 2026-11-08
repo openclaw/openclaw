@@ -20,6 +20,7 @@ export type BackupAgentRoot = Readonly<{
 }>;
 
 export type BackupRegenerableKind =
+  | "worktree template"
   | "agent temporary files"
   | "managed state"
   | "plugin skills"
@@ -128,10 +129,12 @@ export async function createBackupResourcePlan(params: {
   oauthDirs: readonly string[];
   workspaceDirs: readonly string[];
   excludedWorkspaceDirs: readonly string[];
+  excludedWorktreeTemplateDirs?: readonly string[];
   agentRoots: readonly BackupAgentRoot[];
   pluginResources: readonly ResolvedPluginBackupResource[];
   pluginRoots: readonly string[];
   onlyConfig?: boolean;
+  localCompanion?: boolean;
 }): Promise<BackupResourcePlan> {
   const stateDir = path.resolve(params.stateDir);
   const pluginResourceRoots: string[] = [];
@@ -161,12 +164,18 @@ export async function createBackupResourcePlan(params: {
     for (const root of MANAGED_STATE_ROOTS) {
       exclude("managed state", path.join(stateDir, root));
     }
+    for (const templateDir of params.excludedWorktreeTemplateDirs ?? []) {
+      exclude("worktree template", templateDir);
+    }
     for (const temporaryRoot of await listDefaultAgentTemporaryRoots(stateDir, agentRoots)) {
       exclude("agent temporary files", temporaryRoot);
     }
     exclude("plugin skills", path.join(stateDir, "plugin-skills"));
 
     for (const resource of params.pluginResources) {
+      if (resource.profile === "local-companion" && !params.localCompanion) {
+        continue;
+      }
       const anchors = resource.scope === "state" ? [{ sourcePath: stateDir }] : agentRoots;
       for (const anchor of anchors) {
         const sourcePath = path.resolve(anchor.sourcePath, ...resource.relativePath.split("/"));

@@ -51,11 +51,10 @@ export function defineGatewayModuleBoundaryTests(
             await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(connectedSocketCount);
             const connectionStatus = page.locator(
               width === 390
-                ? ".mobile-connection-status .gateway-status:visible"
+                ? ".mobile-header__notices:visible"
                 : ".sidebar-shell__footer .gateway-status:visible",
             );
             await connectionStatus
-              .locator(".gateway-status__label")
               .getByText("Reconnecting…", { exact: true })
               .waitFor({ state: "visible" });
             expect(await connectionStatus.getByRole("button").count()).toBe(0);

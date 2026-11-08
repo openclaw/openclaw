@@ -424,7 +424,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                     opts.goalMode
                       ? `<div class="agent-chat__goal-mode composer-context-strip">
                         <span class="agent-chat__goal-mode-label composer-context-strip__label"><span class="composer-context-strip__icon">${iconSvg()}</span><span class="composer-context-strip__label-text">Goal</span></span>
-                        <span class="agent-chat__goal-mode-hint composer-context-strip__text">Enter your objective.</span>
+                        <span class="agent-chat__goal-mode-hint composer-context-strip__text">Describe what “done” looks like.</span>
                       </div>`
                       : ""
                   }

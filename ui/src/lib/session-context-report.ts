@@ -4,12 +4,10 @@ import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isRetryableGatewayReadError,
-} from "./gateway-errors.ts";
+import { isRetryableGatewayReadError } from "./gateway-errors.ts";
 import { canCallGatewayMethod } from "./gateway-methods.ts";
 import { createGatewayRetryOwner } from "./gateway-retry.ts";
+import { formatMissingOperatorReadScopeMessage } from "./permission-error.ts";
 import { listen } from "./reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "./sessions/session-key.ts";
 import { requestSessionUsage } from "./sessions/usage.ts";

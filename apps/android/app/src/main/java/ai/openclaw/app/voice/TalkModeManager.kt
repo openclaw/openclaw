@@ -26,13 +26,10 @@ import android.content.Intent
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
-import android.media.AudioRecord
-import android.media.MediaRecorder
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -76,7 +73,6 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import java.io.IOException
 import java.util.LinkedHashMap
 import java.util.Locale
 import java.util.UUID
@@ -159,51 +155,11 @@ private data class TalkConfigCache(
   val loaded: Boolean = false,
 )
 
-private class PushToTalkAudioSource(
-  val readDescriptor: ParcelFileDescriptor,
-  private val writeStream: ParcelFileDescriptor.AutoCloseOutputStream,
-  private val audioRecord: AudioRecord,
-) {
-  private var finishRequested = false
-  private var inputFinished = false
-  private var descriptorClosed = false
-  var pumpJob: Job? = null
-
-  @Synchronized
-  fun requestFinish() {
-    if (finishRequested) return
-    finishRequested = true
-    runCatching { audioRecord.stop() }
-  }
-
-  // close() must wait for a pump already inside release, not just observe its claim.
-  @Synchronized
-  fun finishFromPump() {
-    if (inputFinished) return
-    inputFinished = true
-    runCatching { audioRecord.stop() }
-    runCatching { audioRecord.release() }
-    runCatching { writeStream.close() }
-  }
-
-  @Synchronized
-  fun close() {
-    requestFinish()
-    pumpJob?.cancel()
-    finishFromPump()
-    pumpJob = null
-    if (!descriptorClosed) {
-      descriptorClosed = true
-      runCatching { readDescriptor.close() }
-    }
-  }
-}
-
 private sealed interface PushToTalkRecognitionRung {
   val candidate: PushToTalkRecognitionCandidate
 
   data class RawAudioSegmented(
-    val source: PushToTalkAudioSource,
+    val source: SpeechRecognitionAudioSource,
   ) : PushToTalkRecognitionRung {
     override val candidate = PushToTalkRecognitionCandidate.RawAudioSegmented
   }
@@ -240,7 +196,6 @@ class TalkModeManager internal constructor(
     private const val chatFinalWaitMs = 45_000L
     private const val maxCachedRunCompletions = 128
     private const val realtimeUserFinalRewriteGraceMs = 1_500L
-    private const val pushToTalkSampleRateHz = 16_000
     private const val pushToTalkReleaseGraceMs = 5_000L
     private const val pushToTalkReleaseDrainTimeoutMs = 6_000L
     private const val pushToTalkRestartDelayMs = 200L
@@ -2115,7 +2070,7 @@ class TalkModeManager internal constructor(
         val rung =
           when (candidate) {
             PushToTalkRecognitionCandidate.RawAudioSegmented -> {
-              PushToTalkRecognitionRung.RawAudioSegmented(openPushToTalkAudioSource())
+              PushToTalkRecognitionRung.RawAudioSegmented(openSpeechRecognitionAudioSource(gatewayWorkScope))
             }
 
             PushToTalkRecognitionCandidate.SilenceSegmented -> {
@@ -2153,7 +2108,7 @@ class TalkModeManager internal constructor(
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, rung.source.readDescriptor)
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
-            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, pushToTalkSampleRateHz)
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, speechRecognitionSampleRateHz)
             putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
           }
         }
@@ -2173,62 +2128,6 @@ class TalkModeManager internal constructor(
         }
       }
     }
-
-  @SuppressLint("MissingPermission")
-  private fun openPushToTalkAudioSource(): PushToTalkAudioSource {
-    check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
-    val minBufferSize =
-      AudioRecord.getMinBufferSize(
-        pushToTalkSampleRateHz,
-        AudioFormat.CHANNEL_IN_MONO,
-        AudioFormat.ENCODING_PCM_16BIT,
-      )
-    check(minBufferSize > 0) { "AudioRecord buffer unavailable" }
-
-    val pipe = ParcelFileDescriptor.createPipe()
-    var recorder: AudioRecord? = null
-    var writeStream: ParcelFileDescriptor.AutoCloseOutputStream? = null
-    try {
-      recorder =
-        AudioRecord(
-          MediaRecorder.AudioSource.VOICE_RECOGNITION,
-          pushToTalkSampleRateHz,
-          AudioFormat.CHANNEL_IN_MONO,
-          AudioFormat.ENCODING_PCM_16BIT,
-          minBufferSize * 2,
-        )
-      check(recorder.state == AudioRecord.STATE_INITIALIZED) { "AudioRecord initialization failed" }
-      recorder.startRecording()
-      check(recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "AudioRecord did not start" }
-      val activeRecorder = recorder
-      val activeWriteStream = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])
-      writeStream = activeWriteStream
-      val source = PushToTalkAudioSource(pipe[0], activeWriteStream, activeRecorder)
-      source.pumpJob =
-        gatewayWorkScope.launch(Dispatchers.IO) {
-          val buffer = ByteArray(minBufferSize.coerceAtLeast(4_096))
-          try {
-            while (currentCoroutineContext().isActive) {
-              val bytesRead = activeRecorder.read(buffer, 0, buffer.size)
-              if (bytesRead <= 0) break
-              activeWriteStream.write(buffer, 0, bytesRead)
-            }
-          } catch (err: IOException) {
-            Log.d(tag, "PTT audio pipe closed: ${err.message}")
-          } finally {
-            source.finishFromPump()
-          }
-        }
-      return source
-    } catch (err: Throwable) {
-      runCatching { recorder?.stop() }
-      runCatching { recorder?.release() }
-      runCatching { writeStream?.close() }
-      if (writeStream == null) runCatching { pipe[1].close() }
-      runCatching { pipe[0].close() }
-      throw err
-    }
-  }
 
   private fun schedulePushToTalkRestart(
     delayMs: Long,

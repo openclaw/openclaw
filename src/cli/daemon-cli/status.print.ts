@@ -38,6 +38,7 @@ import { formatCliCommand } from "../command-format.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import {
   createCliStatusTextStyles,
+  formatGatewayCrashHistory,
   formatRuntimeStatus,
   projectDaemonServiceForJson,
   resolveDaemonInstallBlockMessage,
@@ -313,6 +314,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       `${label("Last shutdown:")} ${infoText(terminalText`${reason ?? "unknown"}`)} at ${new Date(completedAtMs).toISOString()}`,
     );
   }
+  for (const line of formatGatewayCrashHistory(status.gateway)) {
+    printWarning(line);
+  }
   if (status.gateway?.duelingScopesWarning) {
     printWarning(terminalText`${status.gateway.duelingScopesWarning}`);
   }
@@ -428,9 +432,8 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   const serviceInspectionDetail = service.inspectionReason
     ? formatServiceInspectionReason(service.inspectionReason)
-    : service.loadState.status === "unknown"
-      ? service.loadState.detail
-      : undefined;
+    : (service.runtime?.inspectionFailure?.detail ??
+      (service.loadState.status === "unknown" ? service.loadState.detail : undefined));
   if (serviceInspectionDetail) {
     defaultRuntime.error(
       managerUnavailable

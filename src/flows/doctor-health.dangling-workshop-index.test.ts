@@ -112,7 +112,11 @@ it("preserves known damaged state before backing up and migrating an older agent
     for (const sourcePath of [database.path, agentPath]) {
       const backups = fs
         .readdirSync(path.dirname(sourcePath))
-        .filter((name) => name.startsWith(`${path.basename(sourcePath)}.pre-startup-migration-`));
+        .filter(
+          (name) =>
+            name.startsWith(`${path.basename(sourcePath)}.pre-startup-migration-`) &&
+            name.endsWith(".bak"),
+        );
       expect(backups).toHaveLength(1);
       expectDatabase(path.join(path.dirname(sourcePath), backups[0]!), {
         "PRAGMA foreign_key_check": [],

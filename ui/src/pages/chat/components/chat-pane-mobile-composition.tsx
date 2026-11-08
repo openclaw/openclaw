@@ -29,7 +29,7 @@ import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { companionClearAction } from "../chat-panel-header-actions.tsx";
 import { chatPaneLayoutModel, ChatPaneLayoutHeaderActions } from "./chat-header-panel-actions.tsx";
 import type { HeaderSessionMenuPage } from "./chat-header-session-menu-mobile.tsx";
-import { ChatHeaderSessionMenu } from "./chat-header-session-menu.tsx";
+import { ChatHeaderSessionMenu, type HeaderMenuVersions } from "./chat-header-session-menu.tsx";
 import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 import { ChatPaneMobileChrome } from "./chat-pane-mobile-chrome.runtime.tsx";
 import {
@@ -47,7 +47,6 @@ export function ChatPaneMobileComposition(props: {
   header: ChatPaneHeaderProps;
   project?: Element;
   details: Component<{ placement: ChatPanePlacementProps; onOpenMachine: () => void }>;
-  notice: Element;
   fallback: (
     sessionMenu: Element,
     machineName: () => string | undefined,
@@ -514,6 +513,18 @@ export function ChatPaneMobileComposition(props: {
   // Keep the trigger mounted as metadata arrives or the connection changes so keyboard focus survives.
   const sessionMenuAction = () =>
     sessionCommandsAvailable() ? props.header.sessionMenuAction : undefined;
+  // Desktop versions live in the session menu; mobile lists them in Details.
+  const versions = createMemo((): HeaderMenuVersions | undefined =>
+    mobile() ||
+    props.header.catalog ||
+    !(props.header.hasVersions ?? props.header.branches.length > 1)
+      ? undefined
+      : {
+          branches: props.header.branches,
+          disabledReason: props.header.branchSwitchDisabledReason,
+          onSelect: props.header.onBranchSelect,
+        },
+  );
   const sessionMenu = (
     <Show
       when={
@@ -536,6 +547,7 @@ export function ChatPaneMobileComposition(props: {
               : desktopSessionActions(native)
           }
           viewActions={mobile() ? layoutActions() : desktopViewActions()}
+          versions={versions()}
           viewContent={
             mobile() ? (
               <ChatPaneLayoutHeaderActions
@@ -573,7 +585,6 @@ export function ChatPaneMobileComposition(props: {
       header={props.header}
       project={props.project}
       details={details}
-      notice={props.notice}
       sessionMenu={sessionMenu}
       mobile={mobile()}
       presented={presented()}

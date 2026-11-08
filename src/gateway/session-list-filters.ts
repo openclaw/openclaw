@@ -5,7 +5,7 @@ import type {
   SessionsListParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { SessionRunStatusSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildGroupDisplayName } from "../config/sessions/group-display.js";
 import {
@@ -35,7 +35,6 @@ import {
   resolveSessionProfileId,
   projectSessionPeople,
   projectSessionPeopleFacet,
-  resolveSessionListProfileReference,
 } from "./session-identity-projection.js";
 import type { SessionEntryPair } from "./session-list-order.js";
 import { addSessionListSearchModelFields } from "./session-list-search-fields.js";
@@ -43,6 +42,7 @@ import type {
   SessionListModelFactsLookup,
   SessionListTargetLookup,
 } from "./session-list-target.js";
+import { resolveProfileActivitySelection } from "./session-profile-activity-policy.js";
 import type {
   SessionActorProfileIdentity,
   SessionListActiveRunProjector,
@@ -107,6 +107,8 @@ export type SessionListFilterParams = {
     target: NonNullable<ReturnType<SessionListTargetLookup>>,
   ) => boolean;
   restrictProfileReferences?: boolean;
+  /** Undefined permits other profiles; null is an unidentified session-only caller. */
+  profileActivityViewerId?: string | null;
   involvingActorId?: string;
   ownerFirstActorId?: string;
   projectActiveRun?: SessionListActiveRunProjector;
@@ -204,6 +206,9 @@ export function filterSessionEntries(
       }
     : undefined;
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
+  const activityViewerId = params.profileActivityViewerId
+    ? resolveSessionProfileId(params.profileActivityViewerId, identities)
+    : params.profileActivityViewerId;
 
   // Person references resolve before candidate filters; ordinary reads need no roster copy.
   const visibleEntries: SessionEntryPair[] = [];
@@ -224,6 +229,9 @@ export function filterSessionEntries(
   const allowedProfileIds =
     opts.involvingProfileId && params.restrictProfileReferences ? new Set<string>() : undefined;
   if (allowedProfileIds) {
+    if (activityViewerId) {
+      allowedProfileIds.add(activityViewerId);
+    }
     for (const [, entry] of visibleEntries) {
       const owner = projectOwner(entry, identities, cfg, configuredAgentIds)?.actor;
       for (const person of projectPeople(entry, identities, owner)) {
@@ -231,18 +239,16 @@ export function filterSessionEntries(
       }
     }
   }
-  const profileReference = opts.involvingProfileId
-    ? resolveSessionListProfileReference(
-        opts.involvingProfileId,
-        visibleEntries,
-        identities,
-        allowedProfileIds,
-      )
-    : undefined;
-  if (profileReference && !profileReference.ok) {
-    throw new Error("Person link is ambiguous. Use a longer profile ID in the Activity URL.");
-  }
-  const selectedProfileId = profileReference?.value;
+  const selectedProfileId = resolveProfileActivitySelection({
+    viewerId: activityViewerId,
+    creatorId,
+    ownerId,
+    relationProfileId: profileRelation?.profileId,
+    reference: opts.involvingProfileId,
+    entries: visibleEntries,
+    identities,
+    allowedProfileIds,
+  });
 
   const candidateEntries = opts.involvingProfileId
     ? visibleEntries.filter(([, entry]) => matchesSessionArchiveFilter(entry, opts.archived))
@@ -531,7 +537,10 @@ export function filterSessionEntries(
     if (profileRelation?.relationship === "involving" && !relationKeys?.has(key)) {
       continue;
     }
-    if (effectiveOwner) {
+    if (
+      effectiveOwner &&
+      (activityViewerId === undefined || effectiveOwner.identity?.id === activityViewerId)
+    ) {
       addSessionOwnerFacetIdentity(ownerFacet, effectiveOwner);
     }
     if (creatorId && resolveSessionCreatorActor(entry.createdActor)?.id !== creatorId) {
@@ -546,11 +555,15 @@ export function filterSessionEntries(
     }
     if (opts.includePeople || opts.involvingProfileId) {
       const associated = projectPeople(entry, identities, effectiveOwner);
-      peopleSessionCount += 1;
+      const facetPeople =
+        activityViewerId === undefined
+          ? associated
+          : associated.filter((person) => person.identity.id === activityViewerId);
+      peopleSessionCount += Number(activityViewerId === undefined || facetPeople.length > 0);
       peopleIncomplete ||=
         (entry.participantCount ?? entry.participants?.length ?? 0) >= MAX_SESSION_PARTICIPANTS ||
         entry.participants?.some((participant) => participant.identity.type === "legacy") === true;
-      for (const person of associated) {
+      for (const person of facetPeople) {
         const existing = people.get(person.identity.id);
         if (existing) {
           existing.identity = person.identity;
@@ -568,7 +581,7 @@ export function filterSessionEntries(
         }
       }
       if (pulsePeople) {
-        for (const person of associated) {
+        for (const person of facetPeople) {
           pulsePeople.add(person.identity.id);
         }
       }
@@ -576,7 +589,8 @@ export function filterSessionEntries(
     if (
       ownerSessionCounts &&
       entry.archivedAt === undefined &&
-      effectiveOwner?.identity?.type === "profile"
+      effectiveOwner?.identity?.type === "profile" &&
+      (activityViewerId === undefined || effectiveOwner.identity.id === activityViewerId)
     ) {
       const profileId = effectiveOwner.identity.id;
       const counts = ownerSessionCounts.get(profileId) ?? { profileId, open: 0, running: 0 };
@@ -655,7 +669,7 @@ export function filterSessionEntries(
 export function projectSessionOwnerRunningCounts(
   params: SessionListFilterParams,
   selection: SessionEntrySelection,
-  candidateKeys: () => Iterable<string>,
+  activeRunCandidateKeys?: () => ReadonlySet<string> | undefined,
 ): SessionEntrySelection {
   if (!selection.ownerSessionCounts || !selection.ownerSessionProfiles) {
     return selection;
@@ -664,24 +678,47 @@ export function projectSessionOwnerRunningCounts(
     selection.ownerSessionCounts.map((count) => [count.profileId, { ...count, running: 0 }]),
   );
   const context = params.getRowContext();
-  for (const key of candidateKeys()) {
-    const profileId = selection.ownerSessionProfiles.get(key);
-    if (profileId === undefined) {
-      continue;
+  const activeRequesters = context.subagentRuns.activeRequesterSessionKeys();
+  const projected = context.projectedSubagentActivity;
+  const increment = (key: string) => {
+    const profileId = selection.ownerSessionProfiles!.get(key);
+    if (profileId !== undefined) {
+      counts.get(profileId)!.running += 1;
+    }
+  };
+  const project = (key: string) => {
+    if (!selection.ownerSessionProfiles!.has(key)) {
+      return;
     }
     const target = params.getTarget(key);
     if (!target) {
-      continue;
+      return;
     }
-    const active = params.projectActiveRun?.(key, target.entry, target.agentId);
     const storeKey = target.storeKey ?? key;
+    const active = params.projectActiveRun?.(key, target.entry, target.agentId);
     if (
       (active?.active === true && active.status !== "queued") ||
-      context.subagentRuns.countActiveDescendantRuns(storeKey) > 0 ||
-      context.projectedSubagentActivity?.has(storeKey) === true
+      activeRequesters.has(storeKey) ||
+      projected?.has(storeKey)
     ) {
-      counts.get(profileId)!.running += 1;
+      increment(key);
     }
+  };
+  if (params.opts.activeOnly) {
+    // Active-only sentinel keys are qualified by agent; the selected rows own that mapping.
+    selection.ownerSessionProfiles.forEach((_, key) => project(key));
+  } else {
+    activeRequesters.forEach(increment);
+    projected?.forEach((key) => {
+      if (!activeRequesters.has(key)) {
+        increment(key);
+      }
+    });
+    activeRunCandidateKeys?.()?.forEach((key) => {
+      if (!activeRequesters.has(key) && !projected?.has(key)) {
+        project(key);
+      }
+    });
   }
   return { ...selection, ownerSessionCounts: [...counts.values()] };
 }

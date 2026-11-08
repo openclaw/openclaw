@@ -204,6 +204,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_worker_queue_depth`                             | gauge     | `kind`                                                                                    |
 | `openclaw_worker_queue_wait_seconds`                      | histogram | `kind`, `request_class`                                                                   |
 | `openclaw_worker_request_seconds`                         | histogram | `kind`, `request_class`                                                                   |
+| `openclaw_sqlite_reader_operations_total`                 | counter   | `reader_operation`                                                                        |
+| `openclaw_sqlite_reader_read_bytes_total`                 | counter   | `reader_operation`                                                                        |
 | `openclaw_worker_heap_sampled_count`                      | gauge     | none (aggregate), `script`                                                                |
 | `openclaw_worker_heap_used_bytes`                         | gauge     | `script`                                                                                  |
 | `openclaw_worker_heap_used_high_water_bytes`              | gauge     | `worker_class`, `script`                                                                  |
@@ -242,6 +244,32 @@ managed heaps and buffers; they do not measure total native or allocator memory.
 when a later read fails, rather than reported as zero or retained from an older
 sample. Other platforms do not expose these gauges. OpenClaw does not currently
 expose a total SQLite or jemalloc allocation counter.
+
+On Linux, `openclaw_sqlite_reader_read_bytes_total` sums physical storage reads
+from `/proc/thread-self/io` across outer reader operations, including reads below
+the 64 MiB heavy-reader log threshold. `openclaw_sqlite_reader_operations_total`
+counts completed operations with valid before/after measurements, including
+failures and zero-byte reads. Nested readers count once under their outer
+operation. Usage operations distinguish `sessions.usage.refresh`, `summary`,
+`overview`, `sessions`, and `inventory` suffixes.
+
+Transcript hydration uses `sessions.transcript-hydration.<caller>` with fixed
+caller names, including `model-open`, `cron-model`, `subagent-model`,
+`model-reload`, `compaction`, `preview`, and `export`. Sum this prefix to compare
+with the former `sessions.transcript-hydration` total. Reused actor snapshots
+and followers sharing an in-flight hydration do not add reader operations;
+the dispatched read is attributed to its initiating caller. Chat history and
+message subscriptions use separate history operations.
+
+These process-lifetime totals include retired direct reader workers and travel
+with the existing diagnostic memory samples. The label uses internal operation
+names, capped at 256 plus `other`; paths and session identities are excluded.
+The diagnostic sample retains these totals; Prometheus applies its existing
+per-family and total series budgets and reports omitted series through
+`openclaw_prometheus_family_series_dropped_total`. Unavailable measurements are
+omitted. These counters cover physical reads on
+the reader thread during the operation, not logical SQLite pager reads, main
+thread reads, libuv filesystem workers, or all process I/O.
 
 SQLite `sqlite_request`, `sqlite_reply`, and `authority` payload byte series add
 `request_class` from the owning writer job, using the same closed vocabulary as
@@ -1353,7 +1381,7 @@ attributes.
   <Accordion title="Series cap and overflow accounting">
     The exporter retains at most **16,384 aggregate label sets** across counters, gauges, and histograms. Each histogram consumes one entry, regardless of its bucket count; the rendered scrape has more time series. The WebSocket frame-size family is different: its nine cumulative scalar bounds each consume an entry, so 200 event names use 1,800 entries.
 
-    A fixed catalog of 143 metric families reserves **16,136 entries**, leaving **248 shared entries**. Each family can retain at most **128 entries** or its reserve, whichever is larger. Unused reserves are not borrowed. This protects late RPC, run, model, tool, GC, and memory observations from startup traffic in other families. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
+    A fixed catalog of 149 metric families reserves **16,133 entries**, leaving **251 shared entries**. Each family can retain at most **128 entries** or its reserve, whichever is larger. Unused reserves are not borrowed. This protects late RPC, run, model, tool, GC, and memory observations from startup traffic in other families. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
 
     The following reserves apply per family (all names have the `openclaw_` prefix):
 

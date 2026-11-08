@@ -202,9 +202,18 @@ it.each(["advanced", "security"] as const)(
       expect(split).toHaveBeenCalled();
       uiHints = { [`${section}.value`]: { advanced: true } };
       await runtimeConfig.refreshSchema();
-      await waitForSolid(() =>
-        expect(view.page.querySelector(".config-advanced-disclosure")).not.toBeNull(),
-      );
+      // Privacy & security titles its sections itself, so advanced settings stay in place.
+      await waitForSolid(() => {
+        const disclosure = view.page.querySelector(".config-advanced-disclosure");
+        if (pageId === "security") {
+          expect(disclosure).toBeNull();
+          expect(
+            view.page.querySelector('input[aria-label="Replacement schema label"]'),
+          ).not.toBeNull();
+        } else {
+          expect(disclosure).not.toBeNull();
+        }
+      });
     } finally {
       runtimeConfig.setWritesSuspended(true);
       view.dispose();

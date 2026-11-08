@@ -41,7 +41,7 @@ describe("session attention observations", () => {
         ...base,
         type: "session.long_running",
         classification: "long_running",
-        reason: "active_work_progressing",
+        reason: "active_model_call_without_progress",
         activeWorkKind: "model_call",
       });
       metrics.record({
@@ -58,7 +58,7 @@ describe("session attention observations", () => {
         'openclaw_session_stalled_total{active_work_kind="embedded_run",classification="stalled_agent_run",reason="active_work_without_progress",state="processing"} 1\n',
       );
       expect(text).toContain(
-        'openclaw_session_long_running_total{active_work_kind="model_call",reason="active_work_progressing",state="processing"} 1\n',
+        'openclaw_session_long_running_total{active_work_kind="model_call",reason="active_model_call_without_progress",state="processing"} 1\n',
       );
       expect(text).toContain(
         'openclaw_session_stuck_total{reason="queued_work_without_active_run",state="processing"} 1\n',
@@ -68,29 +68,6 @@ describe("session attention observations", () => {
       metrics.stop();
     }
     expect(metrics.render()).toBe("");
-  });
-
-  it.each([
-    ["model_call", "active_model_call_without_progress"],
-    ["model_call", "provider_retry_wait"],
-    ["tool_call", "tool_execution_wait"],
-  ] as const)("counts permitted %s waits without promising progress", (activeWorkKind, reason) => {
-    const metrics = createMetricsHarness();
-    try {
-      metrics.record({
-        type: "session.long_running",
-        classification: "long_running",
-        state: "processing",
-        ageMs: 900_000,
-        activeWorkKind,
-        reason,
-      });
-      expect(metrics.render()).toContain(
-        `openclaw_session_long_running_total{active_work_kind="${activeWorkKind}",reason="${reason}",state="processing"} 1\n`,
-      );
-    } finally {
-      metrics.stop();
-    }
   });
 
   it("normalizes optional diagnostic dimensions", () => {

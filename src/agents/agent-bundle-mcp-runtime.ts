@@ -5,6 +5,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { logWarn } from "../logger.js";
 import { monotonicDeadlineAfter, monotonicNow } from "../shared/monotonic-time.js";
+import type { McpToolCatalog, McpToolCatalogDiagnostic } from "./agent-bundle-mcp-catalog.types.js";
 import {
   getSessionMcpRequestSignal,
   runWithSessionMcpRequestSignal,
@@ -18,12 +19,7 @@ import type {
   CreateSessionMcpRuntime,
   ServerMcpRuntime,
 } from "./agent-bundle-mcp-runtime-shared.js";
-import type {
-  McpRequestOptions,
-  McpToolCatalog,
-  McpToolCatalogDiagnostic,
-  SessionMcpRuntime,
-} from "./agent-bundle-mcp-types.js";
+import type { McpRequestOptions, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import {
   getCatalogListTimeoutMs,
   listAllMcpTools,
@@ -253,7 +249,7 @@ function createServerMcpRuntime(
       if (sessionExpired && !requestSignal?.aborted) {
         recycleReason = "expired HTTP session";
       } else if (tracksFailureBackoff && !requestSignal?.aborted) {
-        const failures = recordServerToolFailure(session, nowMs);
+        const failures = recordServerToolFailure(session, monotonicNow());
         if (requests.didTimeout(error) && failures && failures >= BUNDLE_MCP_FAILURE_THRESHOLD) {
           recycleReason = "repeated request timeouts";
         }

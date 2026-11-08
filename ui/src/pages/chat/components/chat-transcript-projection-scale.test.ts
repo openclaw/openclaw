@@ -19,6 +19,7 @@ import {
 } from "../chat-view.test-helpers.ts";
 import { createRealtimeTalkConversationState } from "../talk/conversation-state.ts";
 import { updateRealtimeTalkConversation } from "../talk/conversation.ts";
+import { settleChatMount } from "../test-helpers/chat-mount-frames.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -69,15 +70,17 @@ async function mountLiveThread(
   transcript: ReturnType<typeof createTranscript>,
   makeProps: () => Parameters<typeof createChatViewFrame>[0],
 ) {
-  const view = mountSolid(() => {
-    const props = makeProps();
-    const viewFrame = createChatViewFrame(
-      props,
-      () => undefined,
-      createAsyncQuestionPresentation(getTranscriptState(paneId), props),
-    );
-    return createComponent(ChatThread, { props: viewFrame.threadProps, transcript });
-  });
+  const view = settleChatMount(() =>
+    mountSolid(() => {
+      const props = makeProps();
+      const viewFrame = createChatViewFrame(
+        props,
+        () => undefined,
+        createAsyncQuestionPresentation(getTranscriptState(paneId), props),
+      );
+      return createComponent(ChatThread, { props: viewFrame.threadProps, transcript });
+    }),
+  );
   onTestFinished(view.unmount);
   transcript.start();
   transcript.update();
@@ -134,7 +137,9 @@ describe("transcript projection", () => {
     vi.useRealTimers();
   });
 
-  it("updates live text without projecting rows, but projects visibility and completion", async () => {
+  it("parks hidden live text without projecting rows and catches up on return", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    onTestFinished(() => visibility.mockRestore());
     const paneId = "stream-leaf-projection";
     const transcript = createTestTranscript(paneId);
     const projectRows = vi.spyOn(transcriptIndex, "projectTranscriptIndex");
@@ -179,6 +184,20 @@ describe("transcript projection", () => {
       expect(currentBubble()!).toBe(bubble);
       expect(bubble.textContent).toContain(text);
     }
+
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    flush();
+    for (const text of ["Hidden reply", "Hidden reply is complete."]) {
+      changeText(text);
+      expect(bubble.textContent).toContain("Reply grows again.");
+      expect(bubble.textContent).not.toContain("Hidden reply");
+    }
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    flush();
+    expect(currentBubble()).toBe(bubble);
+    expect(bubble.textContent).toContain("Hidden reply is complete.");
 
     // A sibling projection update replaces the live resolver's reactive owner.
     updateContext(true);
@@ -491,10 +510,11 @@ describe("transcript projection", () => {
       msg("assistant", "needle", 1_000, { __openclaw: { id: "matching-row" } }),
     ]);
     props.chatBubbleMode = true;
-    const read = vi.fn(() => 700);
+    const heights = new Proxy<Record<string, number>>({}, { get: () => 700 });
+    const read = vi.fn(() => heights);
     props.widgetLayout = {
-      read,
-      readRows: () => undefined,
+      read: (key) => heights[key],
+      readRows: read,
       write: vi.fn(),
       writeRows: vi.fn(),
       invalidateRow: vi.fn(),
@@ -540,7 +560,7 @@ describe("transcript projection", () => {
     const build = vi.spyOn(chatThreadBuild, "buildChatItems");
     const project = () => {
       projectSession(props, transcript);
-      return state.transcriptRenderContext.turnMediaMessages
+      return state.transcriptRenderContext.threadMediaMessages
         ?.values()
         .next()
         .value?.map(({ message }) => message);

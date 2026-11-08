@@ -29,7 +29,7 @@ import {
   testing,
   waitUntilCompleted,
 } from "./code-mode.test-support.js";
-import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
+import { consumeToolExecutionNotStarted as consumeTrustedToolNoStartError } from "./tool-effect-receipt.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import * as gatewayTool from "./tools/gateway.js";

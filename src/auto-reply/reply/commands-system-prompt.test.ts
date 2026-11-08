@@ -105,10 +105,9 @@ vi.mock("../../agents/agent-tools.js", () => ({
   createOpenClawCodingToolsAsync: createOpenClawCodingToolsAsyncMock,
 }));
 
-vi.mock("../../tts/tts-settings.js", () => ({
-  buildTtsSystemPromptHint: vi.fn(() => undefined),
-  resolveModelOverridePolicy: vi.fn(),
-  setTtsMachinePrefsPathResolver: vi.fn(),
+vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: vi.fn(async () => undefined),
 }));
 
 function makeParams(overrides: Partial<HandleCommandsParams> = {}): HandleCommandsParams {

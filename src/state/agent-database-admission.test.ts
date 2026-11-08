@@ -10,10 +10,12 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-error.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
   AgentDatabaseAdmissionError,
@@ -68,16 +70,19 @@ it.each(["settled", "pending"] as const)(
   },
 );
 
-it("reports exhausted lock admission without recommending database repair", () => {
+it.each([
+  Object.assign(new Error("database is locked"), { errcode: 5 }),
+  new WorkerTaskError("worker task capacity reached", "overloaded"),
+  new SqliteWorkerError("worker capacity reached", "overloaded"),
+])("reports exhausted contention without recommending database repair: %s", (cause) => {
   const refusal = inspectionRefusal({
     agentId: "worker",
     paths: ["/synthetic/openclaw-agent.sqlite"],
-    reason: "database is locked",
-    cause: Object.assign(new Error("database is locked"), { errcode: 5 }),
+    reason: cause.message,
+    cause,
   });
   expect(refusal).toMatchObject({
     code: "agent-database-inspection-failed",
-    reason: "database locked by another process",
     repairHint: expect.stringContaining("restart the Gateway to retry admission"),
   });
   expect(refusal.repairHint).not.toContain("doctor --fix");
@@ -264,27 +269,30 @@ it("retains merged inspection causes without changing public refusals", () => {
   );
 });
 
-it("retains its selected agent and state while observing current refusal publications", () => {
-  const env = makeEnv();
-  const stateDir = env.OPENCLAW_STATE_DIR;
-  const assertAdmitted = captureAdmission("  MAIN  ", { env });
-  expect(assertAdmitted).not.toThrow();
-  env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-other-admission-");
-  const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-  const refusal = inspectionRefusal({
-    agentId: "main",
-    paths: [],
-    reason: "Original admission refused",
-  });
-  recordAdmissions([refusal], options);
-  expect(assertAdmitted).toThrow(expect.objectContaining({ refusal }));
-  expect(readRefusal("main", { env })).toBeUndefined();
-  const replacement = { ...refusal, reason: "Replacement admission refused" };
-  recordAdmissions([replacement], options);
-  expect(assertAdmitted).toThrow(expect.objectContaining({ refusal: replacement }));
-  recordAdmissions([], options);
-  expect(assertAdmitted).not.toThrow();
-});
+it.each(["read", "write"] as const)(
+  "retains its selected agent and state while observing current %s refusal publications",
+  (access) => {
+    const env = makeEnv();
+    const stateDir = env.OPENCLAW_STATE_DIR;
+    const assertAdmitted = captureAdmission("  MAIN  ", { env, access });
+    expect(assertAdmitted).not.toThrow();
+    env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-other-admission-");
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const refusal = inspectionRefusal({
+      agentId: "main",
+      paths: [],
+      reason: "Original admission refused",
+    });
+    recordAdmissions([refusal], options);
+    expect(assertAdmitted).toThrow(expect.objectContaining({ refusal }));
+    expect(readRefusal("main", { env })).toBeUndefined();
+    const replacement = { ...refusal, reason: "Replacement admission refused" };
+    recordAdmissions([replacement], options);
+    expect(assertAdmitted).toThrow(expect.objectContaining({ refusal: replacement }));
+    recordAdmissions([], options);
+    expect(assertAdmitted).not.toThrow();
+  },
+);
 
 it("uses the current preparation scope and refuses an escaped scope after preparation ends", async () => {
   const env = makeEnv();

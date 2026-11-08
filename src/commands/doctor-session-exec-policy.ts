@@ -17,15 +17,15 @@ import { repairCanonicalSessionEntries } from "./doctor-session-delivery-state.j
 type LegacySessionEntry = SessionEntry & { execSecurity?: unknown; execAsk?: unknown };
 
 /** Retires session exec overrides without granting the full-mode approval-floor bypass. */
-export function repairLegacySessionExecPolicy(params: {
+export async function repairLegacySessionExecPolicy(params: {
   apply: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   targets?: readonly ExistingAgentDatabaseTarget[];
   integrityCheck?: "quick" | "full";
-}): void {
+}): Promise<void> {
   const messages: string[] = [];
-  repairCanonicalSessionEntries({
+  await repairCanonicalSessionEntries({
     ...params,
     updateDeliveryProjection: false,
     transform(entry: LegacySessionEntry, sessionKey, phase) {

@@ -357,4 +357,43 @@ describe("clawhub artifacts", () => {
       await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from([7, 8, 9]));
     });
   });
+
+  it("does not follow resolver archive redirects to private addresses", async () => {
+    const request = captureClawHubResponse(
+      () =>
+        new Response(null, {
+          status: 302,
+          headers: { Location: "http://169.254.169.254/latest/meta-data/" },
+        }),
+    );
+
+    await expect(
+      downloadClawHubSkillArchiveUrl({
+        baseUrl: "https://clawhub.ai",
+        url: "https://archives.example.com/skill.zip",
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(request.fetch).toHaveBeenCalledTimes(1);
+    expect(request.url().toString()).toBe("https://archives.example.com/skill.zip");
+  });
+
+  it("allows private self-hosted registry origins but not other private resolver URLs", async () => {
+    const request = captureClawHubResponse(() => archiveResponse());
+    const archive = await downloadClawHubSkillArchiveUrl({
+      baseUrl: "http://127.0.0.1:8787",
+      url: "/archives/skill.zip",
+    });
+    await withArchive(archive, async () => {
+      expect(request.url().toString()).toBe("http://127.0.0.1:8787/archives/skill.zip");
+    });
+
+    request.fetch.mockClear();
+    await expect(
+      downloadClawHubSkillArchiveUrl({
+        baseUrl: "http://127.0.0.1:8787",
+        url: "http://127.0.0.1:9999/skill.zip",
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(request.fetch).not.toHaveBeenCalled();
+  });
 });

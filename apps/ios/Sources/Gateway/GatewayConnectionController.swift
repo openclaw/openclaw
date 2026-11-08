@@ -4,11 +4,6 @@ import Observation
 import OpenClawKit
 import SwiftUI
 
-typealias GatewayTCPReachabilityProbe = @Sendable (String, Int, Double, String) async -> Bool
-typealias GatewayServiceEndpointResolver = @Sendable (NWEndpoint) async -> (host: String, port: Int)?
-typealias GatewayForceReconnectReset = @MainActor (NodeAppModel) async -> Void
-typealias GatewayTLSFingerprintPersist = @Sendable (_ fingerprint: String, _ stableID: String) -> Bool
-
 @MainActor
 @Observable
 final class GatewayConnectionController {
@@ -704,6 +699,7 @@ extension GatewayConnectionController {
             } ?? false
             self.appModel?.disconnectForgottenGateway(
                 preservingPendingConnectAttempt: hasDifferentPendingTarget)
+            self.appModel?.focusChatSession(nil)
         }
         if shouldDisconnect, let appModel = self.appModel {
             await appModel.waitForGatewaySessionResetIfNeeded()
@@ -734,6 +730,8 @@ extension GatewayConnectionController {
         _ = GatewaySettingsStore.clearGatewayCustomHeaders(gatewayStableID: stableID)
         _ = GatewayTLSStore.clearFingerprint(stableID: stableID)
         GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        // Re-pairing the same Gateway must not reopen the forgotten conversation.
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
         let shareRelayGatewayID = ShareGatewayRelaySettings.loadConfig()?.gatewayStableID
         if GatewayStableIdentifier.matches(shareRelayGatewayID, stableID) {
             ShareGatewayRelaySettings.clearConfig()
@@ -950,6 +948,9 @@ extension GatewayConnectionController {
             return false
         }
 
+        if GatewayStableIdentifier.matches(ShareGatewayRelaySettings.loadConfig()?.gatewayStableID, stableID) {
+            ShareGatewayRelaySettings.clearConfig()
+        }
         guard self.persistTLSFingerprint(fingerprint, stableID) else {
             self.appModel?.gatewayStatusText = "Could not update gateway certificate"
             return false
@@ -968,12 +969,13 @@ extension GatewayConnectionController {
            GatewayStableIdentifier.matches(cfg.tls?.storeKey ?? cfg.stableID, stableID)
         {
             let currentTLS = cfg.tls
-            var refreshedConfig = cfg
-            refreshedConfig.tls = GatewayTLSParams(
+            let refreshedTLS = GatewayTLSParams(
                 required: currentTLS?.required ?? true,
                 expectedFingerprint: fingerprint,
                 allowTOFU: currentTLS?.allowTOFU ?? false,
                 storeKey: currentTLS?.storeKey ?? stableID)
+            var refreshedConfig = cfg
+            refreshedConfig.tls = refreshedTLS
             let generation = appModel.gatewayConnectGeneration
             guard !Task.isCancelled, !self.hasPendingForgetCleanup(stableID: cfg.stableID) else { return false }
             do {
@@ -1386,7 +1388,7 @@ extension GatewayConnectionController {
                 fingerprintSha256: fp,
                 isManual: pendingConnect.isManual,
                 attemptGeneration: pendingConnect.suppressionLease.generation)
-            self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
+            self.appModel?.awaitGatewayTrustDecision()
             return .accepted
         case let .failure(failure):
             let problem = self.tlsProbeFailureProblem(failure, host: host, port: port)

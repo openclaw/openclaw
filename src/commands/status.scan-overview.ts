@@ -315,7 +315,9 @@ export async function collectStatusScanOverview(params: {
   }
 
   return {
-    recoveryCopies: (await import("./recovery-disk-usage.js")).collectRecoveryDiskUsage({
+    recoveryCopies: await (
+      await import("./recovery-disk-usage.js")
+    ).collectRecoveryDiskUsage({
       cfg,
       env,
     }),

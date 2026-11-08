@@ -12,6 +12,15 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Cross-tab sidebar deletion invalidation" });
 type DeletionProbe = Record<"sent" | "received" | "wipes" | "writes", number> & {
   exchanged: Promise<void>;
+  measuring: boolean;
+  operations: Array<{
+    operation: string;
+    measuring: boolean;
+    at: number;
+    invalidations: { sent: number; received: number };
+    stack?: string;
+    value: unknown;
+  }>;
 };
 declare global {
   interface Window {
@@ -65,6 +74,8 @@ suite.define(() => {
               received: 0,
               wipes: 0,
               writes: 0,
+              measuring: false,
+              operations: [],
               exchanged: new Promise<void>((resolve) => {
                 settle = resolve;
               }),
@@ -104,6 +115,14 @@ suite.define(() => {
                 const source = this instanceof IDBCursor ? this.source : this;
                 if (source instanceof IDBObjectStore && source.name === "sidebarSnapshots") {
                   probe[counter] += 1;
+                  probe.operations.push({
+                    operation: operation.name,
+                    measuring: probe.measuring,
+                    at: Date.now(),
+                    invalidations: { sent: probe.sent, received: probe.received },
+                    stack: new Error("Sidebar snapshot operation").stack,
+                    value: args[0],
+                  });
                 }
                 return operation.apply(this, args);
               };
@@ -176,7 +195,11 @@ suite.define(() => {
         }
         for (const target of pages) {
           await target.evaluate(() => {
-            Object.assign(window.openclawDeletionSnapshotProbe, { wipes: 0, writes: 0 });
+            Object.assign(window.openclawDeletionSnapshotProbe, {
+              wipes: 0,
+              writes: 0,
+              measuring: true,
+            });
           });
         }
         await page.clock.install();
@@ -218,13 +241,20 @@ suite.define(() => {
           });
           await row(target, deleted.key).first().waitFor({ state: "detached" });
         }
-        const writes = await Promise.all(
-          pages.map((target) => target.evaluate(() => window.openclawDeletionSnapshotProbe.writes)),
+        const snapshots = await Promise.all(
+          pages.map((target) =>
+            target.evaluate(() => {
+              const { writes, operations } = window.openclawDeletionSnapshotProbe;
+              return { writes, operations };
+            }),
+          ),
         );
+        const writes = snapshots.map((snapshot) => snapshot.writes);
         // A subagent deletion also settles its retained parent's child-load targets.
-        expect(writes.reduce((total, count) => total + count, 0)).toBeLessThanOrEqual(
-          subagent ? 2 : 1,
-        );
+        expect(
+          writes.reduce((total, count) => total + count, 0),
+          JSON.stringify({ tail, snapshots }, null, 2),
+        ).toBeLessThanOrEqual(subagent ? 2 : 1);
         console.info("deletion-cache-writes-per-two-virtual-minutes", { tail, writes });
         await page.locator("aside.sidebar").screenshot({
           path: `${suite.artifactDir}/${subagent ? "subagent" : "normal"}-live.png`,

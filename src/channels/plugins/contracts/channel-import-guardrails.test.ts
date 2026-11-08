@@ -2,7 +2,6 @@ import fs from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { SourceFile } from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mts";
 import { collectModuleReferencesFromSource } from "../../../../scripts/lib/guard-inventory-utils.mjs";
@@ -179,22 +178,34 @@ function collectExtensionFiles(extensionId: string, excludeApi = false): string[
   );
 }
 
-function visitSources(files: string[], check: (source: SourceFile) => void) {
+type ModuleReferences = ReturnType<typeof collectModuleReferencesFromSource>;
+// Keep plain references after each native parser snapshot is disposed.
+const sourceReferences = new Map<() => string[], Map<string, ModuleReferences>>();
+
+function collectSourceReferences(collect: () => string[]) {
+  const cached = sourceReferences.get(collect);
+  if (cached) {
+    return cached;
+  }
+  const references = new Map<string, ModuleReferences>();
+  const files = collect();
   for (let offset = 0; offset < files.length; offset += 32) {
     const sources = files
       .slice(offset, offset + 32)
       .map((fileName) => ({ fileName, text: readSource(fileName) }));
     for (const source of parser.parseSourceFiles(sources)) {
-      check(source);
+      references.set(source.fileName, collectModuleReferencesFromSource(source));
     }
   }
+  sourceReferences.set(collect, references);
+  return references;
 }
 
-function expectNoCorePluginPrivateSrcImports(sourceFile: SourceFile): void {
-  const imports = collectModuleReferencesFromSource(sourceFile, {
-    acceptSpecifier: (specifier) => /(?:^|\/)extensions\/[^/]+\/src\//u.test(specifier),
-  });
-  expect(imports, `${sourceFile.fileName} should not import plugin-private src paths`).toEqual([]);
+function expectNoCorePluginPrivateSrcImports(file: string, references: ModuleReferences): void {
+  const imports = references.filter(({ specifier }) =>
+    /(?:^|\/)extensions\/[^/]+\/src\//u.test(specifier),
+  );
+  expect(imports, `${file} should not import plugin-private src paths`).toEqual([]);
 }
 
 function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void {
@@ -282,26 +293,30 @@ describe("channel import guardrails", () => {
       "source.ts",
       'import client = require("../../extensions/feishu/src/client");',
     );
-    expect(() => expectNoCorePluginPrivateSrcImports(source)).toThrow(
-      "should not import plugin-private src paths",
-    );
+    expect(() =>
+      expectNoCorePluginPrivateSrcImports(
+        source.fileName,
+        collectModuleReferencesFromSource(source),
+      ),
+    ).toThrow("should not import plugin-private src paths");
   });
 
   it("allows diagnostic paths and import examples without loading plugin-private modules", () => {
-    expectNoCorePluginPrivateSrcImports(
-      parser.parseSourceFile(
-        "source.ts",
-        [
-          'const modulePath = "extensions/feishu/src/client.ts";',
-          '// import "../../extensions/feishu/src/client.js";',
-          'const example = `require("../../extensions/feishu/src/client.js")`;',
-        ].join("\n"),
-      ),
+    const source = parser.parseSourceFile(
+      "source.ts",
+      [
+        'const modulePath = "extensions/feishu/src/client.ts";',
+        '// import "../../extensions/feishu/src/client.js";',
+        'const example = `require("../../extensions/feishu/src/client.js")`;',
+      ].join("\n"),
     );
+    expectNoCorePluginPrivateSrcImports(source.fileName, collectModuleReferencesFromSource(source));
   });
 
   it("keeps core production files off plugin-private src imports", () => {
-    visitSources(collectCoreSourceFiles(), expectNoCorePluginPrivateSrcImports);
+    for (const [file, references] of collectSourceReferences(collectCoreSourceFiles)) {
+      expectNoCorePluginPrivateSrcImports(file, references);
+    }
   });
 
   it.each<[string, () => string[], (file: string, imports: string[]) => void]>([
@@ -314,17 +329,17 @@ describe("channel import guardrails", () => {
     ],
     ["extension public seams", collectExtensionSourceFiles, expectOnlyApprovedExtensionSeams],
   ])("guards %s", (_name, collect, check) => {
-    visitSources(collect(), (source) =>
+    for (const [file, references] of collectSourceReferences(collect)) {
       check(
-        source.fileName,
-        collectModuleReferencesFromSource(source)
+        file,
+        references
           .filter(
             ({ kind, specifier }) =>
               kind !== "import-meta-url" && /\.(?:[cm]?[jt]sx?)$/u.test(specifier),
           )
           .map(({ specifier }) => specifier),
-      ),
-    );
+      );
+    }
   });
 
   it("keeps internalized extension helper surfaces behind local api barrels", () => {

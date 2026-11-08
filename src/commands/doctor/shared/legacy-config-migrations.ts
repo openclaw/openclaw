@@ -3,6 +3,7 @@ import type { LegacyConfigMigrationSpec, LegacyConfigRule } from "../../../confi
 import { selectLegacyHeartbeatVisibility } from "./channel-legacy-config-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS_AUDIO } from "./legacy-config-migrations.audio.js";
 import { LEGACY_CONFIG_MIGRATIONS_CHANNELS } from "./legacy-config-migrations.channels.js";
+import { LEGACY_PLUGIN_PROMPT_PERMISSION } from "./legacy-config-migrations.plugin-prompts.js";
 import { LEGACY_CONFIG_MIGRATIONS_QQBOT } from "./legacy-config-migrations.qqbot.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME } from "./legacy-config-migrations.runtime.js";
 import { LEGACY_CONFIG_MIGRATIONS_WEB_SEARCH } from "./legacy-config-migrations.web-search.js";
@@ -11,6 +12,7 @@ import { removeLegacyCopilotDiscovery } from "./legacy-copilot-discovery.js";
 import { LEGACY_CONFIG_MIGRATION_TOOLS_BY_SENDER } from "./legacy-tools-by-sender.js";
 
 export const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigrationSpec[] = [
+  LEGACY_PLUGIN_PROMPT_PERMISSION,
   {
     id: "plugins.empty-installs",
     legacyRules: [

@@ -40,9 +40,7 @@ export function knownSessionIdentities(params: {
       id: profile.id,
       identity: { type: "profile", id: profile.id },
       label: profile.label,
-      ...(profile.hasAvatar
-        ? { avatarUrl: buildControlUiUserAvatarPath(profile.id, profile.updatedAt) }
-        : {}),
+      avatarUrl: buildControlUiUserAvatarPath(profile.id, profile.updatedAt),
     });
   }
   return [...identities.values()];

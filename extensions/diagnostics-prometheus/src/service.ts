@@ -76,6 +76,7 @@ function recordDiagnosticEvent(
       }
       return;
     case "sessions.list.retention":
+    case "sessions.projection.retention":
     case "sessions.event.retention":
     case "sessions.event.rows.reset":
       if (metadata.trusted) {
@@ -501,8 +502,6 @@ function recordDiagnosticEvent(
         {},
         numericValue(evt.queueLength),
       );
-      break;
-    case "diagnostic.heartbeat":
       break;
     case "telemetry.exporter":
       store.counter("openclaw_telemetry_exporter_total", "Telemetry exporter lifecycle events.", {
