@@ -112,31 +112,72 @@ suite.define(() => {
     const links = user.getByRole("button", { name: "Send now", exact: true });
     const link = links.first();
     await link.waitFor({ state: "visible" });
-    await expectCount(links, 2);
+    // Steers waiting together drain together: one Send now, on the newest sendable steer.
+    await expectCount(links, 1);
     await expectCount(user, 1);
     const bubble = await user.locator(".chat-bubble").first().elementHandle();
+    const banner = page.locator(".chat-pending-inputs");
+    const historyReads = async () => (await gateway.getRequests("chat.history")).length;
+    // A refused Send now refreshes the row instead of raising a composer banner.
+    await gateway.setMethodResponse("chat.steerNow", {
+      __mockError: {
+        code: "FORBIDDEN",
+        message: "Sending a pending steer now requires session write access.",
+      },
+    });
+    let reads = await historyReads();
     await link.click();
     const request = await gateway.waitForRequest("chat.steerNow");
-    expect(request.params).toMatchObject({ sessionKey, sessionId, runId });
-    await page.getByText("Waiting for upload; cannot interrupt safely.", { exact: true }).waitFor();
-    await expectCount(user, 1);
-    await gateway.setMethodResponse("chat.steerNow", { status: "interrupted", tools: ["exec"] });
+    expect(request.params).toMatchObject({ sessionKey, sessionId, runId: "pending-steer-2" });
+    await gateway.waitForRequest("chat.history", { after: reads });
+    await expectCount(banner, 0);
+    await expectCount(links, 1);
+    // Steers waiting on the same run share one quiet label on the newest message.
+    const blocked = (input: (typeof history.pendingInputs.items)[number]) => ({
+      ...input,
+      steerNow: { status: "blocked", tools: ["upload"] },
+    });
+    await gateway.setMethodResponse("chat.steerNow", { status: "blocked", tools: ["upload"] });
     await gateway.setMethodResponse("chat.history", {
       ...history,
-      pendingInputs: { items: [secondInput], total: 1 },
+      pendingInputs: { items: history.pendingInputs.items.map(blocked), total: 2 },
     });
+    reads = await historyReads();
     await link.click();
+    await gateway.waitForRequest("chat.steerNow", { after: 1 });
+    await gateway.waitForRequest("chat.history", { after: reads });
+    const steering = page.locator(".chat-steer-now [role=status]");
+    await expectCount(steering, 1);
+    expect(await steering.getAttribute("aria-label")).toBe(
+      "Steering — sends when the current step finishes.",
+    );
+    expect(await steering.textContent()).toBe("Steering…");
+    await expectCount(links, 0);
+    await expectCount(banner, 0);
+    await expectCount(user, 1);
+    expect(await bubble?.evaluate((element) => element.isConnected)).toBe(true);
+    // When only the earlier steer can interrupt, it carries Send now and the newest stays bare.
+    const [firstInput] = history.pendingInputs.items;
+    const remaining = {
+      ...history,
+      pendingInputs: { items: [firstInput, blocked(secondInput)], total: 2 },
+    };
+    await gateway.setMethodResponse("chat.startup", remaining);
+    await gateway.setMethodResponse("chat.history", remaining);
+    await gateway.setMethodResponse("chat.steerNow", { status: "interrupted", tools: [] });
+    await page.reload();
     await expectCount(links, 1);
+    await expectCount(steering, 0);
     await gateway.setMethodResponse("chat.history", {
       ...history,
       pendingInputs: { items: [], total: 0 },
     });
     await links.click();
-    const second = await gateway.waitForRequest("chat.steerNow", { after: 2 });
-    expect(second.params).toMatchObject({ runId: "pending-steer-2" });
+    // Request history is per page load.
+    const second = await gateway.waitForRequest("chat.steerNow");
+    expect(second.params).toMatchObject({ runId });
     await expectCount(links, 0);
-    await expectCount(user, 1);
-    expect(await bubble?.evaluate((element) => element.isConnected)).toBe(true);
+    await expectCount(steering, 0);
   });
 
   it.each([

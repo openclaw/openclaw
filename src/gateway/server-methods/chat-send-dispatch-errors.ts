@@ -11,6 +11,7 @@ import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/disp
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import {
   getRpcSourceIdentity,
   getRpcSourceLifecycleGeneration,
@@ -127,10 +128,23 @@ type PendingDispatchLifecycleError = {
   error: string;
   errorKind?: "state_contention";
   notice?: string;
+  desktopNotice?: string;
   sessionId: string;
   lifecycleRevision?: string;
   startedAt: number;
 };
+
+function resolveDesktopChatSendErrorNotice(error: unknown): string | undefined {
+  const storageFailure = classifyGatewayStorageFailure(error);
+  const notice =
+    storageFailure === "SQLITE_BUSY" || storageFailure === "SQLITE_LOCKED"
+      ? "The request was interrupted because OpenClaw storage is busy."
+      : (resolveChatSendStorageErrorMessage(error) ??
+        renderAgentHarnessPreflightUserMessage(error, { audience: "desktop" }) ??
+        renderFailoverCodeUserCopy(describeFailoverError(error).code));
+  // Desktop notices state the failure, without the following recovery advice.
+  return notice?.split(/(?<=[.!?])\s+|\r?\n/u, 1)[0];
+}
 
 function formatChatSendError(error: unknown): string {
   if (error instanceof DispatchSessionRefreshRequiredError) {
@@ -359,6 +373,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
     }
     const errorMessage = formatChatSendError(err);
     const errorKind = resolveStateContentionPresentation(err)?.errorKind;
+    const desktopNotice = resolveDesktopChatSendErrorNotice(err);
     const queuedFollowupEnqueued = isQueuedFollowupEnqueued();
     if (queuedFollowupEnqueued) {
       context.logGateway.warn(
@@ -433,6 +448,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
         endedAt: Date.now(),
         error: errorMessage,
         errorKind,
+        desktopNotice,
         sessionId: getRpcSourceIdentity(activeRunAbort.entry).sessionId,
         lifecycleRevision:
           session.entry?.lifecycleRevision ?? admission.initialSessionEntry?.lifecycleRevision,
@@ -516,6 +532,9 @@ export function createChatSendDispatchErrorLifecycle(params: {
             error: dispatchError.error,
             errorKind: dispatchError.errorKind,
             ...(dispatchError.notice ? { errorNotice: dispatchError.notice } : {}),
+            ...(dispatchError.desktopNotice
+              ? { desktopErrorNotice: dispatchError.desktopNotice }
+              : {}),
             ...dispatchError.terminationFields,
           },
         },
@@ -545,6 +564,13 @@ export function createChatSendDispatchErrorLifecycle(params: {
    * failure before any runtime lifecycle exists. Record it as this run's durable
    * terminal so history and other clients show the outcome, not only the live broadcast.
    */
+  let unstartedDesktopNotice: string | undefined;
+  const captureUnstartedFailure = (error: unknown): never => {
+    // Source completion flattens this error before delivering the unstarted terminal.
+    unstartedDesktopNotice = resolveDesktopChatSendErrorNotice(error);
+    throw error;
+  };
+
   const recordUnstartedFailure = async (failure: { error: string; notice?: string }) => {
     if (suppressLifecycle || params.isAgentRunStarted()) {
       return;
@@ -553,8 +579,10 @@ export function createChatSendDispatchErrorLifecycle(params: {
       allowUnstartedFailure: true,
       terminationFields: {},
       endedAt: Date.now(),
-      // A returned payload notice is already user-facing copy with its next step.
       ...failure,
+      errorKind: resolveStateContentionPresentation(failure.error)?.errorKind,
+      notice: failure.notice,
+      desktopNotice: unstartedDesktopNotice,
       sessionId: getRpcSourceIdentity(activeRunAbort.entry).sessionId,
       lifecycleRevision:
         session.entry?.lifecycleRevision ?? admission.initialSessionEntry?.lifecycleRevision,
@@ -631,5 +659,12 @@ export function createChatSendDispatchErrorLifecycle(params: {
     }
   };
 
-  return { broadcastError, classifyFailure, finalize, handleError, recordUnstartedFailure };
+  return {
+    broadcastError,
+    captureUnstartedFailure,
+    classifyFailure,
+    finalize,
+    handleError,
+    recordUnstartedFailure,
+  };
 }

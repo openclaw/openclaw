@@ -39,7 +39,7 @@ export const MARKDOWN_FILE_LINK_SCAN_RE = new RegExp(
   "gu",
 );
 const FILE_LINE_SUFFIX_RE = /:(\d{1,6})(?:[-:]\d{1,6})?$/;
-const BARE_FILE_EXTENSIONS = new Set([
+const AUTOLINK_FILE_EXTENSIONS = new Set([
   "astro",
   "bash",
   "c",
@@ -154,7 +154,7 @@ function isAllowlistedBareFilename(raw: string, grammar: RegExp): boolean {
     return false;
   }
   const match = grammar.exec(raw);
-  return Boolean(match?.[1] && BARE_FILE_EXTENSIONS.has(match[1].toLowerCase()));
+  return Boolean(match?.[1] && AUTOLINK_FILE_EXTENSIONS.has(match[1].toLowerCase()));
 }
 
 export function parseMarkdownFileLinkTarget(
@@ -166,7 +166,18 @@ export function parseMarkdownFileLinkTarget(
   if (!grammar.exact.test(target) && !isAllowlistedBareFilename(target, grammar.bare)) {
     return null;
   }
-  return splitMarkdownFileLineSuffix(target);
+  const parsed = splitMarkdownFileLineSuffix(target);
+  // Unprefixed paths are ambiguous with repository names ("openclaw/openclaw.ai").
+  // An explicit path prefix or authored link keeps uncommon extensions addressable.
+  if (
+    !options?.authored &&
+    parsed.path.includes("/") &&
+    !/^(?:~\/|\.{1,2}\/|\/|[A-Za-z]:[\\/])/.test(parsed.path) &&
+    !AUTOLINK_FILE_EXTENSIONS.has(parsed.path.slice(parsed.path.lastIndexOf(".") + 1).toLowerCase())
+  ) {
+    return null;
+  }
+  return parsed;
 }
 
 export function isHostLocalMarkdownFileHref(href: string): boolean {
