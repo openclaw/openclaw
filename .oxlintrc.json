@@ -526,7 +526,7 @@
     {
       "files": ["src/gateway/session-worktree-preparation.ts"],
       "rules": {
-        "max-lines": ["error", { "max": 725, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["error", { "max": 755, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {
@@ -604,7 +604,7 @@
     {
       "files": ["src/gateway/server-methods/projects.ts"],
       "rules": {
-        "max-lines": ["error", { "max": 749, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["error", { "max": 755, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {
@@ -697,6 +697,24 @@
       "rules": {
         // Scenario scripts need page-global declarations, unlike Playwright's expression evaluation.
         "eslint/no-eval": ["error", { "allowIndirect": true }]
+      }
+    },
+    {
+      "files": ["src/gateway/server-methods/sessions-create.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 705, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/agents/subagents/spawn/subagent-spawn.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 708, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/gateway/server-methods/projects.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1026, "skipBlankLines": true, "skipComments": true }]
       }
     }
   ]

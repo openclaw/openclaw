@@ -134,7 +134,7 @@ describe("listGatewayMethods", () => {
     expect(
       descriptors.find((descriptor) => descriptor.name === "projects.searchRemote"),
     ).toMatchObject({
-      scope: "operator.read",
+      scope: "operator.write",
       description: "Search GitHub repositories that can be cloned as managed projects.",
     });
   });

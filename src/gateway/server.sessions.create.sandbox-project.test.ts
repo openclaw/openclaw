@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -22,11 +24,29 @@ import { initializeRepository } from "./server.sessions.create.projects.test-sup
 import { testState } from "./test-helpers.js";
 import { setupGatewaySessionsHandlerTestHarness } from "./test/server-sessions.test-helpers.js";
 
+// Keep the public API transport contract over this suite's stubbed fetch; the
+// suite does not load the bundled GitHub provider transport.
+vi.mock("./github-public-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./github-public-api.js")>()),
+  gitHubPublicApi: {
+    fetchGitHubJson: async (url: string, fetchImpl: typeof fetch) => {
+      const response = await fetchImpl(url);
+      if (!response.ok) {
+        throw Object.assign(new Error("GitHub visibility lookup failed"), {
+          statusCode: response.status,
+        });
+      }
+      return await response.json();
+    },
+  },
+}));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
+  vi.unstubAllGlobals();
 });
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
@@ -38,6 +58,18 @@ test.each(["all", "off"] as const)(
     const outside = await initializeRepository(root, "outside");
     testState.agentConfig = { workspace, sandbox: { mode } };
     const { storePath } = await createSessionStoreDir();
+    const repository = "example/sandbox-project-" + mode;
+    const visibility = { current: "public" };
+    const fetchImpl = vi.fn(async () => Response.json({ visibility: visibility.current }));
+    vi.stubGlobal("fetch", fetchImpl);
+    await promisify(execFile)("git", [
+      "-C",
+      outside,
+      "remote",
+      "set-url",
+      "origin",
+      "https://github.com/" + repository + ".git",
+    ]);
     const project = await registerProjectRegistry({ path: outside });
 
     const profile = ensureProfileForEmail("project-guest@example.test");
@@ -189,6 +221,46 @@ test.each(["all", "off"] as const)(
           message: "sessions.create project is outside the sandboxed agent workspace",
         },
       });
+    }
+    // Discovery's cached public answer cannot authorize a later source handoff.
+    visibility.current = "private";
+    const respond = vi.fn();
+    await handleGatewayRequest({
+      req: {
+        type: "req",
+        id: "private-project",
+        method: "sessions.create",
+        params: { agentId: "main", projectId: project.id, worktree: true },
+      },
+      client,
+      context,
+      respond,
+      isWebchatConnect: () => false,
+    });
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "INVALID_REQUEST",
+      message: "unknown project id: " + project.id,
+    });
+    expect(await checkoutOptions(project.id)).toEqual([
+      true,
+      { current: false, worktree: false },
+      undefined,
+    ]);
+    for (const [method, params] of [
+      ["sessions.create", { projectGitUrl: "https://github.com/" + repository + ".git" }],
+      ["projects.searchRemote", { query: repository }],
+      ["worktrees.list", {}],
+    ] as const) {
+      const denied = vi.fn();
+      await handleGatewayRequest({
+        req: { type: "req", id: method, method, params },
+        client,
+        context,
+        respond: denied,
+        isWebchatConnect: () => false,
+      });
+      expect(denied.mock.calls[0]?.[0]).toBe(false);
+      expect(JSON.stringify(denied.mock.calls[0]?.[2])).toContain("operator.write");
     }
   },
 );

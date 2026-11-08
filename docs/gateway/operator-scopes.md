@@ -505,8 +505,9 @@ dispatch so authorization failures have one standard structured response:
   require an exact match, or `operator.admin`.
 - `sessions.create` accepts `operator.sessions.write` for ordinary own-session
   creation, including a `projectId`, or the broader `operator.write` scope.
-  Existing device folders (`deviceFolder: { deviceId, path }`) require the broader
-  `operator.write` scope, a connected session host advertising folder support, and
+  Repository URLs (`projectGitUrl`) require the broader `operator.write` scope.
+  Existing device folders (`deviceFolder: { deviceId, path }`) require that scope,
+  a connected session host advertising folder support, and
   node-local consent through `nodeHost.workerRuns.folders`. They do not grant
   arbitrary node execution, but the selected folder becomes the session's
   workspace root. If you rely on `tools.fs.workspaceOnly` or exec restrictions to
@@ -564,7 +565,15 @@ Project RPCs use these scopes:
 | `projects.list`                        | `operator.sessions.read` or broader read access; only callers satisfying `operator.write` receive `repoRoot` and `originUrl`. |
 | `projects.add`                         | `operator.write` and the `controlPlaneWrite` method flag.                                                                     |
 | `projects.register`, `projects.remove` | `operator.admin`.                                                                                                             |
-| `projects.searchRemote`                | `operator.read`.                                                                                                              |
+| `projects.searchRemote`                | `operator.write`.                                                                                                             |
+
+Restricted callers (without `operator.write`) can discover and start only public
+GitHub registry projects on the configured GitHub host, plus permitted agent
+workspace pseudo-projects. Private, Enterprise-internal, unknown, and different-host
+repositories are unavailable. Discovery may cache visibility for ten minutes; each
+new session or native child source handoff independently checks current visibility.
+Internal maintenance and broad writer access remain unchanged, as do existing
+checkouts and their custody. `worktrees.list` requires `operator.write`.
 
 Some handlers then apply stricter checks based on the concrete thing being
 approved or mutated:

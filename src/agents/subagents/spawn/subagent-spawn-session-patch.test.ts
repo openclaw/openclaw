@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -12,6 +13,8 @@ import {
   bindInProcessSessionRun,
   takeInProcessFreshChildSession,
 } from "../../../gateway/in-process-session-run.js";
+import { initializeRepository } from "../../../gateway/server-methods/projects.test-support.js";
+import { registerProjectRegistry } from "../../../projects/project-registry.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -103,6 +106,7 @@ it.each(["creation", "fork"] as const)(
           operation === "creation"
             ? await createFromParent({
                 cfg,
+                projectRequester: { kind: "internal" },
                 requesterAgentId: agentId,
                 targetAgentId: agentId,
                 childSessionKey,
@@ -176,6 +180,7 @@ function lineageSpawnParams(
 ) {
   return {
     cfg: {},
+    projectRequester: { kind: "internal" as const },
     requesterAgentId: "main",
     targetAgentId: "main",
     childSessionKey,
@@ -382,3 +387,62 @@ it("commits group and delivery facts with creation for one host-bound admission"
     expect(takeInProcessFreshChildSession(request)).toBeUndefined();
   });
 });
+
+it.each(["explicit", "inherited"] as const)(
+  "checks fresh repository visibility for %s native child source handoff",
+  async (selection) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = await captureRuntimeConfigAsyncReader()();
+      const repo = await initializeRepository(
+        state.stateDir,
+        "native-" + selection,
+        "https://github.com/example/native-" + selection + ".git",
+      );
+      const project = await registerProjectRegistry({ path: repo });
+      const parentKey = "agent:main:project-parent";
+      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      await upsertSessionEntryCore(
+        { storePath, sessionKey: parentKey },
+        {
+          sessionId: "parent",
+          projectId: project.id,
+          sessionRoot: repo,
+        },
+      );
+      let visibility = "private";
+      const fetchImpl = vi.fn(async () => Response.json({ visibility }));
+      vi.stubGlobal("fetch", fetchImpl);
+      onTestFinished(() => {
+        vi.unstubAllGlobals();
+      });
+      const create = (suffix: string) =>
+        createFromParent({
+          ...lineageSpawnParams(parentKey, "agent:main:subagent:" + suffix, {
+            senderIsOwner: true,
+          }),
+          cfg,
+          projectRequester: { kind: "operator", scopes: ["operator.sessions.write"] },
+          worktree: {
+            task: "Inspect selected project",
+            ...(selection === "explicit" ? { projectId: project.id } : {}),
+          },
+        });
+      const denied = await create("private");
+      expect(denied).toMatchObject({ status: "error" });
+      expect(denied.status === "error" ? denied.error : "").toContain(
+        selection === "explicit" ? "unknown project id" : "not available to this requester",
+      );
+      expect(
+        loadSessionEntry({ storePath, sessionKey: "agent:main:subagent:private" }),
+      ).toBeUndefined();
+      visibility = "public";
+      const allowed = await create("public");
+      expect(allowed, JSON.stringify(allowed)).toMatchObject({ status: "ok" });
+      expect(
+        loadSessionEntry({ storePath, sessionKey: "agent:main:subagent:public" })?.pendingWorktree
+          ?.workspace,
+      ).toBe(repo);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+  },
+);

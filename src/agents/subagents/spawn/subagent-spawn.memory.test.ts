@@ -75,6 +75,7 @@ it.each([
     expect(initialized.kind).toBe("committed");
     const create = () =>
       createInitialSubagentSession({
+        projectRequester: { kind: "internal" },
         cfg: {},
         requesterAgentId: "main",
         targetAgentId,

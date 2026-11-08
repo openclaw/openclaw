@@ -72,8 +72,12 @@ export function resolveSessionMethodScope(
   method: string,
   params?: unknown,
 ): SessionOperatorScope | undefined {
-  // Selecting a device filesystem requires the broader operator capability.
-  if (method === "sessions.create" && isRecord(params) && params.deviceFolder !== undefined) {
+  // Device paths and URL clones using the Gateway identity require broader write access.
+  if (
+    method === "sessions.create" &&
+    isRecord(params) &&
+    (params.deviceFolder !== undefined || params.projectGitUrl !== undefined)
+  ) {
     return undefined;
   }
   if (SESSION_READ_METHODS.has(method)) {

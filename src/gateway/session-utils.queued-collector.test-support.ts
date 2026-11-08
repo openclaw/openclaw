@@ -260,6 +260,7 @@ export function useQueuedCollectorFixture() {
     const groupId = `swarm:${parentKey}:parent-turn`;
     reserveSwarmRun({ runId, groupId, maxConcurrent: 1, activeRunIds: [] });
     const created = await createInitialSubagentSession({
+      projectRequester: { kind: "internal" },
       cfg: getRuntimeConfig(),
       requesterAgentId: "main",
       targetAgentId: "main",

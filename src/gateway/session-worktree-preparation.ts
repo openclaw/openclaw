@@ -40,12 +40,18 @@ import {
   ProjectCheckoutError,
   resolveProjectCheckout,
   resolveProjectDirectory,
-  resolveProjectRegistry,
+  listWorkspaceProjects,
   resolveWorkspaceProject,
   selectStoredProjectRegistry,
 } from "../projects/project-registry.js";
 import type { ProjectRegistryRecord } from "../projects/project-registry.types.js";
 import { generateWorktreeSessionTitle } from "./dashboard-session-title.js";
+import {
+  canRequesterUseProject,
+  hasFullProjectAccess,
+  type ProjectRequester,
+  resolveRequesterProject,
+} from "./project-access.js";
 import { prepareSessionCreateFilesystemRoot } from "./server-methods/session-create-root.js";
 import type {
   PrepareGatewaySessionLifecycle,
@@ -62,8 +68,9 @@ export async function resolveSessionProjectRoot(
   cfg: OpenClawConfig,
   projectId: string,
   worktree: boolean,
+  requester: ProjectRequester,
 ): Promise<Result<string, ErrorShape>> {
-  const project = await resolveProjectRegistry(cfg, projectId);
+  const project = await resolveRequesterProject(cfg, projectId, requester, { fresh: true });
   if (!project) {
     return invalidSessionRequest(`unknown project id: ${projectId}`);
   }
@@ -103,6 +110,7 @@ function selectSessionWorktreeProjectSource(projectId: string | undefined, signa
 export async function resolveSessionProjectCheckoutOptions(params: {
   cfg: OpenClawConfig;
   projectId: string;
+  requester: ProjectRequester;
   targetAgentId: string;
   resolveSandboxRequired: () => boolean;
   assertCurrent: () => void;
@@ -113,9 +121,11 @@ export async function resolveSessionProjectCheckoutOptions(params: {
   const source = pendingSource ? await pendingSource : undefined;
   params.assertCurrent();
   const project = source?.project ?? resolveWorkspaceProject(params.cfg, params.projectId);
-  if (!project) {
+  if (!project || !(await canRequesterUseProject(params.cfg, project, params.requester))) {
+    params.assertCurrent();
     return { current: false, worktree: false };
   }
+  params.assertCurrent();
   const [direct, managed] = await Promise.all([
     resolveSessionProjectRootForRecord(project, false),
     resolveSessionProjectRootForRecord(project, true),
@@ -140,6 +150,7 @@ type AcceptedWorktreeSource = NonNullable<
 
 type SpawnParentWorktreeSource = {
   workspace: string;
+  projectId?: string;
   source?: AcceptedWorktreeSource;
   withCurrent: WorktreeSourceStage;
   withRollback?: <T>(run: (assertCurrent: () => void) => Promise<T>) => Promise<T>;
@@ -230,6 +241,7 @@ async function prepareSpawnParentWorktreeSource(
     if (selection) {
       return {
         workspace: project.repoRoot,
+        projectId,
         source: { kind: "project", id: projectId },
         withRollback: selection.withRollback,
         withCurrent: async (run) =>
@@ -253,6 +265,7 @@ async function prepareSpawnParentWorktreeSource(
     assertCurrent();
     return {
       workspace: project.repoRoot,
+      projectId,
       source: { kind: "project", id: projectId },
       withCurrent: async (run) => await run({ assertCurrent, signal: options.signal }),
     };
@@ -280,6 +293,7 @@ async function prepareSpawnParentWorktreeSource(
   assertCurrent();
   return {
     workspace: worktree.repoRoot,
+    projectId: normalizeOptionalString(parent.entry.projectId),
     source: { kind: "worktree", id: worktree.id },
     withCurrent: async (run) =>
       await run({
@@ -620,6 +634,7 @@ export async function prepareSessionWorktreeCreation(params: {
   target: Parameters<PrepareGatewaySessionLifecycle>[0];
   workspace?: string | { kind: "empty" };
   inheritParentKey?: string;
+  projectRequester: ProjectRequester;
   projectGitUrl?: string;
   name?: string;
   baseRef?: string;
@@ -658,6 +673,21 @@ export async function prepareSessionWorktreeCreation(params: {
           signal,
         })
       : undefined;
+  if (inheritedSource && !hasFullProjectAccess(params.projectRequester)) {
+    const allowed = inheritedSource.projectId
+      ? (await resolveRequesterProject(cfg, inheritedSource.projectId, params.projectRequester, {
+          fresh: true,
+        })) !== undefined
+      : listWorkspaceProjects(cfg).some(
+          (project) => path.resolve(project.repoRoot) === path.resolve(inheritedSource.workspace),
+        );
+    commitGuard();
+    if (!allowed) {
+      return invalidSessionRequest(
+        "The parent session's project is not available to this requester.",
+      );
+    }
+  }
   commitGuard();
   const withSource = inheritedSource?.withCurrent;
   const withCommit: PreparedGatewaySessionLifecycle["withCommit"] = withSource

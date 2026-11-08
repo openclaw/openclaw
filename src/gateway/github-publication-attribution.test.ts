@@ -302,6 +302,7 @@ describe("Gateway GitHub publication attribution", () => {
     }
     const childKey = "agent:main:subagent:delegated-publication";
     const child = await createInitialSubagentSession({
+      projectRequester: { kind: "internal" },
       cfg: config,
       requesterAgentId: "main",
       targetAgentId: "main",

@@ -189,6 +189,7 @@ it.each([
     });
     const result = await withMemorySource(parent, parentKey, () =>
       createInitialSubagentSession({
+        projectRequester: { kind: "internal" },
         cfg: {},
         requesterAgentId: parent.agentId,
         targetAgentId: childOwner.agentId,

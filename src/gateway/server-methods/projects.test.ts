@@ -307,6 +307,10 @@ test("checkout options preserve permitted Current access without exposing paths"
     const workspace = await initializeRepository(state.root, "workspace");
     const outside = await initializeRepository(state.root, "outside");
     const project = await registerProjectRegistry({ path: outside });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ visibility: "public" })),
+    );
     const cfg: OpenClawConfig = {
       agents: { entries: { main: { workspace, sandbox: { mode: "off" } } } },
     };
@@ -378,7 +382,7 @@ test("projects.list exposes a normalized configured default repository", async (
     ]),
   ).toMatchObject({
     ok: true,
-    payload: { defaultRepository: { identity: "acme/private-repo" } },
+    payload: expect.not.objectContaining({ defaultRepository: expect.anything() }),
   });
 });
 
@@ -509,6 +513,10 @@ test("projects.searchRemote redacts unexpected error diagnostics", async () => {
 });
 
 test("projects.list exposes checkout details only at write scope", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ visibility: "public" })),
+  );
   return withProjectState(async (state) => {
     const repo = await initializeRepository(state.root);
     await registerProjectRegistry({ path: repo, name: "Registered" });
@@ -1031,5 +1039,28 @@ test("projects.remove refuses to delete a cloned checkout configured as an agent
       error: { code: "INVALID_REQUEST", message: expect.stringContaining("agent workspace") },
     });
     await expect(fs.stat(repo)).resolves.toBeDefined();
+  });
+});
+
+test("restricted project discovery hides private repositories", async () => {
+  await withProjectState(async (state) => {
+    const repo = await initializeRepository(
+      state.root,
+      "restricted-private",
+      "https://github.com/example/restricted-private.git",
+    );
+    await registerProjectRegistry({ path: repo });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ visibility: "private" }), {
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const result = await invokeProjectMethod("projects.list", {}, {}, ["operator.sessions.read"]);
+    expect(result).toMatchObject({ ok: true });
+    expect(JSON.stringify(result)).not.toContain("restricted-private");
   });
 });

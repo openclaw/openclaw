@@ -289,8 +289,10 @@ describe("method scope resolution and authorization", () => {
     ).toEqual(["operator.admin"]);
   });
 
-  it("requires operator.write rather than own-session scope for device folders", () => {
-    const params = { deviceFolder: { deviceId: "paired-device", path: "~/project" } };
+  it.each([
+    { deviceFolder: { deviceId: "paired-device", path: "~/project" } },
+    { projectGitUrl: "https://github.com/example/private.git" },
+  ])("requires operator.write for device folders and URL clones (%j)", (params) => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
       "operator.write",
     ]);

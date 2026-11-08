@@ -362,6 +362,7 @@ it("inherits accepted human credit when participant persistence is still queued"
       }
       try {
         return await createInitialSubagentSession({
+          projectRequester: { kind: "internal" },
           cfg: request.resolved.cfg,
           requesterAgentId: agentId,
           targetAgentId: agentId,

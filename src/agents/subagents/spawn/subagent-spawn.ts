@@ -1,6 +1,8 @@
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
+import { sessionCreatorProfileId } from "../../../config/sessions/session-entry-provenance.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import { resolveRunProjectRequester } from "../../../gateway/project-access.js";
 import {
   readExecRequestOwners,
   withExecRequestOwners,
@@ -183,6 +185,12 @@ export async function spawnSubagentDirect(
       createInitialSubagentSession({
         assertActive,
         cfg,
+        projectRequester: resolveRunProjectRequester(cfg, {
+          profileId:
+            operatorAuthority?.profileId ??
+            sessionCreatorProfileId(requestResolution.resolved.requesterEntry?.createdActor),
+          operatorScopes: operatorAuthority?.scopes,
+        }),
         requesterAgentId,
         targetAgentId,
         childSessionKey,
