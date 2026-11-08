@@ -22,7 +22,6 @@ import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js"
 import { log } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import { bindToolResultPromptProjectionKeys } from "../tool-result-projection-key.js";
-import { truncateOversizedToolResultsInMessages } from "../tool-result-truncation.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
@@ -30,21 +29,19 @@ import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js
 
 function boundSettledFinalizationMessages(attempt: EmbeddedRunAttemptInternalParams) {
   const contextTokens = attempt.contextTokenBudget ?? 128_000;
-  const boundedToolMessages = truncateOversizedToolResultsInMessages(
-    [...attempt.settledTurnFinalizationMessages!],
-    contextTokens,
-  ).messages;
-  const requests: ModelContextRequest[] = boundedToolMessages.map((message, index) => ({
-    entry: {
-      type: "message",
-      id: String(index),
-      parentId: index ? String(index - 1) : null,
-      timestamp: new Date(message.timestamp).toISOString(),
-      message,
-      seq: index,
-    },
-    omitCheckpoint: false,
-  }));
+  const requests: ModelContextRequest[] = attempt.settledTurnFinalizationMessages!.map(
+    (message, index) => ({
+      entry: {
+        type: "message",
+        id: String(index),
+        parentId: index ? String(index - 1) : null,
+        timestamp: new Date(message.timestamp).toISOString(),
+        message,
+        seq: index,
+      },
+      omitCheckpoint: false,
+    }),
+  );
   const project = (request: ModelContextRequest) => {
     const message = request.entry.type === "message" ? request.entry.message : undefined;
     return message?.role === "toolResult" && request.toolResultOmission
