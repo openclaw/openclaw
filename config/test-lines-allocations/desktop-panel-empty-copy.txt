@@ -1,0 +1,5 @@
+42
+# Exact grant: 26 net new regression lines (four rendered empty-state cases in
+# the existing desktop-panel-view suite, no new test file or lane) plus 16
+# lines of ceiling debt inherited from the comparison base. The grant makes
+# slack exactly zero and raises no reusable headroom for other changes.
