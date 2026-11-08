@@ -1,0 +1,2 @@
+103
+# Compaction summary priority regressions: generated body vs verbatim preserved turns, tool-output excerpts, split-turn required-section retention (#195028). Release adaptation: current fixtures and a focused sibling file keep the existing oversized test file from growing.

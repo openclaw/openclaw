@@ -1311,7 +1311,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       content: `preserved-${index}-${"p".repeat(600)}`,
       timestamp: index + 1,
     })) as AgentMessage[];
-    const toolCalls = Array.from({ length: 12 }, (_, index) => ({
+    const toolCalls = Array.from({ length: 80 }, (_, index) => ({
       type: "toolCall",
       id: `finalizer_call_${index}`,
       name: "read",
@@ -1332,7 +1332,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       castAgentMessage({
         role: "assistant" as const,
         content: [{ type: "text", text: "raw terminal answer survives" }],
-        timestamp: 114,
+        timestamp: 200,
       }),
     ];
     const event = createCompactionEvent({
