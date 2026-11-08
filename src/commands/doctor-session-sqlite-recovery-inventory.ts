@@ -100,7 +100,9 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       reason: "manifest-directory-alias",
     });
   } else {
-    manifestPaths.push(...listSessionSqliteMigrationManifestPaths(params.env));
+    for (const manifestPath of listSessionSqliteMigrationManifestPaths(params.env)) {
+      manifestPaths.push(manifestPath);
+    }
     for (const manifestPath of manifestPaths) {
       const stat = statMigrationPath(manifestPath);
       const manifest =

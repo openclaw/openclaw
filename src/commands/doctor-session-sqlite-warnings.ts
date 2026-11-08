@@ -198,28 +198,28 @@ export function readSessionSqliteMigrationWarnings(env = process.env): string[] 
         continue;
       }
       seen.add(key);
-      warnings.push(
-        ...formatSessionSqliteMigrationWarnings(
-          [
-            {
-              ...target,
-              issues: currentMigrationIssues(target, env).map((issue) =>
-                issue.code === "active_sqlite_transcript_jsonl"
-                  ? {
-                      code: issue.code,
-                      sessionKey: issue.sessionKey,
-                      message: issue.message.replace(
-                        /Run openclaw doctor --fix or .*$/s,
-                        "Run openclaw doctor --session-sqlite inspect to check current originals before choosing recovery.",
-                      ),
-                    }
-                  : issue,
-              ),
-            },
-          ],
-          env,
-        ),
-      );
+      for (const warning of formatSessionSqliteMigrationWarnings(
+        [
+          {
+            ...target,
+            issues: currentMigrationIssues(target, env).map((issue) =>
+              issue.code === "active_sqlite_transcript_jsonl"
+                ? {
+                    code: issue.code,
+                    sessionKey: issue.sessionKey,
+                    message: issue.message.replace(
+                      /Run openclaw doctor --fix or .*$/s,
+                      "Run openclaw doctor --session-sqlite inspect to check current originals before choosing recovery.",
+                    ),
+                  }
+                : issue,
+            ),
+          },
+        ],
+        env,
+      )) {
+        warnings.push(warning);
+      }
     }
   }
   return warnings;
