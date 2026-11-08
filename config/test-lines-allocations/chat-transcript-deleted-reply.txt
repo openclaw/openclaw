@@ -1,0 +1,2 @@
+# Exercise the existing transcript CLI with a retained deleted target and cross-day reply.
+11

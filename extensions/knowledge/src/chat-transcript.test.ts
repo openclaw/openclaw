@@ -54,4 +54,15 @@ it("keeps day/thread boundaries and replies while budgeting UTF-8 headers and pa
     const label = `part ${chunk.part} of ${chunk.parts}`;
     expect(texts[i].includes(label)).toBe(chunk.parts > 1);
   }
+  rows[0] = message("1", rows[0].occurred_at, "11", "Ann", "retained deleted text", {
+    deleted_at: "2026-10-02T01:00:00Z",
+  });
+  await writeFile(path.join(out, "in.jsonl"), jsonl(rows));
+  execFileSync(process.execPath, [...args, "--channel", "#dev", "--max-bytes", "1000"]);
+  expect(await readFile(path.join(out, "2026-10-01.txt"), "utf8")).toContain(
+    "23:50 Ann: [deleted]",
+  );
+  expect(await readFile(path.join(out, "2026-10-02-part1.txt"), "utf8")).toContain(
+    '00:10 Bo ↩ Ann 2026-10-01 23:50 "[deleted]": yes @Ann',
+  );
 });
