@@ -25,6 +25,49 @@ const { mocks, childSessionKey, gatewayRuntime, dispatchAgent, run, recover } =
 describe("subagent registry restart recovery", () => {
   beforeEach(() => restartRecoveryTestHarness.reset());
 
+  it.each([true, false])(
+    "recovers saved terminal delivery, not unfinished execution, after child reuse (terminal: %s)",
+    async (terminal) => {
+      const entry = run({
+        generation: 1,
+        ...(terminal
+          ? {
+              terminalOwner: "interrupted-recovery" as const,
+              endedAt: 200,
+              endedReason: "subagent-error" as const,
+              outcome: { status: "error" as const, error: "saved interruption" },
+            }
+          : {}),
+      });
+      const successor = run({ runId: "newer-run", generation: 2 });
+      mocks.entries[childSessionKey]!.lifecycleRunId = successor.runId;
+      const beforeSuccessor = structuredClone(successor);
+      const runs = new Map([
+        [entry.runId, entry],
+        [successor.runId, successor],
+      ]);
+      const { sweeper, finalizeInterruptedSubagentRun } = createSubagentSweeperHarness(
+        { current: gatewayRuntime },
+        entry,
+        runs,
+      );
+      await sweeper.recoverInterruptedRuns();
+      const originalCalls = finalizeInterruptedSubagentRun.mock.calls.filter(
+        ([params]) => params.runId === entry.runId,
+      );
+      expect(originalCalls).toHaveLength(terminal ? 1 : 0);
+      if (terminal) {
+        expect(originalCalls[0]?.[0]).toMatchObject({
+          runId: entry.runId,
+          expectedEntry: entry,
+          suppressSessionEffects: true,
+          error: "saved interruption",
+        });
+      }
+      expect(runs.get(successor.runId)).toEqual(beforeSuccessor);
+    },
+  );
+
   it.each([false, true])(
     "does not replay cleaned interruption effects with requester wake=%s",
     async (pendingWake) => {
