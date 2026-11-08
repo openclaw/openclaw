@@ -76,6 +76,8 @@ export async function* parseGoogleSseChunks(
             },
           );
         }
+        // This parser is private to the Google transport; JSON parsing checks syntax only.
+        // SAFETY: Successful generateContent SSE payloads use the Google wire contract.
         yield chunk as GoogleSseChunk;
       }
     }
