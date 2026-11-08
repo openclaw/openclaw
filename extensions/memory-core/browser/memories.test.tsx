@@ -86,7 +86,7 @@ const waitMatch = (text: string) => waitForSolid(() => expect(match()).toBe(text
 
 it("loads changed locales without replacing the search input or its draft", async () => {
   const originalInput = input();
-  expect(originalInput.placeholder).toBe("Search this agent's memories");
+  expect(originalInput.placeholder).toBe("Search this agent’s memories");
   search("Ada", false);
   update({ locale: "fr" });
   await waitForSolid(() =>
@@ -138,7 +138,7 @@ it.each(["search", "detail", "resolve", "reject"])(
 
 it("hides search when the method is not advertised", () => {
   update({ advertisedMethods: [] });
-  expect(element.textContent).toContain("Update the gateway to search memories");
+  expect(element.textContent).toContain("Update the Gateway to search memories");
   expect(element.querySelector("form")).toBeNull();
 });
 
@@ -239,8 +239,10 @@ it("keeps results and the query through a same-identity reconnect and retries in
     .mockResolvedValueOnce(memoryFileResponse(matchedContent));
   search();
   await openResult();
-  await waitText("Could not load this memory file: gateway closed");
-  expectText(element, [result.snippet], ["Memory search failed"]);
+  await waitText(
+    "Couldn’t load this memory file. Close and reopen it to try again. gateway closed",
+  );
+  expectText(element, [result.snippet], ["Couldn’t search memories"]);
   update({ connected: false, connectionEpoch: 2 });
   expect(submitButton()?.disabled).toBe(true);
   update({ connected: true, connectionEpoch: 3 });

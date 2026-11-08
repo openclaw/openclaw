@@ -78,7 +78,7 @@ export function createProfileCard(
     if (!pubkey) {
       return t("common.na");
     }
-    return pubkey.length <= 20 ? pubkey : `${pubkey.slice(0, 8)}...${pubkey.slice(-8)}`;
+    return pubkey.length <= 20 ? pubkey : `${pubkey.slice(0, 8)}…${pubkey.slice(-8)}`;
   }
 
   function NostrAccount(props: { account: ChannelAccountSnapshot }) {
@@ -96,7 +96,7 @@ export function createProfileCard(
         accountId={account().accountId}
         facts={[
           `${t("common.configured")}: ${account().configured ? t("common.yes") : t("common.no")}`,
-          `${t("common.publicKey")}: ${truncatePubkey(publicKey())}`,
+          `${t("channels.nostr.publicKey")}: ${truncatePubkey(publicKey())}`,
         ]}
         status={{
           kind: boolStatusKind(account().running),
@@ -183,7 +183,7 @@ export function createProfileCard(
                   <Show when={profile()?.[field]}>
                     {(value) => (
                       <>
-                        <dt>{field === "nip05" ? "NIP-05" : t(`channels.nostr.${field}`)}</dt>
+                        <dt>{t(`channels.nostr.${field}`)}</dt>
                         <dd>{value()}</dd>
                       </>
                     )}
@@ -208,7 +208,7 @@ export function createProfileCard(
             <Show when={publicKey() || lastStart()}>
               <dl class="settings-kv">
                 <Show when={publicKey()}>
-                  <dt>{t("common.publicKey")}</dt>
+                  <dt>{t("channels.nostr.publicKey")}</dt>
                   <dd>
                     <code title={publicKey() ?? ""}>{truncatePubkey(publicKey())}</code>
                   </dd>
