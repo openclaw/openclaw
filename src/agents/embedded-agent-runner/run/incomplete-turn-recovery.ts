@@ -1,5 +1,8 @@
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
-import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
+import {
+  hasOnlyAssistantReasoningContent,
+  isReasoningOnlyLengthAssistantTurn,
+} from "@openclaw/ai/internal/shared";
 import { MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE } from "../../../llm/types.js";
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
@@ -175,6 +178,8 @@ export function resolveReasoningOnlyRetryInstruction(
   return joinAssistantTexts(params.attempt.assistantTexts).length === 0 &&
     assistant &&
     assistant.stopReason !== "error" &&
+    // Replay omits token-limited reasoning, so no partial turn remains to continue.
+    !isReasoningOnlyLengthAssistantTurn(assistant) &&
     !assistant.openclawDelivery?.tts?.text?.trim() &&
     Array.isArray(assistant.content) &&
     assistant.content.length > 0 &&

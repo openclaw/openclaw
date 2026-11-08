@@ -8,6 +8,10 @@ import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { transformTransportMessages } from "../../transport-message-transform.js";
+import { normalizeAssistantReplayContent } from "../replay-history.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "../result-fallback-classifier.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
 import {
   markEmbeddedRunAuthProfileSuccess,
@@ -521,6 +525,86 @@ describe("terminal resolution", () => {
       terminalPresentation: true,
     });
   });
+
+  it.each(
+    (
+      [
+        { provider: "anthropic", api: "anthropic-messages", thinkingSignature: "sig" },
+        { provider: "kimi", api: "anthropic-messages", thinkingSignature: "" },
+        { provider: "openai", api: "openai-responses", thinkingSignature: '{"id":"rs_1"}' },
+        { provider: "openai", api: "openai-completions", thinkingSignature: "" },
+      ] as const
+    ).flatMap((provider) =>
+      (["stop", "length"] as const).map((stopReason) => ({
+        provider: provider.provider,
+        api: provider.api,
+        thinkingSignature: provider.thinkingSignature,
+        stopReason,
+      })),
+    ),
+  )(
+    "resolves $provider/$api $stopReason reasoning consistently with replay",
+    async ({ provider, api, thinkingSignature, stopReason }) => {
+      const model = makeProviderModelFixture({
+        provider,
+        api,
+        id: "reasoning-model",
+        baseUrl: "http://127.0.0.1",
+      });
+      const user = { role: "user", content: "Answer the question.", timestamp: 0 } as const;
+      const assistant = buildEmbeddedRunnerAssistant({
+        provider,
+        api,
+        model: model.id,
+        stopReason,
+        content: [{ type: "thinking", thinking: "Partial reasoning.", thinkingSignature }],
+      });
+      const replay = stopReason === "stop" ? [user, assistant] : [user];
+      expect(normalizeAssistantReplayContent([user, assistant])).toEqual(replay);
+      expect(transformTransportMessages([user, assistant], model)).toEqual(replay);
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: [],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      });
+      const input = makeTerminalInput({
+        attempt,
+        activeErrorContext: { provider, model: model.id },
+        modelApi: api,
+      });
+      const resolved = await resolveEmbeddedRunTerminal(input);
+      if (stopReason === "stop") {
+        expect(resolved).toEqual({ action: "retry" });
+        expect(input.sessionPromptState.activateInternalPrompt).toHaveBeenCalledWith(
+          REASONING_ONLY_RETRY_INSTRUCTION,
+        );
+      } else {
+        expect(resolved.action).toBe("complete");
+        if (resolved.action !== "complete") {
+          throw new Error("Expected length to be terminal");
+        }
+        expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+        expect(resolved.result.payloads).toEqual([
+          {
+            text: "⚠️ The model reached its output token limit before generating an answer. Please try again.",
+            isError: true,
+          },
+        ]);
+        expect(resolved.result.meta.error).toMatchObject({
+          kind: "incomplete_turn",
+          fallbackSafe: true,
+        });
+        expect(
+          classifyEmbeddedAgentRunResultForModelFallback({
+            provider,
+            model: model.id,
+            result: resolved.result,
+          }),
+        ).toMatchObject({ code: "incomplete_result" });
+      }
+    },
+  );
 
   it("does not replay a reasoning-only turn after an unsafe write", async () => {
     const assistant = buildEmbeddedRunnerAssistant({
