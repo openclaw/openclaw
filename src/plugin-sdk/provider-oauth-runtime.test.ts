@@ -41,11 +41,18 @@ describe("provider OAuth runtime", () => {
     expect(parseOAuthAuthorizationInput("   ")).toEqual({});
   });
 
-  it("escapes HTML-sensitive OAuth page content", () => {
-    expect(oauthSuccessHtml(`signed in as <user>&"'`)).toContain(
-      "signed in as &lt;user&gt;&amp;&quot;&#39;",
-    );
-    expect(oauthErrorHtml("failed <login>", `details &"'`)).toContain("details &amp;&quot;&#39;");
+  it("renders escaped OAuth status pages with shared branding and distinct error poses", () => {
+    const success = oauthSuccessHtml(`signed in as <user>&"'`);
+    const error = oauthErrorHtml("failed <login>", `details &"'`);
+    expect(success).toContain("signed in as &lt;user&gt;&amp;&quot;&#39;");
+    expect(error).toContain("details &amp;&quot;&#39;");
+    expect(error).toContain("failed &lt;login&gt;");
+    for (const html of [success, error]) {
+      expect(html).toContain('aria-label="OpenClaw"');
+      expect(html).toContain('class="mascot" aria-hidden="true"');
+    }
+    expect(success).toContain('<body data-state="success">');
+    expect(error).toContain('<body data-state="error">');
   });
 
   it("resolves safe OAuth token lifetimes and expiry timestamps", () => {

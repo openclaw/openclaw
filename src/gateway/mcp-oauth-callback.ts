@@ -14,17 +14,19 @@ const MCP_OAUTH_CALLBACK_PATH = "/oauth/mcp/callback";
 const MCP_OAUTH_CALLBACK_MAX_URL_BYTES = 8 * 1024;
 const CONNECTED_HTML = renderOAuthPage({
   title: "Account connected",
-  heading: "You're connected.",
-  message: "Return to the chat.",
+  heading: "You’re connected",
+  message: "You can close this tab and return to the chat.",
 });
 const RETRY_HTML = renderOAuthPage({
   title: "Sign-in incomplete",
-  heading: "Sign-in wasn't completed.",
+  heading: "Sign-in didn’t complete",
+  state: "error",
   message: "Ask the bot to connect again.",
 });
 const EXPIRED_HTML = renderOAuthPage({
   title: "Sign-in link expired",
-  heading: "This sign-in link expired or was already used.",
+  heading: "This sign-in link expired or was already used",
+  state: "error",
   message: "Ask the bot to connect again.",
 });
 

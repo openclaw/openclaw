@@ -209,8 +209,12 @@ function respond(res: ServerResponse, status: number, message: string): void {
   res.end(
     renderOAuthPage({
       title: "Provider sign-in",
-      heading: message,
-      message: "Return to OpenClaw for the sign-in result.",
+      heading: status >= 400 ? "Sign-in didn’t complete" : "Sign-in response received",
+      message:
+        status >= 400
+          ? `${message} Return to OpenClaw to try again.`
+          : "You can close this tab and return to OpenClaw for the sign-in result.",
+      state: status >= 400 ? "error" : undefined,
     }),
   );
 }
@@ -265,7 +269,7 @@ export function handleProviderOAuthCallback(req: IncomingMessage, res: ServerRes
   pendingAuthorizations.delete(state);
   if (denied) {
     pending.reject(new ProviderBrowserSignInError("declined"));
-    respond(res, 400, "Sign-in was not completed.");
+    respond(res, 400, "The provider declined sign-in.");
   } else {
     const iss = url.searchParams.get("iss");
     pending.accept({ code: code!, state, ...(iss === null ? {} : { iss }) });

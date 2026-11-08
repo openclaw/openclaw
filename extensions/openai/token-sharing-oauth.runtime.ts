@@ -453,7 +453,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
       contentType: "text/html; charset=utf-8",
       body: oauthSuccessHtml(
         sharing
-          ? "ChatGPT token sharing is connected. You can return to OpenClaw."
+          ? "ChatGPT token sharing is connected. You can close this tab and return to OpenClaw."
           : "ChatGPT sign-in succeeded. Token sharing is disabled; return to OpenClaw to choose inference access.",
       ),
     });
@@ -489,7 +489,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
     await callback.complete({
       status: 400,
       contentType: "text/html; charset=utf-8",
-      body: oauthErrorHtml("Sign-in did not complete. Return to OpenClaw for details and retry."),
+      body: oauthErrorHtml("Return to OpenClaw for details and retry."),
     });
     throw error;
   } finally {
