@@ -1,0 +1,2 @@
+# A Muse quota failure must keep its typed signal so failover classifies it.
+44

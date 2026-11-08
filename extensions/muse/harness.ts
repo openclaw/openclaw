@@ -41,6 +41,7 @@ import {
 import { consumeTurn } from "./src/events.js";
 import { MusePool, openMuseSession } from "./src/runtime.js";
 import { MuseCatalogReader } from "./src/verify-setup.js";
+import { museTurnFailureError } from "./turn-failure.js";
 
 type MuseInputPart = Parameters<Session["sendUserTurn"]>[0]["input"][number];
 
@@ -514,14 +515,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           throw new Error(`Muse turn ended without a terminal result (${result.outcome.kind}).`);
         }
         if (result.outcome.params.terminal === "failed") {
-          const turnError = result.outcome.params.error;
-          throw new Error(
-            turnError?.kind === "authRequired"
-              ? `Muse Code is not signed in on the Gateway host (${turnError.message}). Run \`muse login\` there, or set META_API_KEY for the Gateway.`
-              : (turnError?.message ??
-                  result.outcome.params.reason ??
-                  "Muse model request failed. Run muse to check login and model access."),
-          );
+          throw museTurnFailureError(result.outcome.params.error, result.outcome.params.reason);
         }
         // A cancellation the harness started for a failure (such as an approval
         // error) reports that failure, not an external abort.
@@ -580,7 +574,8 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       const terminal = failureMessage
         ? agentHarnessAttemptTerminal.setFailure(interruption, {
             source: "prompt",
-            error: new Error(failureMessage),
+            // Keep the typed failure reachable: the host classifies failover through `cause`.
+            error: new Error(failureMessage, { cause: failure }),
           })
         : interruption;
       const lastAssistant = messages.findLast((message) => message.role === "assistant");
