@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile, symlink, rename } from "node:fs/promises";
 import path from "node:path";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
-import { parse, stringify } from "yaml";
+import { parse, parseDocument, stringify } from "yaml";
 import { ATTACHMENT_CHUNK_BYTES } from "./attachment-contract.js";
 import { contract } from "./contract.js";
 import type { AnnotateInput } from "./mutation-contract.js";
@@ -461,4 +461,50 @@ it("annotation-only identity and attribution sources are readable", async () => 
     expect(result.text).toBe("Annotation-only retained source.");
   }
   await expect(f.read(inputFor(candidate, evidence))).rejects.toThrow(/unavailable/);
+});
+
+it("externally edited nested citations retain record-scoped downloads", async () => {
+  const f = await fixture(),
+    original = "Fictional Prism orchard source.",
+    evidence = await upload(f, original);
+  const saved = await publish(f, [evidence]),
+    candidate = await publish(f, []),
+    input = inputFor(saved, evidence);
+  const ordinary = await f.service.attachment(input, f.owner);
+  expect(Buffer.from(ordinary.data, "base64")).toEqual(Buffer.from(original));
+  const before = (await f.service.record({ id: saved.id, view: "raw" }, f.owner)).record!;
+  const header = /^---\n([\s\S]*?)\n---\n/.exec(before.raw!)!;
+  const metadata = parseDocument(header[1]!);
+  // External Markdown edits need not copy nested citations into top-level evidence.
+  metadata.set("evidence", []);
+  metadata.set("identity", {
+    status: "partial",
+    context: "Unresolved fictional label",
+    candidates: [{ id: candidate.id, basis: "Possible fictional match", evidence: [evidence] }],
+  });
+  metadata.set("revision", before.revision + 1);
+  metadata.set("updated_at", new Date(Date.parse(before.updatedAt!) + 1).toISOString());
+  const edited = "---\n" + metadata.toString() + "---\n" + before.raw!.slice(header[0].length),
+    file = path.join(f.root, "private", before.path);
+  await writeFile(file, edited);
+  const detail = await f.service.record(
+    { id: saved.id, metadataView: "full", includeEvidence: true },
+    f.owner,
+  );
+  expect(detail.record?.valid).toBe(true);
+  expect(detail.issues).toEqual([]);
+  expect(detail.record?.metadata?.evidence).toEqual([]);
+  expect(detail.identityEvidence?.[0]?.evidence[0]?.verified).toBe(true);
+  expect((await f.read(input)).text).toBe(original);
+  await expect(f.service.attachment(inputFor(candidate, evidence), f.owner)).rejects.toThrow(
+    /unavailable/,
+  );
+  const downloaded = await f.service.attachment(input, f.owner);
+  expect(downloaded.sha256).toBe(evidence.sha256);
+  expect(downloaded.nextOffset).toBe(null);
+  expect(Buffer.from(downloaded.data, "base64")).toEqual(Buffer.from(original));
+  expect(await readFile(file, "utf8")).toBe(edited);
+  expect(await readFile(path.join(f.root, "private", evidence.path))).toEqual(
+    Buffer.from(original),
+  );
 });
