@@ -1,0 +1,2 @@
+11
+# Nanosecond interval acceptance and equal/reversed offset-bound regressions.

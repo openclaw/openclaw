@@ -195,6 +195,17 @@ it("Discrawl adapter resolves a stable channel, bounds instants, emits attachmen
     "30",
     "last",
   ]);
+  const since = "2026-09-27T00:00:00.000000000-07:00";
+  const before = "2026-09-27T07:00:00.000000001Z";
+  expect((await exportRows("20", since, before)).map((message) => message.id)).toStrictEqual([
+    "start",
+  ]);
+  for (const [start, end] of [
+    [before, since],
+    [since, "2026-09-27T07:00:00Z"],
+  ]) {
+    await expect(exportRows("20", start!, end!)).rejects.toThrow(/--since must precede --before/);
+  }
   const threaded = await exportRows(...day, "--threads", "include");
   expect(
     threaded.map((message) => [message.id, message.payload.thread_name ?? null]),
