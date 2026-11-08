@@ -34,21 +34,21 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey), {
         waitUntil: "domcontentloaded",
       });
-      const boot = page.locator(".connect-splash #openclaw-boot-composer");
+      const boot = page.locator("#openclaw-boot-composer");
       await boot.waitFor({ state: "visible" });
       // Like the chat composer, it takes focus only from the operator; nothing covers it.
       expect(await boot.evaluate((el) => el === document.activeElement)).toBe(false);
+      const routeFrame = page.locator(".lazy-view-state--route #openclaw-boot-composer");
+      await routeFrame.waitFor({ state: "visible" });
       await boot.click();
       await page.locator(".loading-skeleton__composer").first().waitFor({ state: "visible" });
       // The skeleton alone signals loading; no generic label sits above the composer.
       expect(await page.locator(".connect-splash__status").count()).toBe(0);
       await page.keyboard.type("Ship the boot ");
 
-      // The Gateway admits the browser; the same element moves into the shell's route frame.
+      // The Gateway admits the browser while session resolution is still pending.
       await gateway.waitForRequest("connect");
       await gateway.resolveDeferred("connect");
-      const routeFrame = page.locator(".lazy-view-state--route #openclaw-boot-composer");
-      await routeFrame.waitFor({ state: "visible" });
       await page.keyboard.type("composer");
       await page.keyboard.press("Enter");
       expect(await routeFrame.inputValue()).toBe("Ship the boot composer");
