@@ -605,6 +605,18 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
     {
+        if let externalURL = self.externalNavigationURL(
+            to: navigationAction.request.url,
+            sourceURL: navigationAction.sourceFrame.request.url,
+            sourceIsMainFrame: navigationAction.sourceFrame.isMainFrame,
+            targetIsMainFrame: navigationAction.targetFrame?.isMainFrame,
+            navigationType: navigationAction.navigationType)
+        {
+            decisionHandler(.cancel)
+            // Open only the destination URL, never the authenticated WebKit request.
+            UIApplication.shared.open(externalURL)
+            return
+        }
         let decision = self.navigationDecision(
             to: navigationAction.request.url,
             isMainFrame: navigationAction.targetFrame?.isMainFrame)
@@ -705,6 +717,30 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         case .reject:
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
+    }
+
+    func externalNavigationURL(
+        to candidateURL: URL?,
+        sourceURL: URL?,
+        sourceIsMainFrame: Bool,
+        targetIsMainFrame: Bool?,
+        navigationType: WKNavigationType) -> URL?
+    {
+        guard self.usesNativeEmbed,
+              self.allowedMainFramePathPrefix == nil,
+              let expectedOrigin = self.expectedOrigin,
+              navigationType == .linkActivated,
+              sourceIsMainFrame,
+              targetIsMainFrame != false,
+              let sourceURL,
+              GatewayTLSAuthority(url: sourceURL) == expectedOrigin,
+              let candidateURL,
+              ["https", "http"].contains(candidateURL.scheme?.lowercased() ?? ""),
+              candidateURL.host?.isEmpty == false,
+              candidateURL.user == nil, candidateURL.password == nil,
+              GatewayTLSAuthority(url: candidateURL) != expectedOrigin
+        else { return nil }
+        return candidateURL
     }
 
     func navigationDecision(
