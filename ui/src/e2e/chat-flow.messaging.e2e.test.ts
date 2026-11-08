@@ -74,11 +74,12 @@ suite.define(() => {
       idempotencyKey: "pending-steer-2:user",
       steerTargetRunId: "active-run",
     });
+    const acceptedAt = Date.now();
     const secondInput = {
       id: "steer-input-2",
       runId: "pending-steer-2",
       message: secondMessage,
-      acceptedAt: Date.now(),
+      acceptedAt: acceptedAt + 1,
       state: "queued",
       steerNow: { status: "available", tools: [] },
     };
@@ -91,7 +92,7 @@ suite.define(() => {
             id: "steer-input",
             runId,
             message,
-            acceptedAt: Date.now(),
+            acceptedAt,
             state: "queued",
             steerNow: { status: "available", tools: [] },
           },

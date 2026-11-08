@@ -173,6 +173,12 @@ suite.define(() => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.locator(".topbar--navigation-locked").waitFor();
+    expect(
+      await page
+        .locator(".topbar-connection-brand svg")
+        .filter({ visible: true })
+        .evaluate((element) => (element as SVGSVGElement).getBBox().width),
+    ).toBeGreaterThan(0);
     const navigation = page.locator(".shell-nav");
     expect(await navigation.getAttribute("aria-hidden")).toBe("true");
     expect(
