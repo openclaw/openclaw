@@ -13,7 +13,6 @@ import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/type
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
-import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
@@ -33,11 +32,7 @@ import {
 } from "../config/sessions/session-entry-provenance.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  buildProjectedAgentRunIndex,
-  resolveProjectedAgentRunModel,
-  type ProjectedAgentRunIndex,
-} from "../infra/agent-run-registry.js";
+import { buildProjectedAgentRunIndex } from "../infra/agent-run-registry.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -46,8 +41,6 @@ import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-statu
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
-import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
-import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { channelAvatarRevision } from "./channel-avatar-reference.js";
@@ -91,10 +84,13 @@ import {
   projectSessionRowChildLinks,
   resolveTranscriptUsageFallbacks,
 } from "./session-utils-projection.js";
+import { resolveGatewaySessionActiveModel } from "./session-utils-row-active-model.js";
 import { parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { isUnscopedSessionHostWorkspace } from "./session-workspace-roots.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
+
+export { resolveGatewaySessionActiveModel } from "./session-utils-row-active-model.js";
 
 export function readSessionRowInputs(params: {
   cfg: OpenClawConfig;
@@ -310,65 +306,6 @@ export function buildGatewaySessionRow(
   return presentSessionRow(materializeSessionRow(inputs), presentation);
 }
 
-export function resolveGatewaySessionActiveModel(params: {
-  cfg: OpenClawConfig;
-  active?: boolean;
-  activeModel?: { provider: string; model: string } | null;
-  terminalModel?: { modelProvider: string; model: string } | null;
-  agentId: string;
-  storeAgentId?: string;
-  sessionId?: string;
-  sessionKey: string;
-  projectedAgentRuns: ProjectedAgentRunIndex;
-  selectedModel: { provider: string; model: string };
-  entry?: InternalSessionEntry;
-  storePath: string;
-}): { provider: string; model: string } | undefined {
-  const liveModel = resolveProjectedAgentRunModel({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    index: params.projectedAgentRuns,
-  });
-  if (params.active ?? liveModel !== undefined) {
-    return liveModel ?? undefined;
-  }
-  if (!params.entry?.fallbackNotice) {
-    return undefined;
-  }
-  const { selectedModel } = params;
-
-  const fallbackEntry =
-    params.activeModel === undefined
-      ? readSessionFallbackModel({
-          selectedProvider: selectedModel.provider,
-          selectedModel: selectedModel.model,
-          sessionEntry: params.entry,
-          config: params.cfg,
-          terminalModel: params.terminalModel ?? null,
-          sessionScope: {
-            agentId: params.storeAgentId ?? params.agentId,
-            sessionKey: params.sessionKey,
-            storePath: params.storePath,
-          },
-        })
-      : params.activeModel
-        ? { modelProvider: params.activeModel.provider, model: params.activeModel.model }
-        : undefined;
-  const { selected, active } = resolveSelectedAndActiveModel({
-    selectedProvider: selectedModel.provider,
-    selectedModel: selectedModel.model,
-    sessionEntry: fallbackEntry ?? params.entry,
-  });
-  return resolveActiveFallbackState({
-    selectedModelRef: selected.label,
-    activeModelRef: active.label,
-    config: params.cfg,
-    state: params.entry,
-  }).active
-    ? { provider: active.provider, model: active.model }
-    : undefined;
-}
-
 /** Profile publications invalidate display facts independently of stored session metadata. */
 function projectSessionRowProfiles(
   input: Pick<
@@ -567,6 +504,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     }).mode,
     modelProvider: input.rowModelIdentity.provider,
     model: input.rowModelIdentity.model,
+    modelSelectionSource: input.selectedModel.selectionSource,
     modelOverrideSource:
       input.selectedModel.storedOverrideSource === "parent"
         ? "inherited"
