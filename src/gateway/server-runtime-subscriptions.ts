@@ -550,11 +550,12 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
         entry: getScopedRpcSource(candidateRunId),
       })),
     );
-    return () =>
-      evt.runId === runId &&
-      (!params.chatRunState.registry.peek(runId) ||
-        params.chatRunState.registry.peek(runId) === chatLink) &&
-      isRegistrationCurrent();
+    return () => {
+      const link = params.chatRunState.registry.peek(runId);
+      // A queued run links its client from its own start notification; that start is still its own.
+      const linkCurrent = !link || link === chatLink || (!chatLink && evt.data.phase === "start");
+      return evt.runId === runId && linkCurrent && isRegistrationCurrent();
+    };
   });
   const agentUnsub = async () => {
     auditPolicyClosed = true;

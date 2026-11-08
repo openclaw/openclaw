@@ -17,7 +17,7 @@ export function registerTerminalReservationPublicationTests(fixture: {
   ) => void;
 }): void {
   const { createParams, start } = fixture;
-  it("persists a queued run start before its deferred chat mapping is registered", async () => {
+  it("persists and delivers a queued run start before its deferred chat mapping is registered", async () => {
     const actual = await vi.importActual<typeof import("./server-chat.js")>("./server-chat.js");
     const { persistGatewaySessionLifecycleEvent } = await import("./session-lifecycle-state.js");
     fixture.installHandlerFactory(actual.createAgentEventHandler);
@@ -39,12 +39,15 @@ export function registerTerminalReservationPublicationTests(fixture: {
       // Runtime start precedes the queued source's onAgentRunStart callback.
       params.chatRunState.registry.add(runId, { sessionKey, clientRunId: runId });
       await subscriptions.agentUnsub();
+      const started = expect.objectContaining({
+        runId,
+        data: { phase: "start", startedAt: 1_000 },
+      });
       expect(persistGatewaySessionLifecycleEvent).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          sessionKey,
-          event: expect.objectContaining({ runId, data: { phase: "start", startedAt: 1_000 } }),
-        }),
+        expect.objectContaining({ sessionKey, event: started }),
       );
+      // A queued chat links itself from this start; clients still need the start itself.
+      expect(params.broadcast).toHaveBeenCalledWith("agent", started, expect.anything());
     } finally {
       await subscriptions.agentUnsub();
       subscriptions.transcriptUnsub();
@@ -61,11 +64,8 @@ export function registerTerminalReservationPublicationTests(fixture: {
       sessionKey: "agent:main:main",
     });
     const entry = registration.entry;
-    claimAgentRunContext(runId, {
-      sessionId: getRpcSourceIdentity(entry).sessionId,
-      sessionKey: getRpcSourceIdentity(entry).sessionKey,
-      projectSessionLifecycle: false,
-    });
+    const { sessionId, sessionKey } = getRpcSourceIdentity(entry);
+    claimAgentRunContext(runId, { sessionId, sessionKey, projectSessionLifecycle: false });
     const olderDispatch = { entered: createDeferred(), release: createDeferred() };
     const newerDispatch = { entered: createDeferred(), release: createDeferred() };
     const dispatches = [olderDispatch, newerDispatch];
