@@ -118,9 +118,10 @@ export function hasOpenClawIdOperatorBinding(deviceId: string): boolean {
 }
 
 /**
- * Marks a relayed operator that received no device token (trusted-proxy auth mode,
- * configured operator roles) as an OpenClaw ID browser, without minting a credential.
- * The binding guards no token here, so an unavailable owner only skips the marker.
+ * Binds a relayed operator that was delivered no device token (trusted-proxy auth mode,
+ * configured operator roles) to its OpenClaw ID peer, without minting a credential.
+ * Any token approval persisted for it then follows the membership lifecycle. Best effort:
+ * an unavailable owner or failed write leaves the browser an ordinary device.
  */
 export async function recordTokenlessOpenClawIdOperator(
   deviceId: string,
@@ -134,7 +135,7 @@ export async function recordTokenlessOpenClawIdOperator(
       await owner.record(deviceId, "operator", peerKey);
     }
   } catch {
-    // Marker only: a failed claw write leaves this browser removable as a device.
+    // Best effort: a failed claw write leaves this browser removable as a device.
   }
 }
 
