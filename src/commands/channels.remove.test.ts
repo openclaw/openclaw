@@ -218,6 +218,15 @@ describe("channelsRemoveCommand", () => {
     expect(offsetMocks.deleteTelegramUpdateOffset).toHaveBeenCalledWith({ accountId: "default" });
   });
 
+  it("rejects an unknown channel before asking for confirmation", async () => {
+    await channelsRemoveCommand({ channel: "nope" }, runtime, { hasFlags: true });
+
+    expect(prompterMocks.confirm).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining('Unknown channel "nope"'));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("keeps omitted removal on literal default when the plugin selects another default", async () => {
     const plugin = createExternalChatDeletePlugin();
     const defaultAccountId = vi.fn(() => "work");
