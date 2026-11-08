@@ -1,3 +1,0 @@
-142
-# 96 lines prove fresh-process capture and false missing-module failure.
-# Reconcile 46 inherited lines on CI base 058133da525; leaves zero headroom.
