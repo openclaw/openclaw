@@ -237,11 +237,20 @@ export function exactLookup(
 }
 
 /** Deliberately literal modes, never raw FTS syntax/SQL/regex. Punctuation is token separation. */
+/**
+ * FTS5's unicode61 tokenizer keeps canonically equivalent spellings apart — a decomposed
+ * Greek accent is a separate codepoint run from its composed form — so index and query
+ * text are NFC-normalized before they reach the index. Stored records keep their bytes.
+ */
+function normalizeKeywordText(text: string): string {
+  return text.normalize("NFC");
+}
+
 export function keywordExpression(input: SearchInput): string {
   if (!Check(SearchInput, input)) {
     throw new Error("Invalid keyword search input.");
   }
-  const tokens = input.query.match(/[\p{L}\p{N}\p{M}]+/gu) ?? [];
+  const tokens = normalizeKeywordText(input.query).match(/[\p{L}\p{N}\p{M}]+/gu) ?? [];
   if (!tokens.length || tokens.length > 64) {
     throw new Error("Keyword search requires 1–64 word tokens. Use exact lookup for a name or ID.");
   }
@@ -302,7 +311,12 @@ function syncFts(db: DatabaseSync, table: string, rows: string, records: LoadedR
     track.run(
       r.id,
       r.hash,
-      insert.run(r.id, r.title, (r.metadata.aliases ?? []).join("\n"), r.body).lastInsertRowid,
+      insert.run(
+        r.id,
+        normalizeKeywordText(r.title),
+        normalizeKeywordText((r.metadata.aliases ?? []).join("\n")),
+        normalizeKeywordText(r.body),
+      ).lastInsertRowid,
     );
   }
 }
@@ -435,7 +449,12 @@ function temporaryCorpus(db: DatabaseSync, name: string, records: LoadedRecord[]
   db.exec(`CREATE VIRTUAL TABLE temp.${name} USING fts5(${FTS_COLUMNS})`);
   const insert = db.prepare(`INSERT INTO temp.${name}(id,title,aliases,body) VALUES (?,?,?,?)`);
   for (const r of records) {
-    insert.run(r.id, r.title, (r.metadata.aliases ?? []).join("\n"), r.body);
+    insert.run(
+      r.id,
+      normalizeKeywordText(r.title),
+      normalizeKeywordText((r.metadata.aliases ?? []).join("\n")),
+      normalizeKeywordText(r.body),
+    );
   }
 }
 

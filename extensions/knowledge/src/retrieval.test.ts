@@ -618,3 +618,19 @@ it("superseded-record edits update the persistent history index and the search s
   });
   expect(ids(await f.service.grep({ query: "inkword" }, f.owner))).toStrictEqual(["plan_two"]);
 });
+
+it("keyword search matches canonically equivalent spellings", async () => {
+  const f = await fixture();
+  const composed = "άλφα"; // U+03AC …
+  const decomposed = "α\u0301λφα"; // alpha + combining acute
+  expect(composed.normalize("NFD")).toBe(decomposed.normalize("NFD"));
+  expect(composed).not.toBe(decomposed);
+
+  await f.put("nfd_note", "Greek glossary", `The word ${decomposed} means first letter.`);
+  await f.put("nfc_note", "Latin control", "The cafe serves coffee.");
+
+  for (const query of [composed, decomposed]) {
+    const hit = await f.service.grep({ query }, f.owner);
+    expect(ids(hit), query).toStrictEqual(["nfd_note"]);
+  }
+});
