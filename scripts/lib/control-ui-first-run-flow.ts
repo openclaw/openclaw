@@ -444,7 +444,8 @@ export async function runControlUiFirstRunFlow(
           return key;
         }),
       );
-      const nextReply = `${assistantGroup}${previousReplies.map((key) => `:not([data-chat-row-key=${JSON.stringify(key)}])`).join("")} .chat-text p`;
+      // Streaming groups can still contain a working placeholder beside the answer.
+      const nextReply = `${assistantGroup}:not([data-chat-streaming="true"]):not(.chat-group--working)${previousReplies.map((key) => `:not([data-chat-row-key=${JSON.stringify(key)}])`).join("")} .chat-text p`;
       await page.locator(composer).fill(message);
       await wait(`${send}:not([disabled])`);
       await measure(
