@@ -316,6 +316,9 @@ With the OpenShell backend, `mirror` mode still uses the local workspace as the 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 Later conversation turns load retained images from that same staged copy.
 Missing copies and paths outside the active sandbox remain unavailable.
+If a previously included image becomes unavailable, replay keeps a resend notice
+and stops retrying that image for the retained session decision. Resend the image
+as a new attachment to make another attempt; other attachments remain available.
 For a managed project session, attachments on follow-up messages use that
 session's private checkout, including after its worktree has been created.
 Attachment staging retains the managed workspace owner until the copy settles.

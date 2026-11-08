@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { readProcessCommand } from "@openclaw/proc-safe/inspect";
@@ -7,6 +8,39 @@ import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import type { ProcessCommand } from "./service-child-group-ownership.js";
 
 let reportedForeignArguments = false;
+
+// codesign prints a key/value dump by default and XML with --xml; some macOS 27
+// hosts reject the XML form for this blob, so accept either representation.
+const REDACTED_ARGUMENTS_ENTITLEMENT =
+  /\[Key\] com\.apple\.private\.no-read-procargs\s*\[Value\]\s*\[Bool\] true|<key>com\.apple\.private\.no-read-procargs<\/key>\s*<true\/>/u;
+
+/** The running image: the first text mapping, confirmed by the kernel accounting
+ * name (exec basename, truncated to 16 bytes), so a mapped binary cannot pose as it. */
+function readDarwinImagePath(pid: number): string | undefined {
+  const options = { encoding: "utf8", timeout: 2_000 } as const;
+  const mapping = spawnSync(
+    "/usr/sbin/lsof",
+    ["-a", "-p", String(pid), "-d", "txt", "-Fn"],
+    options,
+  );
+  const image = mapping.status === 0 ? /^n(\/.+)$/mu.exec(mapping.stdout)?.[1] : undefined;
+  const name = image && spawnSync("/bin/ps", ["-o", "ucomm=", "-p", String(pid)], options);
+  return name && name.status === 0 && name.stdout.trim() === path.basename(image).slice(0, 16)
+    ? image
+    : undefined;
+}
+
+/** A sealed Apple binary that opts out of argument inspection, such as mdworker. */
+function isRedactedSystemImage(image: string): boolean {
+  if (!image.startsWith("/System/")) {
+    return false;
+  }
+  const result = spawnSync("/usr/bin/codesign", ["-d", "--entitlements", "-", image], {
+    encoding: "utf8",
+    timeout: 2_000,
+  });
+  return result.status === 0 && REDACTED_ARGUMENTS_ENTITLEMENT.test(result.stdout);
+}
 
 function readCommandWithServiceMarker(pid: number) {
   try {
@@ -52,6 +86,17 @@ export function readDarwinProcessCommand(
     };
   } catch (cause) {
     if (!(cause instanceof ProcSafeError)) {
+      throw cause;
+    }
+    if (cause.code === "layout-mismatch" || cause.code === "incomplete") {
+      // Darwin redacts the argument image of binaries entitled with
+      // no-read-procargs, which then fails the alignment check. Those sealed
+      // system binaries cannot hold OpenClaw artifacts. Other unparseable images
+      // (non-UTF-8 argv) may, so they stay unknown.
+      const image = readDarwinImagePath(pid);
+      if (image && isRedactedSystemImage(image)) {
+        return { argvUnavailable: true, executable: image, ...(owner ? { owner } : {}) };
+      }
       throw cause;
     }
     if (cause.code === "unsupported-platform" && process.platform === "darwin") {
