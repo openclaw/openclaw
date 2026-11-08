@@ -26,6 +26,16 @@ it("keeps the offline failure message and recovery controls visible", async () =
     (button) => button.textContent === "Retry",
   )!;
   expect(card.textContent).toContain("Couldn’t load this panel.");
+  expect(card.textContent).toContain("Saved");
+  showToast({
+    severity: "warning",
+    message: "Review pending config",
+    description: "Changes are retained.",
+    placement: "top-right",
+    durationMs: 60_000,
+  });
+  await waitForSolid(() => expect(card.textContent).toContain("Review pending config"));
+  expect(card.textContent).toContain("Changes are retained.");
   expect(getComputedStyle(content).opacity).toBe("1");
   expect(card.getBoundingClientRect().height).toBeGreaterThan(40);
   expect(retry.getBoundingClientRect().width).toBeGreaterThan(0);

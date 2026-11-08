@@ -1,4 +1,5 @@
-import { Errored, lazy, Loading, Show } from "solid-js";
+import { createMemo, Errored, For, lazy, Loading, Show } from "solid-js";
+import { redactToolDetail } from "./browser-redact.ts";
 import { t } from "./reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
 import { toastOwnerFor, type ToastProperties, type ToastMethods } from "./toast.ts";
@@ -39,6 +40,38 @@ if (typeof customElements !== "undefined") {
                       <div class="app-toast__content">
                         <div class="app-toast__body">
                           <span class="app-toast__message">{t("lazyView.errorTitle")}</span>
+                          <For each={props.toasts} keyed={(entry) => entry.id}>
+                            {(entry) => {
+                              const content = createMemo(() => entry().options.message);
+                              const message = createMemo(() => {
+                                const value = content();
+                                if (typeof value === "string") {
+                                  return redactToolDetail(value.trim());
+                                }
+                                const copy = value.cloneNode(true);
+                                return copy instanceof DocumentFragment
+                                  ? Array.from(copy.childNodes)
+                                  : copy;
+                              });
+                              return (
+                                <Show when={entry().active}>
+                                  <div>
+                                    <span class="app-toast__message">{message()}</span>
+                                    <Show when={entry().options.description}>
+                                      {(description) => (
+                                        <>
+                                          {" "}
+                                          <span class="app-toast__description">
+                                            {redactToolDetail(description().trim())}
+                                          </span>
+                                        </>
+                                      )}
+                                    </Show>
+                                  </div>
+                                </Show>
+                              );
+                            }}
+                          </For>
                         </div>
                         <button class="app-toast__action" type="button" onClick={() => reset()}>
                           {t("common.retry")}
