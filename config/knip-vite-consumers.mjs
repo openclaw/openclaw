@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { parse } from "@babel/parser";
+import traverse from "@babel/traverse";
 
 /**
  * @param {string} source
@@ -57,20 +59,69 @@ export function compileViteConfigConsumers(source, filePath) {
   }
   // Solid's named lazy export is selected by a string rather than a property
   // read. Derive the edge from the live loader so deleting it stays detectable.
-  const lazyPath = path.resolve("ui/src/components/settings-sidebar-lazy.tsx");
-  const lazySource = fs.readFileSync(lazyPath, "utf8");
-  for (const [, specifier, name] of lazySource.matchAll(
-    /\blazy\(\(\) => import\("([^"\r\n]+)"\),\s*\{\s*export:\s*"(\w+)"/gu,
-  )) {
-    const relative = path
-      .relative(
-        path.dirname(path.resolve(filePath)),
-        path.resolve(path.dirname(lazyPath), specifier),
-      )
-      .replaceAll("\\", "/");
-    imports.push(
-      `import { ${name} as __solidLazy${imports.length} } from ${JSON.stringify(relative)};`,
-    );
+  for (const sourcePath of [
+    "ui/src/components/settings-sidebar-lazy.tsx",
+    "ui/src/app/app-shell-loader.tsx",
+  ]) {
+    const lazyPath = path.resolve(sourcePath);
+    const ast = parse(fs.readFileSync(lazyPath, "utf8"), {
+      sourceType: "module",
+      plugins: ["typescript", "jsx"],
+      createImportExpressions: true,
+    });
+    traverse(ast, {
+      CallExpression(call) {
+        const { callee, arguments: args } = call.node;
+        const binding = callee.type === "Identifier" && call.scope.getBinding(callee.name);
+        if (
+          !binding?.path.isImportSpecifier() ||
+          binding.path.node.imported.name !== "lazy" ||
+          binding.path.parentPath.node.source.value !== "solid-js"
+        ) {
+          return;
+        }
+        const [loader, options] = args;
+        if (loader?.type !== "ArrowFunctionExpression" || options?.type !== "ObjectExpression") {
+          return;
+        }
+        const selected = options.properties.find(
+          (property) => property.type === "ObjectProperty" && property.key.name === "export",
+        );
+        if (selected?.value.type !== "StringLiteral") {
+          return;
+        }
+        let imported = loader.body;
+        if (imported.type === "BlockStatement") {
+          const result = imported.body.find((statement) => statement.type === "ReturnStatement");
+          const moduleBinding =
+            result?.argument?.type === "Identifier" &&
+            call.get("arguments.0").scope.getBinding(result.argument.name);
+          if (
+            !moduleBinding?.path.isVariableDeclarator() ||
+            moduleBinding.kind !== "const" ||
+            moduleBinding.scope.path.node !== loader
+          ) {
+            return;
+          }
+          imported = moduleBinding.path.node.init;
+        }
+        if (imported?.type === "AwaitExpression") {
+          imported = imported.argument;
+        }
+        if (imported?.type !== "ImportExpression" || imported.source.type !== "StringLiteral") {
+          return;
+        }
+        const relative = path
+          .relative(
+            path.dirname(path.resolve(filePath)),
+            path.resolve(path.dirname(lazyPath), imported.source.value),
+          )
+          .replaceAll("\\", "/");
+        imports.push(
+          `import { ${selected.value.value} as __solidLazy${imports.length} } from ${JSON.stringify(relative)};`,
+        );
+      },
+    });
   }
   return `${source}\n${imports.join("\n")}`;
 }

@@ -269,20 +269,32 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     expect(compile(source, path.join(path.dirname(file), `other.${kind}`))).toBe("");
   });
 
-  it("models named Solid lazy consumers without retaining a deleted loader", () => {
-    const source = `const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
-  export: "ShellSettingsSidebar",
-});`;
-    const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
-    const compile = knipConfig.compilers.mjs;
-    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
-      'import { ShellSettingsSidebar as __solidLazy0 } from "../ui/src/components/settings-sidebar-shell.tsx";',
-    );
-    read.mockReturnValue("const SettingsSidebar = null;");
-    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
-      "ShellSettingsSidebar",
-    );
-  });
+  it.each([
+    ["ui/src/components/settings-sidebar-lazy.tsx", "ShellSettingsSidebar"],
+    ["ui/src/app/app-shell-loader.tsx", "OpenClawShell"],
+  ])(
+    "models named Solid lazy consumers from %s without retaining a deleted loader",
+    (file, name) => {
+      const readFileSync = fs.readFileSync.bind(fs);
+      const source = readFileSync(file, "utf8");
+      const read = vi.spyOn(fs, "readFileSync");
+      const project = (replacement = source) => {
+        read.mockImplementation((pathValue, options) =>
+          path.resolve(String(pathValue)) === path.resolve(file)
+            ? replacement
+            : readFileSync(pathValue, options),
+        );
+        return knipConfig.compilers.mjs("// config", "config/knip-vite-consumers.mjs");
+      };
+      expect(project()).toContain(`${name} as __solidLazy`);
+      expect(project("")).not.toContain(`${name} as __solidLazy`);
+      if (file.endsWith("app-shell-loader.tsx")) {
+        expect(project(replaceFixture(source, "return shell;", "return other;"))).not.toContain(
+          `${name} as __solidLazy`,
+        );
+      }
+    },
+  );
 
   it("models only Vite runner members consumed by the build", () => {
     const source = `const { module: routes, dependencies: routeDependencies } = await runnerImport<

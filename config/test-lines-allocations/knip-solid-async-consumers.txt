@@ -1,0 +1,2 @@
+# Cover direct and async Solid lazy consumers and retired-loader edges.
+12
