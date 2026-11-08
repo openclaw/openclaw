@@ -313,6 +313,22 @@ describe("compaction-safeguard runtime registry", () => {
 });
 
 describe("compaction-safeguard recent-turn preservation", () => {
+  it("keeps missing-result timestamps stable across repeated compaction projections", () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const messages = [
+      userMessage("older ask", 1),
+      toolCallMessage("missing", "read", 7),
+      userMessage("recent ask", 8),
+    ];
+    const first = splitPreservedRecentTurns({ messages, recentTurnsPreserve: 1 });
+    clock.mockReturnValue(2_000);
+    expect(splitPreservedRecentTurns({ messages, recentTurnsPreserve: 1 })).toEqual(first);
+    expect(first.summarizableMessages.at(-1)).toMatchObject({
+      toolCallId: "missing",
+      timestamp: 7,
+    });
+    expect(messages.map(({ role }) => role)).toEqual(["user", "assistant", "user"]);
+  });
   it.each([
     {
       name: "paired recent tool results",

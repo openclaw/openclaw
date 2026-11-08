@@ -1,7 +1,7 @@
 // Verifies transcript repair pairs tool calls/results and sanitizes tool inputs.
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   sanitizeToolCallInputs,
   makeMissingToolResult,
@@ -33,7 +33,32 @@ function getAssistantToolCallBlocks(messages: AgentMessage[]) {
   }) as Array<{ type?: unknown; id?: unknown; name?: unknown }>;
 }
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("sanitizeToolUseResultPairing", () => {
+  it.each([undefined, 0, 7])(
+    "keeps replay timestamp %s stable without changing persistence time",
+    (timestamp) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const source = castAgentMessages([
+        {
+          ...sparseAssistant([{ type: "toolCall", id: "legacy", name: "read", arguments: {} }]),
+          timestamp,
+        },
+      ]);
+      const first = sanitizeToolUseResultPairing(source);
+      clock.mockReturnValue(2_000);
+      expect(sanitizeToolUseResultPairing(source)).toEqual(first);
+      expect(first[1]).toMatchObject({ toolCallId: "legacy", timestamp: timestamp ?? 0 });
+      expect(repairToolUseResultPairing(source).added[0]?.timestamp).toBe(2_000);
+
+      const recorded = makeMissingToolResult({ toolCallId: "legacy", toolName: "read" });
+      expect(recorded.timestamp).toBe(2_000);
+      clock.mockReturnValue(3_000);
+      expect(sanitizeToolUseResultPairing([...source, recorded])[1]).toBe(recorded);
+    },
+  );
+
   it("keeps matched parallel tool results and synthesizes only missing siblings", () => {
     const input = castAgentMessages([
       sparseAssistant([

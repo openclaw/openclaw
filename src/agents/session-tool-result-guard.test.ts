@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
@@ -15,6 +15,7 @@ import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures
 import { sanitizeTranscriptMessage } from "./transcript-sanitize.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
 const asAppendMessage = (message: unknown) => message as AppendMessage;
@@ -90,6 +91,7 @@ describe("installSessionToolResultGuard", () => {
   });
 
   it("preserves ordering with multiple tool calls and partial results", () => {
+    vi.spyOn(Date, "now").mockReturnValue(4_000);
     const { sm, guard } = setup();
     sm.appendMessage(
       asAppendMessage({
@@ -110,7 +112,7 @@ describe("installSessionToolResultGuard", () => {
     );
     sm.appendMessage(assistant("after tools"));
     const persisted = roles(sm, ["assistant", "toolResult", "toolResult", "assistant"]);
-    expect(persisted[2]).toMatchObject({ toolCallId: "call_b", isError: true });
+    expect(persisted[2]).toMatchObject({ toolCallId: "call_b", isError: true, timestamp: 4_000 });
     expect(guard.getPendingIds()).toEqual([]);
   });
 
