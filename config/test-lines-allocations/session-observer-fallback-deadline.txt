@@ -1,0 +1,3 @@
+26
+# Source 0d4c07fb0a25a1f24adc358d2b1f6b5034156817; src/gateway/session-observer-completion.ts resolveObserverDeadlineMs and shared timer use: 30 seconds per already-configured utility candidate. Existing utility fallback and readUtilityModelSetting are prerequisite; no import of new observer lifecycle.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.
