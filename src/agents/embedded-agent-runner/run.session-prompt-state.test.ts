@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import type { Model } from "@openclaw/ai";
+import { buildOpenAICompletionsParams } from "@openclaw/ai/transports";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
@@ -25,6 +27,8 @@ import {
   type ProcessSession,
 } from "../bash-process-registry.js";
 import { createLazyExecTool } from "../lazy-exec-tool.js";
+import { convertToLlm } from "../sessions/messages.js";
+import * as transcriptNotes from "../sessions/session-manager-write-admission.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -40,7 +44,7 @@ import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.
 const assertActive = () => {};
 
 const CONTINUE_FROM_TRANSCRIPT_PROMPT =
-  "Continue the current task from the existing transcript, preserving completed work. If an action was interrupted, inspect its state before deciding whether to retry it. Do not restart the task or repeat completed actions.";
+  "Continue the current task from the existing transcript, preserving completed work and the user's constraints. Use recorded tool results to determine what completed. Before retrying an action with an unknown outcome, inspect its state. If the recorded results already satisfy the remaining request, report them without additional tool calls. Do not restart the task or repeat completed actions.";
 const CONTINUE_AFTER_TOOL_FAILURE_PROMPT = `${CONTINUE_FROM_TRANSCRIPT_PROMPT} If a tool failed, say so; never claim completion or success.`;
 
 const BASE_RUN_PARAMS = {
@@ -116,6 +120,101 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
 }
 
 describe("embedded run session prompt state", () => {
+  it("preserves the serialized provider prefix across repeated transcript continuations", async () => {
+    const model: Model<"openai-completions"> = {
+      id: "local-test",
+      name: "Local test",
+      provider: "custom-local",
+      api: "openai-completions",
+      baseUrl: "https://local.example/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 1024,
+    };
+    await using state = await createState({
+      prompt: "Report the recorded result without retrying.",
+    });
+    const messages = [
+      makeUserMessage(),
+      buildEmbeddedRunnerAssistant({
+        content: [{ type: "text", text: "The requested work is complete." }],
+      }),
+    ];
+    const request = (history: Parameters<typeof buildOpenAICompletionsParams>[1]["messages"]) =>
+      buildOpenAICompletionsParams(
+        model,
+        {
+          systemPrompt: "Stable project instructions.",
+          messages: history,
+          tools: [],
+        },
+        undefined,
+      );
+    const before = request(messages);
+    state.continueFromCurrentTranscript({ messages });
+    state.continueFromCurrentTranscript({ messages: [] });
+    const continued = expectDefined(state.continuation, "expected retained continuation");
+    const after = request(
+      convertToLlm([...continued.messages, makeUserMessage(state.activePrompt.override)]),
+    );
+    expect(JSON.stringify(after.messages.slice(0, before.messages.length))).toBe(
+      JSON.stringify(before.messages),
+    );
+    expect(after.tools).toEqual(before.tools);
+    expect(continued.prompt).toBe("Report the recorded result without retrying.");
+    expect(after.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: CONTINUE_FROM_TRANSCRIPT_PROMPT,
+    });
+  });
+
+  it.each([undefined, "truncated-call"])(
+    "keeps output-limit recovery within original constraints (%s)",
+    async (toolCallId) => {
+      const append = vi
+        .spyOn(transcriptNotes, "appendSessionTranscriptNote")
+        .mockImplementation(async (_target, message) => ({
+          appended: true,
+          currentTail: true,
+          message,
+          messageId: "output-limit-notice",
+        }));
+      try {
+        await using state = await createState({
+          prompt: "Report the recorded result. Do not use tools or retry.",
+        });
+        await state.recordOutputLimitNotice(toolCallId);
+        expect(append).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            content: expect.stringContaining(
+              "only if the original request allows continuing that work",
+            ),
+          }),
+          expect.anything(),
+        );
+        expect(append).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            content: expect.stringContaining(
+              "Inspect state only for actions whose outcomes are unknown",
+            ),
+          }),
+          expect.anything(),
+        );
+        state.continueFromCurrentTranscript({ messages: [] });
+        expect(state.continuation?.prompt).toBe(
+          "Report the recorded result. Do not use tools or retry.",
+        );
+        expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
+      } finally {
+        append.mockRestore();
+      }
+    },
+  );
+
   it("carries the current request and settled work across repeated recovery without changing legacy prompts", async () => {
     await using state = await createState({ prompt: "Task B: inspect the blue database." });
     state.continueFromCurrentTranscript({ messages: [] });
