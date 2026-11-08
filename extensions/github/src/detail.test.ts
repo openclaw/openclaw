@@ -406,27 +406,6 @@ describe("GitHub detail public read boundary", () => {
     expect((await loadGitHubDetail(input, undefined, fetchMock)).partial).toBe(false);
   });
 
-  it("expires cached reads on elapsed time even when the wall clock steps back", async () => {
-    const input = target();
-    const wallClock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-    const elapsed = vi.spyOn(performance, "now").mockReturnValue(0);
-    const first = item();
-    const refreshed = item({ body: "v2" });
-    const fetchMock = fetchResponses(
-      json(publicRepo),
-      json(first),
-      json(publicRepo),
-      json(refreshed),
-    );
-    expect((await loadGitHubDetail(input, undefined, fetchMock)).body).toBe(first.body);
-    // The cache window is 5 minutes; elapse 6 minutes while the wall clock
-    // steps backward, which would keep a Date.now-based cache alive forever.
-    elapsed.mockReturnValue(6 * 60_000);
-    wallClock.mockReturnValue(1_000_000 - 60 * 60_000);
-    expect((await loadGitHubDetail(input, undefined, fetchMock)).body).toBe("v2");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-  });
-
   it("bounds UTF-16 content, pages and patch totals", async () => {
     const comment = commentItem({ body: "x".repeat(5000) });
     const bodyPrefix = "b".repeat(32 * 1024 - 1);

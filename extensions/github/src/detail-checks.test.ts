@@ -210,8 +210,7 @@ describe("GitHub PR checks through the document loader", () => {
   );
 
   it("keeps refreshed failures over late reads, then recovers and expires them", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1000);
-    const elapsed = vi.spyOn(performance, "now").mockReturnValue(1000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1000);
     const deferred = createDeferred<Response>();
     const requested = createDeferred<void>();
     const read = reader(
@@ -248,10 +247,8 @@ describe("GitHub PR checks through the document loader", () => {
       checks: { state: "failure", commit: nextSha, truncated: false, total: 1 },
     });
     now.mockReturnValue(30_999);
-    elapsed.mockReturnValue(30_999);
     expect(await read()).toBe(fresh);
     now.mockReturnValue(31_001);
-    elapsed.mockReturnValue(31_001);
     expect(await read(false, publicFetch())).not.toBe(fresh);
   });
 });
