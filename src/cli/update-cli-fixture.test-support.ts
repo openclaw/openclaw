@@ -25,7 +25,10 @@ import * as packages from "./update-cli/update-cli-package.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
-export function createUpdateCliFixture() {
+export function createUpdateCliFixture(fixtureOptions: { databaseEngines?: string[] } = {}) {
+  const targetDeclaration = fixtureOptions.databaseEngines
+    ? { databaseEngines: fixtureOptions.databaseEngines }
+    : {};
   // Unique across concurrent runs; realpath normalizes macOS's /var symlink.
   const fixtureRoot = fsSync.realpathSync(
     fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-tests-")),
@@ -38,6 +41,7 @@ export function createUpdateCliFixture() {
   writeFixtureJsonSync(path.join(checkoutRoot, "package.json"), {
     name: "openclaw",
     version: VERSION,
+    ...(fixtureOptions.databaseEngines ? { openclaw: targetDeclaration } : {}),
   });
   const globalNpmConfig = path.join(fixtureRoot, "global-npmrc");
   fsSync.writeFileSync(globalNpmConfig, "");
@@ -143,7 +147,11 @@ export function createUpdateCliFixture() {
       const packageJsonPath = path.join(packageRoot, "package.json");
       fsSync.mkdirSync(path.dirname(entrypoint), { recursive: true });
       fsSync.writeFileSync(entrypoint, "// test entrypoint\n", "utf8");
-      writeFixtureJsonSync(packageJsonPath, { name: "openclaw", version: targetVersion });
+      writeFixtureJsonSync(packageJsonPath, {
+        name: "openclaw",
+        version: targetVersion,
+        ...(fixtureOptions.databaseEngines ? { openclaw: targetDeclaration } : {}),
+      });
       tempDirsToCleanup.add(packageRoot);
     }
     mocks.pathExists.mockImplementation(
@@ -159,10 +167,13 @@ export function createUpdateCliFixture() {
     );
     vi.mocked(update.updateGitCheckout).mockImplementation(async ({ opts: options, gitRoot }) => {
       // Admit the original owner even without activation, as the Git runner does.
-      await options.inspectGitTarget({ version: targetVersion });
+      await options.inspectGitTarget({ version: targetVersion, ...targetDeclaration });
       // Baseline-capture cases separately exercise the actual mutation callback.
       if (params?.admitMutation) {
-        await assert.requireValue(options.beforeGitMutation, "Git mutation admission")({});
+        await assert.requireValue(
+          options.beforeGitMutation,
+          "Git mutation admission",
+        )(targetDeclaration);
       }
       // Explicit inspection-only failures have no published runtime to retain.
       if (params?.admitMutation !== false && options.onTransaction) {
@@ -374,8 +385,10 @@ export function createUpdateCliFixture() {
           root,
           before: { sha: "old-managed-sha", version: "2026.4.26" },
           after: { sha: "new-managed-sha", version: VERSION },
+          ...targetDeclaration,
         }),
         reinspect,
+        targetDeclaration,
       );
       mockFileBackedPathExists();
       mocks.serviceLoaded.mockResolvedValue(true);

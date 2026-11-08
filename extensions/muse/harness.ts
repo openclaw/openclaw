@@ -570,7 +570,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       }
       const toolMetas = messages
         .filter((message) => message.role === "toolResult")
-        .map((message) => ({ toolName: message.toolName }));
+        .map((message) => ({ toolName: message.toolName, isError: message.isError }));
       const interruption = timedOut
         ? { kind: "timeout" as const, phase: "prompt" as const, source: "runtime" as const }
         : aborted

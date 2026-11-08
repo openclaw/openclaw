@@ -2,6 +2,7 @@ import { nextTick } from "node:process";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  X_ACTIVITY_POST_EVENT_TYPES,
   XApiError,
   parseXPostEnvelope,
   type XApiClient,
@@ -35,8 +36,22 @@ type XReceiveOptions = {
   onPost: (envelope: XPostEnvelope) => Promise<void>;
   onStatus?: (status: XEventStatus) => void;
   onWarning?: (message: string) => void;
+  onStreamTiming?: (step: string, elapsedMs: number) => void;
   signal: AbortSignal;
 };
+
+async function timeStreamStep<T>(
+  options: XReceiveOptions,
+  step: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const started = performance.now();
+  try {
+    return await operation();
+  } finally {
+    options.onStreamTiming?.(step, performance.now() - started);
+  }
+}
 
 function laterId(a: string | undefined, b: string): string {
   return !a || BigInt(b) > BigInt(a) ? b : a;
@@ -145,14 +160,14 @@ export async function waitForXBudgetReset(until: number, signal: AbortSignal): P
 
 function eventEnvelope(value: unknown): XPostEnvelope | undefined {
   const event = asRecord(asRecord(value).data);
-  if (event.event_type !== "post.mention.create") {
+  if (!X_ACTIVITY_POST_EVENT_TYPES.some((type) => type === event.event_type)) {
     return undefined;
   }
   return parseXPostEnvelope({ post: event.payload, users: asRecord(event.includes).users });
 }
 
 async function receiveStream(
-  options: XReceiveOptions & { onBudgetPause: (until: number) => void },
+  options: XReceiveOptions & { onBudgetPause: (until: number) => void; onConnected: () => void },
   backfillMs: number,
 ): Promise<void> {
   const controller = new AbortController();
@@ -208,15 +223,26 @@ async function receiveStream(
   const unsubscribe = options.api.spend.subscribe(() => {
     void checkBudget().catch((error: unknown) => controller.abort(error));
   });
-  const armIdleTimer = () => {
+  const disarmIdleTimer = () => {
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(
-      () => controller.abort(new Error("X activity stream idle timeout")),
-      25_000,
-    );
+    idleTimer = undefined;
+  };
+  const armIdleTimer = () => {
+    disarmIdleTimer();
+    const timer = setTimeout(() => {
+      // After a local stall, let buffered socket reads run before declaring X idle.
+      setImmediate(() => {
+        if (idleTimer === timer) {
+          controller.abort(new Error("X activity stream idle timeout"));
+        }
+      });
+    }, 25_000);
+    idleTimer = timer;
   };
   const receiveBatches = async (source: ReadableStreamDefaultReader<Uint8Array>) => {
     const decoder = new TextDecoder();
+    const started = performance.now();
+    let firstByte = true;
     let pending = "";
     try {
       for (;;) {
@@ -261,7 +287,7 @@ async function receiveStream(
             });
           } finally {
             wakeReader = undefined;
-            clearTimeout(idleTimer);
+            disarmIdleTimer();
           }
         }
         if (drainRequested && !ready) {
@@ -282,6 +308,10 @@ async function receiveStream(
             return;
           }
           throw new Error("X activity stream disconnected");
+        }
+        if (firstByte && result.value.byteLength) {
+          firstByte = false;
+          options.onStreamTiming?.("first-byte", performance.now() - started);
         }
         pending += decoder.decode(result.value, { stream: true });
         if (pending.length > 1_048_576) {
@@ -324,16 +354,18 @@ async function receiveStream(
     } finally {
       receiveDone = true;
       wakeConsumer?.();
-      clearTimeout(idleTimer);
+      disarmIdleTimer();
     }
   };
   try {
-    await checkBudget();
+    await timeStreamStep(options, "budget-check", checkBudget);
     if (budgetPaused) {
       return;
     }
     armIdleTimer();
-    const response = await options.api.openActivityStream(signal);
+    const response = await timeStreamStep(options, "response-headers", () =>
+      options.api.openActivityStream(signal),
+    );
     if (!response.body) {
       throw new Error("X activity stream has no response body");
     }
@@ -342,7 +374,8 @@ async function receiveStream(
     if (signal.aborted) {
       cancelOnAbort();
     }
-    clearTimeout(idleTimer);
+    disarmIdleTimer();
+    options.onConnected();
     options.onStatus?.({
       eventMode: "stream",
       streamConnected: true,
@@ -415,7 +448,10 @@ async function receiveStream(
         if (!envelope) {
           const event = asRecord(value);
           const type = asRecord(event.data).event_type;
-          if (typeof type === "string" && type !== "post.mention.create") {
+          if (
+            typeof type === "string" &&
+            !X_ACTIVITY_POST_EVENT_TYPES.some((eventType) => eventType === type)
+          ) {
             continue;
           }
           if (++unparsed === 3) {
@@ -471,7 +507,7 @@ async function receiveStream(
   } finally {
     closed = true;
     unsubscribe();
-    clearTimeout(idleTimer);
+    disarmIdleTimer();
     controller.abort();
     await backfill;
     signal.removeEventListener("abort", cancelOnAbort);
@@ -525,7 +561,10 @@ export async function runXEvents(
     }
     while (!options.signal.aborted) {
       if (stream && Date.now() >= streamPausedUntil) {
-        streamPausedUntil = (await options.api.spend.streamResumeAt()) ?? 0;
+        streamPausedUntil =
+          (await timeStreamStep(options, "budget-preflight", () =>
+            options.api.spend.streamResumeAt(),
+          )) ?? 0;
       }
       if (!stream || Date.now() < streamPausedUntil) {
         options.onStatus?.({
@@ -559,7 +598,13 @@ export async function runXEvents(
       }
       try {
         await receiveStream(
-          { ...options, onBudgetPause: pauseStream },
+          {
+            ...options,
+            onBudgetPause: pauseStream,
+            onConnected: () => {
+              backoffMs = 1_000;
+            },
+          },
           Math.max(60, (options.pollSeconds ?? 60) * 4) * 1000,
         );
       } catch (error) {
@@ -573,7 +618,7 @@ export async function runXEvents(
           streamBackoffMs: backoffMs,
           message: "activity stream reconnect backoff",
         });
-        await sleepWithAbort(backoffMs, options.signal);
+        await timeStreamStep(options, "backoff", () => sleepWithAbort(backoffMs, options.signal));
         backoffMs = Math.min(backoffMs * 2, 60_000);
       }
     }

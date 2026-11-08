@@ -13,8 +13,26 @@ const nativeHost = "extensions/browser/src/browser/extension-install.native-host
 const discord = "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts";
 const local = "src/tui/tui-pty-local.e2e.test.ts";
 const built = { OPENCLAW_TUI_PTY_USE_BUILT_CLI: "1" };
+const reply = "test/vitest/vitest.auto-reply.config.ts";
+const delivery = "src/auto-reply/reply/dispatch-from-config.delivery.test.ts";
 
 it.each([
+  { name: "reply delivery", config: reply, files: [delivery], env: {}, runtime: true },
+  { name: "broad reply", config: reply, files: [], env: {}, runtime: false },
+  {
+    name: "custom reply config",
+    config: "custom.config.ts",
+    files: [delivery],
+    env: {},
+    runtime: false,
+  },
+  {
+    name: "mixed reply",
+    config: reply,
+    files: [delivery, "src/auto-reply/reply/unknown.test.ts"],
+    env: {},
+    runtime: false,
+  },
   { name: "Doctor", config: e2e, files: [doctor], env: {}, runtime: true },
   { name: "SQLite", config: e2e, files: [sqlite], env: {}, runtime: true },
   { name: "native host", config: e2e, files: [nativeHost], env: {}, runtime: true },
