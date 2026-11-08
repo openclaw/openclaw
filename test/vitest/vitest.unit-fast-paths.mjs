@@ -171,6 +171,7 @@ const ownerRoutedUnitTestPatterns = [
   // The family-attempt stall proof needs Node's real attempt timer. The shared
   // unit-fast runner hides that ordering, so a broken budget still passes there.
   "src/infra/net/undici-family-policy.attempt-timeout.test.ts",
+  "src/infra/net/undici-family-policy.provider-attempt.test.ts",
   // Detached handoff and service-manager fixtures retain their infra owner when shared.
   "src/infra/update-managed-service-handoff-lifecycle.test.ts",
   "src/infra/update-managed-service-handoff-native-lifecycle.test.ts",

@@ -1,0 +1,2 @@
+# Shared family-attempt proof: real-socket stall coverage plus the Gateway provider path.
+268
