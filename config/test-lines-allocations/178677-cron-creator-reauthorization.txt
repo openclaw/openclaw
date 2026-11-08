@@ -1,0 +1,4 @@
+# Cron creator-channel reauthorization surface: cronJobUsesToolRuntime predicate (tools-allow.test.ts),
+# cron.get/cron.list reauthorizationRequired view + output-schema contract, and the agent-tool policy
+# re-authorization regression. Exact measured net test-line growth at the rebased head.
+173
