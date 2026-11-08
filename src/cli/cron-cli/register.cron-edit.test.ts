@@ -262,6 +262,33 @@ describe("cron edit", () => {
   });
 
   it.each([
+    [
+      ["--failure-alert-channel", "", "--failure-alert-to", " ", "--failure-alert-account-id", ""],
+      { channel: null, to: null, accountId: null },
+    ],
+    [
+      [
+        "--failure-alert-channel",
+        " Telegram ",
+        "--failure-alert-to",
+        " Target ",
+        "--failure-alert-account-id",
+        " Bot-A ",
+      ],
+      { channel: "telegram", to: "Target", accountId: "Bot-A" },
+    ],
+    [["--failure-alert-after", "2"], { after: 2 }],
+  ] as const)("serializes failure-alert target edits for %j", async (args, failureAlert) => {
+    await edit(args);
+    const update = callGatewayFromCli.mock.calls.find(([method]) => method === "cron.update");
+    const wirePayload = JSON.stringify(update?.[2]);
+    expect(JSON.parse(wirePayload)).toEqual({
+      id: "job-1",
+      patch: { failureAlert },
+    });
+  });
+
+  it.each([
     ["0", 0],
     ["1h30m", 5_400_000],
   ] as const)("accepts failure cooldown %s", async (duration, cooldownMs) => {
