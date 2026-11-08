@@ -562,7 +562,7 @@ describe("Gateway state ownership", () => {
       };
       vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
         if (
-          pathname === secondLock &&
+          path.dirname(String(pathname)) === directory &&
           typeof flags === "number" &&
           (flags & fs.constants.O_EXCL) !== 0 &&
           !released

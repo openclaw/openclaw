@@ -70,22 +70,40 @@ it.runIf(process.platform !== "win32")("rejects FIFO swaps at descriptor open", 
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(filePath, "regular");
     const bridge = bridgeFor(workspaceDir);
+    let swapped = false;
+    const swapToFifo = () => {
+      fsSync.unlinkSync(filePath);
+      expect(spawnSync("mkfifo", [filePath]).status).toBe(0);
+      swapped = true;
+    };
+    const realLstat = fs.lstat.bind(fs);
+    // Async POSIX reads open after the exact pre-open metadata observation.
+    using lstat = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stat = await realLstat(...args);
+      if (!swapped && String(args[0]) === filePath && args[1]?.bigint === true) {
+        swapToFifo();
+      }
+      return stat;
+    });
     const realOpenSync = fsSync.openSync.bind(fsSync);
     using openSync = vi.spyOn(fsSync, "openSync").mockImplementation((target, flags, mode) => {
       if (path.resolve(String(target)) === filePath) {
         if (typeof flags !== "number" || (flags & fsSync.constants.O_NONBLOCK) === 0) {
           throw new Error("sandbox read descriptor open is blocking");
         }
-        fsSync.unlinkSync(filePath);
-        expect(spawnSync("mkfifo", [filePath]).status).toBe(0);
+        if (!swapped) {
+          swapToFifo();
+        }
       }
       return realOpenSync(target, flags, mode);
     });
 
     void openSync;
+    void lstat;
     await expect(bridge.readFile({ filePath: "live.pipe" })).rejects.toThrow(
       /boundary checks|cannot read/i,
     );
+    expect(swapped).toBe(true);
     expectOnlyCanonicalPathCommands();
   });
 });

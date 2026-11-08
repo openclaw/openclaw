@@ -2,6 +2,7 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -125,16 +126,24 @@ export function registerWorkspaceBootstrapTests() {
 
       const agentsPath = path.join(syncFs.realpathSync(tempDir), DEFAULT_AGENTS_FILENAME);
       const originalLstat = syncFs.lstatSync.bind(syncFs);
+      const originalAsyncLstat = fs.lstat.bind(fs);
       let agentsLstatAttempts = 0;
-      vi.spyOn(syncFs, "lstatSync").mockImplementation(((target: unknown, options?: unknown) => {
+      const beforeLstat = (target: unknown) => {
         if (String(target) === agentsPath && ++agentsLstatAttempts === 1) {
           throw Object.assign(new Error("Unknown system error -11: lstat"), {
             code: "EAGAIN",
             errno: -11,
           });
         }
+      };
+      vi.spyOn(syncFs, "lstatSync").mockImplementation(((target: unknown, options?: unknown) => {
+        beforeLstat(target);
         return originalLstat(target as never, options as never);
       }) as typeof syncFs.lstatSync);
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        beforeLstat(args[0]);
+        return await originalAsyncLstat(...args);
+      });
 
       await expectAgents(tempDir, "boundary retry");
       expect(agentsLstatAttempts).toBeGreaterThanOrEqual(2);
@@ -145,20 +154,23 @@ export function registerWorkspaceBootstrapTests() {
 
       // openRootFile reports a transient open failure as reason "io"; the reader
       // must retry it (re-open) rather than drop the file for the turn.
-      const originalOpenSync = syncFs.openSync.bind(syncFs);
+      const originalOpen = boundaryFileRead.openRootFile;
+      const agentsPath = path.join(syncFs.realpathSync(tempDir), DEFAULT_AGENTS_FILENAME);
       let threwTransientOpen = false;
-      vi.spyOn(syncFs, "openSync").mockImplementation(((
-        ...args: Parameters<typeof syncFs.openSync>
-      ) => {
-        if (!threwTransientOpen) {
+      vi.spyOn(boundaryFileRead, "openRootFile").mockImplementation(async (params) => {
+        if (!threwTransientOpen && params.absolutePath === agentsPath) {
           threwTransientOpen = true;
-          throw Object.assign(new Error("Unknown system error -11: open"), {
-            code: "EAGAIN",
-            errno: -11,
-          });
+          return {
+            ok: false,
+            reason: "io",
+            error: Object.assign(new Error("Unknown system error -11: open"), {
+              code: "EAGAIN",
+              errno: -11,
+            }),
+          };
         }
-        return originalOpenSync(...args);
-      }) as typeof syncFs.openSync);
+        return await originalOpen(params);
+      });
 
       await expectAgents(tempDir, "open retry");
       expect(threwTransientOpen).toBe(true);
