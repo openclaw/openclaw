@@ -180,6 +180,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             sessionSettingsAvailable: true,
             modelMutationAvailable: ScreenshotFixtureMode.modelSignInScenario != "read-only",
             effortMutationAvailable: true,
+            verboseMutationAvailable: true,
             webSearchBaseEnabled: true,
             webSearchAvailable: true,
             skills: [
@@ -1249,7 +1250,10 @@ private actor LocalFixtureChatStore {
                         type: "toolCall",
                         id: "fixture-exec",
                         name: "exec",
-                        arguments: AnyCodable(["command": "printf ready"])),
+                        arguments: AnyCodable(
+                            ProcessInfo.processInfo.arguments.contains("--openclaw-command-purpose-fixture")
+                                ? ["command": "printf ready", "title": "Check local readiness"]
+                                : ["command": "printf ready"])),
                     OpenClawChatMessageContent(
                         type: "tool_result",
                         content: AnyCodable([["type": "text", "text": "ready"]]),

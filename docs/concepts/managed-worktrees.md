@@ -229,6 +229,8 @@ Lowering the setting applies the eviction policy to existing checkouts. Disk-spa
 
 Creation hydrates only the selected commit's missing contents. Its object census
 returns only missing IDs, keeping preparation responses small for large checkouts.
+The batch fetch uses that commit as its only negotiation tip, avoiding reads of
+unrelated session branch tips even though object negotiation is disabled.
 It does not scan every promisor pack to classify missing objects; that proof belongs to snapshot
 removal, where lost locally authored data must preserve the checkout. Successful
 default-base hydration is already shared by commit while the Git worker remains

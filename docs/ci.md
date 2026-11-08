@@ -438,6 +438,10 @@ Control UI, repo E2E, and native live browser CI restore the Chromium revision p
 
 The first `checks-ui` shard also runs a curated WebKit overlay and composer-focus project when changed paths touch its interaction owners, their styles, or the subset in `ui/vitest.config.ts`. The manifest owns that selection. WebKit runs sequentially after the existing UI tests, with the same three-worker limit and no additional runner or matrix row. Scheduled runs without changed paths and frozen targets omit it. The selected row installs the pinned Playwright WebKit browser and Linux dependencies. Run the same project explicitly with `OPENCLAW_UI_WEBKIT=1 pnpm --dir ui test --project=webkit --maxWorkers=3`; ordinary UI test runs remain Chromium-only. CDP-dependent modal media and accessibility-tree suites stay on Chromium until their browser-neutral replacements land.
 
+Control UI E2E skips Vitest requirement discovery when its selected files cannot
+include a WebKit or Gateway-runtime suite. Matching or unspecified selections
+retain the existing shard discovery before installing WebKit or preparing runtime.
+
 The WebKit project requires every selected assertion to pass, with no expected-failure exceptions. Shared fixtures wait for usable overlay content, inspect native adopted stylesheets, and establish keyboard traversal independently of Safari's pointer-focus behavior.
 
 Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 15.2.0 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.
