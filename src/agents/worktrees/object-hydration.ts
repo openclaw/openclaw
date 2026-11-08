@@ -68,6 +68,8 @@ export async function hydrateCommitObjects(
       [
         "fetch",
         "--refetch",
+        // Even refetch's noop negotiator otherwise parses every local ref tip.
+        `--negotiation-tip=${commit}`,
         "--no-auto-maintenance",
         remote,
         "--no-tags",
