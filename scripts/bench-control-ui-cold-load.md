@@ -911,6 +911,15 @@ modules and mapping coverage. It gzips source-mapped generated ranges independen
 so those scores identify expensive modules but are not additive transfer costs;
 the existing shipped gzip sidecars remain the route budget authority.
 
+Run the absolute checker as well as `ui:check-performance:base`: a passing delta
+against the base does not prove the artifact fits its fixed ceilings. The document
+budget includes early locale preload metadata and the self-contained recovery
+shell. Locale namespace data uses one content generation per language so those
+hints stay compact without delaying translated Chat behind another request.
+Changing any namespace invalidates that language's namespace set; base catalogs
+and config hints retain their own chunk identities. Generated data assets have
+no source maps, so module attribution reports their bytes as unmapped.
+
 Every reload replays the warm visit's persisted sidebar and trimmed v8 transcript
 (after unloading the app), local storage and session storage. `--gateway-http`
 serves synthetic HTTP fixtures natively so production JS/CSS can use the browser's
