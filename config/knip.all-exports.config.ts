@@ -86,6 +86,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/agents/harness/tool-authority.runtime.retention.test-support.ts!",
   // The hook retention test launches this native-ESM child through resolveRuntimeWorkerUrl.
   "src/gateway/hooks-mapping.retention.test-support.ts!",
+  // Spawned through resolveRuntimeWorkerUrl by installed-skill-retention.test.ts.
+  "src/agents/installed-skill-retention.test-support.ts!",
   // Generated handoff preload and resolver shims import this helper by URL.
   "test/helpers/managed-handoff-isolation.ts!",
   // The Windows CLI lifetime test launches this isolated probe by path.

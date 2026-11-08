@@ -204,6 +204,7 @@ const { values } = parseArgs({
     "exec-io-storm": { type: "boolean", default: false },
     "worktree-tool-churn": { type: "boolean", default: false },
     "stress-tool-search": { type: "boolean", default: false },
+    "oldgen-workload": { type: "boolean", default: false },
     "stress-network-tool": { type: "boolean", default: false },
     "attempt-setup-image": { type: "string" },
     "sandbox-image": { type: "string" },
@@ -518,6 +519,9 @@ if (
   );
 }
 const toolScenario = scenario === "chat.send" || reasoningScenario;
+if (values["oldgen-workload"] && (!values["team-stress"] || !values["stress-tools"])) {
+  throw new Error("--oldgen-workload requires --team-stress and --stress-tools");
+}
 if (values["stress-tool-search"] && !values["stress-tools"]) {
   throw new Error("--stress-tool-search requires --stress-tools");
 }
@@ -3094,6 +3098,9 @@ const mock = createServer((req, res) => {
                     code:
                       storeCode +
                       execIoCode +
+                      (values["oldgen-workload"]
+                        ? 'const foundSkills = await skills.search("quasar", 5); if (!foundSkills.skills.some(skill => skill.name.startsWith("synthetic-"))) throw new Error("Synthetic skill search omitted fixture guides");\n'
+                        : "") +
                       (values["stress-tool-search"]
                         ? 'if (!(await catalog.search("read file content", { limit: 5 })).some(tool => tool.name === "read")) throw new Error("Synthetic tool search omitted read");\n'
                         : "") +
@@ -5711,6 +5718,9 @@ try {
         ? new URL("./team-shape-stress-loader.mjs", import.meta.url).href
         : "./scripts/tsx.mjs",
       ...(gatewayPreload ? ["--import", gatewayPreload.path] : []),
+      ...(values["oldgen-workload"]
+        ? ["--import", new URL("./2312-oldgen-preload.mjs", import.meta.url).href]
+        : []),
       ...(values["exec-io-storm"]
         ? ["--import", fileURLToPath(new URL("./agent-exec-io-preload.mjs", import.meta.url))]
         : []),
@@ -6913,7 +6923,7 @@ try {
   const retainedProfilePath = path.join(output, "retained.heapprofile");
   let retainedProfileStartedAt: number | undefined;
   if (soakScenario) {
-    await sampleMemory();
+    await sampleMemory(values["oldgen-workload"] && values["team-stress-retention-sampling"]);
   }
   for (
     let round = 0;
@@ -6924,6 +6934,16 @@ try {
       : round < (idleScenario ? 2 : rounds);
     round++
   ) {
+    if (values["oldgen-workload"] && round > 0 && round % 5 === 0) {
+      const current = await rpc(sender, "config.get", {});
+      if (!isRecord(current) || typeof current.hash !== "string") {
+        throw new Error("Synthetic reload requires the current config hash");
+      }
+      await rpc(sender, "config.patch", {
+        baseHash: current.hash,
+        raw: JSON.stringify({ logging: { level: round % 10 === 0 ? "info" : "warn" } }),
+      });
+    }
     const verifyWorkspaceMutation = mutateTurnStartWorkspaces(round, keys);
     if (values["turn-start-phases"] && round < coldSessionRounds) {
       await delay(roundIntervalMs);
@@ -7503,7 +7523,9 @@ try {
               throw subscriberFailure;
             }
             await delay(Math.min(memoryIntervalMs, pacedUntil - Date.now()));
-            await sampleMemory();
+            await sampleMemory(
+              values["oldgen-workload"] && values["team-stress-retention-sampling"],
+            );
           }
         }
       } finally {
