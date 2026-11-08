@@ -39,7 +39,7 @@ export function getTextLexicalIndex(
 ) {
   const prepared = typeof documents[0] === "object";
   const revision = prepared
-    ? `prepared:${JSON.stringify(documents.map((document) => (typeof document === "string" ? document : document.revision)))}`
+    ? `prepared:${prepareTextLexicalDocument(JSON.stringify(documents.map((document) => (typeof document === "string" ? document : document.revision)))).revision}`
     : createHash("sha256").update(JSON.stringify(documents)).digest("hex");
   if (current?.revision === revision && current.index) {
     return current.index;

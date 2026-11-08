@@ -895,7 +895,7 @@ function responseRetryAfterMs(response) {
   return undefined;
 }
 
-export async function readBoundedResponseBody(response, params) {
+async function consumeBoundedResponseBody(response, params, consume) {
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
     const retryAfterMs = responseRetryAfterMs(response);
@@ -930,7 +930,6 @@ export async function readBoundedResponseBody(response, params) {
     }
   }
 
-  const chunks = [];
   let totalBytes = 0;
   const reader = response.body.getReader();
   try {
@@ -947,7 +946,7 @@ export async function readBoundedResponseBody(response, params) {
         await reader.cancel();
         throw new Error(`${params.label} exceeded its approved byte count.`);
       }
-      chunks.push(Buffer.from(value));
+      consume(value);
     }
   } catch (error) {
     await reader.cancel().catch(() => undefined);
@@ -963,6 +962,14 @@ export async function readBoundedResponseBody(response, params) {
       `${params.label} ended before its approved byte count.`,
     );
   }
+  return totalBytes;
+}
+
+export async function readBoundedResponseBody(response, params) {
+  const chunks = [];
+  const totalBytes = await consumeBoundedResponseBody(response, params, (chunk) => {
+    chunks.push(Buffer.from(chunk));
+  });
   return Buffer.concat(chunks, totalBytes);
 }
 
@@ -1091,7 +1098,7 @@ function retainVerifiedArchive(archivePath, bytes, expected, maxBytes) {
   }
 }
 
-function createArtifactTransfer(params, expected) {
+function createArtifactTransfer(params, expected, digestOnly = false) {
   const token = assertTrimmedString(params.token, "GitHub token");
   const timeoutMs = boundedLimit(params.timeoutMs, DEFAULT_TIMEOUT_MS, "GitHub request timeout");
   const explicitDeadlineMs =
@@ -1106,11 +1113,15 @@ function createArtifactTransfer(params, expected) {
     params.retryDelayMs === undefined
       ? 250
       : boundedLimit(params.retryDelayMs, 5_000, "GitHub retry delay");
-  const maxArchiveBytes = boundedLimit(
-    params.maxArchiveBytes,
-    DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES,
-    "Actions artifact ZIP byte limit",
-  );
+  // Digest-only verification never retains or expands a payload. Its exact
+  // authenticated byte count is the transfer bound, including large OCI images.
+  const maxArchiveBytes = digestOnly
+    ? expected.artifactSizeBytes
+    : boundedLimit(
+        params.maxArchiveBytes,
+        DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES,
+        "Actions artifact ZIP byte limit",
+      );
   if (expected.artifactSizeBytes > maxArchiveBytes) {
     throw new Error("Actions artifact size exceeds the configured archive limit.");
   }
@@ -1169,11 +1180,23 @@ function createArtifactTransfer(params, expected) {
               signal: AbortSignal.timeout(Math.min(timeoutMs, remainingMs)),
             },
           );
-          const bytes = await readBoundedResponseBody(response, {
+          const bodyPolicy = {
             expectedBytes: expected.artifactSizeBytes,
             label,
             maxBytes: maxArchiveBytes,
-          });
+          };
+          if (digestOnly) {
+            const hash = createHash("sha256");
+            await consumeBoundedResponseBody(response, bodyPolicy, (chunk) => hash.update(chunk));
+            const digest = `sha256:${hash.digest("hex")}`;
+            if (digest !== expected.artifactDigest) {
+              throw new Error(
+                `${label} digest ${digest} does not match ${expected.artifactDigest}.`,
+              );
+            }
+            return digest;
+          }
+          const bytes = await readBoundedResponseBody(response, bodyPolicy);
           verifyArchiveBytes(bytes, expected, label);
           return bytes;
         },
@@ -1185,6 +1208,29 @@ function createArtifactTransfer(params, expected) {
       return archiveBytes;
     },
   };
+}
+
+// Content verification only: callers still authenticate producer authority.
+// No file, ZIP parse, expanded payload, or whole-archive allocation is created.
+export async function verifyExactActionsArtifactDigest(params) {
+  if (params.archivePath !== undefined || params.maxArchiveBytes !== undefined) {
+    throw new Error("Digest-only verification does not accept archive storage or size overrides.");
+  }
+  const expected = {
+    ...requireArtifactIdentity(params.expected),
+    artifactExpiresAt: assertTrimmedString(
+      params.expected.artifactExpiresAt,
+      "Actions artifact expiry",
+    ),
+  };
+  const transfer = createArtifactTransfer(params, expected, true);
+  const artifactMetadata = await transfer.json(
+    `actions/artifacts/${expected.artifactId}`,
+    "GitHub Actions artifact metadata",
+  );
+  validateArtifactMetadata(artifactMetadata, expected);
+  const digest = await transfer.archive();
+  return { digest, artifactMetadata };
 }
 
 export async function downloadExactActionsArtifactArchive(params) {

@@ -254,6 +254,18 @@ Disabled, unconfigured, and ordinarily unlinked accounts do not fail channel rea
 
 Unexpected channel exits use automatic restart backoff. Intentional stops cancel a pending retry; failed restart waits leave a stopped account with `restartPending: false` and the failure recorded in `lastError`.
 
+A previously connected channel can recover its transport without failing the
+whole Gateway. During the existing two-minute reconnect grace, `/readyz` stays
+`200` when all other readiness checks pass, and detailed responses include
+`degraded: ["discord"]` (or the affected channel IDs). Channel status retains
+`connected: false`, `lifecycle: "recovering"`, `healthState: "reconnect-grace"`,
+and the disconnect timestamp; transport logs record the reconnect attempts.
+The window starts at the first disconnect and retries do not renew it. Recovery
+clears degradation. An unrecovered channel fails readiness after the window,
+including while an agent run is active. Blocked or terminal failures bypass
+reconnect grace. Initial connection still uses the existing startup readiness
+rules; an account that has never connected is not a reconnecting account.
+
 Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
 
 Proxies listed in `gateway.trustedProxies` can request aggregate readiness and
