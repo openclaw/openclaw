@@ -9,6 +9,7 @@ import {
   fsSafeEnvInput,
   normalizeFsSafeNativeEnv,
 } from "../infra/fs-safe-env.js";
+import { captureEnvironmentKey, resolveEnvironmentKey } from "../shared/environment-key.js";
 import {
   collectConfigRuntimeEnvVars,
   envSnapshotEntriesEqual,
@@ -26,11 +27,11 @@ export { collectConfigRuntimeEnvVars, isConfigRuntimeEnvVarAllowed } from "./con
 
 // Read-time application is not a runtime publication, but isolated write preparation
 // still needs its provenance to distinguish config-owned values from equal OS values.
-const appliedConfigEnvOwnership = new WeakMap<NodeJS.ProcessEnv, Record<string, string>>();
+const appliedConfigEnvOwnership = new WeakMap<object, Record<string, string>>();
 
 function resolveAppliedConfigEnvOwnership(env: NodeJS.ProcessEnv): Record<string, string> {
   return {
-    ...appliedConfigEnvOwnership.get(env),
+    ...appliedConfigEnvOwnership.get(resolveEnvironmentKey(env)),
     ...(env === process.env ? publishedConfigRuntimeEnvState.ownedEnv : {}),
   };
 }
@@ -38,7 +39,9 @@ function resolveAppliedConfigEnvOwnership(env: NodeJS.ProcessEnv): Record<string
 /** Capture read-time provenance separately from runtime publication authority. */
 export function snapshotEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const snapshot = cloneEnvWithPlatformSemantics(env);
-  appliedConfigEnvOwnership.set(snapshot, { ...appliedConfigEnvOwnership.get(env) });
+  appliedConfigEnvOwnership.set(captureEnvironmentKey(snapshot), {
+    ...appliedConfigEnvOwnership.get(resolveEnvironmentKey(env)),
+  });
   return snapshot;
 }
 
@@ -51,9 +54,13 @@ export function restoreEnvChangesIfUnchanged(params: {
   const before = snapshotEnvByPlatformKey(params.before);
   const after = snapshotEnvByPlatformKey(params.after);
   const current = snapshotEnvByPlatformKey(params.env);
-  const beforeOwned = snapshotEnvByPlatformKey(appliedConfigEnvOwnership.get(params.before) ?? {});
-  const afterOwned = snapshotEnvByPlatformKey(appliedConfigEnvOwnership.get(params.after) ?? {});
-  const owned = { ...appliedConfigEnvOwnership.get(params.env) };
+  const beforeOwned = snapshotEnvByPlatformKey(
+    appliedConfigEnvOwnership.get(resolveEnvironmentKey(params.before)) ?? {},
+  );
+  const afterOwned = snapshotEnvByPlatformKey(
+    appliedConfigEnvOwnership.get(resolveEnvironmentKey(params.after)) ?? {},
+  );
+  const owned = { ...appliedConfigEnvOwnership.get(resolveEnvironmentKey(params.env)) };
   const currentOwned = snapshotEnvByPlatformKey(owned);
   const keys = new Set(before.keys());
   for (const entries of [after, beforeOwned, afterOwned]) {
@@ -72,7 +79,7 @@ export function restoreEnvChangesIfUnchanged(params: {
     // Lower-precedence replacement can change ownership without changing bytes.
     replaceEnvSnapshotEntry(owned, currentOwned.get(key), beforeOwned.get(key));
   }
-  appliedConfigEnvOwnership.set(params.env, owned);
+  appliedConfigEnvOwnership.set(captureEnvironmentKey(params.env), owned);
   normalizeFsSafeNativeEnv(params.env);
 }
 
@@ -107,17 +114,19 @@ function snapshotConfigEnvOwnership(
   properties: Map<string, EnvSnapshotEntry>,
 ): Map<string, EnvSnapshotEntry> {
   return new Map(
-    Object.entries(appliedConfigEnvOwnership.get(env) ?? {}).map(([key, value]) => {
-      // Windows aliases may enumerate a different spelling than the config collector.
-      // Bind provenance to that actual slot, retaining its spelling for restoration.
-      const propertyKey =
-        !properties.has(key) && Object.hasOwn(env, key)
-          ? [...properties.keys()].find(
-              (candidate) => candidate.toUpperCase() === key.toUpperCase(),
-            )
-          : key;
-      return [propertyKey ?? key, { key, value }];
-    }),
+    Object.entries(appliedConfigEnvOwnership.get(resolveEnvironmentKey(env)) ?? {}).map(
+      ([key, value]) => {
+        // Windows aliases may enumerate a different spelling than the config collector.
+        // Bind provenance to that actual slot, retaining its spelling for restoration.
+        const propertyKey =
+          !properties.has(key) && Object.hasOwn(env, key)
+            ? [...properties.keys()].find(
+                (candidate) => candidate.toUpperCase() === key.toUpperCase(),
+              )
+            : key;
+        return [propertyKey ?? key, { key, value }];
+      },
+    ),
   );
 }
 
@@ -180,7 +189,7 @@ export function captureConfigReadEnvMutation<T>(
         return;
       }
       active = false;
-      const owned = { ...appliedConfigEnvOwnership.get(env) };
+      const owned = { ...appliedConfigEnvOwnership.get(resolveEnvironmentKey(env)) };
       const current = snapshotEnvProperties(env);
       const currentOwned = snapshotConfigEnvOwnership(env, current);
       for (const change of changes) {
@@ -200,7 +209,7 @@ export function captureConfigReadEnvMutation<T>(
         // Equal-byte replacement can still transfer ownership from a lower-precedence layer.
         replaceEnvSnapshotEntry(owned, currentOwned.get(key), change.beforeOwned);
       }
-      appliedConfigEnvOwnership.set(env, owned);
+      appliedConfigEnvOwnership.set(captureEnvironmentKey(env), owned);
       normalizeFsSafeNativeEnv(env);
     };
     // Snapshot rejection and include compensation consume the same receipt once.
@@ -265,7 +274,10 @@ export function cloneEnvWithPlatformSemantics(env: NodeJS.ProcessEnv): NodeJS.Pr
       },
     });
   }
-  appliedConfigEnvOwnership.set(cloned, resolveAppliedConfigEnvOwnership(env));
+  appliedConfigEnvOwnership.set(
+    captureEnvironmentKey(cloned),
+    resolveAppliedConfigEnvOwnership(env),
+  );
   normalizeFsSafeNativeEnv(cloned);
   return cloned;
 }
@@ -383,7 +395,7 @@ export function resetPublishedConfigRuntimeEnv(
   options: { preserveOwnership?: boolean } = {},
 ): void {
   if (!options.preserveOwnership) {
-    appliedConfigEnvOwnership.delete(process.env);
+    appliedConfigEnvOwnership.delete(resolveEnvironmentKey(process.env));
   }
   publishedConfigRuntimeEnvState = options.preserveOwnership
     ? { ...publishedConfigRuntimeEnvState }
@@ -663,7 +675,7 @@ export function applyConfigEnvVars(
     env[key] = value;
   }
   normalizeZaiEnv(env);
-  appliedConfigEnvOwnership.set(env, {
+  appliedConfigEnvOwnership.set(captureEnvironmentKey(env), {
     ...filterConfigRuntimeEnvOwnership(cfg, env, previousOwnedEnv),
     ...collectConfigRuntimeEnvOwnership(cfg, before, env, { replacedLowerPrecedenceKeys }),
   });
