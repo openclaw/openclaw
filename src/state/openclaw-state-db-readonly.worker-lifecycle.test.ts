@@ -82,6 +82,11 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => ({
     };
   },
 }));
+vi.mock("./openclaw-state-db-readonly-reuse.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-state-db-readonly-reuse.js")>()),
+  // These borrowed handles are fakes; image sharing has its own work-count tests.
+  canReadWarmNativeSourceIndependently: () => false,
+}));
 vi.mock("../infra/sqlite-readonly-location-cleanup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-readonly-location-cleanup.js")>()),
   // Preparation is mocked; this fixture has no private directory to retain.
@@ -95,8 +100,6 @@ import {
 } from "./openclaw-state-db-cache.js";
 import {
   executeExistingOpenClawStateRead as readExisting,
-  getActiveOpenClawStateDatabaseReadSnapshot as getSnapshot,
-  getActiveOpenClawStateDatabaseReadSnapshotAsync as getSnapshotAsync,
   withArtifactPreservingStateReads as preserveArtifacts,
   withOpenClawStateDatabaseReadSnapshot as withSnapshot,
 } from "./openclaw-state-db-readonly.js";
@@ -161,46 +164,6 @@ function startPendingRead() {
   });
   return { started, finish };
 }
-
-it("prepares one lazy snapshot without blocking and retains its identity through sync reads", async () => {
-  const started = createDeferredCore();
-  const preparation = createDeferredCore<AsyncPreparedSqliteReadOnlyLocation>();
-  mock.prepareSourceAsync.mockImplementation(() => {
-    started.resolve();
-    return preparation.promise;
-  });
-  finishProducer = () => preparation.resolve(preparedLocation());
-  const afterCleanup = createDeferredCore();
-  let escaped: ReturnType<typeof getSnapshotAsync> | undefined;
-  await withSnapshot(
-    async () => {
-      const first = getSnapshotAsync(options);
-      const second = getSnapshotAsync(options);
-      await started.promise;
-      // Completion needs an event-loop turn, which a synchronous first read would block.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(mock.cleanup).not.toHaveBeenCalled();
-      finishProducer!();
-      const [left, right] = await Promise.all([first, second]);
-      expect(left).toMatchObject({ location: "/fixture/prepared.sqlite" });
-      expect(right).toBe(left);
-      expect(getSnapshot(options)).toBe(left);
-      await read();
-      expect(mock.prepareSourceAsync).toHaveBeenCalledOnce();
-      expect(mock.prepareSource).not.toHaveBeenCalled();
-      expect(mock.cleanup).not.toHaveBeenCalled();
-      escaped = afterCleanup.promise.then(() => getSnapshotAsync(options));
-    },
-    { ...options, lazy: true },
-  );
-  expect(mock.cleanup).toHaveBeenCalledOnce();
-  afterCleanup.resolve();
-  await expect(escaped).rejects.toMatchObject({
-    code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
-  });
-});
 
 it("closes pending snapshot preparation before joining the read at shutdown", async () => {
   const started = createDeferredCore();

@@ -126,6 +126,7 @@ function formatChildResultDataBlock(value: string): string {
     wrapPromptDataBlock({
       label: "Child result",
       text: value,
+      encoding: "verbatim",
     }) || "Child result: (no output)"
   );
 }

@@ -1,0 +1,4 @@
+# Real SQLite predecessor-stop receipt attribution: preserve parent capture, reject
+# unrelated writes before/after the receipt, and retain durable recovery custody.
+# Net +94 test lines against prepared pre-correction parent 7f0bb79af1e0.
+94

@@ -477,6 +477,8 @@ on:
         default: true
         type: boolean
     secrets:
+      ABLITERATION_API_KEY:
+        required: false
       AZURE_SPEECH_KEY:
         required: false
       AZURE_SPEECH_REGION:
@@ -633,11 +635,7 @@ jobs:
   validate_selected_ref:
     runs-on: &linux_runner_small >-
       ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(inputs.runner_group), toJSON(!inputs.use_github_hosted_runners && github.repository ==
-      'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404'
-      || 'ubuntu-24.04'))) || (!inputs.use_github_hosted_runners && github.repository ==
-      'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404'
-      || 'ubuntu-24.04') }}
+      toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 30
     outputs:
       test_bun_artifact_id: ${{ steps.test_bun_artifact.outputs.artifact-id }}
@@ -1279,8 +1277,8 @@ jobs:
     runs-on: &linux_runner_medium >-
       ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
       toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
-      'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
-      'blacksmith-8vcpu-ubuntu-2404') }}
+      'blacksmith-2vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
+      'blacksmith-2vcpu-ubuntu-2404') }}
     timeout-minutes: 30
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1413,6 +1411,7 @@ jobs:
       workflow_repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
       workflow_sha: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
       build_profile: ciArtifacts
+      requires_sandbox_image: false
       suites: >-
         [{"name":"UI 1/4","command":"pnpm test:ui:e2e --shard=1/4"},
          {"name":"UI 2/4","command":"pnpm test:ui:e2e --shard=2/4"},
@@ -1430,8 +1429,8 @@ jobs:
     runs-on: &linux_runner_xlarge >-
       ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
       toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
-      'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
-      'blacksmith-32vcpu-ubuntu-2404') }}
+      'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
+      'blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -1630,15 +1629,14 @@ jobs:
             --server-san 127.0.0.1 --server-san localhost --server-san host.openshell.internal
           cat > "$fixture_root/gateway.toml" <<TOML
           [openshell]
-          version = 1
+          version = 2
           [openshell.gateway]
-          compute_drivers = ["docker"]
+          compute_driver = "docker"
           [openshell.gateway.mtls_auth]
           enabled = true
           [openshell.drivers.docker]
-          sandbox_namespace = "$gateway_name"
-          network_name = "$gateway_name"
-          grpc_endpoint = "https://host.openshell.internal:$gateway_port"
+          sandbox_label = "$gateway_name"
+          grpc_endpoint = "https://127.0.0.1:$gateway_port"
           TOML
           RUST_LOG=info openshell-gateway --config "$fixture_root/gateway.toml" \
             --bind-address 0.0.0.0 --port "$gateway_port" \
@@ -1812,6 +1810,17 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+
+      # Hosted release workers have exhausted disk during dependency/image setup.
+      # Reclaim unused toolchains before the checkouts and installs grow further.
+      - name: Reclaim hosted runner disk
+        if: contains(matrix.profiles, inputs.release_test_profile) && runner.environment == 'github-hosted' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
 
       - name: Checkout trusted release harness
         if: contains(matrix.profiles, inputs.release_test_profile)
@@ -2087,7 +2096,7 @@ jobs:
   plan_docker_lane_groups:
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.docker_lanes != ''
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404') }}
     timeout-minutes: 90
     outputs:
       groups_json: ${{ steps.groups.outputs.groups_json }}
@@ -2221,6 +2230,17 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+
+      # Hosted release workers have exhausted disk during dependency/image setup.
+      # Reclaim unused toolchains before the checkouts and installs grow further.
+      - name: Reclaim hosted runner disk
+        if: runner.environment == 'github-hosted' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
 
       - name: Checkout trusted release harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -2437,7 +2457,7 @@ jobs:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
     if: (!inputs.prepare_only) && inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')
     name: Docker E2E (openwebui)
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: 60
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -3094,6 +3114,24 @@ jobs:
                 }
             fi
           fi
+          metadata=".artifacts/docker-e2e-package/package-candidate.json"
+          if [[ ! -f "$metadata" ]]; then
+            jq -n \
+              --arg name "$name" \
+              --arg packageSourceSha "$package_source_sha" \
+              --arg sha256 "$digest" \
+              --arg version "$version" \
+              '{
+                name: $name,
+                packageSourceSha: $packageSourceSha,
+                sha256: $sha256,
+                version: $version
+              }' > "$metadata"
+          fi
+          [[ -s "$metadata" ]] || {
+            echo "Docker E2E package metadata was not created." >&2
+            exit 1
+          }
           tag="pkg-${digest:0:32}"
           echo "sha256=$digest" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -3110,8 +3148,11 @@ jobs:
         if: steps.plan.outputs.needs_package == '1' && needs.validate_selected_ref.outputs.package_artifact_present != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: docker-e2e-package-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/docker-e2e-package/openclaw-current.tgz
+          path: |
+            .artifacts/docker-e2e-package/openclaw-current.tgz
+            .artifacts/docker-e2e-package/package-candidate.json
           if-no-files-found: error
 
       - name: Validate prerelease plugin registry artifact identity
@@ -3670,21 +3711,13 @@ jobs:
             local digest="$4"
             local run_id="$5"
             local run_attempt="$6"
-            bash .release-harness/scripts/docker/shared-image-artifact.sh \
-              verify-upload "$label" "$id" "$name" "$digest" "$run_id" "$run_attempt"
-            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" |
-              jq -er \
-                --arg id "$id" \
-                --arg name "$name" \
-                --arg digest "sha256:${digest}" \
-                --arg run_id "$run_id" \
-                'select(
-                  (.id | tostring) == $id and
-                  .name == $name and
-                  .digest == $digest and
-                  .expired == false and
-                  (.workflow_run.id | tostring) == $run_id
-                ) | .expires_at'
+            local artifact_json
+            # Bash clears errexit inside this substitution; preserve verifier failures explicitly.
+            artifact_json="$(
+              bash .release-harness/scripts/docker/shared-image-artifact.sh \
+                verify-upload "$label" "$id" "$name" "$digest" "$run_id" "$run_attempt" --json
+            )" || return
+            jq -er '.expires_at' <<< "$artifact_json"
           }
           package_expiry="$(
             artifact_expiry \
@@ -3951,13 +3984,13 @@ jobs:
 
       - name: Setup Docker builder
         if: inputs.shared_image_policy == 'no-push-artifact'
-        uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          cache-key: Dockerfile
+          version: v0.23.0
 
       - name: Build shared live-test image
         if: inputs.shared_image_policy == 'no-push-artifact'
-        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile
@@ -4143,14 +4176,6 @@ jobs:
             bash .release-harness/scripts/docker/shared-image-artifact.sh \
             load .artifacts/live-test-image live-test "$TARGET_SHA" "$WORKFLOW_SHA" "$LIVE_IMAGE"
 
-      - name: Setup Node environment
-        if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-
       - name: Hydrate live auth/profile inputs
         if: contains(matrix.profiles, inputs.release_test_profile)
         run: bash scripts/ci-hydrate-live-auth.sh
@@ -4292,13 +4317,6 @@ jobs:
         env: *live_test_image_load_env
         shell: bash
         run: *live_test_image_load_run
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
 
       - name: Normalize provider allowlist
         shell: bash
@@ -4537,8 +4555,9 @@ jobs:
             # Pinned while the release OpenCode workspace lacks Global regions: deepseek-v4.1-flash
             # returns 400 "requires Global regions", and upstream metadata deprecated the V4 Flash
             # routes. Restore dynamic selection (drop OPENCLAW_LIVE_GATEWAY_MODELS) once the
-            # workspace enables Global.
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3 OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            # workspace enables Global. Release-workspace discovery stopped listing glm-5.3 on
+            # 2026-10-18, so the smoke pins glm-5.2.
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2 OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 45
             profile_env_only: false
             profiles: stable
@@ -4667,6 +4686,17 @@ jobs:
         id: selection
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         run: echo "run=true" >> "$GITHUB_OUTPUT"
+
+      # Hosted release workers have exhausted disk during dependency/image setup.
+      # Reclaim unused toolchains before the checkouts and installs grow further.
+      - name: Reclaim hosted runner disk
+        if: steps.selection.outputs.run == 'true' && runner.environment == 'github-hosted' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
 
       - name: Checkout selected ref
         if: steps.selection.outputs.run == 'true'
@@ -4865,6 +4895,17 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      # Hosted release workers have exhausted disk during dependency/image setup.
+      # Reclaim unused toolchains before the checkouts and installs grow further.
+      - name: Reclaim hosted runner disk
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group) && runner.environment == 'github-hosted' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
+
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -5049,6 +5090,7 @@ jobs:
             profile_env_only: false
             profiles: full
     env:
+      ABLITERATION_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.ABLITERATION_API_KEY || '' }}
       AZURE_SPEECH_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.AZURE_SPEECH_KEY || '' }}
       AZURE_SPEECH_REGION: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.AZURE_SPEECH_REGION || '' }}
       BASETEN_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.BASETEN_API_KEY || '' }}

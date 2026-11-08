@@ -17,14 +17,15 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
+    vi.unstubAllEnvs();
     cleanup();
   }),
 );
 
 it("shares approval replay across 64 subscribers during unrelated approval activity", async () => {
-  const databaseOptions = {
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("subscribe-approval-perf-") },
-  };
+  const stateDir = tempDirs.make("subscribe-approval-perf-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const databaseOptions = { env: process.env };
   const sessionKey = "agent:main:perf";
   const expected: PendingApprovalSnapshot[] = [];
   let unrelatedApproval: store.OperatorApprovalRecord | undefined;
@@ -77,12 +78,11 @@ it("shares approval replay across 64 subscribers during unrelated approval activ
     connect: { client: { id: "test" }, scopes: ["operator.admin"] },
   })) as GatewayClient[];
   const subscribers = createSessionMessageSubscriberRegistry();
+  vi.spyOn(Date, "now").mockReturnValue(5000);
   const runtime = createOperatorApprovalSessionEventRuntime({
     clients,
     sessionMessageSubscribers: subscribers,
     broadcastToConnIds: () => {},
-    databaseOptions,
-    now: () => 5000,
   });
   const prepare = store.prepareOperatorApprovalReplay;
   const preparations = vi
@@ -130,6 +130,6 @@ it("shares approval replay across 64 subscribers during unrelated approval activ
         undefined,
       );
     }
-    expect(preparations).toHaveBeenCalledTimes(round + 1);
+    expect(preparations).toHaveBeenCalledTimes(1);
   }
 });

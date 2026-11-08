@@ -32,6 +32,7 @@ export const pluginArrays = [
   "memoryCorpusSupplements",
   "memoryPromptPreparations",
   "memoryPromptSupplements",
+  "learnContributions",
   "widgetPresenters",
   "mcpServerConnectionResolvers",
   "cliRegistrars",
@@ -39,6 +40,7 @@ export const pluginArrays = [
   "nodeHostCommands",
   "nodeInvokePolicies",
   "gatewayAccessPolicies",
+  "repositoryIntegrations",
   "securityAuditCollectors",
   "services",
   "gatewayDiscoveryServices",
@@ -61,7 +63,6 @@ export const pluginMaps = [
   "sessionDiscussionProviders",
   "dashboardDataBindings",
   "dashboardActionVerbs",
-  "boardWidgetContentKinds",
 ] as const satisfies ReadonlyArray<keyof PluginRegistry>;
 
 export function createEmptyPluginRegistry(): PluginRegistry {

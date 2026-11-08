@@ -8,20 +8,27 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { gatewayHealthResponse } from "../gateway/health-response.test-support.js";
+import { createStatfsFixture } from "../infra/disk-space.test-support.js";
 import { isBetaTag } from "../infra/update-channels.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import * as assert from "./update-cli-assertions.test-support.js";
+import { retainFixtureGitRuntime } from "./update-cli-invocation.test-support.js";
 import { registerUpdateCliLifecycle } from "./update-cli-lifecycle.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as update from "./update-cli-modules.test-support.js";
+import { withPostCoreUpdateFixtureRun } from "./update-cli-shared-fixture.test-support.js";
 import * as configs from "./update-cli/update-cli-config.test-support.js";
 import * as packages from "./update-cli/update-cli-package.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
-export function createUpdateCliFixture() {
+export function createUpdateCliFixture(fixtureOptions: { databaseEngines?: string[] } = {}) {
+  const targetDeclaration = fixtureOptions.databaseEngines
+    ? { databaseEngines: fixtureOptions.databaseEngines }
+    : {};
   // Unique across concurrent runs; realpath normalizes macOS's /var symlink.
   const fixtureRoot = fsSync.realpathSync(
     fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-tests-")),
@@ -31,10 +38,11 @@ export function createUpdateCliFixture() {
   for (const directory of [".git", "src", "extensions"]) {
     fsSync.mkdirSync(path.join(checkoutRoot, directory));
   }
-  fsSync.writeFileSync(
-    path.join(checkoutRoot, "package.json"),
-    JSON.stringify({ name: "openclaw", version: VERSION }),
-  );
+  writeFixtureJsonSync(path.join(checkoutRoot, "package.json"), {
+    name: "openclaw",
+    version: VERSION,
+    ...(fixtureOptions.databaseEngines ? { openclaw: targetDeclaration } : {}),
+  });
   const globalNpmConfig = path.join(fixtureRoot, "global-npmrc");
   fsSync.writeFileSync(globalNpmConfig, "");
 
@@ -139,11 +147,11 @@ export function createUpdateCliFixture() {
       const packageJsonPath = path.join(packageRoot, "package.json");
       fsSync.mkdirSync(path.dirname(entrypoint), { recursive: true });
       fsSync.writeFileSync(entrypoint, "// test entrypoint\n", "utf8");
-      fsSync.writeFileSync(
-        packageJsonPath,
-        JSON.stringify({ name: "openclaw", version: targetVersion }),
-        "utf8",
-      );
+      writeFixtureJsonSync(packageJsonPath, {
+        name: "openclaw",
+        version: targetVersion,
+        ...(fixtureOptions.databaseEngines ? { openclaw: targetDeclaration } : {}),
+      });
       tempDirsToCleanup.add(packageRoot);
     }
     mocks.pathExists.mockImplementation(
@@ -157,12 +165,19 @@ export function createUpdateCliFixture() {
     mocks.readPackageVersion.mockImplementation(async (packageRoot: string) =>
       packageRoots.includes(packageRoot) ? targetVersion : readPreviousPackageVersion(packageRoot),
     );
-    vi.mocked(update.updateGitCheckout).mockImplementation(async ({ opts: options }) => {
+    vi.mocked(update.updateGitCheckout).mockImplementation(async ({ opts: options, gitRoot }) => {
       // Admit the original owner even without activation, as the Git runner does.
-      await options.inspectGitTarget({});
+      await options.inspectGitTarget({ version: targetVersion, ...targetDeclaration });
       // Baseline-capture cases separately exercise the actual mutation callback.
       if (params?.admitMutation) {
-        await assert.requireValue(options.beforeGitMutation, "Git mutation admission")({});
+        await assert.requireValue(
+          options.beforeGitMutation,
+          "Git mutation admission",
+        )(targetDeclaration);
+      }
+      // Explicit inspection-only failures have no published runtime to retain.
+      if (params?.admitMutation !== false && options.onTransaction) {
+        await retainFixtureGitRuntime(gitRoot, options.onTransaction);
       }
       return params?.gatewayUpdateImpl
         ? params.gatewayUpdateImpl(root)
@@ -201,7 +216,7 @@ export function createUpdateCliFixture() {
         OPENCLAW_COMPATIBILITY_HOST_VERSION: process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION,
         ...env,
       },
-      () => update.updateCommand(options),
+      () => withPostCoreUpdateFixtureRun(() => update.updateCommand(options)),
     );
 
   const mockGatewayHealth = (version: string, connId: string, buildId?: string) => {
@@ -234,10 +249,6 @@ export function createUpdateCliFixture() {
     ...packageFixtures,
     baseConfig,
     baseSnapshot,
-    clawHubRiskWarning:
-      "╭─ ClawHub Security Audit ─────────────────────────────────╮\n" +
-      "│ Outcome: Review                                         │\n" +
-      "╰───────────────────────────────────────────────────────────────────────╯",
     clawHubSuspiciousPayloadWarning:
       "╭─ ClawHub Security Audit ─────────────────────────────────╮\n" +
       "│ Outcome: Review                                         │\n" +
@@ -374,8 +385,10 @@ export function createUpdateCliFixture() {
           root,
           before: { sha: "old-managed-sha", version: "2026.4.26" },
           after: { sha: "new-managed-sha", version: VERSION },
+          ...targetDeclaration,
         }),
         reinspect,
+        targetDeclaration,
       );
       mockFileBackedPathExists();
       mocks.serviceLoaded.mockResolvedValue(true);
@@ -437,20 +450,7 @@ export function createUpdateCliFixture() {
       return { updatedRoot, updatedEntrypoint };
     },
     setupUpdatedRootRefresh,
-    statfsFixture: (params: {
-      bavail: number;
-      bsize?: number;
-      blocks?: number;
-    }): ReturnType<typeof fsSync.statfsSync> => ({
-      type: 0,
-      bsize: params.bsize ?? 1024,
-      blocks: params.blocks ?? 2_000_000,
-      bfree: params.bavail,
-      bavail: params.bavail,
-      files: 0,
-      frsize: params.bsize ?? 1024,
-      ffree: 0,
-    }),
+    statfsFixture: createStatfsFixture,
     tempDirs,
     tempDirsToCleanup,
     useNativeScheduledTaskControl: async () => {

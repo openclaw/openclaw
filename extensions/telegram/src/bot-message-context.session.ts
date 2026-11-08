@@ -658,6 +658,7 @@ export async function buildTelegramInboundContextPayload(
       LocationLivePeriodSeconds: primaryCtx.message?.location?.live_period,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
+      ThreadLabel: !isGroup && threadSpec.scope === "dm" ? topicName : undefined,
     },
   } satisfies BuildChannelInboundEventContextAsyncParams);
 

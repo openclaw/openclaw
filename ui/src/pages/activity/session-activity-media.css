@@ -18,7 +18,6 @@ openclaw-activity-session-media {
   padding: 2px;
   overflow-x: auto;
   overscroll-behavior-x: contain;
-  scrollbar-width: thin;
 }
 
 .activity-feed__media .chat-image-frame {
@@ -32,7 +31,7 @@ openclaw-activity-session-media {
   aspect-ratio: auto;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .activity-feed__media .chat-image-surface {

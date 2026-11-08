@@ -12,8 +12,6 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { CronService } from "../cron/service.js";
-import { createNoopLogger } from "../cron/service.test-harness.js";
 import { loadCronStore } from "../cron/store.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -23,11 +21,11 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
+import { createReadService } from "./server-methods/cron-read.test-support.js";
 
 const SESSION = "agent:main:main";
 const RUN = "cli-cron-capture";
@@ -141,13 +139,10 @@ it.each(["inherited", "finite", "schema-filtered", "denied", "excluded"] as cons
       });
       vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptionsAsync").mockResolvedValue([tool]);
     }
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
+    const cron = createReadService({
       storePath,
       cronEnabled: false,
       defaultAgentId: "main",
-      log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });

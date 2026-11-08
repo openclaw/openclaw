@@ -105,11 +105,18 @@ struct GatewayCustomHeadersSettingsView: View {
         GatewayCustomHeaderNames.credential(named: self.trimmedNewName) != nil
     }
 
+    /// Storage drops a non-token name on save, which made the row look added until the next visit.
+    private var newNameIsInvalidToken: Bool {
+        let name = self.trimmedNewName
+        return !name.isEmpty && !GatewayCustomHeaders.isValidName(name)
+    }
+
     private var canAddEntry: Bool {
         !self.trimmedNewName.isEmpty
             && !self.newNameIsReserved
             && !self.newNameIsDuplicate
             && !self.newNameIsCredential
+            && !self.newNameIsInvalidToken
     }
 
     private var addFooterText: String {
@@ -127,6 +134,9 @@ struct GatewayCustomHeadersSettingsView: View {
         }
         if GatewayCustomHeaderNames.credential(named: self.trimmedNewName) == .secret {
             return String(localized: "This looks like a secret. Put it in Header value, not Header name.")
+        }
+        if self.newNameIsInvalidToken {
+            return "Header names cannot include spaces or other characters outside a single HTTP token."
         }
         return String(
             localized: "Sent only over secure connections. For a Cloudflare Access service token, add two headers: Header name CF-Access-Client-Id with your Client ID as Header value, then Header name CF-Access-Client-Secret with your Client Secret as Header value.")

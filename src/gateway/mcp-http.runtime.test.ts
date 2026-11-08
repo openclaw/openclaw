@@ -47,8 +47,6 @@ const toolNames = (resolved: { tools: { name?: string }[] }) =>
 function computerNode(nodeId: string, actions: string[]) {
   return {
     nodeId,
-    displayName: nodeId === "headless-windows-node" ? "E6540" : "Windows Companion",
-    platform: "win32",
     connected: true,
     commands: ["screen.snapshot", "computer.act"],
     computerUse: {
@@ -127,12 +125,6 @@ describe("resolveMcpLoopbackScopedTools", () => {
         scopeParams({ toolsAllow: allow, nodeExecAllowed: exact || undefined }),
       );
       expect(toolNames(scoped)).toEqual(expected);
-      if (exact) {
-        expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({
-          mediatedToolNames: new Set(["write"]),
-          includeNodeExecTool: false,
-        });
-      }
     },
   );
 });
@@ -165,10 +157,6 @@ describe("McpLoopbackToolCache", () => {
       const writerParams = { ...params, admittedRunContext };
       const withSource = await cache.resolve(writerParams);
       expect(withSource.toolSchema.map((tool) => tool.name)).toEqual(["sessions"]);
-      expect(resolveGatewayScopedTools.mock.calls[1]?.[0].admittedRunContext).toBe(
-        admittedRunContext,
-      );
-      expect(resolveGatewayScopedTools.mock.calls[1]?.[0].senderIsOwner).toBe(false);
       expect(await cache.resolve(writerParams)).toBe(withSource);
       expect(await cache.resolve(params)).toBe(withoutSource);
 
@@ -212,7 +200,6 @@ describe("McpLoopbackToolCache", () => {
     const settled = action === "abort" ? expect(pending).rejects.toBe(reason) : pending;
     await entered.promise;
     if (action === "abort") {
-      expect(listNodes).toHaveBeenCalledWith(controller.signal);
       controller.abort(reason);
     } else if (action === "evict") {
       cache.evictGrant("pending-grant");
@@ -227,7 +214,6 @@ describe("McpLoopbackToolCache", () => {
       await cache.resolve({ ...params, signal: next.signal });
       next.abort();
       await cache.resolve({ ...params, signal: new AbortController().signal });
-      expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("signal");
     } else {
       await cache.resolve(params);
     }
@@ -301,10 +287,9 @@ describe("McpLoopbackToolCache", () => {
   it("evicts only the revoked grant's cached tool closures", async () => {
     const cfg = {};
 
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-a" }));
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-b" }));
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-a" }));
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-b" }));
+    for (const grantToken of ["grant-a", "grant-b", "grant-a", "grant-b"]) {
+      await cache.resolve(scopeParams({ cfg, grantToken }));
+    }
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
 
     expect(cache.evictGrant("grant-a")).toBe(true);

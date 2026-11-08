@@ -3,14 +3,12 @@ import { createSignal, flush, Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../../src/shared/deferred.ts";
 import * as toast from "../../../lib/toast.ts";
+import { restoreMocksAndGlobals } from "../../../test-helpers/mock-cleanup.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+afterEach(() => restoreMocksAndGlobals());
 
 it.each(["unmount", "session", "connection"])(
   "does not save bytes after %s changes",
@@ -99,7 +97,10 @@ it("shows download progress, rejects duplicate clicks, and lets a failed downloa
   expect(download).toHaveBeenCalledOnce();
   bytes.reject(new Error("Download unavailable"));
   await waitForSolid(() => expect(button.hasAttribute("disabled")).toBe(false));
-  expect(report).toHaveBeenCalledWith({ message: expect.stringContaining("Download unavailable") });
+  expect(report).toHaveBeenCalledWith({
+    severity: "error",
+    message: expect.stringContaining("Download unavailable"),
+  });
   expect(save).not.toHaveBeenCalled();
   button.click();
   await waitForSolid(() => expect(save).toHaveBeenCalledOnce());

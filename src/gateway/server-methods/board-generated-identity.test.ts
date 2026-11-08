@@ -2,10 +2,8 @@ import { afterEach, expect, it } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  boardFixture,
-  closeBoardDatabases,
-} from "../../boards/board-store.fixtures.test-support.js";
+import { boardFixture } from "../../boards/board-store.fixtures.test-support.js";
+import { closeBoardDatabases } from "../../boards/board-store.test-support.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { createBoardHarness } from "./board.test-support.js";

@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { attachmentAdmissionRef } from "./chat-attachment-admission-ref.ts";
@@ -11,6 +12,8 @@ import {
 } from "./chat-attachment-card.ts";
 import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
@@ -28,6 +31,7 @@ export function CompactAttachmentCard(
   props: AttachmentCardHeaderOptions & {
     elementRef?: (element: Element | undefined) => void;
     onFocus?: () => void;
+    downloadRef?: (element: HTMLAnchorElement) => void;
   },
 ) {
   const ref = attachmentAdmissionRef(() => props.elementRef);
@@ -114,7 +118,10 @@ export function AttachmentStateCard(
 }
 
 export function AttachmentCardHeader(
-  props: AttachmentCardHeaderOptions & { expandRef?: (element: HTMLButtonElement) => void },
+  props: AttachmentCardHeaderOptions & {
+    expandRef?: (element: HTMLButtonElement) => void;
+    downloadRef?: (element: HTMLAnchorElement) => void;
+  },
 ) {
   const view = createMemo(() => prepareAttachmentCardHeader(props, t));
   return (
@@ -177,6 +184,7 @@ export function AttachmentCardHeader(
         ) : props.downloadHref || props.downloadPending ? (
           <a
             class={view().downloadClass}
+            ref={(element) => props.downloadRef?.(element)}
             href={props.downloadPending ? undefined : props.downloadHref}
             aria-disabled={props.downloadPending ? "true" : undefined}
             tabindex={props.downloadPending && props.downloadPendingFocusable ? 0 : undefined}

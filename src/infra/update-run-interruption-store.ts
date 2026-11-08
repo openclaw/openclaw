@@ -4,6 +4,8 @@ import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-stat
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { claimUpdateResultInTransaction } from "./update-result-claim.js";
+import type { UpdateResultPayload } from "./update-result-payload.js";
 import { recordedUpdateRunDrivers } from "./update-run-activity.js";
 import { encodeRun, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { inspectUpdateRunDriver } from "./update-run-driver.js";
@@ -18,8 +20,9 @@ import {
   readLatestUpdateRun,
 } from "./update-run-read.kernel.js";
 import { finishUpdateRunRecord, type UpdateRunRecord } from "./update-run-record.js";
+import { upsertStep } from "./update-run-step-upsert.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
-import { persistRun, updateRunLedgerSchema, upsertStep } from "./update-run-write.js";
+import { persistRun, updateRunLedgerSchema } from "./update-run-write.js";
 
 export const installedUpdateCandidateSchema = z.object({
   version: z.string().trim().min(1).max(1024),
@@ -78,9 +81,12 @@ export function persistInterruptedUpdateObservation(
   assertCurrent("transaction");
   return runExistingOpenClawStateWriteTransaction(
     ({ db }) => {
-      const accept = (run: UpdateRunRecord | undefined): InterruptedUpdateSettlementResult => {
+      const accept = (
+        run: UpdateRunRecord | undefined,
+        updateResult?: UpdateResultPayload,
+      ): InterruptedUpdateSettlementResult => {
         assertCurrent("commit");
-        return { accepted: true, run };
+        return { accepted: true, run, ...(updateResult ? { updateResult } : {}) };
       };
       const current = readLatestUpdateRun(db);
       const active = readActiveUpdateRun(db);
@@ -152,7 +158,8 @@ export function persistInterruptedUpdateObservation(
         detail: `Updater exited before recording completion; installed and serving candidate build ${candidate.buildId} verified.`,
       });
       finishUpdateRunRecord(current, { status: "succeeded", after: candidate });
-      return accept(persistRun(db, current, options));
+      const saved = persistRun(db, current, options);
+      return accept(saved, claimUpdateResultInTransaction(db, saved));
     },
     options,
     { schemaSql: updateRunLedgerSchema, operationLabel: "update.run" },

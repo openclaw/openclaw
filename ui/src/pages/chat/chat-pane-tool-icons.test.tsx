@@ -5,6 +5,7 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import * as iconLoader from "../plugins/icon-loader.ts";
@@ -42,6 +43,15 @@ it("renders plugin artwork for accepted history absent from the capped session l
   const fixture = createMountedPanes([], "main", undefined, {
     "chat.history": history,
     "chat.startup": history,
+  });
+  const snapshot = fixture.context.gateway.snapshot;
+  fixture.pane.applyGatewaySnapshot({
+    ...snapshot,
+    hello: gatewayHelloForMethods([
+      ...(snapshot.hello?.features?.methods ?? []),
+      "plugins.list",
+      "tools.effective",
+    ]),
   });
   const client = expectDefined(fixture.context.gateway.snapshot.client, "pane Gateway client");
   const originalRequest = client.request.bind(client);

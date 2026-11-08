@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
-import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import {
   createControlUiE2eContextOptions,
@@ -12,7 +12,6 @@ import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Cron loading mocked Gateway E2E",
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}.`,
@@ -146,7 +145,7 @@ suite.define(() => {
           title: goBack ? b.name : outcome === "error" ? a.name : saved.name,
           samePage: true,
         });
-        const errors = await page.locator(".cron-error-banner").allTextContents();
+        const errors = await page.locator(".callout.danger").allTextContents();
         if (goBack || outcome === "saved") {
           expect(errors).toEqual([]);
         } else {
@@ -177,7 +176,7 @@ suite.define(() => {
         "cron.runs": runsPage([oldRun], 51, 0, 50),
       });
       await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByRole("tab", { name: "Run history", exact: true }).click();
+      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
       await page.getByText(oldRun.summary, { exact: true }).waitFor();
       await gateway.deferNext("cron.runs");
       await gateway.setMethodResponse("cron.runs", runsPage([secondRun], 2, 50, null));
@@ -188,7 +187,7 @@ suite.define(() => {
             (await gateway.getRequests("cron.runs", { query: "Lunar", offset: 0 })).length,
         )
         .toBe(1);
-      const loadMore = page.getByRole("button", { name: "Load more runs", exact: true });
+      const loadMore = page.getByRole("button", { name: "Load more activity", exact: true });
       if ((await loadMore.isVisible()) && (await loadMore.isEnabled())) {
         await loadMore.click();
       }

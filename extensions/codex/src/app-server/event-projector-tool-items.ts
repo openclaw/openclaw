@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  auditNativeToolTerminalStatus,
   itemName,
   itemStatus,
   auditNativeToolName,
@@ -16,6 +17,8 @@ import { collectDynamicToolContentText } from "./event-projector-tool-output.js"
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 import { asCodexToolArguments } from "./tool-progress-normalization.js";
 import { projectCodexWebSearchItem } from "./web-search-item.js";
+
+const MAX_CODEX_TOOL_PRESENTATION_CHARS = 10_000;
 
 export function readInterceptedNativePatchInput(
   command: unknown,
@@ -52,24 +55,47 @@ export function readInterceptedNativePatchInput(
 
 export function projectCodexToolActivity(
   item: CodexThreadItem,
-  phase: "start" | "result",
+  phase: "start" | "result" | "history",
   meta?: string,
 ) {
   const name = itemName(item) ?? auditNativeToolName(item);
+  // Semantic summaries are optional. Keep large recorded commands intact in the card,
+  // without repeatedly shell-parsing them while fitting native history pages.
+  const summarizeArgs = !(
+    phase === "history" &&
+    item.type === "commandExecution" &&
+    typeof item.command === "string" &&
+    item.command.length > MAX_CODEX_TOOL_PRESENTATION_CHARS
+  );
+  let status =
+    phase === "history"
+      ? auditNativeToolTerminalStatus(item)
+      : item.type === "collabAgentToolCall" && item.status === "interrupted"
+        ? "failed"
+        : unknownItemStatus(item)
+          ? "unknown"
+          : itemStatus(item);
+  // Recorded terminal facts can establish an outcome without claiming current liveness.
+  if (phase === "history" && status !== "blocked") {
+    if (
+      item.error != null ||
+      item.success === false ||
+      (item.exitCode != null && item.exitCode !== 0)
+    ) {
+      status = "failed";
+    } else if (status === "unknown" && (item.exitCode === 0 || item.success === true)) {
+      status = "completed";
+    }
+  }
   return name
     ? projectAgentToolActivity({
         toolCallId: item.id,
         name,
-        phase,
+        phase: phase === "history" ? "result" : phase,
         // Native dynamic items retain requested args, not host-hook execution facts.
-        args: item.type === "dynamicToolCall" ? undefined : itemToolArgs(item),
-        meta,
-        status:
-          item.type === "collabAgentToolCall" && item.status === "interrupted"
-            ? "failed"
-            : unknownItemStatus(item)
-              ? "unknown"
-              : itemStatus(item),
+        args: item.type === "dynamicToolCall" || !summarizeArgs ? undefined : itemToolArgs(item),
+        meta: meta ?? (phase === "history" && summarizeArgs ? itemMeta(item) : undefined),
+        status: status === "cancelled" ? "failed" : status,
         result: { details: itemToolResult(item) },
         ...(item.type === "collabAgentToolCall" && item.tool === "wait"
           ? { nativeOperation: "wait" }
@@ -233,7 +259,7 @@ function truncateFileChangeDiffAtLineBoundary(
 }
 
 function itemFileChanges(item: CodexThreadItem, includeDiff = false): CodexTranscriptFileChange[] {
-  let remainingDiffChars = 10_000;
+  let remainingDiffChars = MAX_CODEX_TOOL_PRESENTATION_CHARS;
   return itemFileChangeRecords(item).flatMap((change) => {
     const path = normalizeOptionalString(change.path);
     if (!path || change.kind === undefined) {

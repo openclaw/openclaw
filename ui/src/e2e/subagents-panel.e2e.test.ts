@@ -190,7 +190,7 @@ suite.define(() => {
         const stopManaged = managed.getByRole("button", { name: `Stop ${child.label}` });
         await openManaged.waitFor();
         await stopManaged.waitFor();
-        const native = panel.getByRole("region", { name: "Live native agents", exact: true });
+        const native = panel.getByRole("region", { name: "Live subagents", exact: true });
         const nativeRow = native.getByRole("listitem").filter({ hasText: nativeLabel });
         // The suite allocates one retained artifact directory per test attempt.
         const directory = suite.artifactDir;
@@ -256,6 +256,7 @@ suite.define(() => {
         expect(await stopManaged.isVisible()).toBe(true);
         await capture("native-completed");
 
+        await page.clock.resume();
         await page.setViewportSize({ width: 390, height: 900 });
         await page.locator(".shell--mobile-nav").waitFor();
         await openChatSidePanelType(page, "Subagents");
@@ -265,6 +266,7 @@ suite.define(() => {
         expect(await stopManaged.isVisible()).toBe(true);
         await capture("native-mobile-completed");
 
+        await pauseVirtualClock(page);
         await gateway.setMethodResponse(
           "sessions.describe",
           describeResponse({
@@ -283,6 +285,7 @@ suite.define(() => {
           .getByText("Updates retry automatically while this panel is visible.")
           .waitFor();
         await capture("native-parent-denied");
+        await page.clock.resume();
         await page.setViewportSize({ width: 1440, height: 1000 });
         await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
         await openChatSidePanelType(page, "Subagents");
@@ -296,7 +299,7 @@ suite.define(() => {
     );
   });
 
-  it("uses narrow subagent panel width without empty avatar gutters", async () => {
+  it("keeps narrow subagent reports inside the panel and scrollable", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1000 }, colorScheme: "dark" },
       async ({ page }) => {
@@ -349,23 +352,70 @@ suite.define(() => {
           { exact: true },
         );
         await copy.waitFor();
-
-        const geometry = await copy.evaluate((element) => {
-          const thread = element.closest<HTMLElement>(".chat-thread")!;
-          const column = element.closest(".chat-group-messages")!;
-          const outer = thread.getBoundingClientRect();
-          const inner = column.getBoundingClientRect();
+        await page.mouse.move(10, 10);
+        const stop = detail.locator(".subagents-desktop__stop");
+        await stop.waitFor();
+        const stopInk = await stop.evaluate((button) => {
+          const glyph = button.querySelector("svg")!;
           return {
-            width: outer.width,
-            left: inner.left - outer.left,
-            right: outer.right - inner.right,
-            overflow: thread.scrollWidth - thread.clientWidth,
+            label: getComputedStyle(button).color,
+            glyph: getComputedStyle(glyph).color,
+            fill: getComputedStyle(glyph).fill,
           };
         });
-        expect(geometry.width).toBeLessThanOrEqual(560);
-        expect(geometry.left).toBeLessThanOrEqual(24);
-        expect(geometry.right).toBeLessThanOrEqual(24);
-        expect(geometry.overflow).toBeLessThanOrEqual(1);
+        expect(stopInk.glyph, "Stop keeps its destructive label foreground at rest").toBe(
+          stopInk.label,
+        );
+        expect(stopInk.fill, "Stop paints its destructive glyph foreground").toBe(stopInk.label);
+
+        const thread = detail.locator(".chat-thread");
+        const initialWidth = (await thread.boundingBox())!.width;
+        expect(initialWidth).toBeLessThanOrEqual(560);
+        await page.setViewportSize({ width: 1440, height: 600 });
+        await page.getByRole("separator", { name: "Resize side panel", exact: true }).press("End");
+        await expect
+          .poll(async () => (await panel.boundingBox())!.width)
+          .toBeLessThan(initialWidth);
+        // The transcript receives its narrowed width through ResizeObserver.
+        await expect
+          .poll(() =>
+            thread.evaluate((element) => {
+              const outer = element
+                .closest("openclaw-chat-subagents-panel")!
+                .getBoundingClientRect();
+              const inner = element.getBoundingClientRect();
+              return Math.max(
+                outer.left - inner.left,
+                inner.right - outer.right,
+                element.scrollWidth - element.clientWidth,
+              );
+            }),
+          )
+          .toBeLessThanOrEqual(1);
+        const bounds = (await panel.boundingBox())!;
+        await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+        await page.mouse.wheel(0, -2000);
+        await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
+        await page.mouse.wheel(0, 2000);
+        await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        const last = detail.getByText(
+          "Confirmed that narrow panels keep long paths and reports readable.",
+          { exact: true },
+        );
+        await expect
+          .poll(() =>
+            last.evaluate((element) => {
+              const text = element.getBoundingClientRect();
+              const viewport = element.closest(".chat-thread")!.getBoundingClientRect();
+              return text.top >= viewport.top && text.bottom <= viewport.bottom;
+            }),
+          )
+          .toBe(true);
+        await panel.getByRole("button", { name: "Back to Subagents", exact: true }).click();
+        await panel
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(child.label, { exact: true }) })
+          .waitFor();
       },
     );
   });
@@ -539,6 +589,14 @@ suite.define(() => {
           .filter({ has: page.getByText(child.label, { exact: true }) })
           .waitFor();
         await expect.poll(() => panel.locator(".subagents-desktop__row").count()).toBe(5);
+        const adjacentRoots = panel
+          .locator(
+            '.subagents-desktop__row[data-depth="0"]:has(+ .subagents-desktop__row[data-depth="0"])',
+          )
+          .first();
+        expect(
+          await adjacentRoots.evaluate((root) => getComputedStyle(root, "::after").content),
+        ).toBe('""');
         await panel
           .locator(`[data-group="waiting"][data-session-key="${queued.key}"]`)
           .getByText("Queued", { exact: true })

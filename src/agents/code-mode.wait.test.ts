@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -8,6 +8,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
 } from "./admitted-run-context.js";
+import { createToolTurnHandoff } from "./agent-tools.abort.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import * as worker from "./code-mode-executor.js";
@@ -196,6 +197,44 @@ it("keeps one execution allowance across event-driven required waits", async () 
   } finally {
     releases.forEach((release) => release.resolve());
     await execution;
+  }
+});
+
+it("preserves an accepted host handoff while wait is parked without resuming the guest", async () => {
+  const release = createDeferred();
+  const parked = createDeferred();
+  const abort = new AbortController();
+  const receipt = {
+    status: "started",
+    async: true,
+    yielded: true,
+    message: "Reload accepted",
+  } as const;
+  const target = pluginToolWithExecute("accept_handoff", "Accept a host handoff", async () => {
+    await release.promise;
+    abort.abort(createToolTurnHandoff("cell", receipt));
+    return jsonResult(receipt);
+  });
+  const after = pluginTool("after_handoff", "Must not run after acceptance");
+  const fixture = harness([target, after]);
+  const initial = await fixture.exec.execute(
+    "cell",
+    { code: "try { await accept_handoff({}); } catch {} return await after_handoff({});" },
+    abort.signal,
+  );
+  const details = resultDetails(initial);
+  expect(details.status).toBe("waiting");
+  observeSettlement(parked.resolve);
+  const waiting = fixture.wait.execute("wait-cell", { runId: details.runId }, abort.signal);
+  try {
+    await parked.promise;
+    release.resolve();
+    expectCompleted(resultDetails(await waiting), receipt);
+    expect(after.execute).not.toHaveBeenCalled();
+    expect(testing.activeRuns.size).toBe(0);
+  } finally {
+    release.resolve();
+    await waiting;
   }
 });
 
@@ -483,62 +522,41 @@ it("keeps an admitted wait alive past idle expiry and expires it only after repa
   expect(testing.activeRuns.size).toBe(0);
 });
 
-it("preserves accepted output when wait expiry exceeds the Date range", async () => {
-  const target = pluginTool("expiry_fixture", "Expiry fixture");
-  const { run, wait } = harness([target], { codeMode: { snapshotTtlSeconds: 1 } });
-  const limit = 8_640_000_000_000_000;
-  const now = vi.spyOn(Date, "now").mockReturnValue(limit - 1_000);
-  const first = await run(
-    `text("delivered"); await yield_control();
-        text("accepted first"); await expiry_fixture({}); text("accepted inline"); await yield_control("pause"); return "done";`,
-    "park",
-  );
-  expect(first).toMatchObject({
-    status: "waiting",
-    output: [{ type: "text", text: "delivered" }],
-  });
-  now.mockReturnValue(limit - 1);
-  const details = resultDetails(await wait.execute("resume", { runId: first.runId }));
-  expect(details).toMatchObject({
-    status: "failed",
-    error: "code mode run expiry is unavailable.",
-    output: [
-      { type: "text", text: "accepted first" },
-      { type: "text", text: "accepted inline" },
-    ],
-  });
-  expect(target.execute).toHaveBeenCalledOnce();
-  expect(testing.activeRuns.size).toBe(0);
-});
+it.each([-60_000, 60_000])(
+  "expires a parked run after its TTL despite a %d ms wall-clock step",
+  async (wallStep) => {
+    mockClock();
+    const { exec } = harness([], { codeMode: { snapshotTtlSeconds: 60 } });
+    const first = resultDetails(
+      await exec.execute("clock-step", { code: 'await yield_control(); return "done";' }),
+    );
+    const state = parkedState(first);
+    vi.setSystemTime(Date.now() + wallStep);
+    // Parking another run rearms the shared timer against the first run's deadline.
+    await exec.execute("clock-step-2", { code: 'await yield_control(); return "done";' });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(state.owner.signal.aborted).toBe(false);
+    expect(testing.activeRuns.has(String(first.runId))).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(state.owner.signal.aborted).toBe(true);
+    expect(testing.activeRuns.has(String(first.runId))).toBe(false);
+  },
+);
 
-describe("suspended-run owner scope", () => {
-  const identities = ["runId", "sessionId", "sessionKey", "agentId"] as const;
-  const rejections = new Map<(typeof identities)[number], string>();
-  let rightfulResult: Record<string, unknown>;
-  beforeAll(async () => {
+it.each(["runId", "sessionId", "sessionKey", "agentId"] as const)(
+  "rejects suspended-run callers missing the owner %s",
+  async (missing) => {
     const { ctx, run, resume } = harness([pluginTool("fake_noop", "Noop")], { agentId: "owner" });
     const first = await run('await yield_control("pause"); return "owner-secret";', "scoped");
     expect(first.status).toBe("waiting");
-    for (const missing of identities) {
-      const foreign = createCodeModeTools({ ...ctx, [missing]: undefined })[1]!;
-      rejections.set(
-        missing,
-        await foreign.execute("missing-owner", { runId: first.runId }).then(
-          () => "unexpected success",
-          (error: unknown) => (error instanceof Error ? error.message : String(error)),
-        ),
-      );
-      expect(testing.activeRuns.has(first.runId as string)).toBe(true);
-    }
-    rightfulResult = await resume(first, "rightful-owner");
-  });
-  it.each(identities)("rejects suspended-run callers missing the owner %s", (missing) => {
-    expect(rejections.get(missing)).toContain(
+    const foreign = createCodeModeTools({ ...ctx, [missing]: undefined })[1]!;
+    await expect(foreign.execute("missing-owner", { runId: first.runId })).rejects.toThrow(
       missing === "runId" ? "different agent run" : "different session",
     );
-    expectCompleted(rightfulResult, "owner-secret");
-  });
-});
+    expect(testing.activeRuns.has(String(first.runId))).toBe(true);
+    expectCompleted(await resume(first, "rightful-owner"), "owner-secret");
+  },
+);
 
 it("rejects concurrent waits for the same suspended run", async () => {
   const { run, resume, wait } = harness([]);

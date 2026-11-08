@@ -2,31 +2,48 @@ import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
-import { SidebarDropdown } from "./app-sidebar-nav-menus.tsx";
+import { SidebarDropdown } from "./app-sidebar-dropdown.tsx";
 import { countSidebarSessionFilters } from "./app-sidebar-session-filter-summary.tsx";
 import {
   SIDEBAR_SESSION_SORT_OPTIONS,
   SIDEBAR_SESSION_STATUS_OPTIONS,
 } from "./app-sidebar-session-types.ts";
+import { createPersonalSessionGroupActions } from "./personal-session-group-actions.ts";
 import type { PickerFocusHandle } from "./select-picker-types.ts";
+import {
+  createSessionGroup,
+  renameSessionGroupFromMenu,
+  deleteSessionGroupFromMenu,
+  editSessionGroupDefaults,
+  setSessionsGrouping,
+  setSessionsShowCron,
+  setSessionsShowPreview,
+  setSessionsShowSystem,
+  setSessionsStatusFilter,
+} from "./session-organizer-menu.runtime.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarFilterMenuView, SidebarMenus } from "./sidebar-menus.tsx";
 import { SidebarSessionFilterPopover } from "./sidebar-session-filter-popover.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { MenuHeading } from "./solid/menu-heading.tsx";
 import type { MenuEntry, MenuItem } from "./solid/menu.tsx";
 import { Picker } from "./solid/select-picker.tsx";
-import { SettingsSegmented, SettingsToggle } from "./solid/settings-ui.tsx";
+import { SettingsSegmented } from "./solid/settings-ui.tsx";
 import {
   SidebarMenuRadioItem,
   SidebarOwnerFilter,
   SidebarOwnerOptions,
 } from "./solid/sidebar-owner-filter.tsx";
+import { SwitchIndicator } from "./solid/switch.tsx";
+
+registerSessionMenuEnglish();
 
 type SidebarSessionGroupMenuAction =
   | "group-defaults"
@@ -130,16 +147,16 @@ export function renderSidebarSessionGroupMenuForMenus(
                 void host.sessionDataContext?.sessions.groupsLoad();
                 break;
               }
-              void host.sessionOrganizer.editSessionGroupDefaults(menu.group);
+              void editSessionGroupDefaults(host.sessionOrganizer, menu.group);
               break;
             case "rename-group":
-              void host.sessionOrganizer.renameSessionGroupFromMenu(menu.group);
+              void renameSessionGroupFromMenu(host.sessionOrganizer, menu.group);
               break;
             case "new-group":
-              void host.sessionOrganizer.createSessionGroup();
+              void createSessionGroup(host.sessionOrganizer);
               break;
             case "delete-group":
-              void host.sessionOrganizer.deleteSessionGroupFromMenu(menu.group);
+              void deleteSessionGroupFromMenu(host.sessionOrganizer, menu.group);
               break;
           }
         }
@@ -196,9 +213,7 @@ export function renderSidebarCatalogViewMenuForMenus(
           {
             kind: "content",
             id: "group-heading",
-            content: (
-              <div class="sidebar-session-sort-menu__title">{t("sessionsView.groupBy")}</div>
-            ),
+            content: <MenuHeading label={t("sessionsView.groupBy")} />,
           },
           ...groupingOptions().map((option) =>
             SidebarMenuRadioItem({
@@ -280,32 +295,6 @@ export function renderSidebarSessionSortMenuForMenus(
   );
   // The mobile sheet has no hover or room for flyouts: choices open as sheet pages.
   const sheet = () => isMobileNavLayout();
-  const segmented = <T extends string>(
-    id: string,
-    label: () => string,
-    value: () => T,
-    options: () => ReadonlyArray<{ value: T; label: string }>,
-    onChange: (value: T) => void,
-    inputRef?: (value: T, element: HTMLInputElement) => void,
-  ) => (
-    <div id={id} class="sidebar-session-menu-row sidebar-session-menu-row--segmented">
-      <span aria-hidden="true" title={label()}>
-        {label()}
-      </span>
-      <SettingsSegmented
-        value={value()}
-        inputRef={inputRef}
-        options={options().map((option) => ({
-          value: option.value,
-          label: option.label,
-          title: option.label,
-        }))}
-        ariaLabel={label()}
-        class="sidebar-session-menu-segmented"
-        onChange={onChange}
-      />
-    </div>
-  );
   const switchItem = (
     id: string,
     label: () => string,
@@ -322,9 +311,7 @@ export function renderSidebarSessionSortMenuForMenus(
       onClick={() => onChange(!checked())}
     >
       <span>{label()}</span>
-      <span inert aria-hidden="true">
-        <SettingsToggle checked={checked()} ariaLabel={label()} onChange={() => undefined} />
-      </span>
+      <SwitchIndicator checked={checked()} size="sm" />
     </button>
   );
   return (
@@ -345,71 +332,87 @@ export function renderSidebarSessionSortMenuForMenus(
             class="sidebar-session-menu-section"
             aria-labelledby="sidebar-sessions-filters-label"
           >
-            <div class="sidebar-session-menu-heading">
-              <h3 id="sidebar-sessions-filters-label">{t("chat.sidebar.menuFilters")}</h3>
-              {settingsChanged() ? (
-                <button
-                  ref={(element) => controls.set("reset", element)}
-                  type="button"
-                  id="sidebar-sessions-reset"
-                  class="sidebar-session-menu-reset"
-                  onClick={() => {
-                    defaultStatus?.focus();
-                    host.sessionOrganizer.setSessionsStatusFilter("active");
-                    host.sessionOrganizer.setSessionsShowCron(false);
-                    host.sessionOrganizer.setSessionsShowSystem(false);
-                    host.sessionOrganizer.setSessionsShowPreview(false);
-                    host.setSessionSortMode("created");
-                    if (!rosterMode()) {
-                      // A displayed default can hide a saved Person choice until owners return.
-                      if (grouping() !== "category") {
-                        host.sessionOrganizer.setSessionsGrouping("category");
+            <MenuHeading
+              as="h3"
+              id="sidebar-sessions-filters-label"
+              label={t("chat.sidebar.menuFilters")}
+              trailing={
+                settingsChanged() ? (
+                  <button
+                    ref={(element) => controls.set("reset", element)}
+                    type="button"
+                    id="sidebar-sessions-reset"
+                    class="oc-menu-heading__action"
+                    onClick={() => {
+                      defaultStatus?.focus();
+                      setSessionsStatusFilter(host.sessionOrganizer, "active");
+                      setSessionsShowCron(host.sessionOrganizer, false);
+                      setSessionsShowSystem(host.sessionOrganizer, false);
+                      setSessionsShowPreview(host.sessionOrganizer, false);
+                      host.setSessionSortMode("created");
+                      if (!rosterMode()) {
+                        // A displayed default can hide a saved Person choice until owners return.
+                        if (grouping() !== "category") {
+                          setSessionsGrouping(host.sessionOrganizer, "category");
+                        }
+                        host.setSessionsEmptyGroupsMode("filtering");
                       }
-                      host.setSessionsEmptyGroupsMode("filtering");
-                    }
-                  }}
-                >
-                  {t("common.reset")}
-                </button>
-              ) : undefined}
-            </div>
-            {segmented(
-              "sidebar-sessions-status",
-              () => t("sessionsView.status"),
-              () => host.sessionsStatusFilter,
-              () =>
-                SIDEBAR_SESSION_STATUS_OPTIONS.map((value) => ({
-                  value,
-                  label: value === "active" ? t("common.active") : t(`sessionsView.${value}`),
-                })),
-              (statusFilter) => host.sessionOrganizer.setSessionsStatusFilter(statusFilter),
-              (value, element) => {
-                statusInputs.set(value, element);
-                if (value === "active") {
-                  defaultStatus = element;
+                    }}
+                  >
+                    {t("common.reset")}
+                  </button>
+                ) : undefined
+              }
+            />
+            <div
+              id="sidebar-sessions-status"
+              class="sidebar-session-menu-row sidebar-session-menu-row--segmented"
+            >
+              <span aria-hidden="true" title={t("sessionsView.status")}>
+                {t("sessionsView.status")}
+              </span>
+              <SettingsSegmented
+                value={host.sessionsStatusFilter}
+                inputRef={(value, element) => {
+                  statusInputs.set(value, element);
+                  if (value === "active") {
+                    defaultStatus = element;
+                  }
+                }}
+                options={SIDEBAR_SESSION_STATUS_OPTIONS.map((value) => {
+                  const label =
+                    value === "active" ? t("common.active") : t(`sessionsView.${value}`);
+                  return { value, label, title: label };
+                })}
+                ariaLabel={t("sessionsView.status")}
+                class="sidebar-session-menu-segmented"
+                onChange={(statusFilter) =>
+                  setSessionsStatusFilter(host.sessionOrganizer, statusFilter)
                 }
-              },
-            )}
+              />
+            </div>
             {switchItem(
               "sidebar-sessions-cron",
               () => t("sessionsView.showCronSessions"),
               () => host.sessionsShowCron,
-              (show) => host.sessionOrganizer.setSessionsShowCron(show),
+              (show) => setSessionsShowCron(host.sessionOrganizer, show),
             )}
             {switchItem(
               "sidebar-sessions-system",
               () => t("sessionsView.showSystemSessions"),
               () => host.sessionsShowSystem,
-              (show) => host.sessionOrganizer.setSessionsShowSystem(show),
+              (show) => setSessionsShowSystem(host.sessionOrganizer, show),
             )}
           </section>
           <section
             class="sidebar-session-menu-section"
             aria-labelledby="sidebar-sessions-display-label"
           >
-            <div class="sidebar-session-menu-heading">
-              <h3 id="sidebar-sessions-display-label">{t("chat.sidebar.menuDisplay")}</h3>
-            </div>
+            <MenuHeading
+              as="h3"
+              id="sidebar-sessions-display-label"
+              label={t("chat.sidebar.menuDisplay")}
+            />
             {rosterMode() ? undefined : (
               <Picker
                 focusRef={(handle) => pickers.set("group", handle)}
@@ -429,7 +432,7 @@ export function renderSidebarSessionSortMenuForMenus(
                 ]}
                 onChange={(value) => {
                   // SAFETY: This picker emits only the category, project, person, and none options above.
-                  host.sessionOrganizer.setSessionsGrouping(value as SidebarSessionsGrouping);
+                  setSessionsGrouping(host.sessionOrganizer, value as SidebarSessionsGrouping);
                 }}
               />
             )}
@@ -476,10 +479,28 @@ export function renderSidebarSessionSortMenuForMenus(
               "sidebar-sessions-preview",
               () => t("sessionsView.showSessionPreview"),
               () => host.sessionsShowPreview,
-              (show) => host.sessionOrganizer.setSessionsShowPreview(show),
+              (show) => setSessionsShowPreview(host.sessionOrganizer, show),
             )}
           </section>
           <footer class="sidebar-session-menu-footer">
+            <button
+              ref={(element) => controls.set("new-collection", element)}
+              type="button"
+              class="sidebar-session-filter-footer"
+              disabled={!host.connected}
+              onClick={() => {
+                const context = host.sessionDataContext;
+                if (context && host.connected) {
+                  menus.closePositionedMenu("sessionSort");
+                  void createPersonalSessionGroupActions(context).edit();
+                }
+              }}
+            >
+              <span aria-hidden="true">
+                <Icon name="plus" />
+              </span>
+              {t("sessionsView.personalGroupNew")}
+            </button>
             <a
               ref={(element) => controls.set("sources", element)}
               id="sidebar-sessions-sources"

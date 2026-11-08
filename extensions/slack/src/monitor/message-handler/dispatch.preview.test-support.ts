@@ -1,5 +1,13 @@
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect } from "vitest";
+
+export type DeliveryParams = Omit<
+  Parameters<typeof import("../replies.js").deliverReplies>[0],
+  "replies"
+> & {
+  replies: ReplyPayload[];
+};
 
 export function createSlackPlatformError(
   error: string,

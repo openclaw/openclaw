@@ -42,6 +42,12 @@ const ensurePortAvailableMock = vi.hoisted(() =>
 vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>()),
   ensurePortAvailable: ensurePortAvailableMock,
+  pathExistsSync: (filePath: string) => fs.existsSync(filePath),
+}));
+
+vi.mock("openclaw/plugin-sdk/path-existence-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/path-existence-runtime")>()),
+  executableFileExistsSync: (filePath: string) => fs.existsSync(filePath),
 }));
 
 vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
@@ -136,7 +142,7 @@ function requireSpawnCall(index = 0): unknown[] {
 
 function mockExpiredLaunchPollingClock(): void {
   let now = 1_000_000;
-  vi.spyOn(Date, "now").mockImplementation(() => {
+  vi.spyOn(performance, "now").mockImplementation(() => {
     now += 1_000;
     return now;
   });
@@ -264,13 +270,6 @@ async function withMockChromeCdpServer(params: {
 describe("chrome.ts internal", () => {
   beforeEach(() => {
     vi.useRealTimers();
-    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
-    vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
-      if (!fs.existsSync(candidate)) {
-        throw new Error("ENOENT");
-      }
-      return { isFile: () => true } as fs.Stats;
-    });
   });
 
   afterEach(() => {
@@ -500,13 +499,12 @@ describe("chrome.ts internal", () => {
     };
 
     it("returns structured no-display details before spawning headed Chrome", async () => {
-      const profile = {
-        ...makeProfile(51110),
+      const profile = makeProfile(51110, {
         driver: "openclaw",
         attachOnly: false,
         headless: false,
         headlessSource: "profile",
-      } as ResolvedBrowserProfile;
+      });
       const error = await launchOpenClawChrome(makeResolved(), profile, {
         platform: "linux",
         env: { DISPLAY: undefined, WAYLAND_DISPLAY: undefined },
@@ -689,7 +687,7 @@ describe("chrome.ts internal", () => {
             throw portBusy;
           }
         });
-        const profile = { ...makeProfile(51111), cdpUrl };
+        const profile = makeProfile(51111, { cdpUrl });
 
         await expect(launchOpenClawChrome(makeResolved(), profile)).rejects.toThrow(portBusy);
         expect(ensurePortAvailableMock.mock.calls).toEqual([
@@ -748,7 +746,7 @@ describe("chrome.ts internal", () => {
 
       const originalFetch = globalThis.fetch;
       let now = 1_000_000;
-      vi.spyOn(Date, "now").mockImplementation(() => now);
+      vi.spyOn(performance, "now").mockImplementation(() => now);
       let discoveryCalls = 0;
       vi.stubGlobal(
         "fetch",
@@ -825,7 +823,7 @@ describe("chrome.ts internal", () => {
         wsPath: "/devtools/browser/SINGLETON_RETRY",
         run: async (baseUrl) => {
           const port = Number(new URL(baseUrl).port);
-          const profile = { ...makeProfile(port), executablePath: "/tmp/profile-chrome" };
+          const profile = makeProfile(port, { executablePath: "/tmp/profile-chrome" });
           const userDataDir = managedDirectory(profile.name);
           await seedLockedProfile(profile, `${os.hostname()}-535`, true);
 
@@ -853,11 +851,7 @@ describe("chrome.ts internal", () => {
             wsPath: "/devtools/browser/ZOMBIE_SINGLETON_RETRY",
             run: async (baseUrl) => {
               const port = Number(new URL(baseUrl).port);
-              const profile = {
-                ...makeProfile(port),
-                cdpUrl: baseUrl,
-                executablePath,
-              } as ResolvedBrowserProfile;
+              const profile = makeProfile(port, { cdpUrl: baseUrl, executablePath });
               const userDataDir = managedDirectory(profile.name);
               await seedLockedProfile(profile, `${os.hostname()}-${zombiePid}`, true);
 
@@ -911,7 +905,7 @@ describe("chrome.ts internal", () => {
         return survivingProc;
       });
 
-      const profile = { ...makeProfile(51109), executablePath: "/tmp/profile-chrome" };
+      const profile = makeProfile(51109, { executablePath: "/tmp/profile-chrome" });
       managedDirectory(profile.name);
       await seedLockedProfile(profile, `${os.hostname()}-62001`);
 
@@ -969,11 +963,7 @@ describe("chrome.ts internal", () => {
         onCommand: () => undefined,
         run: async (baseUrl) => {
           const port = Number(new URL(baseUrl).port);
-          const profile = {
-            ...makeProfile(port),
-            cdpUrl: baseUrl,
-            executablePath,
-          } as ResolvedBrowserProfile;
+          const profile = makeProfile(port, { cdpUrl: baseUrl, executablePath });
           const userDataDir = managedDirectory(profile.name);
           mockLinuxManagedChromeOwnership({
             pid: stalePid,
@@ -1030,7 +1020,7 @@ describe("chrome.ts internal", () => {
       "distinguishes a $name profile lock before releasing data",
       async ({ error, target, expected }) => {
         stubBrowserExecutableAndPrefs("present");
-        const profile = { ...makeProfile(51117), driver: "openclaw" as const };
+        const profile = makeProfile(51117, { driver: "openclaw" as const });
         const lockPath = path.join(resolveOpenClawUserDataDir(profile.name), "SingletonLock");
         const readlink = fs.readlinkSync.bind(fs);
         vi.spyOn(fs, "readlinkSync").mockImplementation((candidate, options) => {
@@ -1202,11 +1192,7 @@ describe("chrome.ts internal", () => {
           onCommand: () => undefined,
           run: async (baseUrl) => {
             const port = Number(new URL(baseUrl).port);
-            const profile = {
-              ...makeProfile(port),
-              cdpUrl: baseUrl,
-              executablePath,
-            } as ResolvedBrowserProfile;
+            const profile = makeProfile(port, { cdpUrl: baseUrl, executablePath });
             const userDataDir = managedDirectory(`${profile.name}-${testCase.pid}`);
             const profileWithUniqueName = {
               ...profile,

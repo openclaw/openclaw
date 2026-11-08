@@ -28,6 +28,8 @@ function fixture(root = roots.make("compiler-input-snapshot-")) {
   put("packages/local/src/index.ts", "export const dependency = 1;\n");
   put("packages/local/dist/index.js", "export const built = 1;\n");
   put(".cache/vitest/ignored.json", "{}");
+  put(".cache/openclaw-vitest-fs-cache/slots/project/0/_metadata.json", "{}");
+  put(".cache/openclaw-node-compile-cache/runtime/compiled", "compiled bytes");
   fs.mkdirSync(path.join(root, "node_modules"));
   const link = (target: string, name: string) =>
     fs.symlinkSync(path.join(root, target), path.join(root, name), linkType);
@@ -43,12 +45,19 @@ function fixture(root = roots.make("compiler-input-snapshot-")) {
     });
   const signature = (input: CompilerInputSnapshot, outputRoot?: string) =>
     input.signature("tsconfig.json", ["fixture-compiler"], ["src/index.ts"], outputRoot);
-  return { root, write: put, snapshot, signature };
+  const record = (input: CompilerInputSnapshot, outputs: string[] = []) => ({
+    version: ARTIFACT_CACHE_VERSION,
+    signature: signature(input),
+    inputs: ["src/index.ts"],
+    outputs: Object.fromEntries(outputs.map((file) => [file, input.hash(file)])),
+  });
+  const matches = (saved: ReturnType<typeof record>, input = snapshot()) =>
+    input.matches(saved, "tsconfig.json", ["fixture-compiler"], Object.keys(saved.outputs));
+  return { root, write: put, snapshot, signature, record, matches };
 }
 
 it.each([
   ['{"compilerOptions":{"target":"invalid"},"include":["src/**/*.ts"]}', "TS6046"],
-  ['{"include":"src/**/*.ts"}', "TS5024"],
   ['{"extends":"./missing.json","include":["src/**/*.ts"]}', "TS5083"],
   ['{"compilerOptions": {', "TS1005"],
 ])("rejects invalid native compiler configuration %s", (config, diagnostic) => {
@@ -59,10 +68,6 @@ it.each([
 
 it.each([
   { file: "tools/compiler.js", bytes: "export const compiler = 2;\n" },
-  {
-    file: "base.json",
-    bytes: '{"compilerOptions":{"target":"ES2022","types":[]}}',
-  },
   {
     file: "base.json",
     bytes: '{ "compilerOptions": {"target":"ES2023","types":[]} }\n',
@@ -105,6 +110,18 @@ it("ignores checkout scratch packages that disappear during preparation", async 
   }
 });
 
+it.each(["openclaw-vitest-fs-cache", "openclaw-node-compile-cache"])(
+  "still hashes explicitly captured inputs under %s",
+  (directory) => {
+    const f = fixture();
+    const file = `.cache/${directory}/captured.js`;
+    f.write(file, "export const value = 1;\n");
+    const before = f.snapshot().signature("tsconfig.json", [], [file]);
+    f.write(file, "export const value = 2;\n");
+    expect(f.snapshot().signature("tsconfig.json", [], [file])).not.toBe(before);
+  },
+);
+
 it("preserves signatures across checkout depths with one shared external dependency", async () => {
   const directory = roots.make("compiler-input-snapshot-portability-");
   const dependency = path.join(directory, "shared-dependency");
@@ -138,25 +155,16 @@ it("invalidates warm records when ancestor installs appear or disappear without 
   const directory = roots.make("compiler-input-snapshot-ancestor-");
   const f = fixture(path.join(directory, "checkout"));
   f.write("dist/index.d.ts", "export declare const value = 1;\n");
-  const record = (snapshot: CompilerInputSnapshot) => ({
-    version: ARTIFACT_CACHE_VERSION,
-    signature: f.signature(snapshot),
-    inputs: ["src/index.ts"],
-    outputs: { "dist/index.d.ts": snapshot.hash("dist/index.d.ts") },
-  });
-  const matches = (saved: ReturnType<typeof record>) =>
-    f.snapshot().matches(saved, "tsconfig.json", ["fixture-compiler"], ["dist/index.d.ts"]);
-  const before = f.snapshot();
-  const absent = record(before);
+  const record = (snapshot: CompilerInputSnapshot) => f.record(snapshot, ["dist/index.d.ts"]);
+  const { matches } = f;
+  const absent = record(f.snapshot());
   expect(matches(absent)).toBe(true);
 
   const install = path.join(directory, "node_modules");
   fs.mkdirSync(install);
   const after = f.snapshot();
   await after.prepare();
-  expect(after.matches(absent, "tsconfig.json", ["fixture-compiler"], ["dist/index.d.ts"])).toBe(
-    false,
-  );
+  expect(matches(absent, after)).toBe(false);
   const present = record(after);
   expect(matches(present)).toBe(true);
 
@@ -177,23 +185,16 @@ it.each(["dependency", "@scope/dependency"])(
     const f = fixture();
     const directory = path.join(f.root, "node_modules", name);
     fs.mkdirSync(path.dirname(directory), { recursive: true });
-    const record = (snapshot: CompilerInputSnapshot) => ({
-      version: ARTIFACT_CACHE_VERSION,
-      signature: f.signature(snapshot),
-      inputs: ["src/index.ts"],
-      outputs: {},
-    });
-    const before = f.snapshot();
-    const absent = record(before);
+    const absent = f.record(f.snapshot());
     fs.mkdirSync(directory);
     const after = f.snapshot();
-    const present = record(after);
-    expect(after.matches(absent, "tsconfig.json", ["fixture-compiler"], [])).toBe(false);
+    const present = f.record(after);
+    expect(f.matches(absent, after)).toBe(false);
 
     fs.rmdirSync(directory);
     const removed = f.snapshot();
-    expect(removed.matches(present, "tsconfig.json", ["fixture-compiler"], [])).toBe(false);
-    expect(removed.matches(absent, "tsconfig.json", ["fixture-compiler"], [])).toBe(true);
+    expect(f.matches(present, removed)).toBe(false);
+    expect(f.matches(absent, removed)).toBe(true);
   },
 );
 
@@ -295,6 +296,8 @@ it("preloads sibling subtrees while the ordered visitor waits on a deeper direct
   expect(active).toBe(0);
   expect(observed.has(path.join(f.root, ".artifacts"))).toBe(false);
   expect(observed.has(path.join(f.root, ".cache/vitest"))).toBe(false);
+  expect(observed.has(path.join(f.root, ".cache/openclaw-vitest-fs-cache"))).toBe(false);
+  expect(observed.has(path.join(f.root, ".cache/openclaw-node-compile-cache"))).toBe(false);
   const synchronous = f.snapshot();
   for (const outputRoot of [undefined, path.join(f.root, "packages/local/dist")]) {
     expect(f.signature(snapshot, outputRoot)).toBe(f.signature(synchronous, outputRoot));

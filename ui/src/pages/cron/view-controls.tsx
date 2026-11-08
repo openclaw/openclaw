@@ -1,27 +1,26 @@
 import { createMemo, createUniqueId, Errored, Loading } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { iconButtonClass, ROW_GLYPH_STROKE } from "../../components/solid/icon-button.tsx";
+import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { CronJobActionProps, CronProps } from "./view-types.ts";
+
+registerCronEnglish();
 export function ErrorBanner(props: { error: string | null; reads?: CronProps["reads"] }) {
   const modelRequest = createMemo(() => props.reads?.modelRequest());
   return (
     <>
       {props.error ? (
-        <div class="cron-error-banner" role="alert">
-          {props.error}
-        </div>
+        <InlineAlert tone="danger">{props.error}</InlineAlert>
       ) : props.reads ? (
         <Loading on={modelRequest()}>
           <Errored
-            fallback={(error) => (
-              <div class="cron-error-banner" role="alert">
-                {formatUiError(error())}
-              </div>
-            )}
+            fallback={(error) => <InlineAlert tone="danger">{formatUiError(error())}</InlineAlert>}
           >
             {props.reads.models()}
           </Errored>
@@ -66,9 +65,9 @@ export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
       id={id}
       label={t("cron.actions.moreJob", { name: displayName() })}
       class="cron-job-menu"
-      triggerClass="btn btn--sm btn--ghost cron-job-menu__trigger"
+      triggerClass={[iconButtonClass({ size: 28, glyph: "row" }), "cron-job-menu__trigger"]}
       triggerAttributes={{ title: t("cron.actions.moreJob", { name: displayName() }) }}
-      trigger={<Icon name="moreHorizontal" />}
+      trigger={sessionIcon("moreHorizontal", 12, ROW_GLYPH_STROKE)}
       placement="bottom-end"
       items={[
         ...(props.job.schedule.kind === "event"
@@ -85,7 +84,7 @@ export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
           id: "clone",
           label: t("cron.actions.clone"),
           class: "cron-job-menu__item",
-          disabled: props.busy || !props.canManage,
+          disabled: props.busy || !(props.canCreate ?? props.canManage),
         },
         {
           id: "remove",
@@ -104,6 +103,9 @@ export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
             props.onRun(props.job, "due");
             break;
           case "clone":
+            if (!(props.canCreate ?? props.canManage)) {
+              return;
+            }
             props.onClone(props.job);
             break;
           case "remove":
@@ -120,7 +122,12 @@ export function EnabledSwitch(
     compact?: boolean;
   },
 ) {
-  const stateLabel = () => (props.job.enabled ? t("cron.detail.active") : t("cron.detail.paused"));
+  const stateLabel = () =>
+    props.job.state?.autoDisabled
+      ? t("cron.detail.autoDisabled")
+      : props.job.enabled
+        ? t("cron.detail.active")
+        : t("cron.detail.paused");
   const actionLabel = () =>
     t(props.job.enabled ? "cron.actions.pauseJob" : "cron.actions.resumeJob", {
       name: props.job.displayName ?? props.job.name,
@@ -133,7 +140,12 @@ export function EnabledSwitch(
     >
       <SettingsToggle
         checked={props.job.enabled}
-        disabled={props.busy || !props.connected || !props.canManage}
+        saving={props.toggleSavingJobId === props.job.id}
+        disabled={
+          !props.connected ||
+          !props.canManage ||
+          (props.busy && props.toggleSavingJobId !== props.job.id)
+        }
         ariaLabel={props.compact ? actionLabel() : stateLabel()}
         onChange={(checked) => {
           if (props.canManage) {

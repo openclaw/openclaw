@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { assert, expect, it, vi } from "vitest";
+import { serviceContext } from "./lifecycle-sync-fixtures.test-support.js";
 import { createWorkboardLifecycleService } from "./lifecycle-sync.js";
 import { createWorkboardSqliteTestHarness } from "./test/sqlite-store.js";
 import { createWorkboardTools } from "./tools.js";
@@ -90,11 +91,7 @@ it("joins a stopped background sweep without reviving its lifecycle generation",
       return { complete: true, sessions: [{ key: sessionKey, status: "done" }] };
     },
   });
-  const context = {
-    config: {},
-    stateDir: "/unused-workboard-test-state",
-    logger: { debug() {}, info() {}, warn: vi.fn(), error() {} },
-  };
+  const context = serviceContext();
   service.onGatewayStop();
   try {
     await service.start(context);

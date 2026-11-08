@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -119,17 +120,12 @@ function createApplyResult(): MigrationsMemoryApplyResult {
 
 function createContext(request: ReturnType<typeof vi.fn>): TestContext {
   const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
     assistantAgentId: "research",
     sessionKey: "agent:research:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const gatewayFixture = createApplicationGateway(snapshot);
   const listeners = new Set<() => void>();
   const subscribe = (notify: () => void) => {
@@ -191,15 +187,15 @@ describe("MemoryImportPage", () => {
     context.gateway.snapshot.phase = "stopped";
     const page = await mountPage(context);
 
-    expect(page.textContent).toContain("Connect to the gateway to import memory.");
+    expect(page.textContent).toContain("Reconnect to import memory.");
     expect(page.querySelector(".memory-import")).toBeNull();
-    expect(page.textContent).not.toContain("Memory import requires operator.admin access.");
+    expect(page.textContent).not.toContain("You need admin access to import memory.");
     expect(request).not.toHaveBeenCalled();
 
     context.gateway.snapshot.phase = "connected";
     context.notify();
     await waitForButton(page, "import-provider-button");
-    expect(page.textContent).not.toContain("Connect to the gateway to import memory.");
+    expect(page.textContent).not.toContain("Reconnect to import memory.");
     expect(page.textContent).toContain("/tmp/openclaw-research");
   });
 
@@ -269,7 +265,7 @@ describe("MemoryImportPage", () => {
         ),
       );
       [...page.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent?.trim() === "Refresh")
+        .find((button) => button.getAttribute("aria-label") === "Refresh")
         ?.click();
       await waitForButton(page, "import-provider-button");
       expect(request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(2);
@@ -295,7 +291,7 @@ describe("MemoryImportPage", () => {
         ),
       );
       [...page.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent?.trim() === "Refresh")
+        .find((button) => button.getAttribute("aria-label") === "Refresh")
         ?.click();
       await waitForMemoryImport(() => expect(page.textContent).toContain("/tmp/openclaw-writer"));
       expect(request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(4);
@@ -326,7 +322,7 @@ describe("MemoryImportPage", () => {
 
     flush();
     expect(request).not.toHaveBeenCalled();
-    expect(page.textContent).toContain("Memory import requires operator.admin access.");
+    expect(page.textContent).toContain("You need admin access to import memory.");
   });
 
   it("keeps a failed plan stable until the operator explicitly refreshes", async () => {
@@ -346,7 +342,7 @@ describe("MemoryImportPage", () => {
     expect(page.textContent).not.toContain("sk-1234567890abcdef");
 
     const refresh = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Refresh",
+      (button) => button.getAttribute("aria-label") === "Refresh",
     );
     if (!refresh) {
       throw new Error("expected Refresh button");
@@ -434,7 +430,7 @@ describe("MemoryImportPage", () => {
     await openImportConfirmation(page);
     findButton(page, "import-confirm")?.click();
     await waitForMemoryImport(() =>
-      expect(page.querySelector(".memory-import__confirm [role='alert']")?.textContent).toBe(
+      expect(page.querySelector(".memory-import__confirm [role='alert']")?.textContent).toContain(
         "response lost",
       ),
     );

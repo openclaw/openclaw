@@ -20,10 +20,8 @@ describe("searxng web search provider", () => {
   });
 
   function createTool() {
-    return expectDefined(
-      createSearxngWebSearchProvider().createTool({ config: {} }),
-      "SearXNG search tool",
-    );
+    const provider = createSearxngWebSearchProvider();
+    return expectDefined(provider.createTool({ config: {} }), "SearXNG search tool");
   }
 
   it("registers a setup-visible web search provider", () => {

@@ -2,6 +2,7 @@ import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   ProviderFastModePolicyContext,
   ProviderNativeWebSearchPolicyContext,
+  ProviderResponseModelEquivalenceContext,
 } from "openclaw/plugin-sdk/provider-model-types";
 import {
   asOptionalRecord,
@@ -9,6 +10,19 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const CLAWROUTER_ROUTE_METADATA_KEY = "clawrouterRoute";
+
+/**
+ * Routed ids are `<vendor>/<upstream>`; the upstream reports its own id without the vendor
+ * namespace. Any other response id, or a different vendor, is a real reroute.
+ */
+export function isResponseModelEquivalent(params: ProviderResponseModelEquivalenceContext) {
+  if (params.provider.trim().toLowerCase() !== "clawrouter") {
+    return false;
+  }
+  const separator = params.requestedModelId.indexOf("/");
+  const upstream = separator > 0 ? params.requestedModelId.slice(separator + 1) : "";
+  return upstream.length > 0 && params.responseModelId === upstream;
+}
 
 /** Catalog support and per-key admission apply only to the exact resolved route. */
 export function resolveNativeWebSearch(ctx: ProviderNativeWebSearchPolicyContext): boolean {

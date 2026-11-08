@@ -43,8 +43,10 @@ function onboarding(state: OpenClawTestState) {
       database,
     });
   const complete = (runId: string, nowMs?: number) =>
-    completeLocalOnboarding({ configPath: state.configPath, runId, nowMs, database });
+    completeLocalOnboarding({ configPath: state.configPath, runId, nowMs });
   const read = () => readLocalOnboardingState(state.configPath, database);
+  const readConfig = (config: Parameters<typeof readLocalOnboardingStateForConfig>[1]) =>
+    readLocalOnboardingStateForConfig(state.configPath, config, database);
   const recover = (owner: Parameters<typeof completeLocalSetupRecovery>[0]["owner"]) =>
     completeLocalSetupRecovery({ owner, appliedConfigPath: state.configPath });
   const writeConfig = () =>
@@ -60,7 +62,7 @@ function onboarding(state: OpenClawTestState) {
       replace: true,
       expectedRunId,
     });
-  return { database, begin, complete, read, recover, writeConfig, replace };
+  return { database, begin, complete, read, readConfig, recover, writeConfig, replace };
 }
 
 function test(
@@ -253,21 +255,13 @@ test("does not let a delayed concurrent run reopen a completed owner", async (co
 });
 
 test("binds receipts to the acknowledged configuration identity", async (context) => {
-  const { database, begin, read, state } = context;
+  const { begin, read, readConfig } = context;
   const pending = begin({ runId: "original-run" });
-
-  assert.deepEqual(
-    readLocalOnboardingStateForConfig(state.configPath, acknowledgedConfig, database),
-    pending,
-  );
+  assert.deepEqual(readConfig(acknowledgedConfig), pending);
   assert.equal(
-    readLocalOnboardingStateForConfig(
-      state.configPath,
-      { wizard: { securityAcknowledgedAt: replacementAcknowledgement } },
-      database,
-    ),
+    readConfig({ wizard: { securityAcknowledgedAt: replacementAcknowledgement } }),
     undefined,
   );
-  assert.equal(readLocalOnboardingStateForConfig(state.configPath, {}, database), undefined);
+  assert.equal(readConfig({}), undefined);
   assert.deepEqual(read(), pending);
 });

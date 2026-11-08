@@ -22,6 +22,7 @@ import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { logInfo } from "../logger.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
@@ -63,6 +64,8 @@ type NodeHostRunOptions = {
   forceWorkerRuns?: boolean;
   /** Disposable cloud host: computer control stays on the private environment carrier. */
   ephemeral?: boolean;
+  /** Provider recovery must retain this exact device, saved config, and node token. */
+  resumeDeviceId?: string;
   /** Optional WebSocket context path (e.g. "/openclaw-gw"). */
   gatewayContextPath?: string;
   nodeId?: string;
@@ -168,6 +171,10 @@ export async function loadResumableNodeHostGateway(): Promise<NodeHostGatewayCon
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
+  const workSignal = getAsyncWorkSignal();
+  if (workSignal?.aborted) {
+    return;
+  }
   const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
   await initializeSqliteRuntimeCapabilities();
   await ensureNodeHostStateReady();
@@ -186,7 +193,25 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     );
   }
   const savedConfig = await loadNodeHostConfig();
-  const plannedGateway: NodeHostGatewayConfig = {
+  const resuming = opts.resumeDeviceId !== undefined;
+  const resumeConfig = resuming ? savedConfig : undefined;
+  const resumeIdentity = resuming ? await loadDeviceIdentityIfPresentAsync() : undefined;
+  if (
+    resuming &&
+    (!resumeConfig?.gateway ||
+      !resumeIdentity ||
+      resumeIdentity.deviceId !== opts.resumeDeviceId ||
+      opts.gatewayBootstrapToken ||
+      opts.gatewayAuthFromEnv ||
+      !(await canReuseNodeHostDeviceToken({
+        savedGateway: resumeConfig.gateway,
+        gatewayCandidates: [resumeConfig.gateway],
+        deviceId: resumeIdentity.deviceId,
+      })))
+  ) {
+    throw new Error("Saved node pairing is missing or changed; same-device resume refused");
+  }
+  const plannedGateway: NodeHostGatewayConfig = resumeConfig?.gateway ?? {
     host: opts.gatewayHost,
     port: opts.gatewayPort,
     tls: opts.gatewayTls ?? cfg.gateway?.tls?.enabled ?? false,
@@ -195,7 +220,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     cloudflareAccess: opts.gatewayCloudflareAccess,
   };
   let gatewayBootstrapToken = opts.gatewayBootstrapToken;
-  let reuseDeviceTokenOnly = false;
+  let reuseDeviceTokenOnly = Boolean(resumeConfig);
   if (
     gatewayBootstrapToken &&
     opts.gatewayBootstrapExpiresAtMs !== undefined &&
@@ -221,25 +246,28 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     reuseDeviceTokenOnly = true;
   }
   const fallbackDisplayName = await getMachineDisplayName();
-  const config = await configureNodeHost({
-    nodeId: opts.nodeId,
-    displayName: opts.displayName,
-    fallbackDisplayName,
-    gateway: plannedGateway,
-    installedAppsSharing: opts.installedAppsSharing,
-    commands: opts.commands,
-    allCommands: opts.allCommands,
-  });
+  const config =
+    resumeConfig ??
+    (await configureNodeHost({
+      nodeId: opts.nodeId,
+      displayName: opts.displayName,
+      fallbackDisplayName,
+      gateway: plannedGateway,
+      installedAppsSharing: opts.installedAppsSharing,
+      commands: opts.commands,
+      allCommands: opts.allCommands,
+    }));
   const nodeId = config.nodeId;
   const displayName = config.displayName ?? fallbackDisplayName;
   const gateway = config.gateway ?? plannedGateway;
-  const gatewayCandidates = opts.gatewayCandidates?.length
-    ? opts.gatewayCandidates.map((candidate, index) =>
-        index === 0 && gateway.cloudflareAccess && !candidate.cloudflareAccess
-          ? { ...candidate, cloudflareAccess: gateway.cloudflareAccess }
-          : candidate,
-      )
-    : [gateway];
+  const gatewayCandidates =
+    !resumeConfig && opts.gatewayCandidates?.length
+      ? opts.gatewayCandidates.map((candidate, index) =>
+          index === 0 && gateway.cloudflareAccess && !candidate.cloudflareAccess
+            ? { ...candidate, cloudflareAccess: gateway.cloudflareAccess }
+            : candidate,
+        )
+      : [gateway];
 
   const plaintextAccessCandidate = gatewayCandidates.find(
     (candidate) => candidate.cloudflareAccess && candidate.tls !== true,
@@ -269,6 +297,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     config: cfg,
     env: process.env,
     enableAgentRuns: true,
+    receivesLocalMcpPolicy: true,
     forceWorkerRuns: opts.forceWorkerRuns,
     ephemeral: opts.ephemeral,
     installedAppsSharingEnabled: config.installedAppsSharing,
@@ -276,7 +305,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     commands: config.commands,
   });
   logInfo(`node-host: advertised commands: ${preparedRuntime.manifest.commands.join(", ")}`);
-  const deviceIdentity = await loadOrCreateDeviceIdentityAsync();
+  const deviceIdentity = resumeIdentity ?? (await loadOrCreateDeviceIdentityAsync());
   const { token, password } =
     gatewayBootstrapToken || reuseDeviceTokenOnly
       ? {}
@@ -293,6 +322,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   let autoUpdateStart: Promise<void> | undefined;
   let autoUpdater: { stop: () => Promise<void> } | undefined;
   const persistWinningGateway = (winningGateway: NodeHostGatewayConfig) => {
+    if (resumeConfig) {
+      return;
+    }
     void configureNodeHost({
       nodeId,
       displayName,
@@ -337,6 +369,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
           evt.payload.decision === "approved"
         ) {
           activeRuntime.refreshRunnerInventory();
+        }
+        return;
+      }
+      if (evt.event === "node.worker.localMcpPolicy") {
+        if (isRecord(evt.payload) && typeof evt.payload.allowed === "boolean") {
+          activeRuntime.setLocalMcpAllowed(evt.payload.allowed);
         }
         return;
       }
@@ -505,6 +543,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     stopWatchingParent();
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
+    workSignal?.removeEventListener("abort", onWorkAbort);
   };
   const stopClientAndMcp = async () => {
     stopping = true;
@@ -546,10 +585,17 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   };
   const onSigint = AsyncLocalStorage.bind(() => void finish(130));
   const onSigterm = AsyncLocalStorage.bind(() => void finish(143));
+  // Startup can outlive CLI cancellation; the outer CLI retains its signal exit code.
+  const onWorkAbort = AsyncLocalStorage.bind(() => void finish(0));
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
+  workSignal?.addEventListener("abort", onWorkAbort, { once: true });
   if (opts.parentStdin && !isNodeHostLauncherChild()) {
     stopWatchingParent = watchNodeHostParentStdin(onSigterm);
+  }
+  if (workSignal?.aborted) {
+    await finish(0);
+    return;
   }
 
   const readinessPromise = startGatewayClientWhenEventLoopReady(client);

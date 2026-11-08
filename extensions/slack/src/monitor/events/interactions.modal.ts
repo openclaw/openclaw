@@ -9,7 +9,7 @@ import type { SlackMessageEvent } from "../../types.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
-import { resolveSlackMonitorEventScope } from "../event-scope.js";
+import { resolveSlackInteractionEventScope } from "../event-scope.js";
 import {
   captureSlackInteractionEventRoute,
   enqueueSlackInteractionEvent,
@@ -73,21 +73,12 @@ export function registerModalLifecycleHandler(params: {
         return;
       }
       await ack();
-      const eventScope = resolveSlackMonitorEventScope({
-        ctx: params.ctx,
-        body,
-        context: args.context,
-        client: args.client,
-        onDrop: (reason) =>
-          params.ctx.runtime.log?.(`slack:interaction drop ${params.interactionType} ${reason}`),
-      });
+      const eventScope = resolveSlackInteractionEventScope(
+        params.ctx,
+        args,
+        params.interactionType,
+      );
       if (eventScope === null) {
-        return;
-      }
-      if (params.ctx.shouldDropMismatchedSlackEvent?.(body)) {
-        params.ctx.runtime.log?.(
-          `slack:interaction drop ${params.interactionType} payload (mismatched app/team)`,
-        );
         return;
       }
       params.trackEvent?.();

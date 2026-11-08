@@ -18,6 +18,7 @@ import {
   appendTranscriptEventSync as appendEvent,
   replaceTranscriptEventsSync,
 } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import type { OwnedSessionTranscriptWriteContext as Context } from "./transcript-write-context-store.js";
 import {
   bindOwnedSessionTranscriptWrites as bindWrites,
   captureOwnedTranscriptWriteAssertion as captureGuard,
@@ -25,7 +26,6 @@ import {
   getOwnedSessionTranscriptInitialWriter as initialWriterFor,
   getOwnedSessionTranscriptWriterFence as writerFence,
   type InitialSessionTranscriptWriter,
-  type OwnedSessionTranscriptWriteContext as Context,
   SessionTranscriptWriterClaimReboundError as ReboundError,
   withOwnedSessionTranscriptWrites as withWrites,
   withSessionTranscriptSourcePublication as withPublication,

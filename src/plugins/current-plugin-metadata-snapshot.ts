@@ -146,7 +146,6 @@ function prepareConfigCompatibility(
   snapshot: PluginMetadataSnapshot,
   options: CurrentPluginMetadataSnapshotOptions,
   fingerprint: (config: OpenClawConfig, policyHash: string | undefined) => string,
-  trustConfigIdentity = false,
 ) {
   const compatiblePolicyHashes = options.compatibleConfigs?.map((config) =>
     resolveInstalledPluginIndexPolicyHash(config, options.env),
@@ -157,11 +156,7 @@ function prepareConfigCompatibility(
   const configIdentities = [...(options.compatibleConfigs ?? [])];
   if (options.config) {
     const policyHash = resolveInstalledPluginIndexPolicyHash(options.config, options.env);
-    if (
-      trustConfigIdentity ||
-      policyHash === snapshot.policyHash ||
-      compatiblePolicyHashes?.includes(policyHash)
-    ) {
+    if (policyHash === snapshot.policyHash || compatiblePolicyHashes?.includes(policyHash)) {
       configIdentities.push(options.config);
     }
   }
@@ -310,6 +305,11 @@ export function createPluginMetadataSnapshotFrame(
 ): PluginExecutionFrame {
   const current = getPluginExecutionFrame();
   const cache = getPluginMetadataSnapshotCache(snapshot);
+  // Complete runtime inventories already own policy; projections still need scope matching.
+  const immutableRuntimeGeneration =
+    options.trustConfigIdentity === true ||
+    (snapshot.pluginIds === undefined &&
+      isCurrentPluginMetadataSnapshotRuntimeGeneration(snapshot));
   // A retained metadata owner can be borrowed inside a different private state view.
   preparePluginNativeAdmissions(snapshot.index, cache);
   const workspaceDir = options.workspaceDir ?? snapshot.workspaceDir;
@@ -323,16 +323,14 @@ export function createPluginMetadataSnapshotFrame(
       policyHash,
       workspaceDir,
     });
-  const { compatibleConfigFingerprints, configIdentities } = prepareConfigCompatibility(
-    snapshot,
-    options,
-    fingerprint,
-    options.trustConfigIdentity === true,
-  );
-  const configFingerprint = options.config
-    ? fingerprint(options.config, snapshot.policyHash)
-    : snapshot.configFingerprint;
-  const capturedConfigIdentities = new WeakSet(configIdentities);
+  const compatibility = immutableRuntimeGeneration
+    ? undefined
+    : prepareConfigCompatibility(snapshot, options, fingerprint);
+  const configFingerprint =
+    !immutableRuntimeGeneration && options.config
+      ? fingerprint(options.config, snapshot.policyHash)
+      : snapshot.configFingerprint;
+  const capturedConfigIdentities = compatibility && new WeakSet(compatibility.configIdentities);
   return createPluginExecutionFrame(
     {
       ...current,
@@ -343,9 +341,11 @@ export function createPluginMetadataSnapshotFrame(
         metadata: cache.metadata,
         configFingerprint,
         envFingerprint: resolvePluginMetadataEnvFingerprint(options.env),
-        compatibleConfigFingerprints,
-        hasConfigIdentity: (config) => capturedConfigIdentities.has(config),
-        immutableRuntimeGeneration: options.trustConfigIdentity === true,
+        compatibleConfigFingerprints: compatibility?.compatibleConfigFingerprints,
+        hasConfigIdentity: capturedConfigIdentities
+          ? (config) => capturedConfigIdentities.has(config)
+          : undefined,
+        immutableRuntimeGeneration,
         parent: current?.metadataScope,
       },
     },

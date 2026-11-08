@@ -1,6 +1,6 @@
 # Solid 2 idioms
 
-Use this when writing or auditing rendering consumers. The installed rc.16
+Use this when writing or auditing rendering consumers. The installed rc.18
 `solid-js/CHEATSHEET.md`, `solid-js/types/client/flow.d.ts`, and
 `@solidjs/signals/dist/types/` own the API contract; Solid 1 examples are not a
 substitute. Examples below abbreviate code from the named OpenClaw modules.
@@ -249,7 +249,7 @@ identities. Never serialize a store proxy as the authoritative data model;
 
 ## Key lists by the lifetime you intend
 
-rc.16 callback arguments depend on `For`'s keying mode:
+rc.18 callback arguments depend on `For`'s keying mode:
 
 | Mode                        | Item          | Index    | Lifetime               |
 | --------------------------- | ------------- | -------- | ---------------------- |
@@ -291,7 +291,7 @@ control flow, not just the resulting markup.
 
 ## Async values and mutations
 
-rc.16 has **no `createAsync` export**. Pure async reads are computations returning
+rc.18 has **no `createAsync` export**. Pure async reads are computations returning
 a Promise or AsyncIterable. Read all reactive dependencies before the first
 `await`; later reads are untracked.
 
@@ -381,7 +381,7 @@ captures the node and writes to it.
 
 ## Dev diagnostics are bug reports
 
-Treat these rc.16 dev warnings as real defects, not noise:
+Treat these rc.18 dev warnings as real defects, not noise:
 
 - **Top-level reactive read in a component body.** The body runs once. Read in
   JSX, a memo, or an accessor.
@@ -395,6 +395,12 @@ Treat these rc.16 dev warnings as real defects, not noise:
 - **`LOADING_ON_OUTSIDE_HOLD`.** The same pending data is read outside the
   `Loading` boundary, so its fallback can never show. Move the read under the
   boundary.
+- **`STORE_WRITE_OUTSIDE_SETTER`.** A store proxy is readonly outside its draft
+  setter; such writes are ignored. Mutate through `setStore`, not the proxy.
+- **`UNCOMMITTED_INPUT_OVERWRITTEN`.** A binding is overwriting a DOM edit that
+  never reached its signal. Use a local draft or the existing `liveValue` ref
+  for commit-on-change fields. Restore rejected edits directly in the handler;
+  `equals: false` does not fix the ownership conflict.
 
 `onSettled` also works inside an event handler: it defers follow-up work
 (focus, measurement) until the transition that handler started has settled.

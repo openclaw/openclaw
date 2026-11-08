@@ -1,5 +1,6 @@
 import { afterEach, assert, expect, vi } from "vitest";
 import { holdForeignWriter } from "../infra/sqlite-worker-shared-state-admission.test-support.js";
+import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { preparePluginStateRead } from "../plugin-sdk/plugin-state-runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import {
@@ -7,8 +8,9 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { stateTest } from "./plugin-state-fixtures.test-support.js";
-import { pluginStatePublication } from "./plugin-state-publication.js";
+import { pluginStatePublication, withPluginStatePublication } from "./plugin-state-publication.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -161,6 +163,50 @@ it("keeps unknown publications denied after recovery attempts", async ({ state: 
   expect(await store.lookup("session")).toBe("later");
   expect(() => guard.read()).toThrow("unavailable");
   await expect(preparePluginStateRead(store, "session")).rejects.toThrow("unavailable");
+});
+
+it("preserves binding authority when a write is refused before dispatch", async ({
+  state: { env },
+}) => {
+  const store = openStore<string>(env);
+  await store.register("session", "original");
+  const guard = await prepareGuard(store);
+  const context = captureOpenClawStateWorkerContext({ env });
+  const scope = { pluginId: "guard-test", namespace: "bindings", key: "session" };
+  const revoked = new Error("Write owner was revoked before dispatch");
+  let current = true;
+  const assertCurrent = () => {
+    if (!current) {
+      throw revoked;
+    }
+  };
+  const createAdmission = withPluginStatePublication(
+    createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
+    context,
+    undefined,
+    undefined,
+    scope,
+  );
+  await expect(
+    runOpenClawStateWorkerOperation(
+      context,
+      (worker) => worker.execute({ type: "pluginState.delete", input: scope }),
+      {
+        assertCurrent,
+        createAdmission(operation) {
+          const owner = createAdmission(operation);
+          // Revoke after publication is retained, before the broker can send the write.
+          current = false;
+          return owner;
+        },
+      },
+    ),
+  ).rejects.toThrow(revoked);
+  expect(await store.lookup("session")).toBe("original");
+  expect(guard.read()).toBe("original");
+  expect((await prepareGuard(store)).read()).toBe("original");
+  await store.register("session", "later");
+  expect(guard.read()).toBe("later");
 });
 
 it("updates prepared absences and preserves opaque adapters", async ({ state: { env } }) => {

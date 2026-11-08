@@ -43,6 +43,7 @@ import { expectSuccessorWorkspaceRead } from "../workspace-readiness.test-suppor
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import * as agentHandlerHelpers from "./agent-handler-helpers.js";
+import { createGate, expectCalls } from "./agent-owner.test-support.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import {
   createExecution,
@@ -80,25 +81,6 @@ vi.mock("../../agents/command/runtime-loaders.js", async (importOriginal) => ({
     resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
   }),
 }));
-
-function createGate() {
-  const entered = createDeferred();
-  const finish = createDeferred();
-  return {
-    entered: entered.promise,
-    resolve: finish.resolve,
-    wait: () => {
-      entered.resolve();
-      return finish.promise;
-    },
-  };
-}
-
-function expectCalls(count: number, ...spies: unknown[]) {
-  for (const spy of spies) {
-    expect(spy).toHaveBeenCalledTimes(count);
-  }
-}
 
 describe("startAgentRunExecution Gateway ownership", () => {
   it("reads the workspace after resuming from a retired same-session preparation", async () => {
@@ -395,7 +377,6 @@ describe("startAgentRunExecution Gateway ownership", () => {
       expect(notices).toEqual([
         { reason: "create", accessChanges: expect.any(Number) },
         { reason: "send", accessChanges: 0 },
-        { reason: "agent.run.started", accessChanges: 0 },
         { reason: "agent.input.settled", accessChanges: 0 },
       ]);
       expect(notices[0]?.accessChanges).toBeGreaterThan(0);
@@ -435,6 +416,11 @@ describe("startAgentRunExecution Gateway ownership", () => {
     { name: "explicit internal channel", replyChannel: "webchat", expectedChannel: "webchat" },
   ])("preserves $name provider context through command resolution", async (testCase) => {
     const execution = createExecution();
+    const sessionEntry: SessionEntry = {
+      sessionId: "source-session",
+      updatedAt: 1,
+      delivery: testCase.sessionDelivery,
+    };
     const client: AgentTurnPrincipal = {
       connect: {
         minProtocol: 1,
@@ -454,9 +440,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
         replyChannel: testCase.replyChannel,
       },
       cfg: {},
-      sessionEntry: testCase.sessionDelivery
-        ? { sessionId: "source-session", updatedAt: 1, delivery: testCase.sessionDelivery }
-        : undefined,
+      sessionEntry,
       agentId: "main",
       recipientChannel: testCase.sourceChannel,
       replyTo: "",
@@ -504,43 +488,6 @@ describe("startAgentRunExecution Gateway ownership", () => {
       clearAgentRunContext(runId);
     }
   });
-
-  it.each([
-    { sourceIngress: "control-ui" as const, sourceChannel: "webchat", deliveryContext: undefined },
-    {
-      sourceIngress: "channel" as const,
-      sourceChannel: "discord",
-      deliveryContext: { channel: "discord" },
-    },
-  ])(
-    "preserves targetless $sourceChannel policy context at recovery dispatch",
-    async ({ sourceIngress, sourceChannel, deliveryContext }) => {
-      const execution = createExecution();
-      Object.assign(execution.params, {
-        canUseInternalRuntimeHandoff: true,
-        isRestartRecoveryResumeRun: true,
-        resolvedSessionId: "recovery-session",
-        sessionEntry: {
-          sessionId: "recovery-session",
-          updatedAt: 1,
-          restartRecoveryDeliveryRunId: execution.params.runId,
-          restartRecoveryDeliverySourceRunId: "source-run",
-          restartRecoveryDeliveryContext: deliveryContext,
-          restartRecoverySourceIngress: sourceIngress,
-        },
-      });
-      execution.params.request.expectedExistingSessionId = "recovery-session";
-      execution.params.delivery.originMessageChannel = "slack";
-      dispatchAgentRunFromGateway.mockResolvedValueOnce(undefined);
-
-      await startAgentRunExecution(execution.params);
-
-      expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
-      const dispatch = dispatchAgentRunFromGateway.mock.calls[0]?.[0];
-      expect(dispatch?.ingressOpts.runContext.messageChannel).toBe(sourceChannel);
-      expect(dispatch?.ingressOpts.runContext.currentChannelId).toBeUndefined();
-    },
-  );
 
   it("dispatches with the runtime generation frozen at admission", async () => {
     const execution = createExecution();

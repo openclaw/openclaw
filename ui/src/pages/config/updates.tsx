@@ -12,9 +12,11 @@ import {
   isPending,
   latest,
   Loading,
+  refresh,
   Show,
 } from "solid-js";
-import type { UpdateScheduleState } from "../../api/types.ts";
+import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
+import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
@@ -22,7 +24,9 @@ import {
   isUpdateActionable,
 } from "../../app/update-schedule-projection.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
+  RetryAction,
   SettingsPage,
   SettingsRow,
   SettingsSection,
@@ -33,11 +37,13 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { UpdateGitRevisions } from "../../components/solid/update-git-revisions.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
+import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { DeviceUpdates } from "./updates-device.tsx";
 import { RecordedAttempt } from "./updates-recorded-attempt.tsx";
+import { UpdatesSchedule } from "./updates-schedule.tsx";
 import { UpdatesStatus } from "./updates-status.tsx";
 import {
   UPDATES_CHANNELS,
@@ -46,36 +52,139 @@ import {
   type UpdatesCommandPresentation,
 } from "./updates-types.ts";
 
-registerEnglishCatalog(registerSettingsEnglish);
-
-function readUpdatesSettings(
-  configObject: Record<string, unknown>,
-  schedule: UpdateScheduleState | null,
-) {
-  const update = asConfigRecord(configObject.update);
-  const auto = asConfigRecord(update?.auto);
-  // Authored policy wins; a configless package install resolves its channel at the Gateway.
-  const channel =
-    UPDATES_CHANNELS.find((candidate) => candidate === update?.channel) ??
-    UPDATES_CHANNELS.find((candidate) => candidate === schedule?.channel) ??
-    "stable";
-  return {
-    channel,
-    autoEnabled:
-      typeof auto?.enabled === "boolean" ? auto.enabled : (schedule?.autoEnabled ?? false),
-    extendedStable: channel === "extended-stable",
+function DeviceUpdates(props: {
+  capability: NativeDeviceSettingsCapability;
+  captureCommandPresentation: () => UpdatesCommandPresentation;
+}) {
+  const native = createMemo(() => projectNativeDeviceSettings(props.capability));
+  const snapshot = () => native().read();
+  const updates = () => snapshot()?.updates;
+  const [automatic, setAutomatic] = createOptimistic(() => updates()?.automatic ?? false);
+  const [saving, setSaving] = createOptimistic(false);
+  const [completed, setCompleted] = createSignal<Promise<void> | null>(null);
+  const outcome = createMemo(async () => completed());
+  const checked = createMemo(() => {
+    if (!saving() && completed()) {
+      latest(outcome);
+    }
+    return automatic();
+  });
+  let requestedValue = false;
+  const presentChange = action(function* (
+    view: UpdatesCommandPresentation,
+    value: boolean,
+    completion: Promise<void>,
+  ) {
+    if (view.isCurrent()) {
+      setAutomatic(value);
+      setSaving(true);
+    }
+    // The async receipt owns errors; this action owns only the saving affordance.
+    yield completion.catch(() => {});
+    if (view.isCurrent()) {
+      yield refresh(automatic);
+    }
+  });
+  const changeAutomatic = async (value: boolean) => {
+    const view = props.captureCommandPresentation();
+    requestedValue = value;
+    const capability = props.capability;
+    const pending = new Promise<void>((resolve, reject) => {
+      void capability.set("updates.automatic", value, (error) =>
+        error ? reject(error) : resolve(),
+      );
+    });
+    const completion = Promise.race([pending, view.retired]);
+    void setCompleted(() => completion);
+    await Promise.resolve();
+    return presentChange(view, value, completion);
   };
+  return (
+    <Show when={snapshot() && updates()}>
+      <SettingsSection title={t(deviceSettingsGroupLabelKey(snapshot()!))}>
+        <SettingsRow
+          title={t("updates.device.version")}
+          control={
+            <SettingsValue
+              value={t("updates.device.versionBuild", {
+                version: snapshot()!.device.appVersion,
+                build: snapshot()!.device.appBuild,
+              })}
+            />
+          }
+        />
+        <Show
+          when={updates()!.available}
+          fallback={
+            <SettingsRow
+              title={t("updates.device.unavailable")}
+              description={updates()!.unavailableReason}
+            />
+          }
+        >
+          <Errored
+            fallback={(error, reset) => (
+              <SettingsRow
+                title={t("updates.device.automatic")}
+                description={formatUiError(error())}
+                control={
+                  <button
+                    class="btn btn--sm"
+                    type="button"
+                    onClick={() => {
+                      reset();
+                      void changeAutomatic(requestedValue);
+                    }}
+                  >
+                    {t("common.retry")}
+                  </button>
+                }
+              />
+            )}
+          >
+            <Loading fallback={<SettingsValue value={t("common.saving")} />}>
+              <SettingsToggleRow
+                title={t("updates.device.automatic")}
+                checked={checked()}
+                saving={saving()}
+                onChange={(value) => void changeAutomatic(value)}
+              />
+            </Loading>
+          </Errored>
+          <SettingsRow
+            title={t("updates.device.check")}
+            control={
+              <button
+                class="btn primary"
+                type="button"
+                onClick={() => props.capability.checkForUpdates()}
+              >
+                {t("updates.device.check")}
+              </button>
+            }
+          />
+        </Show>
+      </SettingsSection>
+    </Show>
+  );
 }
 
-function Timestamp(props: { timestampMs: number; nowMs?: number }) {
+registerEnglishCatalog(registerUpdateActionsEnglish);
+
+registerEnglishCatalog(registerSettingsEnglish);
+
+function Timestamp(props: { timestampMs: number; nowMs?: number; showRelative?: boolean }) {
   const relative = () =>
     formatTimeAgo(Math.max(0, (props.nowMs ?? Date.now()) - props.timestampMs));
   return (
     <SettingsValue
       value={
         <time datetime={new Date(props.timestampMs).toISOString()} title={relative()}>
-          {formatDateTimeMs(props.timestampMs, { dateStyle: "medium", timeStyle: "short" })}{" "}
-          <span class="muted">· {relative()}</span>
+          {formatDateTimeMs(props.timestampMs, { dateStyle: "medium", timeStyle: "short" })}
+          <Show when={props.showRelative}>
+            {" "}
+            <span class="muted">· {relative()}</span>
+          </Show>
         </time>
       }
     />
@@ -247,7 +356,24 @@ function GatewayUpdates(props: UpdatesViewProps) {
     );
   };
   const runTarget = () => run()?.target.sha ?? run()?.target.version ?? run()?.target.tag;
-  const settings = () => readUpdatesSettings(props.configObject, props.update.updateSchedule);
+  const settings = () => {
+    const configObject = props.configObject;
+    const schedule = props.update.updateSchedule;
+    const update = asConfigRecord(configObject.update);
+    const auto = asConfigRecord(update?.auto);
+    // Authored policy wins; a configless package install resolves its channel at the Gateway.
+    const channel =
+      UPDATES_CHANNELS.find((candidate) => candidate === update?.channel) ??
+      UPDATES_CHANNELS.find((candidate) => candidate === schedule?.channel) ??
+      "stable";
+    return {
+      channel,
+      autoEnabled:
+        typeof auto?.enabled === "boolean" ? auto.enabled : (schedule?.autoEnabled ?? false),
+      expression: typeof auto?.schedule === "string" ? auto.schedule : undefined,
+      extendedStable: channel === "extended-stable",
+    };
+  };
   const channelOptions = (): Array<{ value: UpdatesChannel; label: string }> => [
     { value: "stable", label: t("updates.channel.stable") },
     { value: "beta", label: t("updates.channel.beta") },
@@ -302,9 +428,9 @@ function GatewayUpdates(props: UpdatesViewProps) {
   return (
     <>
       <Show when={!props.canAdmin}>
-        <div class="callout warning" role="note">
+        <InlineAlert tone="warning" role="note">
           {t("updates.adminRequired")}
-        </div>
+        </InlineAlert>
       </Show>
       <BuildFacts {...props} />
       <RecordedAttempt
@@ -352,6 +478,13 @@ function GatewayUpdates(props: UpdatesViewProps) {
           }
           onChange={props.onAutomaticUpdatesChange}
         />
+        <Show when={!settings().extendedStable && !devPackageInstall()}>
+          <UpdatesSchedule
+            expression={settings().expression}
+            disabled={props.configBusy || checksDisabled() || !settings().autoEnabled}
+            onChange={(expression) => props.onAutomaticScheduleChange(expression)}
+          />
+        </Show>
       </SettingsSection>
       <SettingsSection title={t("updates.page.statusTitle")}>
         <SettingsRow
@@ -368,16 +501,13 @@ function GatewayUpdates(props: UpdatesViewProps) {
                   fallback={(error, reset) => (
                     <span class="updates-status-check-failed">
                       <SettingsStatus kind="warn" label={formatUiError(error())} dot={false} />
-                      <button
-                        class="btn btn--sm"
+                      <RetryAction
                         type="button"
-                        onClick={() => {
+                        onRetry={() => {
                           reset();
                           void props.onCheckStatus();
                         }}
-                      >
-                        {t("common.retry")}
-                      </button>
+                      />
                     </span>
                   )}
                 >
@@ -464,7 +594,13 @@ function GatewayUpdates(props: UpdatesViewProps) {
           {(currentRun) => (
             <SettingsRow
               title={t("updates.page.lastProgress")}
-              control={<Timestamp timestampMs={currentRun().updatedAtMs} nowMs={props.nowMs} />}
+              control={
+                <Timestamp
+                  timestampMs={currentRun().updatedAtMs}
+                  nowMs={props.nowMs}
+                  showRelative
+                />
+              }
             />
           )}
         </Show>
@@ -521,19 +657,16 @@ function GatewayUpdates(props: UpdatesViewProps) {
       </p>
       <Errored
         fallback={(error, reset) => (
-          <div class="callout danger" role="alert">
+          <InlineAlert tone="danger" role="alert">
             {formatUiError(error())}
-            <button
-              class="btn btn--sm"
+            <RetryAction
               type="button"
-              onClick={() => {
+              onRetry={() => {
                 reset();
                 void updateNow();
               }}
-            >
-              {t("common.retry")}
-            </button>
-          </div>
+            />
+          </InlineAlert>
         )}
       >
         <Loading>{latest(confirmationOutcome) ?? null}</Loading>

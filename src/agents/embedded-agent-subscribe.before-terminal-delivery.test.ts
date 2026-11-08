@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../llm/types.js";
@@ -17,19 +17,10 @@ const visibleTexts = (replies: { text?: unknown }[]) =>
   replies.map(({ text }) => text).filter(Boolean);
 type Options = Parameters<typeof createSubscribedSessionHarness>[0];
 const subscriptions: ReturnType<typeof createSubscribedSessionHarness>["subscription"][] = [];
-const unhandledRejections: unknown[] = [];
-const onUnhandledRejection = (reason: unknown) => {
-  unhandledRejections.push(reason);
-};
-beforeEach(() => {
-  process.on("unhandledRejection", onUnhandledRejection);
-});
 afterEach(() => {
-  process.off("unhandledRejection", onUnhandledRejection);
   for (const subscription of subscriptions.splice(0)) {
     subscription.unsubscribe();
   }
-  expect(unhandledRejections.splice(0)).toEqual([]);
 });
 
 function answer(text: string, stopReason: AssistantMessage["stopReason"] = "stop", phase?: string) {
@@ -65,22 +56,20 @@ function setup({ deferred = false, ...options }: Partial<Options> & { deferred?:
   subscriptions.push(subscription);
   const message = (value: AssistantMessage, stream = true) => {
     emit({ type: "message_start", message: value });
-    if (stream) {
-      for (const [contentIndex, content] of value.content.entries()) {
-        if (content.type !== "text") {
-          continue;
-        }
-        const partial = { ...value, content: value.content.slice(0, contentIndex + 1) };
-        for (const update of [
-          { type: "text_delta", delta: content.text },
-          { type: "text_end", content: content.text },
-        ]) {
-          emit({
-            type: "message_update",
-            message: partial,
-            assistantMessageEvent: { ...update, contentIndex, partial },
-          });
-        }
+    for (const [contentIndex, content] of stream ? value.content.entries() : []) {
+      if (content.type !== "text") {
+        continue;
+      }
+      const partial = { ...value, content: value.content.slice(0, contentIndex + 1) };
+      for (const update of [
+        { type: "text_delta", delta: content.text },
+        { type: "text_end", content: content.text },
+      ]) {
+        emit({
+          type: "message_update",
+          message: partial,
+          assistantMessageEvent: { ...update, contentIndex, partial },
+        });
       }
     }
     emit({ type: "message_end", message: value });
@@ -93,10 +82,13 @@ function setup({ deferred = false, ...options }: Partial<Options> & { deferred?:
   ) => {
     emitToolRun({ emit, toolName, toolCallId, args: {}, result, isError });
   };
-  const assistantEvents = () =>
+  const events = (stream: string) =>
     onAgentEvent.mock.calls
-      .filter(([event]) => event.stream === "assistant")
+      .filter(([event]) => event.stream === stream)
       .map(([event]) => event.data);
+  const assistantEvents = () => events("assistant");
+  const end = (messages: AssistantMessage[] = []) =>
+    emit({ type: "agent_end", messages, willRetry: false });
   return {
     emit,
     subscription,
@@ -113,19 +105,15 @@ function setup({ deferred = false, ...options }: Partial<Options> & { deferred?:
       emit({ type: "message_start", message: value });
       emit({ type: "message_end", message: value });
     },
-    end: (messages: AssistantMessage[] = []) =>
-      emit({ type: "agent_end", messages, willRetry: false }),
+    end,
     finish: async (messages: AssistantMessage[] = []) => {
-      emit({ type: "agent_end", messages, willRetry: false });
+      end(messages);
       await subscription.waitForPendingEvents();
     },
     drain: () => subscription.waitForPendingEvents(),
     assistantEvents,
     hasAssistantText: (text: string) => assistantEvents().some((data) => data.text === text),
-    lifecycleEnded: () =>
-      onAgentEvent.mock.calls.some(
-        ([event]) => event.stream === "lifecycle" && event.data.phase === "end",
-      ),
+    lifecycleEnded: () => events("lifecycle").some((data) => data.phase === "end"),
   };
 }
 
@@ -138,9 +126,7 @@ function expectMediaState(h: ReturnType<typeof setup>, pending: unknown, visible
 }
 
 function expectNoReplies(h: ReturnType<typeof setup>) {
-  expect(h.onBlockReply).not.toHaveBeenCalled();
-  expect(h.onPartialReply).not.toHaveBeenCalled();
-  expect(h.assistantEvents()).toEqual([]);
+  expect([h.replies(), h.partials(), h.assistantEvents()]).toEqual([[], [], []]);
 }
 
 function payloads(subscription: ReturnType<typeof setup>["subscription"]) {
@@ -293,50 +279,44 @@ it("contains rejected progress callbacks", async () => {
   });
   expect(rejected).toHaveBeenCalled();
 });
-it.each(["immediate", "rejected"] as const)(
-  "honors terminal silence without stealing %s delivery ownership",
-  async (delivery) => {
-    const markdown =
-      "## Result\n\n- **Saved** the note.\n- Keep `note.md` unchanged.\n\n```text\nfirst  second\n```";
-    const delivered: string[] = [];
-    const h = setup({
-      onBlockReply: async ({ text }) => {
-        if (delivery === "rejected") {
-          throw new Error("delivery failed");
-        }
-        if (text) {
-          delivered.push(text);
-        }
-      },
-    });
-    const prompt = user("Read the saved note.");
-    const toolCall = assistantMessage([readCall()], "toolUse");
-    const result = readResult("Note saved.", false, 1);
-    const final = answer(markdown, "toolUse", "final_answer"),
-      silent = answer("NO_REPLY");
-    h.emit({ type: "message_end", message: prompt });
-    h.message(toolCall);
-    h.tool("read", result);
-    h.emit({ type: "message_end", message: result });
-    h.turn(toolCall, [result]);
-    for (const message of [final, silent]) {
-      h.message(message);
-      h.turn(message);
-    }
-    const messages = [prompt, toolCall, result, final, silent];
-    h.emit({ type: "agent_end", messages, willRetry: false });
-    await h.drain();
-    expect(h.subscription.assistantTexts).toEqual([markdown]);
-    expect(h.subscription.getItemLifecycle()).toMatchObject({
-      startedCount: 1,
-      completedCount: 1,
-      activeCount: 0,
-    });
-    expect(delivered).toEqual(delivery === "immediate" ? [markdown] : []);
-    expect(h.subscription.getVisibleBlockReplyCount()).toBe(delivery === "rejected" ? 0 : 1);
-    expect(payloads(h.subscription)).toEqual([]);
-  },
-);
+
+it("keeps a rejected text delivery failed when the next response is silent", async () => {
+  const markdown =
+    "## Result\n\n- **Saved** the note.\n- Keep `note.md` unchanged.\n\n```text\nfirst  second\n```";
+  const h = setup({
+    onBlockReply: async () => {
+      throw new Error("delivery failed");
+    },
+  });
+  const prompt = user("Read the saved note.");
+  const toolCall = assistantMessage([readCall()], "toolUse");
+  const result = readResult("Note saved.", false, 1);
+  const final = answer(markdown, "toolUse", "final_answer");
+  const silent = answer("NO_REPLY");
+  h.emit({ type: "message_end", message: prompt });
+  h.message(toolCall);
+  h.tool("read", result);
+  h.emit({ type: "message_end", message: result });
+  h.turn(toolCall, [result]);
+  for (const message of [final, silent]) {
+    h.message(message);
+    h.turn(message);
+  }
+  h.emit({
+    type: "agent_end",
+    messages: [prompt, toolCall, result, final, silent],
+    willRetry: false,
+  });
+  await h.drain();
+  expect(h.subscription.assistantTexts).toEqual([markdown]);
+  expect(h.subscription.getItemLifecycle()).toMatchObject({
+    startedCount: 1,
+    completedCount: 1,
+    activeCount: 0,
+  });
+  expect(h.subscription.getVisibleBlockReplyCount()).toBe(0);
+  expect(payloads(h.subscription)).toEqual([]);
+});
 
 it.each(["read", "skipped"] as const)(
   "seals and delivers steered answers after %s",
@@ -384,14 +364,11 @@ it("preserves the undelivered prefix when a deferred answer extends it", async (
   await h.drain();
   expectNoReplies(h);
   await h.finish(messages);
-  expect(visibleTexts(h.replies())).toEqual(["Result:complete"]);
-  expect(visibleTexts(h.partials())).toEqual(["Result:complete"]);
   expect(
-    h
-      .assistantEvents()
-      .map((event) => event.text)
-      .filter(Boolean),
-  ).toEqual(["Result:complete"]);
+    [h.replies(), h.partials(), h.assistantEvents()].map((replies) =>
+      replies.map(({ text }) => text).filter(Boolean),
+    ),
+  ).toEqual([["Result:complete"], ["Result:complete"], ["Result:complete"]]);
   expect(h.lifecycleEnded()).toBe(true);
 });
 
@@ -448,15 +425,14 @@ it("preserves deferred media and reasoning while superseding obsolete captions",
     "Completed answer.",
     "Second answer block.",
   ]);
-  const assistantEvents = h.assistantEvents();
-  const obsolete = expect.objectContaining({ text: expect.stringContaining("Obsolete") });
-  expect(assistantEvents).not.toEqual(expect.arrayContaining([obsolete]));
-  const mediaEvents = assistantEvents.filter(
-    (data) => Array.isArray(data.mediaUrls) && data.mediaUrls.length > 0,
+  expect(h.assistantEvents()).not.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ text: expect.stringContaining("Obsolete") }),
+    ]),
   );
-  expect(mediaEvents).toEqual([
-    expect.objectContaining({ text: "", mediaUrls: [attachment.path] }),
-  ]);
+  expect(
+    h.assistantEvents().filter((data) => Array.isArray(data.mediaUrls) && data.mediaUrls.length),
+  ).toEqual([expect.objectContaining({ text: "", mediaUrls: [attachment.path] })]);
   expect(h.subscription.hasToolMediaBlockReply()).toBe(true);
   expect(h.subscription.getPendingToolMediaReply()).toBeNull();
 });

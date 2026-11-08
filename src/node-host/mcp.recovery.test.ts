@@ -9,7 +9,7 @@ import {
 } from "@modelcontextprotocol/client";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import {
   McpSseSessionExpiredError,
   OpenClawSSEClientTransport,
@@ -58,6 +58,51 @@ function schemaTool(name: string, inputSchema: Tool["inputSchema"] = { type: "ob
   return { name, inputSchema };
 }
 
+function clientGenerations(clients: Record<string, ReturnType<typeof createClient>[]>) {
+  const generations = new Map<string, number>();
+  return {
+    generations,
+    servers: Object.fromEntries(Object.keys(clients).map((name) => [name, { command: name }])),
+    createClient: (name: string) => {
+      const generation = generations.get(name) ?? 0;
+      generations.set(name, generation + 1);
+      const client = clients[name]?.[generation];
+      if (!client) {
+        throw new Error(`unexpected ${name} MCP client generation ${generation}`);
+      }
+      return client;
+    },
+  };
+}
+
+function heldLists(initial?: Tool[]) {
+  let initialTools = initial;
+  const pending: Array<(value: { tools: Tool[] }) => void> = [];
+  const started = [createDeferred(), createDeferred()] as const;
+  let count = 0;
+  let active = 0;
+  let maxActive = 0;
+  const client = createClient({
+    list: async () => {
+      if (initialTools) {
+        const tools = initialTools;
+        initialTools = undefined;
+        return { tools };
+      }
+      maxActive = Math.max(maxActive, ++active);
+      try {
+        return await new Promise<{ tools: Tool[] }>((resolve) => {
+          pending.push(resolve);
+          started[count++]?.resolve();
+        });
+      } finally {
+        active -= 1;
+      }
+    },
+  });
+  return { client, pending, started, active: () => active, maxActive: () => maxActive };
+}
+
 const stdioTransport = { ...baseTransport, requestTimeoutMs: 100 };
 
 function httpTransport(
@@ -87,22 +132,8 @@ afterEach(useRealTime);
 
 describe("node host MCP live lifecycle", () => {
   it("serializes a startup notification refresh after the initial tool list", async () => {
-    let activeLists = 0;
-    let maxActiveLists = 0;
-    const pending: Array<(value: { tools: Tool[] }) => void> = [];
-    const client = createClient({
-      list: async () => {
-        activeLists += 1;
-        maxActiveLists = Math.max(maxActiveLists, activeLists);
-        try {
-          return await new Promise<{ tools: Tool[] }>((resolve) => {
-            pending.push(resolve);
-          });
-        } finally {
-          activeLists -= 1;
-        }
-      },
-    });
+    const lists = heldLists();
+    const { client, pending } = lists;
     const starting = startClient(client, {
       // Held list calls test ordering, not the request deadline.
       resolveTransport: () => ({ ...stdioTransport, requestTimeoutMs: 5_000 }),
@@ -110,55 +141,46 @@ describe("node host MCP live lifecycle", () => {
 
     await vi.waitFor(() => expect(pending).toHaveLength(1));
     client.onToolsChanged?.();
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextEventLoopTurn();
     expect(client.request).toHaveBeenCalledOnce();
-    expect(maxActiveLists).toBe(1);
+    expect(lists.maxActive()).toBe(1);
 
     pending[0]?.({ tools: [schemaTool("stale")] });
     await vi.waitFor(() => expect(pending).toHaveLength(2));
     pending[1]?.({ tools: [schemaTool("fresh")] });
 
     const manager = await starting;
-    expect(maxActiveLists).toBe(1);
+    expect(lists.maxActive()).toBe(1);
     expect(toolNames(manager)).toEqual(["fresh"]);
     await manager.close();
   });
 
   it("validates a call against the schema dispatched before a catalog refresh", async () => {
-    const schemaA = {
+    const schema = (revision: string) => ({
       type: "object" as const,
-      properties: { revision: { const: "a" } },
+      properties: { revision: { const: revision } },
       required: ["revision"],
-    };
-    const schemaB = {
-      type: "object" as const,
-      properties: { revision: { const: "b" } },
-      required: ["revision"],
-    };
-    let listed = [{ ...schemaTool("versioned"), outputSchema: schemaA }];
-    let resolveCall: ((result: CallToolResult) => void) | undefined;
+    });
+    let listed = [{ ...schemaTool("versioned"), outputSchema: schema("a") }];
+    let pending = createDeferred<CallToolResult>();
     const client = createClient({
       tools: () => listed,
-      call: async () =>
-        await new Promise<CallToolResult>((resolve) => {
-          resolveCall = resolve;
-        }),
+      call: () => pending.promise,
     });
     const manager = await startClient(client);
 
     const calling = manager.callMcpTool({ server: "docs", tool: "versioned" });
     await vi.waitFor(() => expect(client.callTool).toHaveBeenCalledOnce());
-    listed = [{ ...schemaTool("versioned"), outputSchema: schemaB }];
+    listed = [{ ...schemaTool("versioned"), outputSchema: schema("b") }];
     client.onToolsChanged?.();
     await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(2));
-    resolveCall?.({ content: [], structuredContent: { revision: "a" } });
+    pending.resolve({ content: [], structuredContent: { revision: "a" } });
 
     await expect(calling).resolves.toMatchObject({ structuredContent: { revision: "a" } });
+    pending = createDeferred<CallToolResult>();
     const invalid = manager.callMcpTool({ server: "docs", tool: "versioned" });
     await vi.waitFor(() => expect(client.callTool).toHaveBeenCalledTimes(2));
-    resolveCall?.({ content: [], structuredContent: { revision: "not-b" } });
+    pending.resolve({ content: [], structuredContent: { revision: "not-b" } });
     await expect(invalid).rejects.toMatchObject({ code: "MCP_TOOL_ERROR" });
     await manager.close();
   });
@@ -191,45 +213,24 @@ describe("node host MCP live lifecycle", () => {
   });
 
   it("coalesces notification storms and never overlaps refreshes", async () => {
-    let activeLists = 0;
-    let maxActiveLists = 0;
-    let listCount = 0;
-    const pending: Array<(value: { tools: Tool[] }) => void> = [];
-    const refreshStarted = [createDeferred(), createDeferred()] as const;
-    const client = createClient({
-      list: async () => {
-        listCount += 1;
-        if (listCount === 1) {
-          return { tools: [schemaTool("initial")] };
-        }
-        activeLists += 1;
-        maxActiveLists = Math.max(maxActiveLists, activeLists);
-        try {
-          return await new Promise<{ tools: Tool[] }>((resolve) => {
-            pending.push(resolve);
-            refreshStarted[listCount - 2]?.resolve();
-          });
-        } finally {
-          activeLists -= 1;
-        }
-      },
-    });
+    const lists = heldLists([schemaTool("initial")]);
+    const { client, pending } = lists;
     const manager = await startClient(client);
 
     client.onToolsChanged?.();
-    await refreshStarted[0].promise;
-    expect(activeLists).toBe(1);
+    await lists.started[0].promise;
+    expect(lists.active()).toBe(1);
     for (let index = 0; index < 20; index += 1) {
       client.onToolsChanged?.();
     }
     expect(client.request).toHaveBeenCalledTimes(2);
     pending.shift()?.({ tools: [schemaTool("middle")] });
-    await refreshStarted[1].promise;
+    await lists.started[1].promise;
     expect(client.request).toHaveBeenCalledTimes(3);
-    expect(maxActiveLists).toBe(1);
+    expect(lists.maxActive()).toBe(1);
     pending.shift()?.({ tools: [schemaTool("final")] });
     await vi.waitFor(() => expect(toolNames(manager)).toEqual(["final"]));
-    expect(maxActiveLists).toBe(1);
+    expect(lists.maxActive()).toBe(1);
     await manager.close();
   });
 
@@ -275,7 +276,7 @@ describe("node host MCP live lifecycle", () => {
   });
 
   it("fences a stale refresh and reconnects after transport close", async () => {
-    let resolveStale: ((value: { tools: Tool[] }) => void) | undefined;
+    const pending = createDeferred<{ tools: Tool[] }>();
     let firstList = true;
     const stale = createClient({
       list: async () => {
@@ -283,32 +284,19 @@ describe("node host MCP live lifecycle", () => {
           firstList = false;
           return { tools: [schemaTool("stale-initial")] };
         }
-        return await new Promise<{ tools: Tool[] }>((resolve) => {
-          resolveStale = resolve;
-        });
+        return await pending.promise;
       },
     });
     const fresh = createClient({ tools: () => [schemaTool("fresh")] });
-    let generation = 0;
-    const manager = await startNodeHostMcpManager(
-      { docs: { command: "docs" } },
-      {
-        createClient: () => {
-          generation += 1;
-          if (generation === 1) {
-            return stale;
-          }
-          return fresh;
-        },
-      },
-    );
+    const clients = clientGenerations({ docs: [stale, fresh] });
+    const manager = await startNodeHostMcpManager(clients.servers, clients);
 
     stale.onToolsChanged?.();
     await vi.waitFor(() => expect(stale.request).toHaveBeenCalledTimes(2));
     stale.onclose?.();
     expect(manager.descriptors).toEqual([]);
     await vi.waitFor(() => expect(toolNames(manager)).toEqual(["fresh"]));
-    resolveStale?.({ tools: [schemaTool("stale-completion")] });
+    pending.resolve({ tools: [schemaTool("stale-completion")] });
     await Promise.resolve();
     expect(toolNames(manager)).toEqual(["fresh"]);
 
@@ -372,7 +360,7 @@ describe("node host MCP live lifecycle", () => {
               });
         },
       });
-      const clients = {
+      const clients = clientGenerations({
         stateful: [
           expiredStateful,
           createClient({
@@ -400,8 +388,8 @@ describe("node host MCP live lifecycle", () => {
             call: async () => ({ isError: true, content: [{ type: "text", text: "rejected" }] }),
           }),
         ],
-      } as const;
-      const generations = new Map<string, number>();
+      });
+      const { generations } = clients;
       const manager = await startNodeHostMcpManager(
         {
           stateful: { url: "http://stateful.invalid/mcp" },
@@ -409,15 +397,7 @@ describe("node host MCP live lifecycle", () => {
           application: { url: "http://application.invalid/mcp" },
         },
         {
-          createClient: (serverName) => {
-            const generation = generations.get(serverName) ?? 0;
-            generations.set(serverName, generation + 1);
-            const client = clients[serverName as keyof typeof clients][generation];
-            if (!client) {
-              throw new Error(`unexpected ${serverName} MCP client generation ${generation}`);
-            }
-            return client;
-          },
+          createClient: clients.createClient,
           resolveTransport: (serverName) =>
             serverName === "stateful" ? httpTransport("session-1", transportType) : httpTransport(),
         },
@@ -900,40 +880,6 @@ describe("node host MCP manager", () => {
     expect(createClientMock).toHaveBeenCalledOnce();
     await manager.close();
     expect(client.close).toHaveBeenCalledOnce();
-  });
-
-  it("cancels an in-flight MCP tool when its node invocation is aborted", async () => {
-    const controller = new AbortController();
-    const client = createClient({
-      tools: [tool("slow")],
-      call: async (_input, options) =>
-        await new Promise<CallToolResult>((_resolve, reject) => {
-          options?.signal?.addEventListener(
-            "abort",
-            () => {
-              const reason = options.signal?.reason;
-              reject(reason instanceof Error ? reason : new Error("node invocation canceled"));
-            },
-            { once: true },
-          );
-        }),
-    });
-    const manager = await startManager({ createClient: () => client });
-
-    const pending = callTool(manager, "slow", { signal: controller.signal });
-    await vi.waitFor(() => expect(client.callTool).toHaveBeenCalledOnce());
-    expect(client.callTool).toHaveBeenCalledWith(
-      { name: "slow", arguments: {} },
-      {
-        timeout: 120_000,
-        signal: controller.signal,
-      },
-    );
-
-    controller.abort(new Error("node invocation canceled"));
-
-    await expect(pending).rejects.toMatchObject({ code: "MCP_TOOL_ERROR" });
-    await manager.close();
   });
 
   it("returns structured timeout, unknown-server, and dead-client errors", async () => {

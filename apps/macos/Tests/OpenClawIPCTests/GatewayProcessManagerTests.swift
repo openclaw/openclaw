@@ -406,7 +406,7 @@ struct GatewayProcessManagerTests {
         }
     }
 
-    private func withLaunchAgentEnvironment<T>(
+    func withLaunchAgentEnvironment<T>(
         mode: String = "local",
         port: Int? = nil,
         homeDirectory: URL? = nil,
@@ -980,13 +980,21 @@ struct GatewayProcessManagerTests {
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
                 ["status", "--runtime-intent-only", "--json"],
             ])
+            try makeExecutableForTests(at: replacement.bun)
+            defer { try? FileManager.default.removeItem(at: state.appendingPathComponent("runtime")) }
             let resumed = GatewayProcessManager()
             #expect(await resumed.enableLaunchAgentIfNeeded(port: 29871).installed)
             let command = try #require(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
                 .first { $0.contains("install") })
+            // The resumed service keeps the stable Bun path its macOS grants belong to.
             let expected = operatorRuntime ? original : GatewayLaunchAgentManager.InstalledServiceCLI(
-                prefix: replacement.cliCommand, sqliteLibrary: replacement.sqliteLibrary.path)
+                prefix: [replacement.serviceBun.path, replacement.cliCommand[1]],
+                sqliteLibrary: replacement.sqliteLibrary.path)
             #expect(Array(command.prefix(2)) == expected.prefix)
+            let runtimePath = try #require(command.firstIndex(of: "--runtime-path"))
+            #expect(command[runtimePath + 1] == expected.prefix[0])
+            #expect(FileManager.default.contentsEqual(
+                atPath: replacement.serviceBun.path, andPath: replacement.bun.path) == !operatorRuntime)
             #expect(resumed.retainedServiceCLI?.sqliteLibrary == expected.sqliteLibrary)
             #expect(resumed.retainedServiceCLI?.environment["OPENCLAW_SQLITE_LIBRARY"] == expected.sqliteLibrary)
         }
@@ -1276,6 +1284,121 @@ struct GatewayProcessManagerTests {
             manager.launchAgentEnableTask = nil
             #expect(manager.lastFailureReason == "operator changed the service")
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    private func makeServiceBunFixture(home: URL) throws -> BundledRuntime {
+        let runtime = BundledRuntime(root: home.appendingPathComponent("runtime/candidate"))
+        try FileManager.default.createDirectory(
+            at: runtime.bun.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: runtime.serviceBun.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("candidate executable".utf8).write(to: runtime.bun)
+        try Data("installed executable".utf8).write(to: runtime.serviceBun)
+        return runtime
+    }
+
+    @Test(arguments: ["selection", "disabled", "custody", "cancelled", "executable"])
+    func `service installation keeps the live Bun when authority changes during preparation`(
+        withdrawal: String) async throws
+    {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let runtime = try self.makeServiceBunFixture(home: home)
+        let marker = home.appendingPathComponent("disabled")
+        let current = Mutex(true)
+        try await self.withLaunchAgentEnvironment(homeDirectory: home, commandHook: { args in
+            guard args.first == "status" else { return }
+            #expect((try? String(contentsOf: runtime.serviceBun, encoding: .utf8)) == "installed executable")
+            switch withdrawal {
+            case "selection":
+                current.withLock { $0 = false }
+            case "disabled":
+                try? Data().write(to: marker)
+            case "custody":
+                let plist = GatewayLaunchAgentManager.plistURL(
+                    homeDirectory: LaunchAgentPlist.homeDirectoryURL, profile: .current)
+                try? Data("operator replacement".utf8).write(to: plist)
+            case "executable":
+                try? Data("newer executable".utf8).write(to: runtime.serviceBun, options: .atomic)
+            default:
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+        }) {
+            try self.writeManagedLaunchAgent()
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            let install = Task {
+                await GatewayLaunchAgentManager.runDaemonCommand(
+                    ["install"], runtime: runtime, serviceRuntime: runtime, checkCurrent: {
+                        guard current.withLock({ $0 }) else {
+                            throw GatewayHostingError(message: "update selection changed")
+                        }
+                    })
+            }
+            #expect(await install.value != nil)
+            let installedExecutable = try String(contentsOf: runtime.serviceBun, encoding: .utf8)
+            #expect(installedExecutable ==
+                (withdrawal == "executable" ? "newer executable" : "installed executable"))
+            let serviceDirectoryContents = try FileManager.default.contentsOfDirectory(
+                atPath: runtime.serviceBun.deletingLastPathComponent().path)
+            #expect(serviceDirectoryContents == ["bun"])
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "--runtime-intent-only", "--json"],
+            ])
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `failed service installation only rolls back its own executable`(replaced: Bool) async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let runtime = try self.makeServiceBunFixture(home: home)
+        try await self.withLaunchAgentEnvironment(homeDirectory: home, commandHook: { args in
+            if args.first == "status" {
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":false,"message":"install failed"}"#)
+            } else if args.first == "install" {
+                #expect((try? String(contentsOf: runtime.serviceBun, encoding: .utf8)) == "candidate executable")
+                if replaced {
+                    // Model a newer installation atomically replacing the stable executable.
+                    try? Data("newer executable".utf8).write(to: runtime.serviceBun, options: .atomic)
+                }
+            }
+        }) {
+            let error = await GatewayLaunchAgentManager.runDaemonCommand(
+                ["install"], runtime: runtime, serviceRuntime: runtime)
+            #expect(error == "install failed")
+            let installedExecutable = try String(contentsOf: runtime.serviceBun, encoding: .utf8)
+            #expect(installedExecutable ==
+                (replaced ? "newer executable" : "installed executable"))
+            let serviceDirectoryContents = try FileManager.default.contentsOfDirectory(
+                atPath: runtime.serviceBun.deletingLastPathComponent().path)
+            #expect(serviceDirectoryContents == ["bun"])
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().map { $0.first } ==
+                ["status", "install"])
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `stale service replacement keeps the custody captured at detection`(operatorReplaced: Bool) async throws {
+        try await self.withLaunchAgentEnvironment {
+            try self.writeManagedLaunchAgent()
+            let previous = try #require(GatewayLaunchAgentManager.installedServiceCLI())
+            let runtime = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/current-build"))
+            let replacement = try #require(StaleGatewayServiceReplacement.replacing(
+                previous, with: runtime, allowUnconfigured: false))
+            if operatorReplaced {
+                // The operator reassigns the service while this build seeds its runtime.
+                let plist = try #require(previous.serviceAuthority?.plist)
+                try Data("operator-owned replacement".utf8).write(to: plist)
+            }
+            let error = await replacement.stop()
+            if operatorReplaced {
+                #expect(error == "The Gateway service changed before dispatch; retry.")
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            } else {
+                #expect(error == nil)
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [["stop", "--force"]])
+            }
         }
     }
 
@@ -3080,6 +3203,47 @@ struct GatewayProcessManagerTests {
 
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test func `stopped launchd startup surfaces recent ownership refusal without extra polling`() async throws {
+        let port = 19117
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask()
+        }
+        let payload = """
+        {"service":{"loaded":true,"runtime":{"status":"stopped"}},
+        "lastError":"Gateway ownership could not be verified. If the recorded holder has stopped, run `openclaw gateway recover-lock` to inspect it."}
+        """
+        try await self.withLaunchAgentEnvironment(port: port, statusPayload: payload) {
+            manager.lastFailureReason = nil
+            manager._testClearLaunchAgentReadinessFailure()
+            manager._testClearLaunchAgentInstallEvidence()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+            defer {
+                manager.lastFailureReason = nil
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testClearLaunchAgentInstallEvidence()
+            }
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            manager._testStartLaunchdGatewayReadiness(
+                port: port, pid: nil, firstInstallReadinessBudget: 0.1)
+            await manager.waitForStartupAttempt()
+
+            guard case let .failed(reason) = manager.status else {
+                Issue.record("stopped Gateway did not expose its startup failure")
+                await connection.shutdown()
+                return
+            }
+            #expect(reason.contains("may be from an earlier run"))
+            #expect(reason.contains("openclaw gateway recover-lock"))
+            #expect(manager.lastFailureReason == reason)
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "--json", "--no-probe"],
+            ])
+            await connection.shutdown()
         }
     }
 

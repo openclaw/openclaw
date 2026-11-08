@@ -27,6 +27,7 @@ import {
 } from "./model-picker.js";
 import {
   authorizeMattermostCommandInvocation,
+  MATTERMOST_PAIRING_QUEUE_FULL_TEXT,
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
 import { resolveMattermostThreadSessionContext } from "./monitor-context.js";
@@ -454,11 +455,13 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
           });
           return {
             ok: false,
-            denyText: core.channel.pairing.buildPairingReply({
-              channel: "mattermost",
-              idLine: `Your Mattermost user id: ${senderId}`,
-              code,
-            }),
+            denyText: code
+              ? core.channel.pairing.buildPairingReply({
+                  channel: "mattermost",
+                  idLine: `Your Mattermost user id: ${senderId}`,
+                  code,
+                })
+              : MATTERMOST_PAIRING_QUEUE_FULL_TEXT,
           };
         }
 
@@ -530,14 +533,8 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
           sessionKey: route.sessionKey,
           readConsistency: "latest",
         });
-        const data = await buildPreparedModelsProviderData(cfg, route.agentId, { sessionEntry });
-        if (data.providers.length === 0) {
-          const delivered = await sendMessageMattermost(
-            `channel:${channelId}`,
-            [data.refreshWarning, "No models available."].filter(Boolean).join("\n\n"),
-            { cfg, accountId, replyToId: replyRootId },
-          );
-          await recordDeliveredCommandExchange({
+        const recordModelPickerExchange = (replyText: string) =>
+          recordDeliveredCommandExchange({
             config: cfg,
             agentId: route.agentId,
             sessionKey: route.sessionKey,
@@ -545,8 +542,16 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
             commandText,
             commandId: `mattermost:${accountId}:${channelId}:${messageSid}`,
             replyId: "model-picker",
-            replyText: delivered.content,
+            replyText,
           });
+        const data = await buildPreparedModelsProviderData(cfg, route.agentId, { sessionEntry });
+        if (data.providers.length === 0) {
+          const delivered = await sendMessageMattermost(
+            `channel:${channelId}`,
+            [data.refreshWarning, "No models available."].filter(Boolean).join("\n\n"),
+            { cfg, accountId, replyToId: replyRootId },
+          );
+          await recordModelPickerExchange(delivered.content);
           return;
         }
 
@@ -572,19 +577,12 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
           [data.refreshWarning, view.text].filter(Boolean).join("\n\n"),
           { cfg, accountId, buttons: view.buttons, replyToId: replyRootId },
         );
-        await recordDeliveredCommandExchange({
-          config: cfg,
-          agentId: route.agentId,
-          sessionKey: route.sessionKey,
-          expectedSessionId: sessionEntry?.sessionId,
-          commandText,
-          commandId: `mattermost:${accountId}:${channelId}:${messageSid}`,
-          replyId: "model-picker",
-          replyText: [
+        await recordModelPickerExchange(
+          [
             delivered.content,
             ...view.buttons.map((row) => row.map((button) => button.text).join(", ")),
           ].join("\n"),
-        });
+        );
         runtime.log?.(`delivered model picker to ${to}`);
         return;
       }

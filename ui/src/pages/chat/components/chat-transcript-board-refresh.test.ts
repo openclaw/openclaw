@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { emptyBoardSnapshot } from "../../../lib/board/provider-helpers.ts";
 import { ValueSignal } from "../../../lib/board/provider-signals.ts";
-import { boardProviderForSession } from "../../../lib/board/provider.ts";
+import { createNullBoardProvider } from "../../../lib/board/provider.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import * as messageFrame from "./chat-message-group-frame.ts";
@@ -18,6 +18,8 @@ beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
 it("keeps settled transcript rows idle when the dashboard snapshot changes", async () => {
+  // Isolate the dashboard update from the transcript's minute refresh.
+  vi.spyOn(Date, "now").mockReturnValue(Date.now());
   const sessionKey = "agent:main:dashboard:row-refresh";
   const snapshot = new ValueSignal(emptyBoardSnapshot(sessionKey));
   const props = {
@@ -26,7 +28,7 @@ it("keeps settled transcript rows idle when the dashboard snapshot changes", asy
       { role: "assistant", content: "The release is ready.", timestamp: 2_000 },
     ]),
     boardProvider: {
-      ...boardProviderForSession({ sessionKey }, false),
+      ...createNullBoardProvider(sessionKey),
       snapshot$: snapshot,
     },
   };

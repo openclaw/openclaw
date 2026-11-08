@@ -28,15 +28,12 @@
   --oc-bg-elevated: var(--bg-elevated);
 
   --oc-accent-primary: var(--accent);
-  --oc-accent-primary-hover: var(--accent-hover);
   --oc-accent-primary-deep: var(--primary-hover);
   --oc-accent-secondary: var(--accent-2);
-  --oc-accent-secondary-deep: var(--accent-2-muted);
 
   --oc-text-primary: var(--text-strong);
   --oc-text-secondary: var(--text);
   --oc-text-muted: var(--muted);
-  --oc-text-on-accent: var(--primary-foreground);
 
   --oc-border-subtle: var(--border);
   --oc-border-strong: var(--border-strong);
@@ -45,18 +42,13 @@
   --oc-surface-card: var(--card);
   --oc-surface-card-strong: var(--popover);
   --oc-surface-interactive: var(--bg-elevated);
-  --oc-surface-interactive-hover: var(--bg-hover);
+  --oc-surface-interactive-hover: var(--surface-hover);
   --oc-surface-accent-soft: var(--accent-subtle);
-  --oc-surface-secondary-soft: var(--accent-2-subtle);
-  --oc-selection-bg: var(--selection-bg);
   --oc-focus-ring: var(--ring);
 
-  --oc-status-success-bg: var(--ok-subtle);
   --oc-status-success-fg: var(--ok);
-  --oc-status-warning-bg: var(--warn-subtle);
   --oc-status-warning-fg: var(--warn);
   --oc-status-error-fg: var(--danger);
-  --oc-status-info-bg: var(--info-subtle);
   --oc-status-info-fg: var(--info);
 
   --oc-input-bg: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
@@ -66,23 +58,17 @@
   --oc-input-focus-ring: var(--focus);
 
   --oc-font-body: var(--font-body);
-  --oc-font-display: var(--font-display);
   --oc-font-mono: var(--mono);
   --oc-font-size-xs: var(--control-ui-text-xs);
   --oc-font-size-sm: var(--control-ui-text-sm);
   --oc-font-size-base: var(--control-ui-text-md);
-  --oc-font-size-md: var(--control-ui-text-md);
-  --oc-font-size-lg: var(--control-ui-text-lg);
 
   --oc-space-1: var(--space-1);
   --oc-space-2: var(--space-2);
   --oc-space-3: var(--space-3);
   --oc-space-4: var(--space-4);
   --oc-space-5: var(--space-5);
-  --oc-space-6: var(--space-6);
-  --oc-space-7: var(--space-7);
 
-  --oc-radius-full: var(--radius-full);
   --oc-radius-surface: var(--radius-lg);
   --oc-radius-control: var(--radius-md);
   --oc-radius-inset: var(--radius-sm);
@@ -195,19 +181,7 @@
   pointer-events: none;
 }
 
-.oc-action-primary {
-  border-color: var(--primary);
-  background: var(--primary);
-  color: var(--oc-text-on-accent);
-}
-
-.oc-action-primary:hover {
-  border-color: var(--primary-hover);
-  background: var(--primary-hover);
-  color: var(--oc-text-on-accent);
-}
-
-.oc-action-primary:active:not(:disabled):not([aria-disabled="true"]) {
+.oc-action.primary:active:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--oc-accent-primary-deep);
   background: var(--oc-accent-primary-deep);
 }
@@ -311,7 +285,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 }
 
 .oc-input {
-  box-sizing: border-box;
   width: 100%;
   min-height: var(--oc-control-min-height);
   padding: var(--oc-space-2) var(--oc-space-3);
@@ -353,27 +326,20 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 
 .oc-banner {
   display: grid;
-  box-sizing: border-box;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: start;
   gap: var(--oc-space-3);
   padding: var(--oc-space-4);
   border: 1px solid var(--oc-border-subtle);
-  border-radius: var(--oc-radius-surface);
+  border-radius: var(--radius-md);
   background: var(--oc-surface-card-strong);
   color: var(--oc-text-secondary);
   font-size: var(--oc-font-size-sm);
   line-height: 1.45;
 }
 
-.oc-banner-action {
-  margin-left: auto;
-  flex: 0 0 auto;
-}
-
 .oc-empty {
   display: grid;
-  box-sizing: border-box;
   min-height: 12rem;
   place-items: center;
   padding: var(--oc-space-5);
@@ -405,29 +371,10 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   height: 0.75rem;
   overflow: hidden;
   border-radius: var(--oc-radius-control);
-  background: var(--oc-surface-interactive);
-}
-
-.oc-skeleton-line::after {
-  display: block;
-  width: 45%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, var(--oc-border-subtle), transparent);
-  content: "";
-  animation: oc-skeleton-sweep 1.2s linear infinite;
 }
 
 .oc-skeleton-line-short {
   width: 55%;
-}
-
-@keyframes oc-skeleton-sweep {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(225%);
-  }
 }
 
 .oc-status {
@@ -476,10 +423,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   .oc-card-interactive {
     transition: none;
   }
-
-  .oc-skeleton-line::after {
-    animation: none;
-  }
 }
 
 /* Carapace's settings primitives assume a two-child grid row. Control UI's
@@ -514,7 +457,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 }
 
 .settings-section__heading.oc-settings-section-title {
-  color: var(--oc-text-muted);
   font-family: var(--oc-font-body);
   font-size: var(--oc-font-size-xs);
   font-weight: 600;
@@ -528,7 +470,7 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   min-width: 0;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--oc-border-subtle) 85%, transparent);
-  border-radius: var(--oc-radius-surface);
+  border-radius: var(--composer-radius);
   background: var(--oc-bg-surface);
   box-shadow: none;
 }
@@ -590,7 +532,7 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 }
 
 .settings-page.oc-app-surface .btn.oc-action,
-.agents-home .btn:is(.agents-home__claw-add, .agents-home__open).oc-action {
+.agents-home .btn:is(.agents-home__template-add, .agents-home__open).oc-action {
   min-height: 0;
   gap: 6px;
   padding: 8px 14px;
@@ -603,26 +545,32 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   line-height: normal;
 }
 
-.settings-page.oc-app-surface .btn.oc-action.oc-action-primary {
+.settings-page.oc-app-surface .btn.oc-action.primary:not(:disabled, [aria-disabled="true"]) {
   border-color: var(--primary);
   background: var(--primary);
   color: var(--primary-foreground);
 }
 
-.settings-page.oc-app-surface .btn.oc-action.oc-action-primary:hover:not(:disabled) {
+.settings-page.oc-app-surface .btn.oc-action.primary:hover:not(:disabled, [aria-disabled="true"]) {
   border-color: var(--primary-hover);
   background: var(--primary-hover);
   color: var(--primary-foreground);
 }
 
+.settings-page.oc-app-surface .btn.oc-action.primary:active:not(:disabled, [aria-disabled="true"]) {
+  background: var(--primary-active);
+  color: var(--primary-foreground);
+}
+
 .settings-page.oc-app-surface .btn.btn--sm.oc-action,
-.agents-home .btn.btn--sm:is(.agents-home__claw-add, .agents-home__open).oc-action {
+.agents-home .btn.btn--sm:is(.agents-home__template-add, .agents-home__open).oc-action {
   padding: 6px 10px;
   font-size: var(--oc-font-size-xs);
 }
 
 .settings-page.oc-app-surface .btn.oc-action:hover:not(:disabled),
-.agents-home .btn:is(.agents-home__claw-add, .agents-home__open).oc-action:hover:not(:disabled) {
+.agents-home
+  .btn:is(.agents-home__template-add, .agents-home__open).oc-action:hover:not(:disabled) {
   border-color: var(--oc-border-strong);
   background: var(--oc-surface-interactive-hover);
   color: var(--oc-text-primary);

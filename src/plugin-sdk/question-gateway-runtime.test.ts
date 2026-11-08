@@ -4,7 +4,7 @@ import { createQuestionReactionTargetStore } from "./question-gateway-runtime.js
 type RegisterChannelDelivery =
   typeof import("../infra/question-channel-runtime.js").registerQuestionChannelDelivery;
 type ResolveReaction =
-  typeof import("../infra/question-reaction-runtime.js").resolveQuestionReactionOverGateway;
+  typeof import("./question-gateway-runtime.js").questionGatewayRuntime.resolveReaction;
 
 const binding = {
   questionId: "ask_0123456789abcdef0123456789abcdef",

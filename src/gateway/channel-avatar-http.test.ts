@@ -1,6 +1,6 @@
 import { createServer, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -78,13 +78,7 @@ describe("handleChannelAvatarHttpRequest", () => {
         })
         .catch(() => finishFailedGatewayHttpResponse(res));
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        port = (server.address() as AddressInfo).port;
-        resolve();
-      });
-    });
+    port = Number(new URL(await listenLoopback(server)).port);
   });
 
   afterAll(async () => {

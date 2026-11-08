@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
-import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import * as stepWrites from "../infra/update-run-write.async.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -11,7 +10,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
-import { ExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import {
   expectNoSideEffects,
   freshRestartCalls,
@@ -28,6 +27,14 @@ await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
   const f = createUpdateCliFixture();
+  function expectNoMutation(...effects: unknown[]) {
+    expectNoSideEffects(
+      update.replaceConfigFile,
+      update.updateGitCheckout,
+      mocks.syncPluginsForUpdateChannel,
+      ...effects,
+    );
+  }
 
   it.each([
     { installKind: "package", installedVersion: "2026.9.3" },
@@ -75,13 +82,9 @@ describe("update-cli", () => {
       await update.invokeUpdateCli({ dryRun: true, restart: false });
       expect(getLogOutput()).toContain(`Current version: ${installedVersion ?? VERSION}`);
       expect(getLogOutput()).toContain("Target version: unresolved");
-      expectNoSideEffects(
-        cleanupStaleManagedServiceUpdateHandoffs,
-        update.updateGitCheckout,
-        update.replaceConfigFile,
+      expectNoMutation(
         update.runDaemonInstall,
         update.runDaemonRestart,
-        mocks.syncPluginsForUpdateChannel,
         mocks.updateNpmInstalledPlugins,
       );
       expect(packageInstallCommandCall()).toBeUndefined();
@@ -148,17 +151,13 @@ describe("update-cli", () => {
         );
       });
 
-      expectNoSideEffects(
-        cleanupStaleManagedServiceUpdateHandoffs,
-        update.replaceConfigFile,
-        update.updateGitCheckout,
+      expectNoMutation(
         update.runDaemonInstall,
         update.runDaemonRestart,
         mocks.serviceStop,
         mocks.serviceStart,
         mocks.serviceRestart,
         update.doctorCommand,
-        mocks.syncPluginsForUpdateChannel,
         mocks.updateNpmInstalledPlugins,
         mocks.launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
       );
@@ -166,48 +165,6 @@ describe("update-cli", () => {
       expect(packageInstallCommandCall()).toBeUndefined();
     },
   );
-
-  it("leaves restored-generation completion with the helper across updateCommand unwind", async () => {
-    const postUpdate = await import("./update-cli/update-command-post-update.js");
-    const { UpdateCommandFailure } = await import("./update-cli/update-command-result.js");
-    const { finishUpdateRun } = await import("../infra/update-run-ledger.js");
-    const result = update.makeOkUpdateResult({
-      status: "error",
-      root: process.cwd(),
-      reason: "restart-unhealthy",
-      before: { version: "2026.9.1" },
-      after: { version: "2026.9.1" },
-      recovery: {
-        serviceRestartSafe: true,
-        packageRollbackVerified: true,
-        version: "2026.9.1",
-      },
-    });
-    const failure = new UpdateCommandFailure(result);
-    vi.spyOn(postUpdate, "finishUpdate").mockImplementationOnce(async (_params, options) => {
-      await options?.beforeFinalization?.();
-      throw failure;
-    });
-    f.mockOwnedGitService();
-    update.mockGitUpdateAfterMutation(update.makeOkUpdateResult({ root: process.cwd() }));
-
-    await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: "1" }, async () => {
-      await expect(update.updateCommand({ yes: true, json: true })).rejects.toEqual(
-        new update.ExitError(1),
-      );
-
-      expect(postUpdate.finishUpdate).toHaveBeenCalledOnce();
-      const run = expectDefined(update.listUpdateRuns({ limit: 1 })[0], "helper-owned update run");
-      expect(run).toMatchObject({ status: "running", after: { version: "2026.9.1" } });
-      // Native recovery finishes after the CLI exits; the ledger must still accept its outcome.
-      finishUpdateRun(run.runId, { status: "rolled-back", reason: result.reason });
-      expect(update.getUpdateRun(run.runId)).toMatchObject({
-        status: "rolled-back",
-        phase: "finished",
-        reason: "restart-unhealthy",
-      });
-    });
-  });
 
   it("does not reopen the ledger after migrated finalization fails", async () => {
     const migrated = await import("./update-cli/update-command-migrated.js");
@@ -346,7 +303,7 @@ describe("update-cli", () => {
         },
       );
       const writeStep = stepWrites.recordUpdateRunStepAsync;
-      vi.spyOn(stepWrites, "recordUpdateRunStepAsync").mockImplementation((...args) => {
+      vi.spyOn(stepWrites, "recordUpdateRunStepAsync").mockImplementation(async (...args) => {
         if (args[1].step !== "core migrations" || args[1].status !== "completed") {
           return writeStep(...args);
         }
@@ -354,7 +311,8 @@ describe("update-cli", () => {
         receiptRunId = args[0];
         armed = !intercepted;
         try {
-          return writeStep(...args).catch((error: unknown) => {
+          // Recovery preparation can yield before dispatch; retain the selected receipt through settlement.
+          return await writeStep(...args).catch((error: unknown) => {
             receiptError = error;
             throw error;
           });
@@ -479,12 +437,6 @@ describe("update-cli", () => {
       expect(update.defaultRuntime.exit).toHaveBeenCalledWith(1);
     }
     expect(update.listUpdateRuns()).toEqual(runsBefore);
-    expectNoSideEffects(
-      cleanupStaleManagedServiceUpdateHandoffs,
-      update.replaceConfigFile,
-      update.updateGitCheckout,
-      update.doctorCommand,
-      mocks.syncPluginsForUpdateChannel,
-    );
+    expectNoMutation(update.doctorCommand);
   });
 });

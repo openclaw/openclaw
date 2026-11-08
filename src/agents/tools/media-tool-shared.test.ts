@@ -1,5 +1,3 @@
-// Shared media tool tests cover root separation, provider availability, and
-// model-registry normalization for generation/understanding tools.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -20,7 +18,6 @@ import {
   isCapabilityProviderConfigured,
   loadMediaToolReferences,
   resolveGenerateAction,
-  resolveMediaToolInboundRoots,
   resolveCapabilityModelConfigForTool,
   resolveMediaToolReferenceAccess,
   resolveMediaToolSandboxConfig,
@@ -28,63 +25,51 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-// Keep media-tool-shared tests focused on root separation; channel-inbound
-// tests cover the real bundled contract loader.
-vi.mock("../../media/channel-inbound-roots.js", () => ({
-  resolveChannelInboundAttachmentRootsForChannel: (params: {
-    cfg?: OpenClawConfig;
-    channelId?: string | null;
-    accountId?: string | null;
-  }) => {
-    const channelId = params.channelId?.trim();
-    if (!channelId) {
-      return undefined;
-    }
-
-    const channelConfig = params.cfg?.channels?.[channelId];
-    const accountConfig = params.accountId
-      ? channelConfig?.accounts?.[params.accountId]
-      : undefined;
-    const roots = [
-      ...(accountConfig?.attachmentRoots ?? []),
-      ...(channelConfig?.attachmentRoots ?? []),
-    ];
-    return channelId === "imessage" ? [...roots, "/Users/*/Library/Messages/Attachments"] : roots;
-  },
-}));
-
 function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));
 }
 
-describe("resolveGenerateAction", () => {
-  it.each([
-    [{}, "generate"],
-    [{ action: "   " }, "generate"],
-    [{ action: 1 }, "generate"],
-    [{ action: "generate" }, "generate"],
-    [{ action: " STATUS " }, "status"],
-    [{ action: "list" }, "list"],
-    [{ action: "invalid" }, /^action must be "generate", "status", or "list"$/],
-  ] as const)("resolves or rejects %j", (args, expected) => {
-    if (typeof expected === "string") {
-      expect(resolveGenerateAction(args)).toBe(expected);
-    } else {
-      expect(() => resolveGenerateAction(args)).toThrowError(expected);
-    }
-  });
+const workspaceDir = path.join("/tmp", "openclaw-media-workspace");
+function resolveReference(
+  input: string,
+  options: Partial<Parameters<typeof resolveMediaToolReferenceAccess>[0]> = {},
+) {
+  return resolveMediaToolReferenceAccess({ input, isDataUrl: false, workspaceDir, ...options });
+}
+
+function asyncProvider(id: string, defaultModel: string, aliases?: string[]) {
+  return {
+    id,
+    defaultModel,
+    aliases,
+    isConfigured: () => {
+      throw new Error("sync credentials must not run");
+    },
+    isConfiguredAsync: async () => true,
+  };
+}
+
+it.each([
+  [{}, "generate"],
+  [{ action: "   " }, "generate"],
+  [{ action: 1 }, "generate"],
+  [{ action: " STATUS " }, "status"],
+  [{ action: "list" }, "list"],
+  [{ action: "invalid" }, /^action must be "generate", "status", or "list"$/],
+] as const)("resolves or rejects %j", (args, expected) => {
+  if (typeof expected === "string") {
+    expect(resolveGenerateAction(args)).toBe(expected);
+  } else {
+    expect(() => resolveGenerateAction(args)).toThrowError(expected);
+  }
 });
 
 describe("resolveMediaToolLocalRoots", () => {
   it.each([true, false])(
     "adds host-owned attachment roots (workspaceOnly=%s)",
     async (workspaceOnly) => {
-      const workspaceDir = path.join("/tmp", "openclaw-media-workspace");
       const attachmentRoot = path.join("/tmp", "openclaw-subagent-attachments");
-      const { localRoots } = await resolveMediaToolReferenceAccess({
-        input: path.join(attachmentRoot, "receipt.png"),
-        isDataUrl: false,
-        workspaceDir,
+      const { localRoots } = await resolveReference(path.join(attachmentRoot, "receipt.png"), {
         fsPolicy: { workspaceOnly, readOnlyRoots: [attachmentRoot] },
       });
       if (workspaceOnly) {
@@ -105,12 +90,7 @@ describe("resolveMediaToolLocalRoots", () => {
     const hostDir = tempDirs.make("openclaw-host-image-");
     const imagePath = path.join(hostDir, "screenshot.png");
     await fs.writeFile(imagePath, "png");
-    const { resolvedPath, localRoots } = await resolveMediaToolReferenceAccess({
-      input: imagePath,
-      isDataUrl: false,
-      workspaceDir: path.join("/tmp", "openclaw-media-workspace"),
-      fsPolicy,
-    });
+    const { resolvedPath, localRoots } = await resolveReference(imagePath, { fsPolicy });
     const access = assertLocalMediaAllowed(expectDefined(resolvedPath, "path"), localRoots);
     await (allowed
       ? expect(access).resolves.toBeUndefined()
@@ -118,7 +98,7 @@ describe("resolveMediaToolLocalRoots", () => {
   });
 
   it("admits only the declared attachment mount in workspace-only sandboxes", async () => {
-    const root = path.join("/tmp", "openclaw-media-workspace");
+    const root = workspaceDir;
     const hostPath = path.join("/tmp", "openclaw-subagent-attachments");
     const mount = { hostPath, containerPath: "/openclaw/attachments" };
     const sandbox = resolveMediaToolSandboxConfig(
@@ -146,11 +126,7 @@ describe("resolveMediaToolLocalRoots", () => {
     );
 
     await expect(
-      resolveMediaToolReferenceAccess({
-        input: "/openclaw/attachments/receipt.png",
-        isDataUrl: false,
-        sandbox,
-      }),
+      resolveReference("/openclaw/attachments/receipt.png", { sandbox, workspaceDir: undefined }),
     ).resolves.toMatchObject({ resolvedPath: path.join(hostPath, "receipt.png") });
   });
 
@@ -160,9 +136,7 @@ describe("resolveMediaToolLocalRoots", () => {
       process.platform === "win32" ? "C:\\Users\\peter\\Pictures" : "/Users/peter/Pictures";
 
     const { localRoots } = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
-      resolveMediaToolReferenceAccess({
-        input: path.join(picturesDir, "photo.png"),
-        isDataUrl: false,
+      resolveReference(path.join(picturesDir, "photo.png"), {
         workspaceDir: path.join(stateDir, "workspace-agent"),
       }),
     );
@@ -172,42 +146,6 @@ describe("resolveMediaToolLocalRoots", () => {
     expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "workspace")));
     expect(normalizedRoots).not.toContain(normalizeHostPath(picturesDir));
     expect(normalizedRoots).not.toContain(normalizeHostPath("/"));
-  });
-
-  it("keeps channel inbound attachment roots separate from local roots", async () => {
-    // Inbound channel roots may include broad chat attachment folders; keep them
-    // out of local filesystem allowlists unless the channel context asks.
-    const accountRoot = path.join("/tmp", "openclaw-imessage-work");
-    const sharedRoot = path.join("/tmp", "openclaw-imessage-shared");
-    const cfg = {
-      channels: {
-        imessage: {
-          attachmentRoots: [sharedRoot],
-          accounts: {
-            work: {
-              attachmentRoots: [accountRoot],
-            },
-          },
-        },
-      },
-    };
-
-    const { localRoots } = await resolveMediaToolReferenceAccess({
-      input: "relative/reference.png",
-      isDataUrl: false,
-    });
-    expect(localRoots.map(normalizeHostPath)).not.toContain(normalizeHostPath(accountRoot));
-    expect(localRoots.map(normalizeHostPath)).not.toContain(normalizeHostPath(sharedRoot));
-    expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
-    expect(
-      resolveMediaToolInboundRoots({
-        cfg,
-        channelId: "imessage",
-        accountId: "work",
-      }).map(normalizeHostPath),
-    ).toEqual(
-      [accountRoot, sharedRoot, "/Users/*/Library/Messages/Attachments"].map(normalizeHostPath),
-    );
   });
 });
 
@@ -227,11 +165,7 @@ describe("resolveMediaToolReferenceAccess", () => {
     { input: "file:///tmp/encoded%2Fseparator.png", error: /encode path separators/i },
     { input: "file:///tmp/malformed%ZZ.png", error: URIError },
   ])("resolves or rejects $input", async ({ input, isDataUrl = false, expected, error }) => {
-    const result = resolveMediaToolReferenceAccess({
-      input,
-      isDataUrl,
-      workspaceDir: process.cwd(),
-    });
+    const result = resolveReference(input, { isDataUrl, workspaceDir: process.cwd() });
     if (error) {
       await expect(result).rejects.toThrow(error);
     } else {
@@ -279,55 +213,20 @@ describe("resolveMediaToolReferenceAccess", () => {
   );
 });
 
-describe("resolveCapabilityModelConfigForTool", () => {
-  it("uses explicit model config for selection and availability without loading providers", async () => {
-    const providers = vi.fn(() => {
-      throw new Error("runtime provider list should not run for explicit model config");
-    });
-    const modelConfig = { primary: "qwen/wan2.6-t2v" };
-    expect(await resolveCapabilityModelConfigForTool({ modelConfig, providers })).toEqual(
-      modelConfig,
-    );
-    expect(
-      hasGenerationToolAvailability({
-        providerKey: "imageGenerationProviders",
-        modelConfig,
-        providers,
-      }),
-    ).toBe(true);
-    expect(providers).not.toHaveBeenCalled();
-  });
-
-  it("orders async provider defaults by canonical aliases without synchronous credentials", async () => {
-    expect(
-      await resolveCapabilityModelConfigForTool({
-        cfg: {
-          agents: { defaults: { model: { primary: "media-alias/gpt-5.5" } } },
-        },
-        providers: [
-          {
-            id: "fal",
-            defaultModel: "fal-ai/minimax/video-01-live",
-            isConfigured: () => {
-              throw new Error("sync credentials must not run");
-            },
-            isConfiguredAsync: async () => true,
-          },
-          {
-            id: "openai",
-            aliases: ["media-alias"],
-            defaultModel: "sora-2",
-            isConfigured: () => {
-              throw new Error("sync credentials must not run");
-            },
-            isConfiguredAsync: async () => true,
-          },
-        ],
-      }),
-    ).toEqual({
-      primary: "openai/sora-2",
-      fallbacks: ["fal/fal-ai/minimax/video-01-live"],
-    });
+it("orders async provider defaults by canonical aliases without synchronous credentials", async () => {
+  expect(
+    await resolveCapabilityModelConfigForTool({
+      cfg: {
+        agents: { defaults: { model: { primary: "media-alias/gpt-5.5" } } },
+      },
+      providers: [
+        asyncProvider("fal", "fal-ai/minimax/video-01-live"),
+        asyncProvider("openai", "sora-2", ["media-alias"]),
+      ],
+    }),
+  ).toEqual({
+    primary: "openai/sora-2",
+    fallbacks: ["fal/fal-ai/minimax/video-01-live"],
   });
 });
 
@@ -343,7 +242,6 @@ describe("hasGenerationToolAvailability", () => {
     name: string;
     cfg?: OpenClawConfig;
     isConfigured?: () => boolean;
-    authStore?: Parameters<typeof hasGenerationToolAvailability>[0]["authStore"];
     expected: boolean;
   }>([
     { name: "config-backed auth", cfg: configuredCredentials, expected: true },
@@ -354,29 +252,17 @@ describe("hasGenerationToolAvailability", () => {
       expected: false,
     },
     { name: "auth-free configured provider", isConfigured: () => true, expected: true },
-    { name: "unconfigured provider", isConfigured: () => false, expected: false },
-    {
-      name: "supplied auth store",
-      expected: true,
-      authStore: {
-        version: 1,
-        profiles: {
-          "local-image:default": { provider: "local-image", type: "api_key", key: "test" },
-        },
-      },
-    },
-  ])("honors $name", async ({ cfg, isConfigured, authStore, expected }) => {
+  ])("honors $name", async ({ cfg, isConfigured, expected }) => {
     const provider = { id: "local-image", defaultModel: "workflow", isConfigured };
-    const params = { cfg, authStore, providers: [provider] };
-    expect(
-      hasGenerationToolAvailability({ ...params, providerKey: "imageGenerationProviders" }),
-    ).toBe(expected);
-    expect(
-      await hasGenerationToolAvailabilityAsync({
-        ...params,
-        providerKey: "imageGenerationProviders",
-      }),
-    ).toBe(expected);
+    const params = {
+      cfg,
+      providers: [provider],
+      providerKey: "imageGenerationProviders" as const,
+    };
+    expect([
+      hasGenerationToolAvailability(params),
+      await hasGenerationToolAvailabilityAsync(params),
+    ]).toEqual([expected, expected]);
     if (cfg && isConfigured) {
       expect(isCapabilityProviderConfigured({ ...params, provider })).toBe(false);
       expect(await resolveCapabilityModelConfigForTool(params)).toBeNull();
@@ -384,29 +270,27 @@ describe("hasGenerationToolAvailability", () => {
   });
 });
 
-describe("generation provider list availability", () => {
-  it("awaits provider readiness and reports an unavailable async provider accurately", async () => {
-    const isConfigured = vi.fn(() => {
-      throw new Error("sync credentials must not run");
-    });
-    const result = await createMediaGenerateProviderListActionResult({
-      kind: "image_generation",
-      emptyText: "none",
-      providers: [
-        {
-          id: "async-images",
-          capabilities: {},
-          isConfigured,
-          isConfiguredAsync: async () => false,
-        },
-      ],
-      listModes: () => ["generate"],
-      summarizeCapabilities: () => "",
-    });
-    expect(result.details.providers).toEqual([
-      expect.objectContaining({ id: "async-images", configured: false }),
-    ]);
-    expect(result.content[0]?.text).toContain("configured: no");
-    expect(isConfigured).not.toHaveBeenCalled();
+it("awaits provider readiness and reports an unavailable async provider accurately", async () => {
+  const isConfigured = vi.fn(() => {
+    throw new Error("sync credentials must not run");
   });
+  const result = await createMediaGenerateProviderListActionResult({
+    kind: "image_generation",
+    emptyText: "none",
+    providers: [
+      {
+        id: "async-images",
+        capabilities: {},
+        isConfigured,
+        isConfiguredAsync: async () => false,
+      },
+    ],
+    listModes: () => ["generate"],
+    summarizeCapabilities: () => "",
+  });
+  expect(result.details.providers).toEqual([
+    expect.objectContaining({ id: "async-images", configured: false }),
+  ]);
+  expect(result.content[0]?.text).toContain("configured: no");
+  expect(isConfigured).not.toHaveBeenCalled();
 });

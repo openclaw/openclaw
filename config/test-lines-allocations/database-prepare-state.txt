@@ -1,0 +1,2 @@
+# Real PostgreSQL command-boundary proof: exact target bootstrap, idempotent readiness, refusal without repair.
+186

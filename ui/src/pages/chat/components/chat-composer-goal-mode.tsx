@@ -1,11 +1,9 @@
-import { Show } from "solid-js";
-import "../../../styles/chat/composer-context-strip.css";
 import type { SessionGoal } from "../../../api/types.ts";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalDraftMode } from "../../../lib/chat/chat-types.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { isChatGoalCreationDraft } from "../chat-goals.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -44,7 +42,7 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
     clearMode(current);
     focus();
   };
-  const begin = (goal?: SessionGoal) => {
+  const begin = (goal?: SessionGoal, commandObjective?: string) => {
     const props = readProps();
     if (!props.onGoalSubmit || !props.onGoalDraftModeChange || pendingNow(liveMode(props))) {
       return false;
@@ -52,29 +50,79 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
     const previousDraft = state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft;
     props.onGoalDraftModeChange({
       ...(props.currentSessionId ? { sessionId: props.currentSessionId } : {}),
-      ...(goal ? { action: "edit", goalId: goal.id, previousDraft } : { action: "start" }),
+      ...(goal
+        ? { action: "edit", goalId: goal.id, previousDraft }
+        : { action: "start", ...(commandObjective !== undefined ? { fromCommand: true } : {}) }),
     });
     state.slashMenu.reset();
     state.skillMenu.reset();
-    replaceDraft(goal?.objective ?? "");
+    const textarea = state.composerTextarea;
+    const selection =
+      commandObjective !== undefined && textarea
+        ? {
+            start: textarea.selectionStart,
+            end: textarea.selectionEnd,
+            direction: textarea.selectionDirection,
+          }
+        : null;
+    replaceDraft(goal?.objective ?? commandObjective ?? "");
+    if (selection && textarea && commandObjective !== undefined) {
+      const consumed = previousDraft.length - commandObjective.length;
+      textarea.setSelectionRange(
+        Math.max(0, selection.start - consumed),
+        Math.max(0, selection.end - consumed),
+        selection.direction,
+      );
+    }
+    focus();
+    return true;
+  };
+  const restoreCommand = () => {
+    const props = readProps();
+    const current = liveMode(props);
+    if (
+      current?.action !== "start" ||
+      !current.fromCommand ||
+      !props.onGoalDraftModeChange ||
+      pendingNow(current)
+    ) {
+      return false;
+    }
+    props.onGoalDraftModeChange(null);
+    replaceDraft("/goal ");
+    state.composerTextarea?.setSelectionRange(6, 6);
     focus();
     return true;
   };
   const activateDraft = (draft: string, submitting = false) => {
     const props = readProps();
-    if (liveMode(props) || !props.connected || !props.canSend || !props.onGoalSubmit) {
+    const current = liveMode(props);
+    if (pendingNow(current)) {
       return false;
     }
-    const match = /^\s*\/goal(?:\s+(start|set|create))?\s*$/iu.exec(draft);
-    // A separator commits the action word; prefixes remain ordinary objectives.
-    if (!match || (!submitting && (!match[1] || !/\s$/u.test(draft)))) {
+    if (current) {
+      // Initial empty starters stay open: only a later native edit reaches this branch.
+      if (!submitting && draft.length === 0) {
+        restoreCommand();
+      }
       return false;
     }
-    return begin();
+    if (!props.connected || !props.canSend || !props.onGoalSubmit || !props.onGoalDraftModeChange) {
+      return false;
+    }
+    if (isChatGoalCreationDraft(draft)) {
+      const objective = draft.replace(/^\s*\/goal\s+(?:(?:start|set|create)\s)?/iu, "");
+      const activated = begin(undefined, objective);
+      // A populated command entered with Send submits on that same action.
+      return activated && !objective.trim();
+    }
+    return submitting && /^\s*\/goal(?:\s+(?:start|set|create))?\s*$/iu.test(draft)
+      ? begin(undefined, "")
+      : false;
   };
   return {
     get active() {
-      return mode() !== null;
+      return liveMode(readProps()) !== null;
     },
     get pending() {
       return Boolean(mode() && pending() === mode());
@@ -97,6 +145,7 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
       return begin();
     },
     cancel,
+    restoreCommand,
     async submit(submissionAction?: Event) {
       const props = readProps();
       const current = liveMode(props);
@@ -116,7 +165,6 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
       if (!admitted) {
         return;
       }
-      replaceDraft(objective);
       try {
         const submitted = await props.onGoalSubmit(
           {
@@ -144,36 +192,3 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
 }
 
 export type GoalComposer = ReturnType<typeof createGoalComposer>;
-
-export function GoalComposerMode(props: { composer: GoalComposer }) {
-  return (
-    <Show when={props.composer.mode}>
-      {(mode) => (
-        <div
-          class="agent-chat__goal-mode composer-context-strip"
-          role="group"
-          aria-label={t("chat.goals.composerMode")}
-        >
-          <span class="agent-chat__goal-mode-label composer-context-strip__label">
-            <span class="composer-context-strip__icon">{<Icon name="flag" />}</span>
-            <span class="composer-context-strip__label-text">
-              {t(mode().action === "edit" ? "chat.goals.edit" : "chat.goals.composerMode")}
-            </span>
-          </span>
-          <span class="agent-chat__goal-mode-hint composer-context-strip__text">
-            {t(mode().action === "edit" ? "chat.goals.editHint" : "chat.goals.startHint")}
-          </span>
-          <button
-            type="button"
-            class="composer-context-strip__dismiss"
-            aria-label={t("chat.goals.cancel")}
-            disabled={props.composer.pending}
-            onClick={() => props.composer.cancel()}
-          >
-            {<Icon name="x" />}
-          </button>
-        </div>
-      )}
-    </Show>
-  );
-}

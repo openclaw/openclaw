@@ -1,7 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import type { ReplyPayload } from "../types.js";
 import {
   filterMessagingToolMediaDuplicates,
@@ -56,7 +55,6 @@ function targetsMatchTelegramReplySuppression(params: {
   );
 }
 
-const suppression = { targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression };
 // mock-isolation: Keep bundled channel discovery isolated to the synthetic Telegram suppression fixture.
 vi.mock("../../channels/plugins/bundled.js", () => ({
   getBundledChannelPlugin: (channel: string) =>
@@ -87,6 +85,15 @@ describe("filterMessagingToolMediaDuplicates", () => {
       { text: "gallery", mediaUrls: [a, b, c] },
       [b],
       { text: "gallery", mediaUrls: [a, c] },
+    ],
+    [
+      "dedupes both lowercase media fields while preserving unsent media",
+      {
+        mediaUrl: "https://example.test/one.png",
+        mediaUrls: ["https://example.test/two.png", "https://example.test/three.png"],
+      },
+      ["https://example.test/one.png", "https://example.test/two.png"],
+      { mediaUrl: undefined, mediaUrls: ["https://example.test/three.png"] },
     ],
     [
       "preserves delivery operations",
@@ -122,22 +129,7 @@ describe("filterMessagingToolMediaDuplicates", () => {
 });
 
 describe("resolveMessagingToolPayloadDedupe route matching", () => {
-  const installTelegramSuppressionRegistry = () => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram-plugin",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "telegram",
-            outbound: { deliveryMode: "direct", ...suppression },
-          }),
-        },
-      ]),
-    );
-  };
-
+  beforeEach(() => resetPluginRuntimeStateForTest());
   it.each(["", "message"])("matches current route with provider placeholder %j", (provider) => {
     expect(matchesRoute({ provider })).toBe(true);
   });
@@ -151,7 +143,6 @@ describe("resolveMessagingToolPayloadDedupe route matching", () => {
     ["77", "88", false],
     ["77", undefined, false],
   ] as const)("matches topic %s against string thread %s: %s", (topic, threadId, expected) => {
-    installTelegramSuppressionRegistry();
     expect(
       matchesRoute(
         { to: "-100123", ...(threadId === undefined ? {} : { threadId }) },
@@ -161,7 +152,6 @@ describe("resolveMessagingToolPayloadDedupe route matching", () => {
   });
 
   it("matches telegram replies when chatId matches but target forms differ", () => {
-    installTelegramSuppressionRegistry();
     expect(matchesRoute({ to: "-100123" }, { originatingTo: "telegram:group:-100123" })).toBe(true);
   });
   it("dedupes by content when messaging tool target metadata is unavailable", () => {

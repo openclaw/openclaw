@@ -52,6 +52,7 @@ const rubyFastlaneHarness = String.raw`
 require "json"
 require "open3"
 require "fileutils"
+require "rbconfig"
 if ENV["OPENCLAW_TEST_FASTLANE_BUNDLE"] == "1"
   require "fastlane"
   require "supply"
@@ -175,6 +176,18 @@ module Open3
     end
   end
 end
+module Process
+  class << self
+    alias_method :fixture_spawn, :spawn
+    def spawn(*args, **options)
+      if args.any? { |arg| arg.to_s.end_with?("mobile-release-notes.ts") }
+        $events << "generate-notes"
+        return fixture_spawn(RbConfig.ruby, "-e", "exit 0")
+      end
+      fixture_spawn(*args, **options)
+    end
+  end
+end
 ENV["GOOGLE_PLAY_JSON_KEY_DATA"] = "synthetic"
 %w(MATCH_PASSWORD GOOGLE_PLAY_TRACK GOOGLE_PLAY_RELEASE_STATUS GOOGLE_PLAY_VALIDATE_ONLY OPENCLAW_ANDROID_RELEASE_PLAN SUPPLY_UPLOAD_METADATA SUPPLY_UPLOAD_SCREENSHOTS SUPPLY_UPLOAD_IMAGES SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW).each { |key| ENV.delete(key) }
 if ENV["OPENCLAW_TEST_FASTLANE_BUNDLE"] == "1"
@@ -216,7 +229,7 @@ function runRuby(source: string): LaneResult[] {
   return JSON.parse(
     run(
       useBundle ? "bundle" : "ruby",
-      useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+      useBundle ? ["_4.0.23_", "exec", "ruby", ...rubyArgs] : rubyArgs,
       rootDir,
       { ...process.env, BUNDLE_GEMFILE: path.join(rootDir, "apps/android/Gemfile") },
     ),
@@ -279,6 +292,7 @@ plan_path = File.join($root, "recovery", "android-plan.json")
 $scenario, $events, $edits, $client = "plan", [], 0, Supply::Client.new
 $run_lane.call(:release_plan, output_path: plan_path)
 ENV["OPENCLAW_ANDROID_RELEASE_PLAN"] = plan_path
+ENV["OPENCLAW_MOBILE_RELEASE_NOTES"] = File.join($root, "recovery", "release-notes.json")
 results = %w(invalid-destination invalid-notes changed-baseline changed-code initialize-failure validate-only upload closed-testing internal).map do |scenario|
   scenario_result(scenario) do
   ENV["SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW"] = "true"
@@ -311,12 +325,12 @@ STDOUT.puts JSON.generate(results)
       closedTesting,
       internal,
     ] = results;
-    for (const [result, error] of [
-      [invalidDestination, "destination must be play-store or internal"],
-      [rejected, "Saved release notes do not match source/build"],
-    ] as const) {
-      expect(result).toMatchObject({ error: expect.stringContaining(error), events: [] });
-    }
+    expect(invalidDestination).toMatchObject({
+      error: expect.stringContaining("destination must be play-store or internal"),
+      events: [],
+    });
+    expect(rejected?.error).toContain("Saved release notes do not match source/build");
+    expectAbsent(rejected, "upload", "commit", "ref:initialize-android", "ref:record");
     for (const rejectedPlan of [changedBaseline, changedCode]) {
       expectAborted(rejectedPlan, "changed after preparation", "upload", "ref:initialize-android");
     }

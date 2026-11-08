@@ -20,7 +20,6 @@ import {
 } from "../../../test/e2e/qa-lab/runtime/quota-reset.test-support.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.js";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.js";
-import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.js";
 
 type QuotaFixture = Awaited<ReturnType<typeof createQuotaResetFixture>>;
 type SavedState = {
@@ -92,7 +91,6 @@ function clearSavedBlock(fixture: QuotaFixture): SavedClearReceipt {
 
 async function captureFinalStatus(
   fixture: QuotaFixture,
-  artifactDir: string,
   recordProfile: (profile: unknown) => void,
 ) {
   const cli = await fixture.gateway.cli(["models", "status", "--json"]);
@@ -122,10 +120,11 @@ async function captureFinalStatus(
   expect(dashboard.code, reason ?? dashboard.stderr).toBe(0);
   const url = new URL("settings/model-providers", browserUrl);
   url.hash = new URL(browserUrl).hash;
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: inject("controlUiE2eChromium").executablePath,
-  });
+  const { wsEndpoint } = inject("controlUiE2eChromium");
+  if (!wsEndpoint) {
+    throw new Error("Control UI E2E requires its shared Chromium server");
+  }
+  const browser = await chromium.connect(wsEndpoint);
   try {
     const context = await browser.newContext({
       locale: "en-US",
@@ -140,72 +139,52 @@ async function captureFinalStatus(
         JSON.stringify({ dismissedAtMs: 1770000000000 }),
       );
     });
-    try {
-      await page.goto(url.href);
-      await waitForControlUiGatewayReady(page);
-      const card = page.locator('[data-provider-id="openai"]');
-      await card.waitFor({ state: "visible" });
-      // The ordinary turn already proved automatic quota recovery. Initial catalog
-      // publication is best effort; Refresh explicitly asks for its settled status.
-      await page.locator(".model-providers__refresh-button").click();
-      const badge = card.locator(".model-providers__head .settings-status");
-      await expect
-        .poll(async () => (await badge.textContent())?.trim(), { timeout: 60_000 })
-        .toBe("Ready");
-      expect(await page.locator(".community-invite-card").count()).toBe(0);
-      await page.screenshot({
-        path: path.join(artifactDir, "provider-status.png"),
-        animations: "disabled",
-      });
-    } catch (error) {
-      await captureControlUiE2eFailureDiagnostics(page, {
-        error: error instanceof Error ? error : new Error("Quota final-status failure"),
-        label: "quota-final-status",
-      });
-      throw error;
-    } finally {
-      await fs.writeFile(
-        path.join(artifactDir, "rendered-page.json"),
-        JSON.stringify({ text: await page.locator("body").textContent() }, null, 2),
-      );
-      if ((await page.locator(".community-invite-card").count()) === 0) {
-        await page.screenshot({
-          path: path.join(artifactDir, "final-page.png"),
-          animations: "disabled",
-        });
-      }
-    }
+    await page.goto(url.href);
+    await waitForControlUiGatewayReady(page);
+    const card = page.locator('[data-provider-id="openai"]');
+    await card.waitFor({ state: "visible" });
+    // The ordinary turn already proved automatic quota recovery. Initial catalog
+    // publication is best effort; Refresh explicitly asks for its settled status.
+    await page.locator(".model-providers__refresh-button").click();
+    const badge = card.locator(".model-providers__head .settings-status");
+    await expect
+      .poll(async () => (await badge.textContent())?.trim(), { timeout: 60_000 })
+      .toBe("Ready");
+    expect(await page.locator(".community-invite-card").count()).toBe(0);
     await context.close();
   } finally {
     await browser.close();
   }
 }
 
-describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)(
-  "Running Gateway quota status: %s",
-  (recovery) => {
-    it(
-      "serves the same account and shows ready status after recovery without restarting",
-      { timeout: 600_000 },
-      async (context) => {
+describe("Running Gateway quota status", () => {
+  it(
+    "serves the same account and shows ready status after each recovery without restarting",
+    { timeout: 600_000 },
+    async (context) => {
+      const fixture = await createQuotaResetFixture(context, {
+        source: "codex_rate_limits",
+        controlUi: true,
+      });
+      const { gateway, client, provider, turn, stats, advanceClock, clock, evidence } = fixture;
+      const gatewayProcess = gateway.child;
+      expect(gatewayProcess?.pid).toEqual(expect.any(Number));
+      // Saved-only recovery needs an unadvanced clock. Each stage uses a fresh
+      // conversation while sharing the Gateway and its quota state.
+      for (const recovery of ["saved-clear", "automatic", "automatic-during-catalog"] as const) {
         const artifactDir = createControlUiE2eArtifactDir(`quota-refresh-${recovery}`);
-        const fixture = await createQuotaResetFixture(context, {
-          source: "codex_rate_limits",
-          controlUi: true,
-        });
-        const { gateway, client, provider, turn, stats, advanceClock, clock, evidence } = fixture;
+        const sessionKey = `${fixture.sessionKey}-${recovery}`;
         let finalProfile: unknown;
-        const gatewayProcess = gateway.child;
         let catalogHold: ReturnType<typeof provider.holdNextCatalog> | undefined;
         let catalogRefresh:
           | Promise<{ ok: true; result: ModelsListResult } | { ok: false; error: unknown }>
           | undefined;
-        expect(gatewayProcess?.pid).toEqual(expect.any(Number));
         try {
-          expect(await turn(), evidence()).toEqual({ status: "ok", output: [MARKER] });
+          provider.setPhase("healthy");
+          expect(await turn(sessionKey), evidence()).toEqual({ status: "ok", output: [MARKER] });
           await expect.poll(() => stats()?.lastProbeAt).toEqual(expect.any(Number));
           provider.setPhase("initial-exhaustion");
-          expect((await turn()).status, evidence()).toBe("error");
+          expect((await turn(sessionKey)).status, evidence()).toBe("error");
           const blocked = stats();
           expect(blocked, evidence()).toMatchObject({
             blockedReason: "subscription_limit",
@@ -279,7 +258,7 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             await auxiliary.text();
             expect(beforeRecoveryReply, evidence()).toBeUndefined();
           }
-          const nextTurn = await turn();
+          const nextTurn = await turn(sessionKey);
           const inference = provider.requests
             .slice(beforeRecovery)
             .filter((request) => request.path.endsWith("/responses"));
@@ -305,46 +284,30 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
           if (catalogHold) {
             expect(beforeRecoveryReply, evidence()).toBeDefined();
             expect(beforeRecoveryReply?.blockedUntil, evidence()).toBeUndefined();
-            // A cleared persisted block precedes publication of the replacement catalog owner.
-            // Keep the old response held until a prepared-only read observes that replacement.
-            let published: ModelsListResult | undefined;
-            await expect
-              .poll(async () => {
-                published = await client.request<ModelsListResult>("models.list", {
-                  agentId: "main",
-                  view: "configured",
-                  preparedOnly: true,
-                });
-                return {
-                  pending: published.pendingProviders?.includes("openai") ?? false,
-                  available: published.models.some(
-                    (model) =>
-                      model.provider === "openai" && model.id === "gpt-5.5" && model.available,
-                  ),
-                };
-              })
-              .toEqual({ pending: false, available: true });
-            expect
-              .soft(published?.models, evidence())
-              .toContainEqual(
-                expect.objectContaining({ provider: "openai", id: "gpt-5.5", available: true }),
-              );
+            // Quota-only updates keep the catalog owner. Availability must recover while
+            // its refresh is pending and stay recovered after the held response arrives.
+            const readPublishedStatus = async () => {
+              const published = await client.request<ModelsListResult>("models.list", {
+                agentId: "main",
+                view: "configured",
+                preparedOnly: true,
+              });
+              return {
+                pending: published.pendingProviders?.includes("openai") ?? false,
+                available: published.models.some(
+                  (model) =>
+                    model.provider === "openai" && model.id === "gpt-5.5" && model.available,
+                ),
+              };
+            };
+            await expect.poll(readPublishedStatus).toEqual({ pending: true, available: true });
             catalogHold.release();
             const refreshed = await catalogRefresh;
-            // Recovery changes availability, so the held generation must not publish stale facts.
-            expect(refreshed, evidence()).toMatchObject({
-              ok: false,
-              error: {
-                name: "GatewayClientRequestError",
-                code: "UNAVAILABLE",
-                retryable: true,
-                retryAfterMs: 0,
-                message: expect.stringContaining("catalog generation was superseded"),
-              },
-            });
+            expect(refreshed, evidence()).toMatchObject({ ok: true });
+            await expect.poll(readPublishedStatus).toEqual({ pending: false, available: true });
             expect(provider.heldCatalogResponses[0]?.releaseReason, evidence()).toBe("explicit");
           }
-          await captureFinalStatus(fixture, artifactDir, (profile) => {
+          await captureFinalStatus(fixture, (profile) => {
             finalProfile = profile;
           });
           expect(provider.errors, evidence()).toEqual([]);
@@ -357,7 +320,7 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             JSON.stringify(await fixture.publicDiagnostics(finalProfile), null, 2),
           );
         }
-      },
-    );
-  },
-);
+      }
+    },
+  );
+});

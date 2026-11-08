@@ -71,7 +71,7 @@ import {
   matchesDiscordToolContextTarget,
   normalizeDiscordMessagingTarget,
 } from "./normalize.js";
-import { discordOutbound } from "./outbound-adapter.js";
+import { discordOutbound } from "./outbound-payload.js";
 import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
 import type { DiscordProbe } from "./probe.js";
 import { getDiscordRuntime } from "./runtime.js";
@@ -153,6 +153,10 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
   createChatChannelPlugin<ResolvedDiscordAccount, DiscordProbe, unknown, 2>({
     base: {
       ...discordPluginBase,
+      identityLink: {
+        prepare: async (cfg, accountId) =>
+          (await import("./identity-link.js")).discordIdentityLink.prepare(cfg, accountId),
+      },
       allowlist: {
         ...buildLegacyDmAccountAllowlistAdapter({
           channelId: "discord",
@@ -366,7 +370,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
           if (!target?.trim()) {
             return undefined;
           }
-          const parsedTarget = parseDiscordTarget(target.trim(), { defaultKind: "channel" });
+          const parsedTarget = parseDiscordTarget(target, { defaultKind: "channel" });
           const details: Record<string, unknown> = {
             target: {
               raw: target,

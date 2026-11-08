@@ -28,6 +28,7 @@ import {
 } from "../plugins/plugin-invocation-scope.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { inheritPreparedSyntheticAuthScope } from "../plugins/provider-synthetic-auth.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import {
   bindPluginRegistryGatewayOwner,
@@ -137,6 +138,7 @@ function resolveAgentRuntimePluginRegistryLoad(
     // SAFETY: Typed config inputs project only the planner's plugin-policy edits onto authored config.
     activationSourceConfig = projectedSource as OpenClawConfig;
   }
+  inheritPreparedSyntheticAuthScope(params.config, plan.config);
   return {
     ...loadOptions,
     config: plan.config,
@@ -378,7 +380,9 @@ export async function withAgentPluginRegistry<T>(params: {
       : { metadataSnapshot: loadPluginMetadataSnapshot(params) }),
   });
   // The resolver inherits request or configured scope; an empty override drops hook-only plugins.
-  const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
+  // Gateway ingress runs land here too: load incrementally so a cold registry never holds the
+  // shared event loop for the whole plugin set.
+  const pluginRegistry = await loadAgentRuntimePluginRegistryHandleAsync({
     config: params.config,
     env: context.env,
     metadataSnapshot: context.metadataSnapshot,

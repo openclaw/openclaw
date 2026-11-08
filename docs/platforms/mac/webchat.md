@@ -148,9 +148,12 @@ The anchored compact chat panel from the menu bar keeps the compact single-colum
 Native chat preserves Markdown paragraph breaks, including before lists and
 while responses are streaming.
 
-In the full macOS chat window, completed commentary, reasoning, and tool work
-collapse into a **Worked for…** disclosure above the answer. Expand it to inspect
-the work; final text, images, and other attachments stay visible. Active turns,
+In the full macOS chat window, all assistant text, images, and other attachments
+stay visible after a turn completes. Contiguous reasoning and tool work fold into
+separate **Worked** disclosures in place. Expand one to inspect that stretch of work;
+loading older history keeps expanded sections open. Collapsed headings list operation
+kinds and failed, blocked, skipped, or unknown outcomes; expanding a section also
+shows its total tool-call count. Active turns,
 work without a final answer, and unresolved or failed work after the answer remain
 expanded. Work stays on its own side of forwarded messages, new inputs, and
 history dividers. Find in Conversation expands the transcript while searching.
@@ -203,7 +206,7 @@ conflicts. Hover a row or give it keyboard focus to reveal **Pin**/**Unpin** and
 With a supporting Gateway UI, rows also show the web sidebar's unsent-draft
 pencil and the count of outbox messages needing attention, including other
 conversations in that web window. **More actions…** opens the selected thread's
-web actions menu, including plugin actions and **Stop cloud worker…** when
+web actions menu, including plugin actions and **Stop cloud device…** when
 available. Confirmation, progress, and errors stay in the web conversation.
 Older Gateway UIs keep their existing conversation behavior without these extras.
 

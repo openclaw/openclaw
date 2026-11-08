@@ -1,5 +1,6 @@
 import type { Profiler } from "node:inspector";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { observeRuntimeProfileCapability } from "../infra/runtime-capabilities.js";
 import {
   assertProfile,
   captureDiagnosticProfile,
@@ -20,7 +21,7 @@ const MAX_SUMMARY_ROWS = 128;
 export function sanitizeDiagnosticCpuProfile(
   profile: Profiler.Profile,
   packageRoot: string | null,
-  { startBlockedMs }: { startBlockedMs: number },
+  { durationMs, startBlockedMs }: { durationMs: number; startBlockedMs: number },
 ) {
   assertProfile(profile.samples !== undefined && profile.timeDeltas !== undefined);
   if (profile.nodes.length > MAX_NODES || profile.samples.length > MAX_SAMPLES) {
@@ -42,7 +43,7 @@ export function sanitizeDiagnosticCpuProfile(
   });
   const result = {
     requestedDurationMs: DURATION_MS,
-    actualDurationMs: (profile.endTime - profile.startTime) / 1_000,
+    actualDurationMs: durationMs,
     startBlockedMs,
     samplingIntervalMicros: INTERVAL_MICROS,
     sampleLossCount: null,
@@ -137,21 +138,24 @@ export function captureDiagnosticCpuProfile(options: {
   signal: AbortSignal;
   hasAuthority: () => boolean;
 }) {
-  return captureDiagnosticProfile({
-    ...options,
-    durationMs: DURATION_MS,
-    create: (inspector) =>
-      process.versions.bun
-        ? createInspectorProfileCapture(inspector, {
-            setup: async (session) => {
-              await session.post("Profiler.enable");
-              await session.post("Profiler.setSamplingInterval", { interval: INTERVAL_MICROS });
-            },
-            start: (session) => session.post("Profiler.start"),
-            stop: (session) => session.post("Profiler.stop"),
-            disable: (session) => session.post("Profiler.disable"),
-          })
-        : createNativeCpuProfileCapture(INTERVAL_MICROS),
-    sanitize: sanitizeDiagnosticCpuProfile,
-  });
+  return observeRuntimeProfileCapability(
+    "cpuProfiling",
+    captureDiagnosticProfile({
+      ...options,
+      durationMs: DURATION_MS,
+      create: (inspector) =>
+        process.versions.bun
+          ? createInspectorProfileCapture(inspector, {
+              setup: async (session) => {
+                await session.post("Profiler.enable");
+                await session.post("Profiler.setSamplingInterval", { interval: INTERVAL_MICROS });
+              },
+              start: (session) => session.post("Profiler.start"),
+              stop: (session) => session.post("Profiler.stop"),
+              disable: (session) => session.post("Profiler.disable"),
+            })
+          : createNativeCpuProfileCapture(INTERVAL_MICROS),
+      sanitize: sanitizeDiagnosticCpuProfile,
+    }),
+  );
 }

@@ -13,6 +13,7 @@ import type {
 } from "./goals-operations.types.js";
 import type { SessionLifecycleStoreTarget } from "./session-accessor.lifecycle-types.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
+import type { SessionCreationOperation } from "./session-creation-operation.js";
 import type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
@@ -498,7 +499,6 @@ export type SessionTranscriptTurnPersistOptions = {
 export interface SessionTranscriptTurnPersistResult {
   predicateSkipped?: boolean;
   sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;
-  appendedCount: number;
   messages: TranscriptMessageAppendResult<unknown>[];
   rejectedReason?: "session-rebound";
   sessionEntry: SessionEntry | undefined;
@@ -771,7 +771,7 @@ export type SessionBranchListResult =
 export type SessionBranchListParams = Pick<
   SessionMessageCutMutationParams,
   "agentId" | "env" | "sessionKey" | "sessionStoreKey" | "storePath"
->;
+> & { signal?: AbortSignal };
 
 export type SessionBranchSwitchMutationResult =
   | {
@@ -822,6 +822,9 @@ export type SessionEntryCreationPhase =
   | "publication";
 
 export type SessionEntryCreateWithTranscriptOptions = {
+  /** Opt in to storage-certified rejection outcomes for an external creation claim. */
+  certifyNotCommitted?: true;
+  creationOperation?: SessionCreationOperation;
   /** Explicit label claim, checked again inside the final write transaction. */
   label?: string;
   onPhase?: (phase: SessionEntryCreationPhase) => void;
@@ -876,7 +879,6 @@ export type {
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
   DeletedAgentSessionEntryPurgeParams,
-  SessionArchivedTranscriptCleanupRule,
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,

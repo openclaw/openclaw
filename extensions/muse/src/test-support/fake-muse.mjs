@@ -19,16 +19,27 @@ log({
   credentialBackend: process.env.TBH_CREDENTIAL_BACKEND,
   configHome: process.env.XDG_CONFIG_HOME,
   path: process.env.PATH,
-  inheritedValue: process.env.MUSE_FIXTURE_INHERITED_VALUE,
 });
 
 let cursor = 0;
-let sessionCount = 0;
 let active;
 const sessions = new Map();
 const send = (value) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...value })}\n`);
 const reply = (id, result) => send({ id, result });
 const reject = (id, code, message, kind) => send({ id, error: { code, message, data: { kind } } });
+// Hold a reply until the test writes to the Unix socket named by `env`.
+function gated(env, id, result) {
+  if (!process.env[env]) {
+    reply(id, result);
+    return;
+  }
+  const gate = createConnection(process.env[env]);
+  gate.on("connect", () => gate.write(String(process.pid)));
+  gate.once("data", () => {
+    reply(id, result);
+    gate.end();
+  });
+}
 const accept = (id, params, extra = {}) =>
   reply(id, { commandId: params.commandId, status: "accepted", ...extra });
 const event = (method, params) =>
@@ -48,6 +59,7 @@ function complete(terminal, error) {
   event("turn/completed", { terminal, sourceRange, ...(error ? { error } : {}) });
 }
 const fail = (kind, message) => complete("failed", { kind, message, retryable: false });
+const choice = (choiceId, decision, label) => ({ choiceId, decision, scope: "once", label });
 function answer() {
   const itemId = item("reasoning", "inProgress", { text: "" });
   event("item/delta", { itemId, field: "summary.0", delta: "Considering" });
@@ -60,12 +72,11 @@ function answer() {
       visibleOutput: "file content",
     });
   }
-  const text =
-    active.prompt === "credential"
-      ? `credential:${process.env.META_API_KEY ?? "cli-login"}`
-      : active.prompt === "effort"
-        ? `effort:${active.reasoningEffort}`
-        : `${active.resumed ? "resumed" : "started"}: hello`;
+  const responses = new Map([
+    ["credential", `credential:${process.env.META_API_KEY ?? "cli-login"}`],
+    ["effort", `effort:${active.reasoningEffort}`],
+  ]);
+  const text = responses.get(active.prompt) ?? `${active.resumed ? "resumed" : "started"}: hello`;
   const messageId = item("agentMessage", "inProgress", { text: "" });
   event("item/delta", { itemId: messageId, delta: text.slice(0, 8) });
   event("item/delta", { itemId: messageId, delta: text.slice(8) });
@@ -85,27 +96,17 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       experimentalApi: false,
       platformOs: "linux",
     };
-    if (process.env.MUSE_FIXTURE_INITIALIZE_GATE) {
-      const gate = createConnection(process.env.MUSE_FIXTURE_INITIALIZE_GATE);
-      gate.on("connect", () => gate.write(String(process.pid)));
-      gate.once("data", () => reply(id, result));
-      return;
-    }
-    reply(id, result);
+    gated("MUSE_FIXTURE_INITIALIZE_GATE", id, result);
   } else if (method === "model/list") {
-    if (process.env.MUSE_FIXTURE_CATALOG_PATH) {
-      reply(id, JSON.parse(readFileSync(process.env.MUSE_FIXTURE_CATALOG_PATH, "utf8")));
-      return;
-    }
-    reply(id, {
-      providerId: "meta",
-      profileId: "fixture",
-      source: process.env.MUSE_FIXTURE_CATALOG_SOURCE ?? "providerCatalog",
-      models:
-        process.env.META_API_KEY === "rejected-test-key"
-          ? []
-          : [{ providerId: "meta", modelId: "muse-spark-1.3" }],
-    });
+    const result = process.env.MUSE_FIXTURE_CATALOG_PATH
+      ? JSON.parse(readFileSync(process.env.MUSE_FIXTURE_CATALOG_PATH, "utf8"))
+      : {
+          providerId: "meta",
+          profileId: "fixture",
+          source: process.env.MUSE_FIXTURE_CATALOG_SOURCE ?? "providerCatalog",
+          models: [{ providerId: "meta", modelId: "muse-spark-1.3" }],
+        };
+    gated("MUSE_FIXTURE_CATALOG_GATE", id, result);
   } else if (method === "session/start" || method === "session/resume") {
     const resumed = method === "session/resume";
     // Muse 1.3 uses `internal` for retained sessions it can no longer compose.
@@ -118,11 +119,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       reject(id, ...refusal);
       return;
     }
-    const sessionId = resumed
-      ? params.sessionId
-      : process.env.MUSE_REQUEST_LOG
-        ? randomUUID()
-        : `session-${++sessionCount}`;
+    const sessionId = resumed ? params.sessionId : randomUUID();
     sessions.set(sessionId, resumed);
     reply(id, {
       session: { sessionId },
@@ -140,50 +137,37 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       resumed: sessions.get(params.sessionId),
       reasoningEffort: params.reasoningEffort,
     };
-    accept(id, params, {
-      disposition: "started",
-      startedNewTurn: true,
-      turnId: active.turnId,
-    });
+    accept(id, params, { disposition: "started", startedNewTurn: true, turnId: active.turnId });
     setImmediate(() => {
+      const { prompt, turnId } = active;
       event("turn/started", { commandId: params.commandId, sourceRange });
-      if (active.prompt === "crash") {
+      if (prompt === "crash") {
         process.stderr.write("fixture: provider process crashed\n");
         process.exit(7);
-      } else if (active.prompt === "fail") {
+      } else if (prompt === "fail") {
         fail("providerError", "fixture provider rejected authentication");
-      } else if (active.prompt === "loggedout") {
+      } else if (prompt === "loggedout") {
         // Muse 1.3 reports a missing credential this way.
         fail("authRequired", "not logged in: run /login to add an API key");
-      } else if (
-        active.prompt === "approval" ||
-        active.prompt === "approval-settle" ||
-        active.prompt === "approval-deny-only"
-      ) {
+      } else if (prompt === "quota") {
+        complete("failed", {
+          kind: "modelError",
+          message: "fixture quota exhausted",
+          retryable: false,
+          quota: { limitKind: "tierLimit", resetsAtMs: Date.UTC(2030, 0, 2, 3, 4) },
+        });
+      } else if (["approval", "approval-settle", "approval-deny-only"].includes(prompt)) {
+        const denyOnly = prompt === "approval-deny-only";
         event("approval/requested", {
           // Real Muse mints one approval id per request; the SDK ignores repeats.
-          approvalId: `approval-${active.turnId}`,
-          currentRequirementId: { approvalId: `approval-${active.turnId}`, sourceIndex: 0 },
+          approvalId: `approval-${turnId}`,
+          currentRequirementId: { approvalId: `approval-${turnId}`, sourceIndex: 0 },
           availableChoices: [
-            ...(active.prompt === "approval-deny-only"
-              ? []
-              : [
-                  {
-                    choiceId: "server-allow-id",
-                    decision: "approved",
-                    scope: "once",
-                    label: "Allow",
-                  },
-                ]),
-            {
-              choiceId: active.prompt === "approval-deny-only" ? "server-only" : "server-deny-id",
-              decision: "denied",
-              scope: "once",
-              label: "Deny",
-            },
+            ...(denyOnly ? [] : [choice("server-allow-id", "approved", "Allow")]),
+            choice(denyOnly ? "server-only" : "server-deny-id", "denied", "Deny"),
           ],
-          itemId: `tool-${active.turnId}`,
-          toolCallId: `call-${active.turnId}`,
+          itemId: `tool-${turnId}`,
+          toolCallId: `call-${turnId}`,
           toolName: "shell",
           rawArgs: '{"command":"pwd"}',
           subject: { kind: "command", command: "pwd" },
@@ -192,7 +176,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           taskId: "task-1",
           sourceRange,
         });
-      } else if (active.prompt !== "wait") {
+      } else if (prompt !== "wait") {
         answer();
       }
     });

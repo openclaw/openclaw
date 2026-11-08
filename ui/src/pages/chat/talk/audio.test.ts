@@ -48,6 +48,7 @@ function silentPcmBase64(sampleCount: number): string {
 describe("RealtimeTalkMediaStreamMeter", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -91,6 +92,68 @@ describe("RealtimeTalkMediaStreamMeter", () => {
     expect(disconnectAnalyser).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
   });
+
+  it.each([false, true])(
+    "pauses hidden metering, suspending only its own context (shared: %s)",
+    (shared) => {
+      vi.useFakeTimers();
+      const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+      const sample = vi.fn((samples: Float32Array) => samples.fill(0.2));
+      const disconnect = vi.fn();
+      const context = {
+        suspend: vi.fn(async () => {}),
+        resume: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+        createMediaStreamSource: () => ({ connect() {}, disconnect }),
+        createAnalyser: () => ({
+          fftSize: 0,
+          smoothingTimeConstant: 0,
+          disconnect,
+          getFloatTimeDomainData: sample,
+        }),
+      };
+      const onLevel = vi.fn();
+      const meter = new RealtimeTalkMediaStreamMeter(onLevel);
+      vi.stubGlobal(
+        "AudioContext",
+        vi.fn(function () {
+          return context;
+        }),
+      );
+      meter.start({} as MediaStream, shared ? new AudioContext() : undefined);
+      expect(sample).toHaveBeenCalledOnce();
+
+      hidden.mockReturnValue(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      vi.advanceTimersByTime(3_000);
+      expect(sample).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(disconnect).not.toHaveBeenCalled();
+      expect(context.suspend).toHaveBeenCalledTimes(shared ? 0 : 1);
+
+      hidden.mockReturnValue(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(sample).toHaveBeenCalledTimes(2);
+      expect(context.resume).toHaveBeenCalledTimes(shared ? 0 : 1);
+      vi.advanceTimersByTime(100);
+      expect(sample).toHaveBeenCalledTimes(3);
+
+      meter.stop();
+      document.dispatchEvent(new Event("visibilitychange"));
+      vi.advanceTimersByTime(100);
+      expect(sample).toHaveBeenCalledTimes(3);
+      expect(onLevel).toHaveBeenLastCalledWith(0);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(context.close).toHaveBeenCalledTimes(shared ? 0 : 1);
+      hidden.mockReturnValue(true);
+      meter.start({} as MediaStream, shared ? new AudioContext() : undefined);
+      vi.advanceTimersByTime(1_000);
+      expect(sample).toHaveBeenCalledTimes(3);
+      expect(context.suspend).toHaveBeenCalledTimes(shared ? 0 : 2);
+      expect(vi.getTimerCount()).toBe(0);
+      meter.stop();
+    },
+  );
 
   it("reclaims its interval when the initial level callback stops it", () => {
     vi.useFakeTimers();

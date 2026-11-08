@@ -6,6 +6,10 @@ import {
 
 const parse = (args: string, cwd?: string) =>
   parseCodeModeMatrixOptions(args ? args.split(" ") : [], cwd);
+const rejects = (args: string, error?: string) => expect(() => parse(args)).toThrow(error);
+const model = "--model openai/fixture";
+const gateway = `${model} --mode code --task javascript-contracts`;
+const autoPair = `${model} --task repo-invoice-repair --mode direct --mode auto`;
 
 describe("Code Mode model matrix options", () => {
   it("defaults to the complete bounded matrix", () => {
@@ -23,18 +27,8 @@ describe("Code Mode model matrix options", () => {
     });
   });
 
-  it("rejects invalid and duplicate extended task selectors", () => {
-    for (const [tasks, error] of [
-      ["unknown", "--task must be one of"],
-      ["dependent-chain --task dependent-chain", "Duplicate --task"],
-    ]) {
-      expect(() => parse(`--model fixture/model --task ${tasks}`)).toThrow(error);
-    }
-  });
-
   it("keeps Gateway interviews opt-in and resolves comparison inputs independently of output storage", () => {
     const selection = "--model openai/gpt-5.6-luna --task inventory-join";
-    expect(() => parse(selection, "/harness")).toThrow("--mode code");
     const args = `${selection} --mode code --executor quickjs --runtime-dir ../baseline --baseline-results artifacts/previous/results.jsonl --repetitions 1`;
     expect(parse(args, "/harness")).toMatchObject({
       repoRoot: "/harness",
@@ -45,26 +39,48 @@ describe("Code Mode model matrix options", () => {
       modes: ["code"],
       repetitions: 1,
     });
-    expect(() => parse("--model fixture/model --mode code --task partial-failure")).toThrow(
-      "OpenAI, Anthropic, or Google",
-    );
   });
 
-  it.each([
-    ["--executor unknown", "--executor must be node or quickjs"],
-    ["--executor node --executor quickjs", "provided more than once"],
-    ["--executor quickjs --task read", "only Gateway-backed tasks"],
-  ])("rejects invalid or ambiguous executor selection: %s", (args, error) => {
-    expect(() =>
-      parse(`--model openai/fixture --mode code --task javascript-contracts ${args}`),
-    ).toThrow(error);
-  });
-
-  it("rejects a Gateway executor selector for embedded tasks", () => {
-    expect(() =>
-      parseCodeModeMatrixOptions(["--model", "openai/fixture", "--executor", "node"]),
-    ).toThrow("only Gateway-backed tasks");
-  });
+  it.each<[string, string | undefined]>([
+    ["", "At least one --model"],
+    ["--model qwen3.5:9b", "provider/model"],
+    [`${model} --task unknown`, "--task must be one of"],
+    [`${model} --task dependent-chain --task dependent-chain`, "Duplicate --task"],
+    [`${model} --task inventory-join`, "--mode code"],
+    ["--model fixture/model --mode code --task partial-failure", "OpenAI, Anthropic, or Google"],
+    [`${gateway} --executor unknown`, "--executor must be node or quickjs"],
+    [`${gateway} --executor node --executor quickjs`, "provided more than once"],
+    [`${gateway} --executor quickjs --task read`, "only Gateway-backed tasks"],
+    [`${model} --executor node`, "only Gateway-backed tasks"],
+    [`${autoPair} --expect-auto-tier invalid`, "must be preferred, capable, or unflagged"],
+    [
+      `${autoPair} --expect-auto-tier preferred --expect-auto-tier capable`,
+      "provided more than once",
+    ],
+    [`${gateway} --expect-auto-tier preferred`, "requires a Gateway auto arm"],
+    [`${model} --expect-auto-tier preferred`, "requires a Gateway auto arm"],
+    [`${autoPair} --task read --expect-auto-tier preferred`, "only Gateway tasks"],
+    [`${model} --mode code --mode code`, "Duplicate --mode"],
+    ...["--concurrency 4", "--max-tokens 0", "--max-known-cost-usd NaN"].map(
+      (arg): [string, undefined] => [`${model} ${arg}`, undefined],
+    ),
+    ...["auto", "direct", "code"].map((mode): [string, string] => [
+      `${model} --task invoice-reconciliation --mode ${mode}`,
+      "paired direct/code or direct/auto",
+    ]),
+    ...["node", "quickjs"].map((executor): [string, string] => [
+      `${model} --task repo-invoice-repair --mode direct --mode auto --executor ${executor}`,
+      "omit --executor",
+    ]),
+    [
+      `${model} --task repo-invoice-repair --mode direct --mode auto --mode code`,
+      "paired direct/code or direct/auto",
+    ],
+    ...["--skip-build", "constructor", "toString", "__proto__"].map((arg): [string, string] => [
+      `${model} ${arg} 1`,
+      `Unknown argument: ${arg}`,
+    ]),
+  ])("rejects invalid options: %s", (args, error) => rejects(args, error));
 
   it("admits neutral direct/code pairs for all supported providers with bounded root concurrency", () => {
     const args =
@@ -75,25 +91,26 @@ describe("Code Mode model matrix options", () => {
       maxKnownCostUsd: 0.5,
       schedulePath: "/harness/waves.json",
     });
-    for (const limit of ["--concurrency 4", "--max-tokens 0", "--max-known-cost-usd NaN"]) {
-      expect(() => parse(`--model openai/fixture ${limit}`)).toThrow();
-    }
-    for (const mode of ["auto", "direct", "code"]) {
-      expect(() =>
-        parse(`--model openai/fixture --task invoice-reconciliation --mode ${mode}`),
-      ).toThrow("both explicit direct/code");
-    }
   });
 
-  it("rejects ambiguous selectors and output paths", () => {
-    expect(() => parse("")).toThrow("At least one --model");
-    expect(() => parse("--model qwen3.5:9b")).toThrow("provider/model");
-    for (const arg of ["--skip-build", "constructor", "toString", "__proto__"]) {
-      expect(() => parse(`--model ollama/qwen3.5:9b ${arg} 1`)).toThrow(`Unknown argument: ${arg}`);
-    }
-    expect(() => parse("--model fixture/model --mode code --mode code")).toThrow(
-      "Duplicate --mode",
-    );
+  it("admits a complete omitted-default Gateway pair without an executor override", () => {
+    expect(
+      parse(`${model} --task repo-invoice-repair --mode direct --mode auto --max-cells 2`),
+    ).toMatchObject({ modes: ["direct", "auto"], maxCells: 2, gatewayExecutor: "node" });
+  });
+
+  it.each(["preferred", "capable", "unflagged"])(
+    "accepts an independent %s catalog expectation for Gateway auto cells",
+    (tier) => {
+      expect(parse(`${autoPair} --expect-auto-tier ${tier}`)).toMatchObject({
+        expectedAutoTier: tier,
+        modes: ["direct", "auto"],
+      });
+      expect(parse(autoPair).expectedAutoTier).toBeUndefined();
+    },
+  );
+
+  it("rejects output paths outside the repository", () => {
     for (const [output, error] of [
       ["../outside", "within the repository"],
       ["/tmp/out", "repo-relative"],

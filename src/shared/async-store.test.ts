@@ -1,8 +1,45 @@
-import { AsyncLocalStorage, executionAsyncId } from "node:async_hooks";
-import { describe, expect, it } from "vitest";
+import { AsyncLocalStorage, AsyncResource, executionAsyncId } from "node:async_hooks";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runWithAsyncStore } from "./async-store.js";
 
 describe("runWithAsyncStore", () => {
+  it("reuses the entry callback while overlapping calls and continuations retain their stores", async () => {
+    const storage = new AsyncLocalStorage<object>();
+    const values = [
+      { plugin: "first", generation: 1 },
+      { plugin: "second", generation: 2 },
+    ];
+    const gate = createDeferred();
+    const detached: Promise<object | undefined>[] = [];
+    const scoped = vi.spyOn(AsyncResource.prototype, "runInAsyncScope");
+    try {
+      const calls = values.map((value) =>
+        runWithAsyncStore(storage, value, async () => {
+          expect(storage.getStore()).toBe(value);
+          detached.push(gate.promise.then(() => storage.getStore()));
+          await gate.promise;
+          return storage.getStore();
+        }),
+      );
+      const callbacks = scoped.mock.calls.map(([callback]) => callback);
+      expect(storage.getStore()).toBeUndefined();
+      gate.resolve();
+      const results = await Promise.all(calls);
+      const detachedResults = await Promise.all(detached);
+      for (const [index, value] of values.entries()) {
+        expect(results[index]).toBe(value);
+        expect(detachedResults[index]).toBe(value);
+      }
+      expect(storage.getStore()).toBeUndefined();
+      expect(callbacks).toHaveLength(2);
+      expect(new Set(callbacks).size).toBe(1);
+    } finally {
+      gate.resolve();
+      scoped.mockRestore();
+    }
+  });
+
   it("restores unset, default, and nested values after return or throw", () => {
     const fallback = { name: "default" };
     const storage = new AsyncLocalStorage<object | undefined>({ defaultValue: fallback });
@@ -43,28 +80,6 @@ describe("runWithAsyncStore", () => {
       }),
     ).toThrow(failure);
     expect(storage.getStore()).toBe(fallback);
-  });
-
-  it("inherits into awaited and detached continuations without leaking to siblings", async () => {
-    const storage = new AsyncLocalStorage<string>();
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let detached!: Promise<string | undefined>;
-    const first = runWithAsyncStore(storage, "first", async () => {
-      detached = gate.then(() => storage.getStore());
-      await gate;
-      return storage.getStore();
-    });
-    const second = runWithAsyncStore(storage, "second", async () => {
-      await gate;
-      return storage.getStore();
-    });
-    expect(storage.getStore()).toBeUndefined();
-    release();
-    expect(await Promise.all([first, second, detached])).toEqual(["first", "second", "first"]);
-    expect(storage.getStore()).toBeUndefined();
   });
 
   it("leaves same-value reentry in the current async resource", () => {

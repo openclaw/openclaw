@@ -3,12 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { expect, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { createMessageReceiptFromOutboundResults } from "../channels/message/receipt.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
@@ -49,15 +50,8 @@ export async function readEffectFile(file: string): Promise<Buffer | undefined> 
   }
 }
 
-export async function reach<T>(boundary: Promise<T>, request: Promise<Response>): Promise<T> {
-  const first = await Promise.race([
-    boundary.then((value) => ({ boundary: value })),
-    request.then((response) => ({ response })),
-  ]);
-  if ("response" in first) {
-    throw new Error("RPC ended before proof boundary");
-  }
-  return first.boundary;
+export function reach<T>(boundary: Promise<T>, request: Promise<Response>) {
+  return awaitGateBeforeSettlement(boundary, request, "RPC ended before proof boundary");
 }
 
 export function installAuthorityProofKernel() {
@@ -84,6 +78,31 @@ export function installAuthorityProofKernel() {
     },
   });
   return { kernel: () => kernel, harness: () => harness };
+}
+
+/** Configure the provider of the pinned proof model, as a real Gateway's catalog would carry it. */
+export async function configureProofModelProvider() {
+  const [{ refreshPreparedModelRuntimeSnapshots }, config] = await Promise.all([
+    import("../agents/prepared-model-runtime.js"),
+    import("../config/io.js"),
+  ]);
+  await resetPreparedModelCatalogStateForTest();
+  const anthropic: ModelProviderConfig = {
+    baseUrl: "https://anthropic.example.test/v1",
+    models: [
+      modelDefinition("claude-opus-4-6", {
+        name: "Proof model fixture",
+        input: ["text", "image"],
+        reasoning: false,
+        contextWindow: 128_000,
+      }),
+    ],
+  };
+  await config.writeConfigFile({ models: { providers: { anthropic } } });
+  config.clearRuntimeConfigSnapshot();
+  await refreshPreparedModelRuntimeSnapshots(config.getRuntimeConfig(), {
+    gatewayLifecycle: true,
+  });
 }
 
 export function installAuthorityProofGateway() {
@@ -162,30 +181,7 @@ export function installAgentAuthorityProofFixture() {
     testState.agentConfig = { model: { primary: "anthropic/claude-opus-4-6" } };
     if (options?.imageCapable) {
       // Keep catalog preparation and media writing real; only inference is mocked.
-      const [{ refreshPreparedModelRuntimeSnapshots }, config] = await Promise.all([
-        import("../agents/prepared-model-runtime.js"),
-        import("../config/io.js"),
-      ]);
-      await resetPreparedModelCatalogStateForTest();
-      const anthropic: ModelProviderConfig = {
-        baseUrl: "https://anthropic.example.test/v1",
-        models: [
-          {
-            id: "claude-opus-4-6",
-            name: "Proof image fixture",
-            input: ["text", "image"],
-            reasoning: false,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128_000,
-            maxTokens: 8_192,
-          },
-        ],
-      };
-      await config.writeConfigFile({ models: { providers: { anthropic } } });
-      config.clearRuntimeConfigSnapshot();
-      await refreshPreparedModelRuntimeSnapshots(config.getRuntimeConfig(), {
-        gatewayLifecycle: true,
-      });
+      await configureProofModelProvider();
     }
     await prepareGatewayReplyRuntimeForTest();
     if (options?.imageCapable) {

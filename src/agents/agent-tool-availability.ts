@@ -51,6 +51,10 @@ export function copyAgentToolAvailability<T extends object>(source: object, targ
   if (metadata) {
     availabilityBindings.set(target, metadata);
   }
+  const executionSchema = executionSchemas.get(source);
+  if (executionSchema !== undefined) {
+    executionSchemas.set(target, executionSchema);
+  }
   return target;
 }
 
@@ -118,6 +122,20 @@ export function finalizeAgentToolAvailability<T extends ToolDefinition>(
   return [...tools];
 }
 
+/** Provider-neutral input contract behind a projected model-facing schema. */
+const executionSchemas = new WeakMap<object, unknown>();
+
+/**
+ * Bind the canonical input contract for a tool whose advertised schema is a
+ * provider projection. Tool owners keep using `executionSchema` on their
+ * availability binding; this covers projections the framework applies itself.
+ */
+export function bindAgentToolExecutionSchema<T extends object>(tool: T, schema: unknown): T {
+  executionSchemas.set(tool, schema);
+  return tool;
+}
+
 export function resolveAgentToolExecutionSchema(tool: object, schema: unknown): unknown {
-  return availabilityBindings.get(tool)?.binding.executionSchema?.(schema) ?? schema;
+  const declared = availabilityBindings.get(tool)?.binding.executionSchema?.(schema);
+  return declared !== undefined ? declared : (executionSchemas.get(tool) ?? schema);
 }

@@ -29,7 +29,7 @@ export function releaseManifestChildEvidence(child) {
   };
 }
 
-export function buildReleaseValidationManifest({ plan, drain, context }) {
+export function buildReleaseValidationManifest({ plan, drain, context, reusedManifest }) {
   const childEvidence = Object.fromEntries(
     Object.entries(drain?.children ?? {}).map(([key, child]) => [
       key,
@@ -49,8 +49,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
     candidateBinding: plan.candidate,
     publicationArtifacts: context.publicationArtifacts ?? { npmPreflight: null, docker: null },
     publishInputs: context.publishInputs,
-    // Keep the wire field; current release policy admits no advisory jobs.
-    advisoryJobs: [],
+    advisoryJobs: drain?.advisoryJobs ?? [],
     waivers: drain?.waivers ?? [],
     childEvidence,
     ...(plan.qualificationCoverage
@@ -76,7 +75,10 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
       : {}),
   };
   const runs = Object.fromEntries(plan.children.map((child) => [child.key, child.runId]));
-  const root = plan.evidenceReuse.sourceManifest;
+  const root = reusedManifest ?? plan.evidenceReuse.sourceManifest;
+  if (plan.evidenceReuse.requested && !root) {
+    throw new Error("reused release evidence manifest is required at the manifest boundary");
+  }
   let rootPublication;
   if (plan.evidenceReuse.requested && root?.publicationAdmissionContract !== undefined) {
     rootPublication = {
@@ -95,7 +97,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
   }
   const manifest = plan.evidenceReuse.requested
     ? {
-        ...plan.evidenceReuse.sourceManifest,
+        ...root,
         ...current,
         evidenceReuse: {
           policy: plan.evidenceReuse.policy,
@@ -106,7 +108,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
           ...(rootPublication ? { publication: rootPublication } : {}),
         },
         controls: {
-          ...plan.evidenceReuse.sourceManifest.controls,
+          ...root.controls,
           performanceReportPublication: "artifact-only",
         },
       }
@@ -132,8 +134,8 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
           performanceReportPublication: "artifact-only",
         },
         childRuns: plan.qualificationCoverage
-          ? Object.fromEntries(
-              plan.children.map((child) => [
+          ? Object.fromEntries([
+              ...plan.children.map((child) => [
                 child.key,
                 child.key === "productPerformance"
                   ? {
@@ -143,7 +145,15 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
                     }
                   : child.runId,
               ]),
-            )
+              ...(plan.qualificationCoverage.exemptions ?? []).map((exemption) => [
+                exemption.childRole,
+                {
+                  disposition: exemption.disposition,
+                  runId: "",
+                  supportingEvidence: exemption.supportingEvidence,
+                },
+              ]),
+            ])
           : {
               normalCi: runs.normalCi ?? "",
               pluginPrereleaseIndependent: runs.pluginPrereleaseIndependent ?? "",

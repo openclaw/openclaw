@@ -79,7 +79,7 @@ describe.skipIf(!fixtures.connection)("database port command PostgreSQL conforma
         expect(output).not.toContain("synthetic-port-secret");
       },
       true,
-      1001,
+      { rows: 1001 },
     );
   }, 120_000);
 

@@ -158,7 +158,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   ...["create", "validate", "build", "dev"].map((subcommand): CliCommandCatalogEntry => ({
-    commandPath: ["claws", subcommand],
+    commandPath: ["templates", subcommand],
     exact: true,
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   })),
@@ -198,6 +198,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: "bypass",
     },
     route: { id: "gateway-status" },
+  },
+  {
+    commandPath: ["gateway", "auth-token"],
+    exact: true,
+    // The command owns a non-observing config read; exec SecretRefs still need the CLI PATH.
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   {
     commandPath: ["gateway", "recover-lock"],
@@ -533,11 +539,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["update"],
     policy: { configGuard: "skip", hideBanner: true },
   },
-  {
-    commandPath: ["update", "admit"],
+  ...["admit", "preflight"].map((action): CliCommandCatalogEntry => ({
+    commandPath: ["update", action],
     // Malformed internal argv must keep protocol stdout and read-only startup policy too.
     policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true, ownsProtocolStdout: true },
-  },
+  })),
   {
     commandPath: ["config", "validate"],
     exact: true,
@@ -558,6 +564,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: PASSIVE_STARTUP_POLICY,
     route: { id: "plugins-list" },
+  },
+  {
+    commandPath: ["plugins", "lint"],
+    exact: true,
+    policy: PASSIVE_STARTUP_POLICY,
   },
   // Authoring commands operate on a target package, not operator config, and a
   // scaffolded plugin build can run through an older CLI; the startup guard

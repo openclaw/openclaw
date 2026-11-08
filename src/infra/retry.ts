@@ -9,6 +9,7 @@ import {
 } from "../../packages/retry/src/index.js";
 import { getRetryAttemptErrors, recordRetryAttemptErrors } from "./retry-attempt-errors.js";
 import { generateSecureFraction } from "./secure-random.js";
+import { isStateDatabaseAdmissionClosedError } from "./sqlite-error-diagnostics.js";
 
 export { resolveRetryConfig, type RetryConfig, type RetryInfo, type RetryOptions };
 
@@ -28,6 +29,7 @@ function createRetryFailure(rawAttemptErrors: readonly unknown[]): Error {
 
 /** Runs an async operation until it succeeds, policy stops, or attempts are exhausted. */
 export const retryAsync = createRetryRunner({
+  shouldRetry: (error) => !isStateDatabaseAdmissionClosedError(error),
   random: generateSecureFraction,
   createFailure: createRetryFailure,
 });

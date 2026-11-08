@@ -2,7 +2,7 @@ import type { File as TelegramFile } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as keyedAsyncQueue from "openclaw/plugin-sdk/keyed-async-queue";
 import type { SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { setLoggerOverride, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   holdTelegramMediaTimeouts,
@@ -189,10 +189,6 @@ function expectTelegramIngestHook(messageIds: number[], expectedCalls = 1) {
   );
 }
 
-function setOpenTelegramDirectConfig(mediaMaxMb?: number) {
-  setTelegramConfig({ dmPolicy: "open", allowFrom: ["*"], mediaMaxMb });
-}
-
 const commandEntities = (text: string, offset = 0) => [
   { type: "bot_command", offset, length: text.length - offset },
 ];
@@ -212,11 +208,6 @@ function expectTelegramDownloadWarning(messageId: number, warning?: string, chat
 
 function mediaFile(fileId: string, file_path: string): TelegramFile {
   return { file_id: fileId, file_unique_id: `unique-${fileId}`, file_path };
-}
-
-function expectOversizedDocument(messageId: number, limit: string) {
-  expectTelegramDownloadWarning(messageId, `⚠️ File too large. Maximum size is ${limit}.`);
-  expectUnavailableMediaPayload("document", "", `[media unavailable: file exceeds ${limit} limit]`);
 }
 
 describe("createTelegramBot channel_post media", () => {
@@ -250,7 +241,7 @@ describe("createTelegramBot channel_post media", () => {
   ] as const)(
     "reports and settles %s correctly (#98076)",
     async (_name, messageId, limit, reportedLimit, botApiCap) => {
-      setOpenTelegramDirectConfig(limit);
+      setTelegramConfig({ dmPolicy: "open", allowFrom: ["*"], mediaMaxMb: limit });
       saveRemoteMedia.mockRejectedValue(
         reportedLimit
           ? new MediaFetchError("max_bytes", "payload exceeds maxBytes 10")
@@ -294,9 +285,13 @@ describe("createTelegramBot channel_post media", () => {
       const expectedWarnings = warning ? 1 : 0;
       expect(sendMessageSpy).toHaveBeenCalledTimes(expectedWarnings);
       expect(replySpy).toHaveBeenCalledTimes(expectedWarnings);
-      expect(sendMessageSpy.mock.calls[0]?.[1]).toBe(warning);
       if (reportedLimit) {
-        expectOversizedDocument(messageId, reportedLimit);
+        expectTelegramDownloadWarning(messageId, warning);
+        expectUnavailableMediaPayload(
+          "document",
+          "",
+          `[media unavailable: file exceeds ${reportedLimit} limit]`,
+        );
       }
       if (botApiCap) {
         expect(saveRemoteMedia).not.toHaveBeenCalled();
@@ -465,6 +460,23 @@ describe("createTelegramBot channel_post media", () => {
     expectTelegramDownloadWarning(testCase.messageId, undefined, -100456);
     expect(replySpy).toHaveBeenCalledOnce();
     expectUnavailableMediaPayload("image", "caption" in testCase ? testCase.caption : "");
+  });
+
+  it("prints a failed media save on the console, not only in the log file", async () => {
+    // Container operators read stdout; the file log is often out of reach.
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      setTelegramIngestGroupConfig({ groups: { "*": { requireMention: false } } });
+      saveRemoteMedia.mockRejectedValueOnce(new Error("EINVAL: invalid argument, rename"));
+      await createTelegramBot();
+      await dispatchTelegramGroupPhoto({ messageId: 193172 });
+      await waitForTelegramMockCalls(sendMessageSpy, 1);
+      expectTelegramDownloadWarning(193172, undefined, -100456);
+      expect(consoleWarn.mock.calls.flat().join("\n")).toMatch(/media fetch failed.*EINVAL/su);
+    } finally {
+      setLoggerOverride(null);
+    }
   });
 
   it.each([

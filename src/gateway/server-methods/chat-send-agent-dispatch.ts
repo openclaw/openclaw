@@ -33,7 +33,9 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
+import { recordSessionOperatorSource } from "../session-operator-sources.js";
 import { prepareGatewaySkillLibraryTurn } from "../skill-library-authoring.js";
+import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatDelta } from "./chat-broadcast.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
@@ -43,6 +45,7 @@ import {
   createChatSendDispatchErrorLifecycle,
   resolveChatSendReturnedOutcome,
 } from "./chat-send-dispatch-errors.js";
+import { runChatSendExternalDispatch } from "./chat-send-external-dispatch.js";
 import {
   createChatSendInjectionDisposition,
   finalizeAcceptedChatSendMessageInjection,
@@ -75,11 +78,9 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     skillLibrary,
     cronCreatorAuthority,
     assertDashboardReadCurrent,
-    externalAuthorityAdmission,
     injection,
     request,
     session,
-    terminalizeRestartSafeAdmission,
     turn,
     userTurn,
   } = params;
@@ -92,7 +93,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     gatewayWorkAdmission,
     messageInjectionTarget,
     retainGatewayWorkAdmission,
-    restartSafeAdmission,
   } = admission;
   const { agentId, cfg, clientRunId, expectedLeafEntryId, storePath, selectedAgent, sessionKey } =
     session;
@@ -113,9 +113,8 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     persistBestEffort: persistGatewayUserTurnTranscriptBestEffort,
     recorder: userTurnRecorder,
   } = userTurn;
-  const { beginCapturedMessageInjection, preAckReplyContextPromise, replyContextFieldsPromise } =
-    injection;
-  let { messageInjectionAttempt } = injection;
+  const { beginCapturedMessageInjection, replyContextFieldsPromise } = injection;
+  let messageInjectionAttempt: Awaited<ReturnType<typeof beginCapturedMessageInjection>>;
 
   const titleTurn = createDeferredCore();
 
@@ -167,17 +166,23 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     retainWorkAdmission: retainGatewayWorkAdmission,
     armOperatorRunCancellation: admission.armOperatorRunCancellation,
     retireOperatorRunCancellation: admission.retireOperatorRunCancellation,
+    recordUnstartedFailure: (failure) => dispatchErrorLifecycle.recordUnstartedFailure(failure),
   });
   const injectionDisposition = createChatSendInjectionDisposition(
-    injection.messageInjectionDisposition,
     {
       controllerInput: admission.sourceRef.input,
       operatorAuthority: admission.operatorAuthority,
       turnAdoptionLifecycle: queuedFollowup.lifecycle,
       userTurnTranscriptRecorder: userTurnRecorder,
     },
+    cfg.messages?.queue,
   );
   let acceptedMessageInjection = false;
+  const dispatchDisposition = {
+    isSteered: () => acceptedMessageInjection || queuedFollowup.isSteered(),
+    isEnqueued: queuedFollowup.isEnqueued,
+    isTerminal: queuedFollowup.isTerminal,
+  };
   const dispatchErrorLifecycle = createChatSendDispatchErrorLifecycle({
     admission,
     hasObservedSideEffects: () =>
@@ -190,7 +195,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     isQueuedFollowupEnqueued: () => queuedFollowup.isEnqueued() || queuedFollowup.isTerminal(),
     persistUserTurnTranscript: persistGatewayUserTurnTranscript,
     session,
-    terminalizeRestartSafeAdmission,
     userTurnRecorder,
     isReplyDispatchRun: () => replyDispatchRun !== undefined,
   });
@@ -211,13 +215,40 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
   } = createOperatorChatSendServerTiming(params);
   emitServerTiming("dispatch-started");
   const dispatchAdmission = {
-    run: <T>(operation: () => Promise<T>) =>
-      gatewayWorkAdmission.run(async () => {
+    run: async <T>(operation: () => Promise<T>) => {
+      using admissionWait = diagnostics.scope("detail.dispatch.admission_wait");
+      return await gatewayWorkAdmission.run(async () => {
+        admissionWait?.finish();
+        // Durable input custody owns the ACK. Steering may wait behind an older
+        // queued turn, so only detached dispatch joins that ordered admission.
+        phase?.mark("replyContext");
+        if (replyContextFieldsPromise) {
+          applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
+        }
+        phase?.mark("runAdmission");
+        using injectionPhase = diagnostics.scope("detail.run_admission.steer_prepare");
+        messageInjectionAttempt = await withCurrentUserTurnInput(
+          userTurnRecorder,
+          beginCapturedMessageInjection,
+        );
+        void messageInjectionAttempt?.acceptance.then(
+          (accepted) => {
+            if (accepted) {
+              const change = { sessionKey, agentId, reason: "agent.input.steering" };
+              emitSessionsChanged(context, change, { accessChanged: false });
+            }
+          },
+          () => undefined,
+        );
+        injectionPhase?.mark("detail.run_admission.steer_settlement");
         acceptedMessageInjection = await settleChatSendMessageInjection(messageInjectionAttempt);
+        messageInjectionAttempt = await injectionDisposition.observe(messageInjectionAttempt);
+        injectionPhase?.finish();
         return await (acceptedMessageInjection
           ? operation()
           : withCurrentUserTurnInput(userTurnRecorder, operation));
-      }),
+      });
+    },
   };
   const dashboardReadAdmission = assertDashboardReadCurrent
     ? {
@@ -260,26 +291,14 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
               context,
               session,
             });
+            using promptReadyWait = diagnostics.scope("detail.dispatch.workspace_prompt_ready");
             await workspacePreparation.promptReady;
+            promptReadyWait?.finish();
             workspacePreparation.assertCurrent();
           }
           const assertWorkspaceRunOwnership = workspacePreparation?.assertCurrent;
-          phase?.mark("replyContext");
-          if (
-            replyContextFieldsPromise &&
-            !preAckReplyContextPromise &&
-            !injectionDisposition.isRefused()
-          ) {
-            const replyContextFields = await replyContextFieldsPromise;
-            assertWorkspaceRunOwnership?.();
-            applyChatSendReplyContextFields(ctx, replyContextFields);
-            messageInjectionAttempt = await withCurrentUserTurnInput(
-              userTurnRecorder,
-              beginCapturedMessageInjection,
-            );
-          }
-          messageInjectionAttempt = await injectionDisposition.observe(messageInjectionAttempt);
           if (messageInjectionAttempt) {
+            using _ = diagnostics.scope("detail.run_admission.steer_finalize");
             const injected = await finalizeAcceptedChatSendMessageInjection({
               attempt: messageInjectionAttempt,
               sourceRef: admission.sourceRef,
@@ -322,11 +341,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
             replyDispatchRun = options;
             if (activeRunAbort.markExecutionStarted()) {
               admission.armOperatorRunCancellation();
-              emitSessionsChanged(
-                context,
-                { sessionKey, agentId, reason: "agent.run.started" },
-                { accessChanged: false, rowScope: "runtime" },
-              );
             }
             // A bound runtime can start on a different transcript than the source chat.
             agentRunStarted = true;
@@ -368,8 +382,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   runId: clientRunId,
                   operatorAuthority: admission.operatorAuthority,
                   providerReviewAcknowledgment: request.providerReviewAcknowledgment,
-                  forceRestartSafeTools: request.restartResume?.forceRestartSafeTools,
-                  forceCodeModeTools: request.restartResume?.forceCodeModeTools,
                   dashboardReadAdmission,
                   skillLibraryAuthoring,
                   ...(cronCreatorAuthority
@@ -384,6 +396,14 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                     phase?.mark("preparation");
                     admission.onSessionPrepared(binding);
                     replyDispatch.notePreparedSession(binding);
+                    // A first send creates its entry during preparation, after input dispatch.
+                    void recordSessionOperatorSource({
+                      agentId,
+                      sessionKey,
+                      storePath: binding.storePath ?? storePath,
+                      authority: admission.operatorAuthority,
+                      log: context.logGateway,
+                    });
                   },
                   onTranscriptStartPreparation: () => diagnostics.scope("snapshot")?.finish,
                   abortSignal: activeRunAbort.controller.signal,
@@ -409,12 +429,11 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   fastModeOverride: p.fastMode,
                   queueModeOverride: p.queueMode,
                   userTurnTranscriptRecorder: userTurnRecorder,
-                  ...(injectionDisposition.isRefused()
+                  ...(injectionDisposition.isCollaborationBlocked()
                     ? { messageInjectionDisposition: "collaborative-steering-disabled" as const }
                     : p.queueMode === "steer" && messageInjectionTarget
                       ? { messageInjectionDisposition: "rejected" as const }
                       : {}),
-                  ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                   fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                   onAgentRunStart,
                   onPreparedAgentRunStart: ({
@@ -455,6 +474,8 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   ...getRpcSourceIdentity(admission.sourceRef),
                   ownerConnId: admission.sourceRef.adapter.requester?.connectionId,
                   ownerDeviceId: admission.sourceRef.adapter.requester?.deviceId,
+                  initiatingPersonalOperator:
+                    admission.sourceRef.adapter.initiatingPersonalOperator,
                   controlUiVisible: admission.sourceRef.adapter.controlUiVisible,
                   turnKind: admission.sourceRef.adapter.turnKind,
                 },
@@ -467,14 +488,13 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   ),
                 ),
             );
-          const runDispatch = () =>
-            cronCreatorAuthority && externalAuthorityAdmission
-              ? externalAuthorityAdmission.run(
-                  cronCreatorAuthority,
-                  dispatchWithRetry,
-                  activeRunAbort.controller.signal,
-                )
-              : dispatchWithRetry();
+          const runDispatch = async () => {
+            using handoff = diagnostics.scope("detail.dispatch.external_handoff");
+            return await runChatSendExternalDispatch(params, () => {
+              handoff?.finish();
+              return dispatchWithRetry();
+            });
+          };
           // A ready workspace still needs a fresh scope: internal continuations may retain
           // the previous chat run's preparation even after its ownership has ended.
           const dispatchResult = await runWithAgentWorkspaceReadiness(
@@ -483,7 +503,12 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
               try {
                 return await runDispatch();
               } finally {
-                await workspacePreparation?.waitUntilReady();
+                if (workspacePreparation) {
+                  // Preparation overlaps execution; charge only the remaining readiness wait.
+                  using readinessWait = diagnostics.scope("detail.dispatch.workspace_readiness");
+                  await workspacePreparation.waitUntilReady();
+                  readinessWait?.finish();
+                }
               }
             },
           );
@@ -497,11 +522,10 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           config: cfg,
           attributes: chatSendTraceAttributes,
         },
-      ),
+      ).catch(dispatchErrorLifecycle.captureUnstartedFailure),
     )
     .then(async (dispatchResult) => {
-      diagnostics.finish(queuedFollowup);
-      await dispatchErrorLifecycle.settleRefusal(dispatchResult.collaborativeSteeringRefused);
+      diagnostics.finish(dispatchDisposition);
       if (dispatchResult.deferredToActiveRun === "followup" && queuedFollowup.isEnqueued()) {
         const notices = replyDispatch.deliveredReplies
           .map(({ input }) => readChatSendReplyPayload(input))
@@ -597,6 +621,10 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
             (hasReturnedAgentError && (runtimeFailed || !finalizedSourceReply));
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
             if (hasTerminalAgentError && !dispatchResult.collaborativeSteeringRefused) {
+              await dispatchErrorLifecycle.recordUnstartedFailure({
+                error: returnedAgentErrorMessage ?? "agent returned an error payload",
+                notice: returnedAgentErrorMessage,
+              });
               dispatchErrorLifecycle.broadcastError({
                 errorMessage: returnedAgentErrorMessage,
                 errorKind: runtimeClassification === "timeout" ? "timeout" : undefined,
@@ -662,13 +690,13 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
       );
     })
     .catch((error: unknown) => {
-      diagnostics.finish(queuedFollowup);
+      diagnostics.finish(dispatchDisposition);
       return dispatchErrorLifecycle.handleError(error);
     });
   // Runtime completion must not retire the source before media and reply persistence settle.
   // Keep terminal cleanup outside this receipt because it can join source settlement.
   trackSessionControllerSourceWork(admission.sourceRef.input, dispatch);
-  return (async () => {
+  const completion = (async () => {
     try {
       await dispatch;
     } finally {
@@ -690,4 +718,9 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
       }
     }
   })();
+  // Ordinary chat.send detaches completion; Goal acknowledgments still consume its rejection.
+  void completion.catch((error: unknown) => {
+    context.logGateway.warn(`webchat dispatch settlement failed: ${formatForLog(error)}`);
+  });
+  return completion;
 }

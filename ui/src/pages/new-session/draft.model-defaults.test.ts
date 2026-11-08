@@ -1,6 +1,6 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createTestDraft } from "./draft-controller.test-support.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";

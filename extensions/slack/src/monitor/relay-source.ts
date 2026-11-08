@@ -13,7 +13,12 @@ import {
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { type ClientOptions, type RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import {
+  type ClientOptions,
+  type RawData,
+  startWebSocketKeepalive,
+  WebSocket,
+} from "openclaw/plugin-sdk/websocket-runtime";
 import { formatSlackError } from "../errors.js";
 import type { SlackSendIdentity } from "../send.js";
 import { parseSlackMessageEvent, type SlackMessageEvent } from "../types.js";
@@ -51,11 +56,13 @@ export async function monitorSlackRelaySource(params: {
   setIdentity?: (identity: SlackSendIdentity | undefined) => void;
 }): Promise<void> {
   let reconnectAttempts = 0;
+  let disconnectedAt: number | undefined;
   while (!params.abortSignal?.aborted) {
     let connection: WebSocket | undefined;
     try {
       connection = await openRelayWebSocket(params.config, params.abortSignal);
       reconnectAttempts = 0;
+      disconnectedAt = undefined;
       params.setStatus?.({
         connected: true,
         lastConnectedAt: Date.now(),
@@ -79,7 +86,7 @@ export async function monitorSlackRelaySource(params: {
       params.setStatus?.({
         connected: false,
         lifecycle: "recovering",
-        lastDisconnect: { at: Date.now(), error: formatSlackError(err) },
+        lastDisconnect: { at: (disconnectedAt ??= Date.now()), error: formatSlackError(err) },
         lastError: formatSlackError(err),
       });
       params.runtime.log?.(
@@ -151,7 +158,12 @@ function runRelayWebSocket(params: {
   const ws = params.connection;
   let pending = Promise.resolve();
   return new Promise((resolve, reject) => {
+    const stopKeepalive = startWebSocketKeepalive(ws, () => {
+      ws.terminate();
+      settleReject(new Error("Slack relay websocket heartbeat timed out"));
+    });
     const cleanup = () => {
+      stopKeepalive();
       ws.off("message", onMessage);
       ws.off("error", onError);
       ws.off("close", onClose);

@@ -13,6 +13,7 @@ import {
   suppressOpenAIResponsesCompaction as suppressCompaction,
 } from "./openai-responses-compaction-replay.js";
 import type { OpenAIResponsesCompactionOutput } from "./openai-responses-compaction-window.js";
+import { createReplayState } from "./openai-responses-prompt-observer.test-support.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
 import {
   CompactionReplayRefreshRequiredError,
@@ -52,19 +53,12 @@ function createAssistant(content: AssistantMessage["content"], replayIndex: numb
     usage: createZeroUsage(),
     stopReason: "toolUse",
     timestamp: 0,
-    providerReplay: {
-      v: 1,
+    providerReplay: createReplayState(model, replayIdentity, {
       type: "openai-responses-compaction",
       id: "cmp_replay",
       data: "opaque-replay-compaction",
       replayIndex,
-      provider: replayMetadata.provider,
-      api: replayMetadata.api,
-      model: replayMetadata.model,
-      baseUrlHash: replayMetadata.baseUrlHash,
-      sessionHash: replayMetadata.sessionHash,
-      authProfileHash: replayMetadata.authProfileHash,
-    } satisfies ProviderReplayState,
+    }),
   };
 }
 

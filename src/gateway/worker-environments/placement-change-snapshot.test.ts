@@ -89,19 +89,16 @@ it("coalesces machine metadata bursts off thread and selects only correlated pro
       }
     }
     const environments = await createWorkerEnvironmentStore({ database });
+    for (const id of ["unowned", "stale"]) {
+      expect(
+        readWorkerPlacementIdentity(
+          store.get(id)!,
+          undefined,
+          environments.get(`environment-${id}`),
+        ),
+      ).toBeUndefined();
+    }
     const expected = ["active", "pending", "terminal"];
-    expect(
-      (await store.listAsync())
-        .filter(
-          (row) =>
-            readWorkerPlacementIdentity(
-              row,
-              undefined,
-              row.environmentId ? (environments.get(row.environmentId) ?? null) : null,
-            )?.profileId === "development",
-        )
-        .map((row) => row.sessionId),
-    ).toEqual(expected);
     expect((await store.readChangeSnapshot(["development"])).map((row) => row.sessionId)).toEqual(
       expected,
     );

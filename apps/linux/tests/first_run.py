@@ -201,18 +201,10 @@ def exercise(app, Atspi, GLib, *, remote_only, inline_fixture, binary, gateway_s
     wait("Welcome to OpenClaw", "heading")
     click("Get started")
     click("On this computer", "toggle button", prefix=True)
-    click("Continue")
-    # Keeping missingCli (not unconfigured) is what preserves local installation.
-    wait("Choose a release channel", "heading")
-    click("RELEASE CHANNEL", "combo box")
-    # WebKit exposes native options as menu items or table cells across distros.
-    # Their visible text and selected state express the channel choice directly.
-    wait(
-        "Development",
-        predicate=lambda node: node.get_state_set().contains(Atspi.StateType.SELECTED),
-    )
-    wait("Install OpenClaw", "push button")
-    print("PASS: native first-run remote choices and local development channel", flush=True)
+    # Stop before installation; the dedicated onboarding fixture owns that proof.
+    wait("Install bundled OpenClaw", "push button")
+    wait("Bundled with app v", prefix=True)
+    print("PASS: native first-run remote choices and bundled local installation", flush=True)
 
 
 def interrupted(signum, _frame):

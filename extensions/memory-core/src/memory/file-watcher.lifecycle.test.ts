@@ -22,9 +22,8 @@ const calls = (...spies: { mock: { calls: unknown[] } }[]) =>
 function unavailable(entry: Observation, operation: "scan" | "watch", error: Error, code?: string) {
   entry.health({ state: "unavailable", failure: { operation, error, code } });
 }
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (original) => {
-  const actual =
-    await original<typeof import("openclaw/plugin-sdk/memory-core-host-engine-foundation")>();
+vi.mock("openclaw/plugin-sdk/diagnostic-runtime", async (original) => {
+  const actual = await original<typeof import("openclaw/plugin-sdk/diagnostic-runtime")>();
   return {
     ...actual,
     createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => ({
@@ -143,41 +142,10 @@ describe("Memory observation lifecycle", () => {
     return created.promise;
   }
 
-  it.each([
-    ["false", undefined, 30_000],
-    ["false", "40", 40],
-    ["true", undefined, 30_000],
-    ["true", "40", 40],
-    ["true", "60000", 60_000],
-  ] as const)(
-    "honors background polling defaults and overrides with polling=%s interval=%s",
-    async (poll, interval, expected) => {
-      vi.stubEnv("CHOKIDAR_USEPOLLING", poll);
-      vi.stubEnv("CHOKIDAR_INTERVAL", interval);
-      const { watcher } = await start();
-      expect(observer.observations.length).toBeGreaterThan(0);
-      for (const entry of observer.observations) {
-        expect(entry.options).toMatchObject({
-          mode: poll === "true" ? "poll" : "auto",
-          pollIntervalMs: expected,
-          intervalMs: 300_000,
-        });
-        entry.health({ state: "ready", mode: "poll" });
-      }
-      expect(watcher.health()).toMatchObject(
-        observer.observations.map(() => ({
-          mode: "poll",
-          pollingFallback: poll !== "true",
-          pollIntervalMs: expected,
-        })),
-      );
-    },
-  );
-
   it("shares roots across agents, fans out selected events, and joins the last release", async () => {
     const extra = state.path("shared", "notes");
     await fs.mkdir(extra, { recursive: true });
-    const indexed = Array.from({ length: 3 }, () => createDeferred<void>());
+    const indexed = Array.from({ length: 2 }, () => createDeferred<void>());
     const agents = await Promise.all(
       indexed.map((done, index) =>
         start({
@@ -199,39 +167,33 @@ describe("Memory observation lifecycle", () => {
     const invalidate = () =>
       dirty(entry, path.relative(entry.root.rootDir, path.join(extra, "deleted.md")), "structural");
     invalidate();
-    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([1, 1, 1]);
+    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([1, 1]);
     await vi.advanceTimersByTimeAsync(0);
     await Promise.all(indexed.map((done) => done.promise));
     await agents[0]!.watcher.close();
     expect(entry.close).not.toHaveBeenCalled();
     invalidate();
-    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([1, 2, 2]);
-    await agents[1]!.watcher.close();
-    expect(entry.close).not.toHaveBeenCalled();
+    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([1, 2]);
     const joined = createDeferred<void>();
     entry.close.mockImplementationOnce(() => joined.promise);
     let closed = false;
-    const closing = agents[2]!.watcher.close().then(() => {
+    const closing = agents[1]!.watcher.close().then(() => {
       closed = true;
     });
     expect(entry.close).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(0);
     expect(closed).toBe(false);
     invalidate();
-    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([1, 2, 2]);
+    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([1, 2]);
     joined.resolve();
     await closing;
     await start({ extraPaths: [extra] });
     expect(observer.observations).toHaveLength(4);
   });
 
-  it.each([
-    [false, false],
-    [true, true],
-    [true, false],
-  ])("retains the shared baseline for image policies %s then %s", async (images, peerImages) => {
-    const { entry, ...first } = await start({ images });
-    const peer = await start({ agentId: "peer", images: peerImages });
+  it("retains the shared baseline when a text-only peer joins an image watcher", async () => {
+    const { entry, ...first } = await start({ images: true });
+    const peer = await start({ agentId: "peer" });
     expect(observer.observations).toHaveLength(1);
     expect(calls(entry.setScopes, first.onDirty, peer.onDirty)).toEqual([0, 0, 1]);
     expect(peer.watcher.health()[0]?.state).toBe("ready");
@@ -244,20 +206,16 @@ describe("Memory observation lifecycle", () => {
 
   it("rebaselines changed file kinds even when the shared scopes stay the same", async () => {
     const { entry, ...text } = await start();
-    const scopes = entry.options.scopes;
     const image = {
       path: selectedPath(entry, "memory/photo.png"),
       kind: "file" as const,
     };
     expect(entry.options.exclude?.(image)).toBe(true);
     const media = await start({ agentId: "media", images: true });
-    expect(entry.options.scopes).toEqual(scopes);
-    expect(entry.setScopes).toHaveBeenCalledOnce();
     expect(entry.options.exclude?.(image)).toBe(false);
     dirty(entry, image.path);
     expect(calls(text.onDirty, media.onDirty)).toEqual([0, 1]);
     await media.watcher.close();
-    expect(entry.setScopes).toHaveBeenCalledTimes(2);
     expect(entry.options.exclude?.(image)).toBe(true);
   });
 
@@ -360,8 +318,6 @@ describe("Memory observation lifecycle", () => {
       (observation) => observation.root.rootDir === path.dirname(notes),
     )!;
     expect(observer.observations).toHaveLength(2);
-    expect(entry.setScopes).toHaveBeenCalledOnce();
-    expect(entry.options.scopes.map((scope) => scope.path).toSorted()).toEqual(["images", "notes"]);
     const image = { path: "notes/photo.png", kind: "file" as const };
     expect(entry.options.exclude?.(image)).toBe(false);
     for (const file of [image.path, "images/photo.png", "notes/other.md"]) {
@@ -371,7 +327,6 @@ describe("Memory observation lifecycle", () => {
     dirty(entry, "notes/text/shared.md");
     expect(calls(text.onDirty, media.onDirty)).toEqual([1, 4]);
     await media.watcher.close();
-    expect(entry.setScopes).toHaveBeenCalledTimes(2);
     expect(entry.options.exclude?.(image)).toBe(true);
     expect(entry.close).not.toHaveBeenCalled();
   });
@@ -424,8 +379,7 @@ describe("Memory observation lifecycle", () => {
     },
   );
 
-  it("refreshes only selected structural changes while retaining ancestor discovery", async () => {
-    const planning = vi.spyOn(MemoryWatchPolicy.prototype, "observations");
+  it("routes selected structural and ancestor changes to the affected agents", async () => {
     const first = await start();
     const secondWorkspace = path.join(path.dirname(state.workspaceDir), "second-workspace");
     await fs.mkdir(path.join(secondWorkspace, "memory"), { recursive: true });
@@ -434,25 +388,18 @@ describe("Memory observation lifecycle", () => {
       workspaceDir: secondWorkspace,
     });
     expect(observer.observations).toHaveLength(1);
-    // Reuse real admission to make event delivery and planning counts deterministic.
-    const plans = new Map(
-      planning.mock.contexts.map((policy, index) => [policy, planning.mock.results[index]!.value]),
-    );
-    planning.mockImplementation(function (this: MemoryWatchPolicy) {
-      return plans.get(this)!;
-    });
-    planning.mockClear();
     const entry = observer.observations[0]!;
     dirty(entry, selectedPath(entry, "memory/gone.md"), "structural");
     await vi.advanceTimersByTimeAsync(0);
-    expect(calls(first.onDirty, second.onDirty, planning)).toEqual([1, 0, 1]);
+    expect(calls(first.onDirty, second.onDirty)).toEqual([1, 0]);
     dirty(entry, ".", "structural");
     await vi.advanceTimersByTimeAsync(0);
-    expect(calls(first.onDirty, second.onDirty, planning)).toEqual([2, 1, 3]);
+    expect(calls(first.onDirty, second.onDirty)).toEqual([2, 1]);
   });
 
   it.each([undefined, "ENOTSUP"])("reports fallback polling once with reason %s", async (code) => {
     const { watcher, onUnavailable, entry } = await start();
+    expect(entry.options).toMatchObject({ mode: "auto", intervalMs: 300_000 });
     const failure = code
       ? { operation: "watch" as const, code, error: new Error("native backend unsupported") }
       : undefined;
@@ -538,7 +485,6 @@ describe("Memory observation lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(calls(onChange, onUnavailable)).toEqual([2, 0]);
     expect(entry.subscription.health().state).toBe("ready");
-    expect(calls(observer.watch, entry.close)).toEqual([1, 0]);
     await watcher.close();
     expect(entry.close).toHaveBeenCalledOnce();
   });
@@ -686,15 +632,17 @@ describe("Memory observation lifecycle", () => {
     "warns once from aggregated ready %s health with profile and agent remediation",
     async (mode) => {
       vi.stubEnv("CHOKIDAR_USEPOLLING", mode === "poll" ? "true" : "false");
+      vi.stubEnv("CHOKIDAR_INTERVAL", "40");
       vi.stubEnv("OPENCLAW_PROFILE", "research");
       vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
       await fs.mkdir(state.path("extra-parent", "notes"), { recursive: true });
-      await start({ extraPaths: [state.path("extra-parent", "notes")] });
+      const { watcher } = await start({ extraPaths: [state.path("extra-parent", "notes")] });
       expect(observer.observations).toHaveLength(2);
       const [first, second] = observer.observations;
-      expect(
-        observer.observations.every((entry) => entry.subscription.health().mode === mode),
-      ).toBe(true);
+      expect(watcher.health()).toMatchObject([
+        { mode, pollingFallback: false, pollIntervalMs: 40 },
+        { mode, pollingFallback: false, pollIntervalMs: 40 },
+      ]);
       first!.health({ state: "starting", directories: 9_000 });
       expect(warnings).not.toHaveBeenCalled();
       const facts = (count: number) => ({

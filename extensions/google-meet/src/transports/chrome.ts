@@ -20,7 +20,6 @@ import {
 import type {
   GoogleMeetBrowserTab,
   GoogleMeetChromeHealth,
-  GoogleMeetSession,
   GoogleMeetTranscriptSnapshot,
 } from "./types.js";
 
@@ -142,19 +141,7 @@ export async function recoverCurrentMeetTab(
     trackedTargetId?: string;
     url?: string;
   },
-): Promise<
-  Awaited<
-    ReturnType<
-      typeof recoverMeetingBrowserTab<
-        GoogleMeetSession,
-        GoogleMeetMode,
-        GoogleMeetChromeHealth,
-        GoogleMeetTranscriptSnapshot
-      >
-    >
-  > &
-    ({ transport: "chrome"; nodeId?: undefined } | { transport: "chrome-node"; nodeId: string })
-> {
+) {
   // Recovery deliberately re-resolves the configured node, not the session pin.
   const { callBrowser, ...route } = await resolveChromeBrowserRoute({
     ...params,

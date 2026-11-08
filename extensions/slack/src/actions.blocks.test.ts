@@ -5,10 +5,13 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { slackActionRuntime } from "./action-runtime.js";
 import { createSlackEditTestClient, createSlackSendTestClient } from "./blocks.test-helpers.js";
+import { createSlackActions } from "./channel-actions.js";
 import { slackSetupPlugin } from "./channel.setup.js";
 
-const { editSlackMessage, sendSlackMessage } = await import("./actions.js");
+const { editSlackMessage, editSlackRenderedMessage, sendSlackMessage } =
+  await import("./actions.js");
 type EditOptions = NonNullable<Parameters<typeof editSlackMessage>[3]>;
 const textCell = (text: string) => ({ type: "raw_text", text });
 const revenueRow = (name: string, value: number, text: string) => [
@@ -88,6 +91,60 @@ describe("Slack edits", () => {
       { cfg: { channels: { slack } } },
     );
     expectUpdate("*bold* and <https://example.com|OpenClaw>\n\n" + expected);
+  });
+
+  it.each([
+    {
+      name: "deduplicates represented authored text",
+      text: "x".repeat(3001),
+      authored: "x".repeat(3001),
+    },
+    {
+      name: "preserves native presentation bytes",
+      text: "*Overview* &amp;\n" + "x".repeat(3001),
+      authored: undefined,
+    },
+  ])("$name across the action edit boundary", async ({ text, authored }) => {
+    const originalRuntime = { ...slackActionRuntime };
+    const editWithClient: typeof editSlackMessage = (channelId, messageId, content, opts) =>
+      editSlackMessage(channelId, messageId, content, { ...opts, token: "xoxb-test", client });
+    const editRenderedWithClient: typeof editSlackRenderedMessage = (
+      channelId,
+      messageId,
+      content,
+      opts,
+    ) =>
+      editSlackRenderedMessage(channelId, messageId, content, {
+        ...opts,
+        token: "xoxb-test",
+        client,
+      });
+    Object.assign(slackActionRuntime, {
+      editSlackMessage: editWithClient,
+      editSlackRenderedMessage: editRenderedWithClient,
+      resolveSlackConversationInfo: async () => ({ type: "channel", name: "general" }),
+    });
+    try {
+      const actions = createSlackActions("slack");
+      if (!actions.handleAction) {
+        throw new Error("Slack message actions unavailable");
+      }
+      await actions.handleAction({
+        action: "edit",
+        channel: "slack",
+        cfg: { channels: { slack: { botToken: "xoxb-test" } } },
+        conversationReadOrigin: "direct-operator",
+        params: {
+          channelId: "C123",
+          messageId: "171234.567",
+          message: authored,
+          presentation: { blocks: [{ type: "text", text }] },
+        },
+      });
+      expectUpdate(text);
+    } finally {
+      Object.assign(slackActionRuntime, originalRuntime);
+    }
   });
 
   it.each([

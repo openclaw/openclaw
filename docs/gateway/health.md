@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Health check commands and gateway health monitoring"
 read_when:
   - Diagnosing channel connectivity or gateway health
@@ -29,20 +30,26 @@ status before any new session row is materialized. Use the channel status and
 health commands above for live connectivity checks.
 
 Per-agent session counts and recent activity include only that agent's sessions,
-even when agents share a SQLite session store. Status counts each physical store
+even when agents share a session store. Status counts each physical store
 once in its aggregate. The top-level health session summary represents the
 default agent, or the first configured agent when there is no default; it is not
 a fleet total. A running Gateway serves clean health and status session summaries
 from its resident session-row projection. Store hydration and exact dirty-row
-refreshes retain the existing read-only SQLite fallback.
+refreshes retain the existing read-only store fallback.
 These summaries wait for current selection metadata. Display preparation and
 background model catalog discovery can continue independently, so a large fleet's
 catalog warmup does not hold session counts and recent-activity summaries open.
 Startup prepares selection and database facts for the roster; full display rows
-and optional transcript previews are prepared when a page or session recipient
-first requests them. Those rows stay resident for subsequent reads and refresh
+for up to 100 recent unarchived sessions warm in the background while the remaining
+startup work continues. Connect does not wait for that page, and each client still
+selects and authorizes its current visible rows. Other display rows and optional
+transcript previews are prepared when a page or session recipient first requests
+them. Those rows stay resident for subsequent reads and refresh
 from committed changes. Unrequested rows do not repeat display enrichment when
 the startup model catalog becomes available.
+Cold pages share bounded enrichment batches. Each requested row becomes available
+when its own preparation finishes, with event-loop yields between slices; pages
+do not repeatedly select the roster while their accepted rows are still preparing.
 
 ## Deep diagnostics
 
@@ -55,7 +62,9 @@ preparation clears the degraded status when all runtimes are ready.
 If a newer model-runtime refresh replaces preparation in progress, startup
 follows the admitted replacement through preparation and publication. Cancelling
 the retired acquisition does not stop the Gateway; genuine replacement failures
-still propagate.
+still propagate. A config reload that retires the plugins behind that preparation
+follows the same bounded retry. If replacements outlast those retries, the agent's
+refusal asks for a Gateway restart; it does not require database repair.
 
 Transcript projection repair runs after readiness in yielding worker-backed work.
 Pending GitHub publication recovery runs in the background and does not delay
@@ -71,10 +80,11 @@ When `agents.defaults.authInheritance.agentId` names an owner whose PostgreSQL
 database is still preparing, admitted agents start with their own credentials.
 Inherited credentials become available automatically when the owner's admission
 completes. Failed owner inspections remain visible and do not use this pending
-fallback. The Gateway stays running during preparation; the global saved-input
-recovery gate still holds `/readyz` at `503` with `failing: ["chat-recovery"]`
-until pending agents finish admission and recovery. This keeps fresh chat behind
-saved input for those agents.
+fallback. The Gateway stays running during preparation. After initial recovery,
+admitted agents can chat while a different agent's store is still preparing.
+Each pending agent remains gated until its saved inputs have been replayed into
+the ordered session queue. Its inherited credentials and fresh-chat admission
+become available through the existing preparation completion signal.
 
 Health and status collection groups fast session-store reads into short work
 slices, keeping busy background preparation from delaying every individual read.
@@ -98,6 +108,7 @@ successful-health-response compatibility behavior for those versions.
 - `channels.<provider>.accounts.<accountId>.healthMonitor.enabled`: multi-account override that wins over the channel-level setting.
 - These per-channel overrides apply to the channels that expose them today: Discord, Google Chat, iMessage, IRC, Microsoft Teams, Signal, Slack, Telegram, and WhatsApp.
 - A crashing channel is recovered by its own auto-restart backoff first (`auto-restart attempt N/10` in the logs). The health monitor stays out of the way until that ladder ends with `giving up after 10 restart attempts`, then takes over as the last restart owner.
+- During slow startup, health-monitor recovery waits for the same channel-startup barrier as initial startup; expiry of the 60-second monitor grace does not launch providers early. Stopping a waiting account cancels that start.
 
 ## Inbound ingress health
 
@@ -121,6 +132,39 @@ The Gateway exposes three unauthenticated `GET`/`HEAD` check pairs:
 | `/startup`, `/startupz` | Startup sidecars and agent database inspection/preparation have settled, and the Gateway is not draining. Channel health is not consulted.                                                                        | Startup-phase monitoring and update verification. |
 | `/ready`, `/readyz`     | Startup sidecars and fresh-chat admission are ready, the Gateway is not draining, required agent databases have completed admission without failures, and configured channel accounts pass deep readiness checks. | Traffic admission and operator monitoring.        |
 
+All three check pairs share the Gateway HTTP transport; there is no separate
+always-on check listener. Connection refusal is expected before the initial bind
+and after transport closure. An in-process restart can close and reopen the
+listener while the same PID stays alive; requests racing closure can also reset.
+
+While the listener is available, the normal Control UI document and static app
+assets remain available during core startup or draining. A fresh browser loads
+the real application shell and shows its connection state while waiting for the
+Gateway. Existing conversations keep their mounted route, transcript and draft.
+Authentication failures still use the normal sign-in flow.
+
+When the app assets are unavailable, a self-contained `503` availability page
+retries automatically with bounded request timeouts and backoff. It does not require
+the app bundle or a WebSocket connection. APIs and authenticated dynamic routes
+keep their normal admission and authorization checks. Optional startup sidecars
+do not block the normal UI once core request preparation is ready.
+
+An HTTP document is not a completed WebSocket handshake: the loaded app still owns
+connection recovery and reload-required states. If the document loads but the app
+cannot mount after three recovery navigations, its fallback offers manual reload
+and wait actions. A fresh browser with no cached
+app cannot receive a Gateway page while its listener is fully stopped. An existing
+ingress can provide a retryable HTML error page for that interval; keep API and
+WebSocket handling intact, and do not label an unknown connection failure an update.
+
+Supervisors should combine HTTP checks with process and exit information, allow
+bounded startup/restart grace, and honor the process owner's shutdown budget.
+One refusal or reset during these transitions does not prove a wedged Gateway.
+Choose deployment-specific budgets and investigate persistent unavailability
+after they expire; a living PID does not justify indefinite grace. Use `/readyz`
+and normal admission for traffic; neither `/healthz` `200` nor `/startupz` `200`
+certifies readiness.
+
 The HTTP listener opens before the initial session projection is complete. During
 that build, `/healthz` can return `200`, while `/startupz` and `/readyz` remain
 pending. Other HTTP requests and WebSocket upgrades wait for the complete
@@ -131,6 +175,8 @@ on-demand skill reads still prepare the requested workspace. Readiness
 also waits for the reply and WebSocket connection modules to load, so immediate
 connections and first turns reuse the prepared runtime.
 Update verification still waits for startup completion before checking readiness.
+The later `http server listening` startup summary is not the actual bind
+timestamp.
 
 These probe paths stay at the server root even when `gateway.controlUi.basePath`
 is set. A UI base path such as `/health` does not turn its child routes into
@@ -138,19 +184,32 @@ probes: they still wait for initialization and retain their normal authenticatio
 
 `/startupz` returns `503` with `status: "starting"` while startup sidecars or agent database inspection/preparation are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. After sidecars settle, pending inspection for any agent, including an optional agent, reports `pendingReason: "agent-database-inspection"`. This lets `openclaw update` candidate verification wait within its startup budget before checking readiness. A settled inspection failure does not keep startup pending; readiness and per-agent admission report the failure.
 
-Startup completion lets saved-input recovery run. Until that recovery releases
-fresh `chat.send` admission, `/readyz` returns `503` with
-`failing: ["chat-recovery"]`, and `coreReady` stays false. Gateway ready
-announcements wait for the same admission gate. This preserves saved-input
-ordering without reporting readiness before the first chat can be accepted.
+Startup admits one resume input for each eligible session marked at graceful
+shutdown or retaining a persisted unfinished run from the immediately preceding
+Gateway lifetime with no live owner. Older orphaned runs are settled without
+resuming them. Captured
+queued user messages then use ordinary admission. Fresh chat does not wait behind
+a per-agent recovery predecessor. Database and model/plugin preparation still
+gate their own consumers.
 
-A default or system agent database with pending startup inspection/preparation or a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending`. The HTTP listener, Control UI, and admitted agents remain available while readiness is false; pending optional agents do not hold readiness. Readiness waits for saved-input and subagent recovery to release fresh-chat admission, but does not wait for transcript maintenance. Agent-scoped `sessions.list`, plus `sessions.resolve`, `sessions.describe`, and `models.list`, wait up to 20 seconds for their selected agents to finish startup preparation, then recheck request authorization before reading. Requests targeting healthy agents proceed independently. Unscoped session lists continue returning admitted agents while other stores prepare. Writes still require completed admission. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
+A default or system agent database with pending startup inspection/preparation or a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending`. The HTTP listener, Control UI, and admitted agents remain available while readiness is false; pending optional agents do not hold readiness. Readiness does not wait for transcript maintenance or resumed agent work to finish. Agent-scoped `sessions.list`, plus `sessions.resolve`, `sessions.describe`, and `models.list`, wait up to 20 seconds for their selected agents to finish startup preparation, then recheck request authorization before reading. Requests targeting healthy agents proceed independently. Unscoped session lists continue returning admitted agents while other stores prepare. Writes still require completed admission. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
+
+Agents whose admission is closed by deletion appear separately in `agentDeletions`
+with code `agent-deletion`. Pending or completed deletion does not fail `ready` or
+`coreReady`, including after the agent is removed from configuration. Ordinary
+requests remain refused; pending cleanup follows the deletion journal.
 
 If a newer model-runtime publication supersedes deferred agent preparation, admission
 waits for that publication once, then retries preparation against current configuration
 and secrets. Recovery uses the existing four-attempt startup publication budget without
 reopening or migrating the database again. A failed publication or exhausted budget
 keeps the agent unavailable and records its reason and repair hint in readiness.
+
+Temporary SQLite worker-capacity refusals during an agent's database open share
+the existing four-attempt startup lock-retry budget. Releasing capacity can let
+that agent recover without restarting the Gateway. Persistent pressure or a
+non-retryable database failure still leaves it unavailable; opening retries do
+not replay migration or publication.
 
 If Node.js is upgraded or removed while the Gateway is running, its retained
 runtime may stop launching child workers even though the Gateway process is
@@ -193,7 +252,14 @@ for ordinary service start and traffic admission.
 
 Disabled, unconfigured, and ordinarily unlinked accounts do not fail channel readiness. An enabled, configured account with a recorded terminal disconnect, blocked lifecycle, or unavailable ingress still fails its health check even if it becomes unlinked. For example, a terminal WhatsApp logout makes `/readyz` return `503` with `failing: ["whatsapp"]` in detailed responses. Terminal disconnects and blocked accounts require operator action; the health monitor does not restart them.
 
+Unexpected channel exits use automatic restart backoff. Intentional stops cancel a pending retry; failed restart waits leave a stopped account with `restartPending: false` and the failure recorded in `lastError`.
+
 Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
+
+Proxies listed in `gateway.trustedProxies` can request aggregate readiness and
+startup checks without forwarded client headers. Diagnostic details still require
+client attribution and authorization. Proxy attribution remains required for
+non-probe routes; untrusted proxy sources do not receive this exception.
 
 ### Shared-state integrity failure
 
@@ -253,7 +319,10 @@ its CPU and delay readings. If the sampler resets, health responses omit
 The optional `cpuBreakdown` separates independent native counters:
 
 - `hostUtilization` is the busy fraction of the host CPU time reported by
-  `os.cpus()`, from `0` to `1` across `hostCpuCount` logical CPUs. This includes
+  the aggregate `/proc/stat` counters on Linux and `os.cpus()` elsewhere, from
+  `0` to `1` across `hostCpuCount` online logical CPUs. Linux counts user, nice,
+  system, idle, and hard IRQ time, matching `os.cpus()`; iowait, softirq, and
+  steal are excluded, and guest time is not counted twice. This includes
   other processes and is not the Gateway's CPU quota or container allowance.
 - `mainThreadCoreRatio` measures the Gateway main thread with
   `process.threadCpuUsage()`, not event-loop utilization.
@@ -292,16 +361,28 @@ not identify the thread consuming CPU or prove a main-thread hang. Inspect the
 delay measurements alongside CPU pressure. The `eventLoop` diagnostic does not
 change the readiness result by itself.
 
-Main-thread callbacks longer than one second produce a `main-thread stall` log
-with a code-owned task label where available. On Node 26, a bounded CPU flight
+Instrumented synchronous work lasting at least 250 ms and unattributed event-loop
+gaps longer than one second produce a `main-thread stall` log with a code-owned
+task label where available. Native launches through the process and command
+runners and PTY helper have fixed task labels; these measure
+the synchronous launch, not the child's running time. During active event-loop
+sampling on Node, Promise continuations retain their inherited code-owned task
+labels; their synchronous execution is measured without charging time awaiting I/O.
+On Node 26, a bounded CPU flight
 recorder writes one additional bounded `main-thread stall profile` line with a
-trailing window's top inclusive frames, sample count, and truncation status.
-Several callbacks can finish before a sample, so this window is not assigned to
-an individual task. It samples every 10 ms and rotates five-second windows without
+stall interval's top inclusive frames, sample count, and truncation status.
+Several stalls can finish before reporting; only the longest interval is profiled.
+It samples every 25 ms and rotates five-second windows without
 stopping the sampler. At most two windows are retained; no profile files are
 written. Symbols and locations use the same redaction policy as on-demand
 diagnostic profiles. Inclusive counts overlap when a sampled stack contains
 several listed frames; they are not independent durations.
+The `deepest` stacks preserve the sampled leaf and nearest available OpenClaw
+caller, including across dependency frames. `[...]` marks omitted intermediate
+frames. If a continuation has no recorded OpenClaw frame, its captured task
+appears as `[async task:...]`, distinct from a sampled call frame. Unnamed work
+remains unattributed. Lower-ranked entries are dropped first to keep each report within 2 KiB;
+`reportTruncated=true` identifies this log-size trimming.
 
 The recorder skips Bun, Node 24 (which lacks the bounded coarse-sampling API),
 and processes already started with conflicting profiling, tracing, or debugger
@@ -309,6 +390,39 @@ options. Callback labels still work on those runtimes. Native blocking work can
 remain unsymbolized, and an unusually long stall can exhaust the sample cap;
 `truncated=true` identifies incomplete evidence. Recorder failures are logged
 once and disable recording for that monitor's lifetime.
+
+`samples=0` means neither retained profile contains a timestamped sample in that
+stall interval. It does not prove the entire process stopped or identify the
+blocking operation. For example, Linux libuv blocks the sampling signal on the
+calling thread around `fork()`, including allocator fork hooks. The synchronous
+task labels remain available during such sampling gaps.
+
+On Linux, the recorder also watches a shared main-thread heartbeat from a worker.
+After one second without a heartbeat it asynchronously reads the main thread's
+`/proc/self/task/<pid>` state, wait channel, syscall number, kernel stack (when
+permitted), I/O counters, and scheduler counters. It takes at most three snapshots,
+one second apart, while the stall is still ongoing. The `kernel` field on the
+same profile line contains only snapshots inside the reported stall interval.
+No syscall arguments, memory addresses, or user data are recorded. Other
+platforms skip procfs sampling; no configuration is needed.
+
+`state=D` with `folio_wait` or `filemap_fault` in `wchan`/`stack` points to page
+or file-backed waits; `compact_zone` or `try_to_compact_pages` points to compaction.
+Writeback/fsync symbols and the architecture-specific `syscall` number distinguish
+write waits; futex symbols identify a lock or `Atomics.wait`. `state=R` means
+runnable, including currently running: compare `sched` (CPU runtime and run-queue
+wait, in nanoseconds) across snapshots before concluding scheduling starvation.
+These observations narrow the cause; they do not prove why a page or lock was needed.
+
+Snapshot `at` is milliseconds from the stall start. Counter arrays follow procfs
+order: `io` is rchar, wchar, syscr, syscw, read_bytes, write_bytes,
+cancelled_write_bytes; `ctxt` is voluntary/nonvoluntary switches from process
+status; `rssKb` is VmRSS. `psi` contains system-wide I/O, memory, and CPU pressure,
+each as some/full cumulative microseconds. Permission errors appear as `?EACCES`
+or `?EPERM`; unavailable counter arrays are empty. Snapshots are best-effort,
+non-atomic reads: delayed observer scheduling or I/O may miss a stall entirely.
+Counter and stack fields may be omitted to keep kernel evidence within 1,400 bytes
+and the complete profile within 2 KiB; state, wait channel, and syscall remain.
 
 ## Uptime monitoring
 
@@ -358,6 +472,10 @@ session-store summary, and check duration. Live checks use bounded account concu
 and a Gateway-owned deadline, so one slow account returns a structured timeout while
 completed sibling results remain available. The command exits non-zero if the gateway is
 unreachable or the Gateway call itself times out.
+
+Cron heartbeat summaries reuse the running scheduler's last successful read until
+jobs or configuration change. Failed reads are retried on the next refresh. Before
+the scheduler loads, health reads the selected cron store directly.
 
 ### Queue warnings
 

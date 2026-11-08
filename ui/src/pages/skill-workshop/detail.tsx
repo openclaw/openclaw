@@ -1,12 +1,13 @@
 import type { SkillWorkshopChange } from "@openclaw/gateway-protocol";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { SettingsEmpty, SettingsStatus } from "../../components/solid/settings-ui.tsx";
-import { visitTextDiff } from "../../lib/chat/tool-call-diff.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { visitTextDiff } from "../../lib/text-diff.ts";
 import { undoMutationFor } from "./api.ts";
 import {
   MutationButton,
@@ -115,12 +116,12 @@ export function Detail(props: { view: WorkshopView; reads: WorkshopReads }) {
       {!skill() ? (
         <div class="sw-notice">{t("skillWorkshop.viewer.archivedNotice")}</div>
       ) : unused() !== null ? (
-        <div class="sw-notice sw-notice--warning">
+        <InlineAlert tone="warning" class="sw-detail-alert">
           {t("skillWorkshop.unused.notice", {
             days: String(unused()),
             limit: String(UNUSED_ARCHIVE_DAYS),
           })}
-        </div>
+        </InlineAlert>
       ) : null}
       <nav class="sw-tabs" aria-label={t("skillWorkshop.tabs.aria")}>
         <For each={tabs()} keyed={(tab) => tab.value}>
@@ -155,7 +156,7 @@ export function Detail(props: { view: WorkshopView; reads: WorkshopReads }) {
   );
 }
 
-function LoadState(props: { error?: unknown }) {
+export function LoadState(props: { error?: unknown }) {
   return (
     <>
       {props.error !== undefined ? (
@@ -231,7 +232,12 @@ function Instructions(props: { view: WorkshopView; reads: WorkshopReads }) {
                   </div>
                 )}
                 {viewer().current !== undefined ? (
-                  <Diff current={viewer().current!} version={viewer().result.content} />
+                  <Diff
+                    before={viewer().result.content}
+                    after={viewer().current!}
+                    beforeLabel={t("skillWorkshop.viewer.diffVersion")}
+                    afterLabel={t("skillWorkshop.viewer.diffCurrent")}
+                  />
                 ) : (
                   <MarkdownHtml
                     class="sw-markdown chat-text"
@@ -440,23 +446,33 @@ function History(props: { view: WorkshopView }) {
   );
 }
 
-function Diff(props: { current: string; version: string }) {
-  const lines = createMemo(() => diffLines(props.version, props.current));
+/** Line diff from `before` to `after`; falls back to rendering `before` when they match. */
+export function Diff(props: {
+  before: string;
+  after: string;
+  beforeLabel: string;
+  afterLabel: string;
+  sameText?: string;
+  tooLargeText?: string;
+  /** Which side to show when there is no line diff; `before` unless set. */
+  fallbackSide?: "before" | "after";
+}) {
+  const lines = createMemo(() => diffLines(props.before, props.after));
   return (
     <Show
       when={lines() && !lines()!.every((line) => line.kind === "same")}
       fallback={
         <>
           <p class="sw-diff__same">
-            {t(
-              lines() === null
-                ? "skillWorkshop.viewer.diffTooLarge"
-                : "skillWorkshop.viewer.noDiff",
-            )}
+            {lines() === null
+              ? (props.tooLargeText ?? t("skillWorkshop.viewer.diffTooLarge"))
+              : (props.sameText ?? t("skillWorkshop.viewer.noDiff"))}
           </p>
           <MarkdownHtml
             class="sw-markdown chat-text"
-            markdown={splitFrontmatter(props.version).body}
+            markdown={
+              splitFrontmatter(props.fallbackSide === "after" ? props.after : props.before).body
+            }
             options={{ mode: "document" }}
           />
         </>
@@ -464,12 +480,8 @@ function Diff(props: { current: string; version: string }) {
     >
       <div class="sw-diff">
         <div class="sw-diff__legend">
-          <span class="sw-diff__key sw-diff__key--remove">
-            {t("skillWorkshop.viewer.diffVersion")}
-          </span>
-          <span class="sw-diff__key sw-diff__key--add">
-            {t("skillWorkshop.viewer.diffCurrent")}
-          </span>
+          <span class="sw-diff__key sw-diff__key--remove">{props.beforeLabel}</span>
+          <span class="sw-diff__key sw-diff__key--add">{props.afterLabel}</span>
         </div>
         <div class="sw-diff__lines" role="table">
           <For each={lines() ?? []}>
@@ -488,7 +500,7 @@ function Diff(props: { current: string; version: string }) {
   );
 }
 /** SKILL.md frontmatter is shown as the header; the body renders as markdown. */
-function splitFrontmatter(content: string): { description?: string; body: string } {
+export function splitFrontmatter(content: string): { description?: string; body: string } {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(content);
   if (!match) {
     return { body: content };

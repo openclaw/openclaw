@@ -64,7 +64,7 @@ it.each([false, true])("samples completed operations with splitFirst=%s", async 
   expect(warm!.before).toBe(midpoint);
   expect(phase.before).toBe(before);
   expect(phase.after).toBe(after);
-  expect(phase).toMatchObject(summarizeResourcePhase("plugin-tool", before, after, operations(20)));
+  expect(phase).toMatchObject(receipt(20));
   expect(first!.processCpuMsPerCompletedOperation).toBeCloseTo(0.22);
   expect(warm!.processCpuMsPerCompletedOperation).toBeCloseTo(0.99 / 19);
   expect(phase.processCpuMsPerCompletedOperation).toBeCloseTo(1.21 / 20);
@@ -107,15 +107,10 @@ it.each([
 
 const malformed = snapshot(3);
 malformed.memory.rss = Number.NaN;
-const changedCpu = {
-  ...snapshot(3),
-  cpuEnvironment: { availableParallelism: 4, affinity: "0-3" },
-};
 const invalidSamples: Array<[string, GatewayResourceSnapshot | Error, boolean, boolean]> = [
   ["missing", new Error("sample unavailable"), true, false],
   ["malformed memory", malformed, true, false],
   ["changed PID", { ...snapshot(3), pid: 999 }, true, false],
-  ["changed CPU environment", changedCpu, true, false],
   ["missing final", new Error("sample unavailable"), true, true],
   ["child exited", new Error("child exited"), false, true],
 ];

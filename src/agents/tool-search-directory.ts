@@ -15,10 +15,12 @@ import {
   TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type CatalogVisibilityOptions,
-  type ToolSearchCatalogEntry,
-  type ToolSearchCatalogRef,
   type ToolSearchMode,
-  type ToolSearchToolContext,
+} from "./tool-search-protocol.js";
+import type {
+  ToolSearchCatalogEntry,
+  ToolSearchCatalogRef,
+  ToolSearchToolContext,
 } from "./tool-search-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -45,6 +47,7 @@ export function applyToolSchemaDirectoryCatalog(params: {
   return applyToolCatalogCompaction({
     ...params,
     enabled: config.enabled,
+    selection: config,
     isVisibleControlTool: (tool) => TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(tool.name),
     // The unique-name gate defers any cross-source name collision before the
     // shared trust check runs.
@@ -111,7 +114,9 @@ export function resolveToolSearchCatalogTool(
     return undefined;
   }
   const matches = visibleCatalogEntries(catalog, options).filter((entry) => entry.name === needle);
-  return matches.length === 1 ? (matches[0]?.tool as AnyAgentTool | undefined) : undefined;
+  return matches.length === 1 && !matches[0]?.requiresExactId
+    ? (matches[0]?.tool as AnyAgentTool | undefined)
+    : undefined;
 }
 
 function compactDirectoryDescription(description: string, maxChars: number): string {
@@ -176,7 +181,7 @@ function formatToolSearchCatalogDirectory(
   }
   // Count collisions before excluding native tools: their lookalikes remain ambiguous.
   const listedEntries = deferredEntries
-    .filter((entry) => nameCounts.get(entry.name) === 1)
+    .filter((entry) => !entry.requiresExactId && nameCounts.get(entry.name) === 1)
     .toSorted(
       (left, right) =>
         (left.name < right.name ? -1 : left.name > right.name ? 1 : 0) ||
@@ -193,7 +198,8 @@ function formatToolSearchCatalogDirectory(
   const omittedLabel = " additional tools omitted. ";
   // Each line includes its newline; three fixed separators remain outside the rows.
   let lineChars = lines.reduce((chars, line) => chars + line.length + 1, 0);
-  let omitted = deferredEntries.length - lines.length;
+  let omitted =
+    deferredEntries.filter((entry) => entry.source === "openclaw").length - lines.length;
   let guidance: string;
   for (;;) {
     guidance =

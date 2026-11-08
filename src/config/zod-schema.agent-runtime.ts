@@ -220,8 +220,12 @@ function createAllowAlsoAllowConflictValidator(message: string) {
   };
 }
 
+const ExecModeSchema = z.enum(["deny", "allowlist", "ask", "auto", "full"]);
+
 const ToolPolicyWithProfileSchema = ToolPolicyBaseSchema.extend({
   profile: ToolProfileSchema,
+  /** Exec ceiling for turns on this provider/model; it can tighten, never loosen. */
+  exec: z.strictObject({ mode: ExecModeSchema.optional() }).optional(),
 }).superRefine(
   createAllowAlsoAllowConflictValidator(
     "tools.byProvider policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
@@ -239,7 +243,7 @@ const ToolExecApplyPatchSchema = z
     enabled: z.boolean().optional(),
     /**
      * Restrict apply_patch paths to the workspace directory.
-     * Default: true (safer; does not affect read/write/edit).
+     * Default: false on the host; explicit containment and required roots still apply.
      */
     workspaceOnly: z.boolean().optional(),
     /**
@@ -261,7 +265,7 @@ const ToolExecBaseShape = {
   /** Exec host routing (default: auto). */
   host: z.enum(["auto", "sandbox", "gateway", "node"]).optional(),
   /** Normalized exec policy mode. Prefer this over raw security/ask knobs. */
-  mode: z.enum(["deny", "allowlist", "ask", "auto", "full"]).optional(),
+  mode: ExecModeSchema.optional(),
   /** Legacy exec security mode retained when no canonical mode can preserve policy. */
   security: z.enum(["deny", "allowlist", "full"]).optional(),
   /** Legacy exec ask mode retained when no canonical mode can preserve policy. */
@@ -367,6 +371,15 @@ const ToolLoopDetectionSchema = z
   })
   .optional();
 
+const ToolSearchSelectorSchema = z
+  .strictObject({
+    source: z.enum(["openclaw", "mcp", "client"]).optional(),
+    name: z.string().trim().min(1).optional(),
+  })
+  .refine((selector) => selector.source !== undefined || selector.name !== undefined, {
+    message: "Tool Search selectors must specify source, name, or both.",
+  });
+
 const ToolSearchSchema = z
   .union([
     z.boolean(),
@@ -375,6 +388,10 @@ const ToolSearchSchema = z
       enabled: z.boolean().optional(),
       /** Exposed model surface. "tools" exposes structured search/describe/call tools; "directory" keeps a bounded directory plus selected schemas visible while deferring the rest behind search/describe/call. */
       mode: z.enum(["tools", "directory"]).optional(),
+      /** Presentation only: omitted includes all eligible tools; [] includes none. */
+      include: z.array(ToolSearchSelectorSchema).optional(),
+      /** Matching tools remain directly visible. Exclusion wins over inclusion. */
+      exclude: z.array(ToolSearchSelectorSchema).optional(),
       /** Default search result count when the model omits a limit. Runtime clamps to maxSearchLimit. */
       searchDefaultLimit: z.number().int().positive().optional(),
       /** Maximum search result count. Runtime clamps to 1..50. */
