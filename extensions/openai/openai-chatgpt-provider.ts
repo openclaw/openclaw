@@ -266,7 +266,9 @@ function resolveCodexForwardCompatModel(
   } else if (
     ctx.agentRuntimeId === "codex" &&
     ctx.authProfileId === undefined &&
-    ctx.authProfileMode === undefined &&
+    (ctx.authProfileMode === undefined ||
+      ctx.authProfileMode === "oauth" ||
+      ctx.authProfileMode === "token") &&
     ctx.providerConfig?.auth === undefined
   ) {
     // Codex owns its account-scoped model catalog. When that catalog is not yet

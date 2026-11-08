@@ -1016,43 +1016,68 @@ describe("buildOpenAIProvider", () => {
     ).toEqual({ effort: "high", transport: "sse" });
   });
 
-  it("delegates an unlisted first-party model to its explicitly selected Codex runtime", () => {
-    const provider = buildOpenAIProvider();
-    const model = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "gpt-future",
-      modelRegistry: { find: () => null },
-      agentRuntimeId: "codex",
-    } as never);
+  it.each([undefined, "oauth", "token"] as const)(
+    "delegates an unlisted first-party model to its explicitly selected Codex runtime when authProfileMode is %s",
+    (authProfileMode) => {
+      const provider = buildOpenAIProvider();
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-future",
+        modelRegistry: { find: () => null },
+        agentRuntimeId: "codex",
+        authProfileMode,
+      } as never);
 
-    expect(model).toMatchObject({
-      provider: "openai",
-      id: "gpt-future",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
-    });
-    expect(
-      provider
-        .resolveThinkingProfile?.({
+      expect(model).toMatchObject({
+        provider: "openai",
+        id: "gpt-future",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      });
+      expect(
+        provider
+          .resolveThinkingProfile?.({
+            provider: "openai",
+            modelId: "gpt-future",
+            agentRuntime: "codex",
+            api: model?.api,
+            compat: model?.compat,
+          } as never)
+          ?.levels.map((level) => level.id),
+      ).toContain("max");
+      expect(
+        provider
+          .resolveThinkingProfile?.({
+            provider: "openai",
+            modelId: "gpt-future",
+            agentRuntime: "codex",
+          } as never)
+          ?.levels.map((level) => level.id),
+      ).toEqual(expect.arrayContaining(["xhigh", "max"]));
+    },
+  );
+
+  it.each([
+    { authProfileMode: "api_key", authProfileId: undefined },
+    { authProfileMode: "oauth", authProfileId: "openai:selected" },
+  ] as const)(
+    "does not extend native model forwarding for $authProfileMode when authProfileId is $authProfileId",
+    ({ authProfileMode, authProfileId }) => {
+      const provider = buildOpenAIProvider();
+
+      expect(
+        provider.resolveDynamicModel?.({
           provider: "openai",
           modelId: "gpt-future",
-          agentRuntime: "codex",
-          api: model?.api,
-          compat: model?.compat,
-        } as never)
-        ?.levels.map((level) => level.id),
-    ).toContain("max");
-    expect(
-      provider
-        .resolveThinkingProfile?.({
-          provider: "openai",
-          modelId: "gpt-future",
-          agentRuntime: "codex",
-        } as never)
-        ?.levels.map((level) => level.id),
-    ).toEqual(expect.arrayContaining(["xhigh", "max"]));
-  });
+          modelRegistry: { find: () => null },
+          agentRuntimeId: "codex",
+          authProfileMode,
+          authProfileId,
+        } as never),
+      ).toBeUndefined();
+    },
+  );
 
   it("does not invent an unlisted model for authored Platform credentials", () => {
     const provider = buildOpenAIProvider();
@@ -1082,75 +1107,6 @@ describe("buildOpenAIProvider", () => {
         } as never)
         ?.levels.map((level) => level.id),
     ).not.toContain("max");
-  });
-
-  it("restores gpt-5.3-codex-spark only through ChatGPT/Codex OAuth routing", () => {
-    const provider = buildOpenAIProvider();
-
-    const oauthModel = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "gpt-5.3-codex-spark",
-      modelRegistry: { find: () => null },
-      authProfileId: "openai:work",
-      authProfileMode: "oauth",
-    } as never);
-    const apiKeyModel = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "gpt-5.3-codex-spark",
-      modelRegistry: { find: () => null },
-      providerConfig: {
-        auth: "api-key",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      },
-    } as never);
-    const runtimeModel = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "gpt-5.3-codex-spark",
-      modelRegistry: { find: () => null },
-      agentRuntimeId: "codex",
-    } as never);
-    const apiKeyRuntimeModel = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "gpt-5.3-codex-spark",
-      modelRegistry: { find: () => null },
-      agentRuntimeId: "codex",
-      authProfileId: "openai:api-key",
-      authProfileMode: "api_key",
-      providerConfig: {
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      },
-    } as never);
-    const unknownModelHint = provider.buildUnknownModelHint?.({
-      provider: "openai",
-      modelId: "gpt-5.3-codex-spark",
-    } as never);
-
-    expectFields(oauthModel, {
-      provider: "openai",
-      id: "gpt-5.3-codex-spark",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      input: ["text"],
-      contextWindow: 128_000,
-      contextTokens: 128_000,
-      maxTokens: 128_000,
-    });
-    expectFields(runtimeModel, {
-      provider: "openai",
-      id: "gpt-5.3-codex-spark",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      input: ["text"],
-      contextWindow: 128_000,
-      contextTokens: 128_000,
-      maxTokens: 128_000,
-    });
-    expect(apiKeyModel).toBeUndefined();
-    expect(apiKeyRuntimeModel).toBeUndefined();
-    expect(unknownModelHint).toContain("ChatGPT/Codex OAuth");
-    expect(unknownModelHint).toContain("OpenAI API-key auth cannot use this model");
   });
 
   it("passes the selected runtime into GPT-5.6 thinking policy", () => {
