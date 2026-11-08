@@ -1,2 +1,2 @@
-# Rendered agent/reconnect readiness and forced auth-before-catalog ordering.
-174
+# Rendered readiness, auth-before-catalog ordering, and publication warning recovery.
+207

@@ -250,6 +250,22 @@ export class ModelProviderCoreLoader {
         ...(target || reason === "forced" ? { refresh: true } : {}),
         signal: request.signal,
       });
+      if (reason === "publication") {
+        // Keep known rows and their actionable warning until background reconciliation settles.
+        const refreshed = {
+          ...EMPTY_MODEL_PROVIDERS_DATA,
+          ...(await read.auth),
+          ...(await read.catalog),
+        };
+        if (this.request === request) {
+          this.active = false;
+          this.resetCatalog();
+          const data = target ? mergeConnectedProviderData(refreshed, target) : refreshed;
+          this.retryProvider = target && data.error ? target.providerId : undefined;
+          this.options.onComplete({ client, data });
+        }
+        return;
+      }
       const refreshed = { ...EMPTY_MODEL_PROVIDERS_DATA, ...(await read.auth) };
       if (this.request === request) {
         // A page refresh takes over any picker retry started while auth waited.
