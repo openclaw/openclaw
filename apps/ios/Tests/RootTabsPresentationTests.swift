@@ -191,6 +191,22 @@ struct RootTabsPresentationTests {
         #expect(snapshot.sessions.count == 200)
         #expect(snapshot.totalCount == 350)
         #expect(!snapshot.isComplete)
+        #expect(snapshot.incompleteLoadMessage == "Showing 200 sessions; 350 total. Refresh to load the rest.")
+    }
+
+    @Test func `incomplete-load notice stays silent for complete and cached rosters`() {
+        let rows = [Self.sessionEntry(key: "one")]
+        let complete = ChatSessionRosterSnapshot(
+            sessions: rows,
+            isCached: false,
+            totalCount: 1,
+            isComplete: true)
+        let cached = ChatSessionRosterSnapshot(sessions: rows, isCached: true, isComplete: false)
+        let unknownTotal = ChatSessionRosterSnapshot(sessions: rows, isCached: false, isComplete: false)
+
+        #expect(complete.incompleteLoadMessage == nil)
+        #expect(cached.incompleteLoadMessage == nil)
+        #expect(unknownTotal.incompleteLoadMessage == "Some sessions could not be loaded. Refresh to try again.")
     }
 
     @Test func `session roster rejects a nonadvancing gateway cursor without losing rows`() async throws {
