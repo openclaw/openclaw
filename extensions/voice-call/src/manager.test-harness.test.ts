@@ -1,6 +1,5 @@
-import { AsyncLocalStorage, createHook } from "node:async_hooks";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
-import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -29,36 +28,44 @@ it("finalizes fixture calls and releases their timers, database workers, and dir
   const ownership = new AsyncLocalStorage<"duration" | "transcript">();
   const transcriptAllocated = createDeferred<void>();
   const timerMs = { duration: 317_000, transcript: 43_100 };
-  const timerDelay = new AsyncLocalStorage<number | undefined>();
-  const schedule = globalThis.setTimeout;
-  const scheduling = vi
-    .spyOn(globalThis, "setTimeout")
-    .mockImplementation((callback, delay, ...args) =>
-      timerDelay.run(delay, () => schedule(callback, delay, ...args)),
-    );
   const allocated = { duration: 0, transcript: 0 };
   const workerBaseline = fixtureWorkerCounts();
-  const pending = new Map<number, "duration" | "transcript" | "database-timer">();
-  const observer = createHook({
-    init(id, type) {
+  const pending = new Map<
+    Parameters<typeof clearTimeout>[0],
+    "duration" | "transcript" | "database-timer"
+  >();
+  const schedule = globalThis.setTimeout;
+  const cancel = globalThis.clearTimeout;
+  const scheduling = vi
+    .spyOn(globalThis, "setTimeout")
+    .mockImplementation((callback, delay, ...args) => {
+      const timer = schedule(
+        function (this: unknown, ...callbackArgs: unknown[]) {
+          pending.delete(timer);
+          Reflect.apply(callback, this, callbackArgs);
+        },
+        delay,
+        ...args,
+      );
       const owner = ownership.getStore();
-      if (type === "Timeout" && owner) {
+      if (owner) {
         // Database idle timers inherit caller context but are not call timers.
-        if (timerDelay.getStore() === timerMs[owner]) {
+        if (delay === timerMs[owner]) {
           allocated[owner]++;
-          pending.set(id, owner);
+          pending.set(timer, owner);
           if (owner === "transcript") {
             transcriptAllocated.resolve();
           }
         } else {
-          pending.set(id, "database-timer");
+          pending.set(timer, "database-timer");
         }
       }
-    },
-    destroy(id) {
-      pending.delete(id);
-    },
-  }).enable();
+      return timer;
+    });
+  const cancelling = vi.spyOn(globalThis, "clearTimeout").mockImplementation((timer) => {
+    cancel(timer);
+    pending.delete(timer);
+  });
   const fixtures: Array<Awaited<ReturnType<typeof createManagerHarness>>> = [];
   const calls: CallRecord[] = [];
   let turn: ReturnType<(typeof fixtures)[number]["manager"]["continueCall"]> | undefined;
@@ -66,9 +73,8 @@ it("finalizes fixture calls and releases their timers, database workers, and dir
 
   // LIFO: verification follows fixture teardown; recovery and observers retire last.
   onTestFinished(() => {
-    observer.disable();
     scheduling.mockRestore();
-    timerDelay.disable();
+    cancelling.mockRestore();
     ownership.disable();
   });
   onTestFinished(async () => {
@@ -85,7 +91,6 @@ it("finalizes fixture calls and releases their timers, database workers, and dir
     }
   });
   onTestFinished(async () => {
-    await setImmediate(); // Node delivers timer destroy events on the next loop.
     expect(allocated).toEqual({ duration: 2, transcript: 1 });
     const workers = fixtureWorkerCounts();
     for (const script of fixtureWorkerScripts) {
