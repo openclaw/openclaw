@@ -235,6 +235,7 @@ async function withGitRefAdmission<
             ),
             windowsEncoding: resolveWindowsConsoleEncoding(),
           });
+    commonDir = gitPathOutput(commonDir);
   }
   let entered = false;
   // Registration has no subprocess deadline until admitted. Cancel only its queued
@@ -265,7 +266,7 @@ async function withGitRefAdmission<
   try {
     return await enqueueGitRefMutation(
       cwd,
-      commonDir.trim(),
+      commonDir,
       () => {
         entered = true;
         endWait();
@@ -332,6 +333,22 @@ export async function requireGit(
   return requireGitCommandOutput(`git ${args.join(" ")}`, result).trim();
 }
 
+function gitPathOutput(output: string): string {
+  // Git adds one LF; all other whitespace belongs to the filesystem path.
+  return output.endsWith("\n") ? output.slice(0, -1) : output;
+}
+
+export async function requireGitPath(
+  cwd: string,
+  args: string[],
+  options: Parameters<typeof runGit>[2] = {},
+): Promise<string> {
+  const result = await runGit(cwd, args, options);
+  return normalizeGitPathForFilesystem(
+    gitPathOutput(requireGitCommandOutput(`git ${args.join(" ")}`, result)),
+  );
+}
+
 export async function requireGitBuffer(
   cwd: string,
   args: string[],
@@ -350,12 +367,7 @@ export async function resolveGitMetadataPath(
   name: string,
   options: GitCommandOptions = {},
 ): Promise<string> {
-  return path.resolve(
-    cwd,
-    normalizeGitPathForFilesystem(
-      await requireGit(cwd, ["rev-parse", "--git-path", name], options),
-    ),
-  );
+  return path.resolve(cwd, await requireGitPath(cwd, ["rev-parse", "--git-path", name], options));
 }
 
 function parseWorktreeList(output: string): WorktreeListEntry[] {
@@ -431,9 +443,7 @@ export async function resolveGitRepositoryPaths(
   sourceRoot: string,
   options: Parameters<typeof runGit>[2] = {},
 ): Promise<{ canonicalRoot: string; commonDir: string }> {
-  const commonRaw = normalizeGitPathForFilesystem(
-    await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"], options),
-  );
+  const commonRaw = await requireGitPath(sourceRoot, ["rev-parse", "--git-common-dir"], options);
   const commonDir = await fs.realpath(path.resolve(sourceRoot, commonRaw));
   // Repository identity needs only the primary checkout, not every linked HEAD and branch.
   const primary = worktreePaths(await readGitWorktreeList(sourceRoot, options)).next().value;

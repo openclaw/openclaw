@@ -4,7 +4,6 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withContentGitSlot } from "../../infra/git-content-budget.js";
-import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -19,6 +18,7 @@ import {
   commandError,
   listGitWorktrees,
   requireGit,
+  requireGitPath,
   resolveGitMetadataPath,
   runGit,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
@@ -365,12 +365,7 @@ export async function requireExactWorktreeRepository(
 ) {
   const commonAt = async (cwd: string) =>
     await canonicalPathKey(
-      path.resolve(
-        cwd,
-        normalizeGitPathForFilesystem(
-          await requireGit(cwd, ["rev-parse", "--git-common-dir"], options),
-        ),
-      ),
+      path.resolve(cwd, await requireGitPath(cwd, ["rev-parse", "--git-common-dir"], options)),
     );
   if ((await commonAt(sourcePath)) !== (await commonAt(record.repoRoot))) {
     throw new Error("Retained exact-state repository changed; source preserved");

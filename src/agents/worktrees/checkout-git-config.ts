@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import {
   gitNullConfigPath,
-  normalizeGitPathForFilesystem,
   quoteGitConfig,
   requireGitCommandOutput,
 } from "../../infra/git-exec.js";
@@ -13,6 +12,7 @@ import {
   commandError,
   gitEnvironment,
   requireGit,
+  requireGitPath,
   runGit,
   runGitBytes,
   runGitBuffered,
@@ -82,9 +82,7 @@ export async function withWorktreeGitConfig<T>(
   const configOptions: Parameters<typeof runGit>[2] = { ...guard, operation: "worktree.config" };
   const common = path.resolve(
     cwd,
-    normalizeGitPathForFilesystem(
-      await requireGit(cwd, ["rev-parse", "--git-common-dir"], configOptions),
-    ),
+    await requireGitPath(cwd, ["rev-parse", "--git-common-dir"], configOptions),
   );
   const format = await requireGit(cwd, ["rev-parse", "--show-object-format"], configOptions);
   if (format !== "sha1" && format !== "sha256") {

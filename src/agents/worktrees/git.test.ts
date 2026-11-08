@@ -554,16 +554,26 @@ describe("Git checkout discovery", () => {
     await expect(hasSelfContainedGitMetadata(root)).resolves.toBe(false);
   });
 
-  it.for(["files", "reftable"] as const)(
-    "parses native %s worktree paths, locks, symbolic heads, and detached tips",
-    async (refStorage, context) => {
+  it.for([
+    { refStorage: "files", separate: false },
+    { refStorage: "reftable", separate: false },
+    { refStorage: "files", separate: true },
+    { refStorage: "reftable", separate: true },
+  ] as const)(
+    "parses native $refStorage worktree paths, locks, symbolic heads, and detached tips (separate=$separate)",
+    async ({ refStorage, separate }, context) => {
+      if (separate && process.platform === "win32") {
+        context.skip("Windows does not preserve trailing spaces in directory names");
+      }
       const root = tempDirs.make("openclaw-git-worktree-list-");
       const repo = path.join(root, "repo");
+      const commonDir = separate ? path.join(root, " metadata ") : path.join(repo, ".git");
       const linked = path.join(root, "linked");
       const detached = path.join(root, "detached");
       const initialized = await runGit(root, [
         "init",
         "--template=",
+        ...(separate ? [`--separate-git-dir=${commonDir}`] : []),
         ...(refStorage === "reftable" ? ["--ref-format=reftable"] : []),
         "-b",
         "main",
@@ -601,7 +611,11 @@ describe("Git checkout discovery", () => {
       }
       expect(worktrees).toEqual(
         expect.arrayContaining([
-          { path: await fs.realpath(repo), branch: "refs/heads/main", head: initialHead },
+          {
+            path: await fs.realpath(separate ? commonDir : repo),
+            branch: "refs/heads/main",
+            head: initialHead,
+          },
           {
             path: await fs.realpath(linked),
             lockedReason: "held by test",
@@ -611,10 +625,15 @@ describe("Git checkout discovery", () => {
           { path: await fs.realpath(detached), branch: null, head: initialHead },
         ]),
       );
+      await withWorktreeGitConfig(linked, true, {}, async (policy) => {
+        await expect(
+          policy.require(linked, ["symbolic-ref", "HEAD", "refs/heads/alias"]),
+        ).resolves.toBe("");
+      });
       const normalized = vi.spyOn(gitExec, "normalizeGitPathForFilesystem");
       await expect(resolveGitRepositoryPaths(linked)).resolves.toEqual({
-        canonicalRoot: await fs.realpath(repo),
-        commonDir: await fs.realpath(path.join(repo, ".git")),
+        canonicalRoot: await fs.realpath(separate ? commonDir : repo),
+        commonDir: await fs.realpath(commonDir),
       });
       // The common directory and primary checkout are the only paths this reader consumes.
       expect(normalized).toHaveBeenCalledTimes(2);
