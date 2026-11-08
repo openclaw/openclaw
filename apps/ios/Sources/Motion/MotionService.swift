@@ -96,6 +96,7 @@ final class MotionService: MotionServicing {
 
     /// CMMotionActivity has only a start date: each activity lasts until the next one starts.
     /// Only the most recent activity runs to the end of the query range.
+    /// `startDates` must be in ascending order; the caller sorts the activities first.
     static func activityEndDates(startDates: [Date], queryEnd: Date) -> [Date] {
         startDates.indices.map { index in
             let next = startDates.index(after: index)
