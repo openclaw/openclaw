@@ -5234,7 +5234,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache-mode: *cache_mode
+          cache-mode: off
           install-bun: "false"
           install-deps: "false"
 
