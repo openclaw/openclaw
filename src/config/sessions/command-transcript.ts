@@ -104,7 +104,6 @@ type CommandExchangeParams = Pick<
   | "assertCurrent"
   | "beforeMessageWrite"
   | "contextFreeCommand"
-  | "preservesInFlightTurn"
 > & {
   commandText: string;
   replyText: string;
