@@ -1,7 +1,9 @@
 // @vitest-environment node
 import { afterEach, expect, it, vi } from "vitest";
+import { authorizeHttpGatewayConnect } from "../../../src/gateway/auth.ts";
 import type { GatewayHelloOk } from "../api/gateway.ts";
 import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
+import { lookupClientGeolocation } from "../lib/geolocation-lookup.ts";
 import {
   fetchGatewayContextResource,
   setAvatarGatewayOrigin,
@@ -81,11 +83,46 @@ it.each([401, 403, 429])("does not switch identity after an ambient %s denial", 
     () => true,
   );
   if (status === 429) {
-    expect((await fetchGatewayContextResource("/avatar/main", 1000)).status).toBe(429);
+    expect(
+      (await fetchGatewayContextResource("/avatar/main", 1000, undefined, "image")).status,
+    ).toBe(429);
   } else {
-    await expect(fetchGatewayContextResource("/avatar/main", 1000)).rejects.toThrow(
-      "Gateway credentials rejected",
-    );
+    await expect(
+      fetchGatewayContextResource("/avatar/main", 1000, undefined, "image"),
+    ).rejects.toThrow("Gateway credentials rejected");
   }
+  expect(request).toHaveBeenCalledOnce();
+});
+
+it("retains ordinary credentials at the geolocation HTTP authorization boundary", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("location", { origin: "https://gateway.example" });
+  const request = vi.fn(async (_url: string, init: RequestInit) => {
+    const token = new Headers(init.headers).get("authorization")?.replace(/^Bearer /, "");
+    const auth = await authorizeHttpGatewayConnect({
+      auth: { mode: "token", token: "synthetic-http-token", allowTailscale: true },
+      connectAuth: { token },
+    });
+    return auth.ok
+      ? Response.json({ found: true, country: "GB" })
+      : new Response(null, { status: 401 });
+  });
+  vi.stubGlobal("fetch", request);
+  updateGatewayAvatarContext(
+    null,
+    {
+      gatewayUrl: "wss://gateway.example",
+      token: "",
+      password: "",
+      bootstrapToken: "",
+    },
+    "",
+    { auth: { method: "tailscale", deviceToken: "synthetic-http-token" } } as GatewayHelloOk,
+    () => true,
+  );
+  await expect(lookupClientGeolocation("8.8.8.8")).resolves.toEqual({
+    status: "located",
+    location: { country: "GB" },
+  });
   expect(request).toHaveBeenCalledOnce();
 });

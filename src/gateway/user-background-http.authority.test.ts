@@ -11,14 +11,27 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { ensureDeviceToken, revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing, withPairedDeviceRecords } from "../infra/device-pairing.js";
+import { readTailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { normalizeUserBackgroundImage } from "../state/user-background-image.js";
 import { getUserBackground, uploadUserBackground } from "../state/user-background.js";
 import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
+import { setAvatar } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { AUTH_TOKEN, createTestGatewayServer } from "./server-http.test-harness.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
+vi.mock("../infra/tailscale.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/tailscale.js")>()),
+  readTailscaleWhoisIdentity: vi.fn(async () => ({ login: "reader@example.test", name: "Reader" })),
+}));
+const tailscaleHeaders = {
+  "x-forwarded-for": "100.64.0.1",
+  "x-forwarded-proto": "https",
+  "x-forwarded-host": "gateway.example.test",
+  "tailscale-user-login": "reader@example.test",
+  Origin: "https://control.example.test",
+};
 const profileWait = vi.hoisted(() => vi.fn<() => Promise<void>>());
 const imageWait = vi.hoisted(() => vi.fn<(image: Uint8Array | undefined) => Promise<void>>());
 // Hold the actual prepared bytes, not a fabricated authorization or reader result.
@@ -103,10 +116,21 @@ function holdRead(imageStage: boolean) {
 async function startServer(
   auth: Parameters<typeof createTestGatewayServer>[0]["resolvedAuth"],
   getResolvedAuth = () => auth,
+  managedTailscale = false,
 ) {
   const server = createTestGatewayServer({
     resolvedAuth: auth,
-    overrides: { controlUiBasePath: "/control", getResolvedAuth, getRuntimeConfig },
+    overrides: {
+      controlUiBasePath: "/control",
+      getResolvedAuth,
+      getRuntimeConfig,
+      ...(managedTailscale
+        ? {
+            controlUiEnabled: true,
+            ingressTransport: { kind: "managed-tailscale" as const, mode: "serve" as const },
+          }
+        : {}),
+    },
   });
   return { server, origin: await listenLoopback(server) };
 }
@@ -119,6 +143,9 @@ async function expectPrivateBytesWithheld(response: Response) {
   return bytes;
 }
 beforeEach(() => {
+  vi.mocked(readTailscaleWhoisIdentity)
+    .mockReset()
+    .mockResolvedValue({ login: "reader@example.test", name: "Reader" });
   profileWait.mockReset().mockResolvedValue(undefined);
   imageWait.mockReset().mockResolvedValue(undefined);
 });
@@ -218,19 +245,26 @@ it.each([
   },
 );
 
-it.each(["role-reduced", "profile-reassigned"] as const)(
-  "registered background read withholds private bytes after %s",
-  async (change) => {
+it.each(
+  (["trusted-proxy", "tailscale"] as const).flatMap((transport) =>
+    (["role-reduced", "profile-reassigned"] as const).map((change) => ({ transport, change })),
+  ),
+)(
+  "$transport background read withholds private bytes after $change",
+  async ({ transport, change }) => {
     vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("background-role-authority-"));
-    const auth = {
-      mode: "trusted-proxy" as const,
-      allowTailscale: false,
-      trustedProxy: {
-        userHeader: "x-forwarded-user",
-        requiredHeaders: ["x-forwarded-proto"],
-        allowLoopback: true,
-      },
-    };
+    const auth =
+      transport === "tailscale"
+        ? { ...AUTH_TOKEN, allowTailscale: true }
+        : {
+            mode: "trusted-proxy" as const,
+            allowTailscale: false,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              requiredHeaders: ["x-forwarded-proto"],
+              allowLoopback: true,
+            },
+          };
     const reader: GatewayOperatorRoleDefinition = {
       agents: "*" as const,
       sessions: { others: "view" as const },
@@ -262,11 +296,12 @@ it.each(["role-reduced", "profile-reassigned"] as const)(
       foreignAssetId = (await upload(replacement.id, "foreign-fixture")).assetId;
     }
     const gate = holdRead(change === "profile-reassigned");
-    const { server, origin } = await startServer(auth);
+    const { server, origin } = await startServer(auth, () => auth, transport === "tailscale");
     try {
       const response = fetch(origin + "/control/__openclaw__/users/background/" + asset.assetId, {
         headers: {
-          "x-forwarded-for": "198.51.100.23",
+          ...tailscaleHeaders,
+          "x-forwarded-for": transport === "tailscale" ? "100.64.0.1" : "198.51.100.23",
           "x-forwarded-user": "reader@example.test",
           "x-forwarded-proto": "https",
           "x-openclaw-scopes": "operator.read",
@@ -300,3 +335,55 @@ it.each(["role-reduced", "profile-reassigned"] as const)(
     }
   },
 );
+
+it("serves managed-Tailscale images without a bearer and denies foreign private backgrounds", async () => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("tailscale-image-http-"));
+  const auth = { ...AUTH_TOKEN, allowTailscale: true };
+  const profile = ensureProfileForEmail("reader@example.test");
+  const own = await upload(profile.id);
+  const foreign = await upload(ensureProfileForEmail("other@example.test").id);
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  expect(setAvatar(profile.id, png, "image/png").ok).toBe(true);
+  vi.mocked(getRuntimeConfig).mockReturnValue({
+    gateway: { auth, controlUi: { allowedOrigins: [tailscaleHeaders.Origin] } },
+    agents: {
+      entries: {
+        main: {
+          workspace: directories.make("tailscale-avatar-"),
+          identity: { avatar: "data:image/png;base64," + png.toString("base64") },
+        },
+      },
+    },
+  });
+  const { server, origin } = await startServer(auth, () => auth, true);
+  try {
+    for (const route of [
+      "/control/avatar/main",
+      "/control/api/users/" + profile.id + "/avatar",
+      "/control/__openclaw__/users/background/" + own.assetId,
+    ]) {
+      const response = await fetch(origin + route, { headers: tailscaleHeaders });
+      expect(response.status, route).toBe(200);
+      expect(response.headers.get("content-type")).toMatch(/^image\//);
+      expect((await response.arrayBuffer()).byteLength).toBeGreaterThan(0);
+      const rejected = await fetch(origin + route, {
+        headers: { ...tailscaleHeaders, Authorization: "Bearer rejected-device-token" },
+      });
+      expect(rejected.status).toBe(401);
+      expect(rejected.headers.get("content-type")).not.toMatch(/^image\//);
+      await rejected.arrayBuffer();
+    }
+    const denied = await fetch(
+      origin + "/control/__openclaw__/users/background/" + foreign.assetId,
+      { headers: tailscaleHeaders },
+    );
+    expect(denied.status).toBe(404);
+    expect(denied.headers.get("content-type")).not.toMatch(/^image\//);
+    await denied.arrayBuffer();
+  } finally {
+    await closeHttpServer(server);
+  }
+});

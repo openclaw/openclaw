@@ -6,7 +6,7 @@ import { buildControlUiUserBackgroundPath } from "../../../src/gateway/control-u
 import type { ApplicationContext } from "../app/context.ts";
 import {
   fetchWithControlUiAuth,
-  resolveControlUiReadAuthCandidates,
+  resolveControlUiImageAuthCandidates,
 } from "../app/control-ui-auth.ts";
 import { gatewayWebSocketTransportUrl } from "../dev-gateway.ts";
 
@@ -22,7 +22,7 @@ function readScope(context: ApplicationContext, assetId: string) {
   ) {
     return null;
   }
-  const auth = resolveControlUiReadAuthCandidates(
+  const auth = resolveControlUiImageAuthCandidates(
     { hello: snapshot.hello, settings: gateway.connection, password: gateway.connection.password },
     gateway.connection.gatewayUrl,
   );

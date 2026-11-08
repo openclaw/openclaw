@@ -7,6 +7,7 @@ import { isConfiguredUiDevGateway } from "../dev-gateway.ts";
 let appGatewayOrigin: string | null = null;
 let appGatewayResourceBasePath = "";
 let appGatewayAuthTokens: readonly string[] = [];
+let appGatewayImageAuthTokens: readonly string[] = [];
 let appGatewayStorageScope: string | undefined;
 let gatewayRequests = new AbortController();
 const unmanagedContextIsCurrent = () => true;
@@ -22,7 +23,7 @@ export function readAvatarGatewayContext() {
   return {
     origin: appGatewayOrigin,
     resourceBasePath: appGatewayResourceBasePath,
-    authTokens: appGatewayAuthTokens,
+    authTokens: appGatewayImageAuthTokens,
     storageScope: appGatewayStorageScope,
   };
 }
@@ -32,6 +33,7 @@ export async function fetchGatewayContextResource(
   url: string,
   timeoutMs: number,
   signal?: AbortSignal,
+  auth: "gateway" | "image" = "gateway",
 ): Promise<Response> {
   const origin = appGatewayOrigin ?? globalThis.location?.origin ?? "http://localhost";
   if (new URL(url, origin).origin !== origin) {
@@ -46,7 +48,7 @@ export async function fetchGatewayContextResource(
   const response = await fetchWithControlUiAuth(
     url,
     { credentials: "include", signal: requestSignal },
-    appGatewayAuthTokens,
+    auth === "image" ? appGatewayImageAuthTokens : appGatewayAuthTokens,
     isCurrent,
   );
   if (!isCurrent()) {
@@ -82,6 +84,7 @@ export function setAvatarGatewayOrigin(
   resourceBasePath = "",
   storageScope?: string,
   isCurrent: () => boolean = unmanagedContextIsCurrent,
+  imageAuthTokens: readonly string[] = authTokens,
 ): void {
   const nextOrigin =
     gatewayUrl && isConfiguredUiDevGateway(gatewayUrl)
@@ -96,6 +99,8 @@ export function setAvatarGatewayOrigin(
     appGatewayResourceBasePath !== nextResourceBasePath ||
     // Initial admission adopts pending reads; replacement or retirement invalidates them.
     (appGatewayStorageScope !== undefined && appGatewayStorageScope !== storageScope) ||
+    appGatewayImageAuthTokens.length !== imageAuthTokens.length ||
+    appGatewayImageAuthTokens.some((token, index) => token !== imageAuthTokens[index]) ||
     appGatewayAuthTokens.length !== authTokens.length ||
     appGatewayAuthTokens.some((token, index) => token !== authTokens[index]);
   if (contextChanged) {
@@ -108,6 +113,7 @@ export function setAvatarGatewayOrigin(
   appGatewayOrigin = nextOrigin;
   appGatewayResourceBasePath = nextResourceBasePath;
   appGatewayAuthTokens = [...authTokens];
+  appGatewayImageAuthTokens = [...imageAuthTokens];
   appGatewayStorageScope = storageScope;
   isGatewayCurrent = isCurrent;
 }

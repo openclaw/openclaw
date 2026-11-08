@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resolveControlUiAuthCandidates,
   resolveControlUiAuthToken,
-  resolveControlUiReadAuthCandidates,
+  resolveControlUiImageAuthCandidates,
 } from "./control-ui-auth.ts";
 
 describe("Control UI credentials", () => {
@@ -75,7 +75,7 @@ describe("Gateway read credential selection", () => {
   ])("preserves the intended identity for %s through %s", (method, gatewayUrl, expected) => {
     vi.stubGlobal("location", { origin: "https://gateway.example" });
     expect(
-      resolveControlUiReadAuthCandidates(
+      resolveControlUiImageAuthCandidates(
         {
           hello: { auth: { method, deviceToken: "device" } },
           settings: { token: "saved" },

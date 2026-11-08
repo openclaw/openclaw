@@ -1,2 +1,2 @@
-# Tailscale image identity, denial, disconnect and rendered-avatar regressions.
-234
+# Tailscale image identity, denial, disconnect, rendering and ordinary geolocation auth.
+358

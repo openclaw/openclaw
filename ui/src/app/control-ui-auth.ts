@@ -46,8 +46,8 @@ export function resolveControlUiAuthCandidates(source: ControlUiAuthSource): str
   ]).filter((token) => !/[\r\n]/.test(token));
 }
 
-/** Preselect the confirmed connection identity for Gateway-owned HTTP reads, never after denial. */
-export function resolveControlUiReadAuthCandidates(
+/** Preselect the confirmed connection identity for Gateway-owned images, never after denial. */
+export function resolveControlUiImageAuthCandidates(
   source: ControlUiAuthSource,
   gatewayUrl: string,
 ): string[] {

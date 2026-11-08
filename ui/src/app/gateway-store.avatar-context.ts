@@ -1,7 +1,10 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { readOfflineStorageScope } from "./boot-record.ts";
-import { resolveControlUiReadAuthCandidates } from "./control-ui-auth.ts";
+import {
+  resolveControlUiAuthCandidates,
+  resolveControlUiImageAuthCandidates,
+} from "./control-ui-auth.ts";
 import type { ApplicationGatewayConnection } from "./gateway.ts";
 
 export function updateGatewayAvatarContext(
@@ -11,14 +14,13 @@ export function updateGatewayAvatarContext(
   hello: GatewayHelloOk | undefined,
   isCurrent: (client: GatewayBrowserClient | null, hello: GatewayHelloOk | null) => boolean,
 ): void {
+  const auth = { hello, settings: connection, password: connection.password };
   setAvatarGatewayOrigin(
     connection.gatewayUrl,
-    resolveControlUiReadAuthCandidates(
-      { hello, settings: connection, password: connection.password },
-      connection.gatewayUrl,
-    ),
+    resolveControlUiAuthCandidates(auth),
     resourceBasePath,
     readOfflineStorageScope({ client }),
     () => Boolean(hello) && isCurrent(client, hello ?? null),
+    resolveControlUiImageAuthCandidates(auth, connection.gatewayUrl),
   );
 }
