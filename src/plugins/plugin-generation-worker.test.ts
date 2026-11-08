@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setImmediate as nextTurn, setTimeout as nextTimer } from "node:timers/promises";
-import { queryObjects } from "node:v8";
+import { setTimeout as nextTimer } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
@@ -19,6 +18,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
@@ -518,11 +518,7 @@ it.each(["capture", "custody", "fork"] as const)(
         }
         expectSource(artifact, entry, "42");
         await artifact.disposeAsync();
-        const control = new WeakRef({});
-        await nextTurn();
-        queryObjects(WeakRef);
-        expect(control.deref()).toBeUndefined();
-        const moduleFactsReleased = moduleFactCallbacks?.every((callback) => !callback.deref());
+        await expectCollected(...(moduleFactCallbacks ?? []));
         expectSource(recovery, entry, "42");
         const recoveredEntry = recovery.resolve(entry);
         await recovery.disposeAsync();
@@ -531,9 +527,6 @@ it.each(["capture", "custody", "fork"] as const)(
         expect(() => recovery.resolve(path.join(root, "outside.js"))).toThrow(
           "Plugin recovery entry is outside its captured source package",
         );
-        if (moduleFactCallbacks) {
-          expect(moduleFactsReleased).toBe(true);
-        }
       }),
     );
   },

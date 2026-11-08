@@ -4,6 +4,7 @@ import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtim
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
+import { isAgentRunRestartAbortReason } from "../../run-termination.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { clearToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
@@ -12,7 +13,10 @@ import type { retainEmbeddedSessionPromptState } from "../session-prompt-state.j
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import type { UserTranscriptContext } from "./attempt-llm-boundary.types.js";
 import type { EmitDiagnosticRunCompleted } from "./attempt-setup.js";
-import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
+import {
+  cleanupEmbeddedAttemptResources,
+  waitForEmbeddedAbortSettle,
+} from "./attempt-subscription-cleanup.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";
 import type { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
@@ -117,9 +121,19 @@ export async function cleanupEmbeddedAttemptSessionPhase(
   const clearTranscriptRunCallbacks = input.sessionManager?.clearTranscriptRunCallbacks;
   const { attempt } = input;
   const initialState = projectAgentRunAttemptTerminal(input.state.terminal);
+  const restartAbort = isAgentRunRestartAbortReason(attempt.abortSignal?.reason);
   let cleanupError: unknown;
   try {
     try {
+      // The prompt's abort race can finish before the provider's terminal write.
+      // Give its terminal reply the existing abort-settle budget before closing the writer.
+      if (restartAbort) {
+        await waitForEmbeddedAbortSettle({
+          promise: input.buildAbortSettlePromise(),
+          runId: attempt.runId,
+          sessionId: attempt.sessionId,
+        });
+      }
       if (input.trajectoryRecorder && !input.trajectoryEndRecorded) {
         const sessionEndData = {
           status: initialState.promptError
@@ -187,7 +201,8 @@ export async function cleanupEmbeddedAttemptSessionPhase(
       // Aborted runs skip the idle wait so teardown cannot strand the lock.
       aborted: cleanupAbortLike,
       abortSignal: attempt.abortSignal,
-      abortSettlePromise: cleanupAborted ? input.buildAbortSettlePromise() : null,
+      // Restart consumed this budget before the writer drain; do not wait twice.
+      abortSettlePromise: cleanupAborted && !restartAbort ? input.buildAbortSettlePromise() : null,
       runId: attempt.runId,
       sessionId: attempt.sessionId,
     });

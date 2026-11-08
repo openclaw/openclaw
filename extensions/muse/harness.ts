@@ -515,12 +515,20 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         }
         if (result.outcome.params.terminal === "failed") {
           const turnError = result.outcome.params.error;
-          throw new Error(
-            turnError?.kind === "authRequired"
-              ? `Muse Code is not signed in on the Gateway host (${turnError.message}). Run \`muse login\` there, or set META_API_KEY for the Gateway.`
-              : (turnError?.message ??
-                  result.outcome.params.reason ??
-                  "Muse model request failed. Run muse to check login and model access."),
+          const quota = turnError?.quota;
+          const authRequired = turnError?.kind === "authRequired";
+          // MSP types these classes; the status lets the host classify them without parsing text.
+          throw Object.assign(
+            new Error(
+              quota
+                ? `Muse usage limit reached (${quota.limitKind}); resets at ${new Date(quota.resetsAtMs).toISOString()}. ${turnError.message}`
+                : authRequired
+                  ? `Muse Code is not signed in on the Gateway host (${turnError.message}). Run \`muse login\` there, or set META_API_KEY for the Gateway.`
+                  : (turnError?.message ??
+                    result.outcome.params.reason ??
+                    "Muse model request failed. Run muse to check login and model access."),
+            ),
+            quota ? { status: 429 } : authRequired ? { status: 401 } : {},
           );
         }
         // A cancellation the harness started for a failure (such as an approval
@@ -562,7 +570,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       }
       const toolMetas = messages
         .filter((message) => message.role === "toolResult")
-        .map((message) => ({ toolName: message.toolName }));
+        .map((message) => ({ toolName: message.toolName, isError: message.isError }));
       const interruption = timedOut
         ? { kind: "timeout" as const, phase: "prompt" as const, source: "runtime" as const }
         : aborted
@@ -580,7 +588,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       const terminal = failureMessage
         ? agentHarnessAttemptTerminal.setFailure(interruption, {
             source: "prompt",
-            error: new Error(failureMessage),
+            error: new Error(failureMessage, { cause: failure }),
           })
         : interruption;
       const lastAssistant = messages.findLast((message) => message.role === "assistant");
