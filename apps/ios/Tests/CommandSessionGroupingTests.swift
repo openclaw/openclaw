@@ -128,6 +128,7 @@ struct CommandSessionGroupingTests {
         #expect(fallback.map(\.key) == ["a", "b", "c"])
     }
 
+    @MainActor
     @Test(arguments: ["", "amber"])
     func `drawer search hides group headers without matches`(query: String) {
         let sections = RootSidebarModel.sections(
