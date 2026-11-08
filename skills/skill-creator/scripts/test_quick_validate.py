@@ -26,6 +26,18 @@ class TestQuickValidate(TestCase):
         valid, message = self.validate_content(content)
         self.assertTrue(valid, message)
 
+    def test_indented_frontmatter_marker_remains_description_content(self):
+        for header in ("|", ">"):
+            for description, expected in (
+                ("---\n  Summarize reports.", True),
+                ("Summarize\n  ---\n  <reports>", False),
+            ):
+                with self.subTest(header=header, description=description):
+                    valid, message = self.validate_content(
+                        f"---\nname: marker-skill\ndescription: {header}\n  {description}\n---  \n"
+                    )
+                    self.assertEqual(valid, expected, message)
+
     def test_rejects_missing_frontmatter_closing_fence(self):
         content = "---\nname: bad-skill\ndescription: missing end\n# no closing fence\n"
         valid, message = self.validate_content(content)
