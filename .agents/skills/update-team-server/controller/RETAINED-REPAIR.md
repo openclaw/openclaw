@@ -95,6 +95,23 @@ this exception; neither does a native restore or changed database identity.
 Do not edit watermarks, deletion records, or the original witness to satisfy this
 guard. The operator must diagnose missing evidence before proceeding.
 
+Continuity refusals identify the boundary without printing transcript data or
+session identifiers. `RETAINED_CONTINUITY_SAVED_TUPLE` reports `scope=original`
+for the incident witness, `scope=build-floor` for the same operation's captured
+build witness, or `scope=preparation-floor` / `scope=captured-floor` for later
+sealed floors. Its `reason`, `live`, and `archive` fields name the failed
+invariant. `reason=no-rewrite-authority` means that the exact captured generation
+is no longer preserved; the original selected-candidate rewrite exception does
+not apply to that floor. `RETAINED_CONTINUITY_CURRENT_TUPLE` identifies an
+incomplete current witness, and `RETAINED_CONTINUITY_DATABASE` identifies a lost
+physical database.
+
+A fresh operation never reads another operation's build witness. A rewrite
+between its initial snapshot and a later check can leave all three prebuild
+files present even though preparation refused. Retire that unbound attempt and
+use a fresh operation to capture the settled current generation. Preparation
+and activation still refuse further unexplained changes to their captured floors.
+
 ### Native config audit evidence
 
 The Gateway's `agents.delete` path uses the normal atomic config writer. That
@@ -205,8 +222,9 @@ Never use ordinary `--recover`, unlink the journal, or retire `REPAIR_FAILED`.
 A `BUILD_PREPARED` intent binds its operation to an exact target even if the
 subsequent official-main observation refuses. Retrying that operation cannot
 select another target. Fresh UUIDs have independent build intents; there is no
-global build-intent slot. Retire abandoned evidence through its owner before
-replacing the controller, rather than deleting or editing journal files.
+global build-intent slot. Retire abandoned evidence through its owner rather
+than deleting or editing journal files. A completed controller adoption does not
+prevent retirement of an earlier attempt from the same incident.
 
 Run the reviewed replacement packet's `release-lib.mjs` with the existing
 exclusive canonical FD9 lock, using `retained-controller-adoption inspect-build`
@@ -227,10 +245,19 @@ then `retire-build`. Both take `ROOT @stdin` and the same JSON object:
 
 `adoption` is the ordinary exact four-file adoption request below; `buildIntent`
 is the reviewed path/device/inode/SHA-256 descriptor of the abandoned operation's
-`repair-<UUID>.build-intent.json`. The installed incumbent validates its captured
-snapshot. Only its intent, original and witness files may exist: an origin
+`repair-<UUID>.build-intent.json`. The approved replacement owner validates the
+immutable snapshot, original source and witness bytes. Its captured closure must
+belong to the current completed adoption or its verified predecessor chain for
+the same incident. A capture made before the first adoption must match that
+adoption's archived old closure. Retirement does not rerun build admission or require an old
+transcript floor to remain current. The current installed closure and live
+process are independently bound. Only its intent, original and witness files
+may exist: an origin
 observation, later build/preparation artifact, native guard or lifecycle effect
 refuses this action. The source journal and live incumbent remain bound unchanged.
+`RETAINED_BUILD_*` refusal codes distinguish snapshot, adoption ancestry, closure,
+source, witness, process, effects and replay failures. They carry no transcript
+content. Preserve the complete stderr and request when a check refuses.
 
 The owner durably records its move intent, archives the three exact inodes under
 `journal/retired-build-<UUID>/`, then emits `BUILD_RETIRED` and writes
