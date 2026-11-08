@@ -270,14 +270,11 @@ describe("chunkMarkdownTextWithMode", () => {
     expect(chunkMarkdownTextWithMode("A😀B", 1, "length")).toEqual(["A", "😀", "B"]);
   });
 
-  it.each(["length", "newline"] as const)(
-    "handles fractional and NaN limits in %s mode",
-    (mode) => {
-      expect(chunkMarkdownTextWithMode("😀", 1.5, mode)).toEqual(["😀"]);
-      const text = "A fenced reply\n\n```js\nconst x = 1;\n```\n\nWith trailing prose";
-      expect(chunkMarkdownTextWithMode(text, Number.NaN, mode)).toEqual([text]);
-    },
-  );
+  it.each(["length", "newline"] as const)("handles fractional and NaN in %s mode", (mode) => {
+    expect(chunkMarkdownTextWithMode("😀", 1.5, mode)).toEqual(["😀"]);
+    const text = "A fenced reply\n\n```js\nconst x = 1;\n```\n\nWith trailing prose";
+    expect(chunkMarkdownTextWithMode(text, Number.NaN, mode)).toEqual([text]);
+  });
 });
 
 describe("resolveChunkMode", () => {
