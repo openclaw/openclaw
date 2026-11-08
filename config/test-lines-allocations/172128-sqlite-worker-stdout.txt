@@ -1,5 +1,6 @@
-# PR #172128: exact net regression-test growth against main.
+# PR #172128: exact grant approved on 2026-11-08.
+# 287 net regression-test lines plus 92 inherited lines above the main budget.
 # Covers argument-fed stdin, UNKNOWN stdout, exact UTF-8 partial writes,
 # temporary backpressure, fatal write errors, and worker diagnostic integrity.
-# Does not cover inherited main debt or create additional test headroom.
-287
+# Reconciles measured debt without additional headroom; shared scalar unchanged.
+379
