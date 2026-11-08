@@ -9,10 +9,12 @@ import {
   closeHttpServer as closeServer,
   listenLoopback as listen,
 } from "../../test/helpers/gateway-integration-fixtures.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as gitExec from "../infra/git-exec.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import * as processExec from "../process/exec.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -162,7 +164,7 @@ describe("project registry persistence", () => {
   );
 
   it.each(["reused", "refreshed"] as const)(
-    "repairs a base re-shallowed by a linked agent before it is %s",
+    "does not wait for unshallow when a linked agent base is %s",
     async (mode) => {
       const source = await initializeRepository(root, "history");
       await commitFile(source, "README.md", "second commit\n");
@@ -176,14 +178,39 @@ describe("project registry persistence", () => {
       const head = await gitText(worktree, "rev-parse", "HEAD");
       await git(worktree, "fetch", "--depth", "1", "origin");
       expect(await gitText(target, "rev-parse", "--is-shallow-repository")).toBe("true");
-      if (mode === "reused") {
-        await materializeProjectClone({ cfg: {}, gitUrl: originUrl }, options);
-      } else {
-        await refreshProjectClone(project, options);
+      const repairGate = createDeferred();
+      const repairStarted = createDeferred();
+      const execute = gitExec.executeGitCommand;
+      using commands = vi
+        .spyOn(gitExec, "executeGitCommand")
+        .mockImplementation(async (...args) => {
+          if (args[1].includes("--unshallow")) {
+            repairStarted.resolve();
+            await repairGate.promise;
+          }
+          return execute(...args);
+        });
+      const logs = createWarnLogCapture("project-history");
+      const operation =
+        mode === "reused"
+          ? materializeProjectClone({ cfg: {}, gitUrl: originUrl }, options)
+          : refreshProjectClone(project, options);
+      try {
+        await awaitGateBeforeSettlement<Awaited<typeof operation>>(
+          operation,
+          repairStarted.promise,
+          "Preparation started unshallow",
+        );
+        expect(commands.mock.calls.some(([, args]) => args.includes("--unshallow"))).toBe(false);
+        expect(await logs.findText("openclaw doctor --fix")).toContain(target);
+      } finally {
+        repairGate.resolve();
+        await operation;
+        logs.cleanup();
       }
       for (const checkout of [target, worktree]) {
-        expect(await gitText(checkout, "rev-parse", "--is-shallow-repository")).toBe("false");
-        expect(await gitText(checkout, "rev-list", "--count", "HEAD")).toBe("2");
+        expect(await gitText(checkout, "rev-parse", "--is-shallow-repository")).toBe("true");
+        expect(await gitText(checkout, "rev-list", "--count", "HEAD")).toBe("1");
         expect(await gitText(checkout, "config", "remote.origin.partialclonefilter")).toBe(
           "blob:none",
         );

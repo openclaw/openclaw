@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import {
@@ -12,6 +13,8 @@ import {
   runDoctorHealthContributionList,
 } from "../flows/doctor-health-contributions.test-support.js";
 import { runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
+import * as gitExec from "../infra/git-exec.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { withProjectCheckoutLifecycle } from "../projects/project-checkout.js";
 import { cloneProjectCheckout } from "../projects/project-clone-runtime.js";
 import {
@@ -154,15 +157,44 @@ describe("doctor project clone shape", () => {
             env: state.env,
             getConfig: () => ({ worktreeAcceleration: false }),
           });
-          // Linked-parent creation must repair before taking the source's checkout lease.
-          const child = await service.create({
+          const repairGate = createDeferred();
+          const repairStarted = createDeferred();
+          const execute = gitExec.executeGitCommand;
+          using commands = vi
+            .spyOn(gitExec, "executeGitCommand")
+            .mockImplementation(async (...args) => {
+              if (args[1].includes("--unshallow")) {
+                repairStarted.resolve();
+                await repairGate.promise;
+              }
+              return execute(...args);
+            });
+          const logs = createWarnLogCapture("worktree-history");
+          const creation = service.create({
             repoRoot: linked,
             name: "after-depth-fetch",
             baseRef: "HEAD",
             withSource: (run) => selected.withCurrent((current) => run(current)),
           });
+          try {
+            const child = await awaitGateBeforeSettlement(
+              creation,
+              repairStarted.promise,
+              "Worktree creation started unshallow",
+            );
+            expect(commands.mock.calls.some(([, args]) => args.includes("--unshallow"))).toBe(
+              false,
+            );
+            expect(await git(child.path, "rev-list", "--count", "HEAD")).toBe("1");
+            expect(await logs.findText("openclaw doctor --fix")).toContain(clone);
+          } finally {
+            repairGate.resolve();
+            await creation;
+            logs.cleanup();
+          }
+          expect((await detect())[0]?.message).toContain("shallow history");
+          expect((await repair())[0]?.message).toContain("unshallowed");
           expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("false");
-          expect(await git(child.path, "rev-list", "--count", "HEAD")).toBe("2");
           await git(ignored, "init", "--separate-git-dir", state.path("operator.git"));
           const ordinary = await service.create({
             repoRoot: ignored,

@@ -1,2 +1,2 @@
-87
-# Linked-worktree re-shallow regressions for managed preparation, Doctor repair, and desktop tag fetch; preserve environment-routing isolation.
+146
+# Linked-worktree depth-fetch diagnostics, hanging-unshallow ordering proof, explicit Doctor repair, and desktop tag-fetch regressions; preserve environment-routing isolation.

@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { gitEnvironment } from "../agents/worktrees/git.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { executeGitCommand, requireGitCommandOutput } from "../infra/git-exec.js";
 import {
   ProjectCheckoutBusyError,
   withProjectCheckoutLifecycle,
 } from "../projects/project-checkout.js";
-import { repairProjectCloneHistory } from "../projects/project-clone-shape.js";
 import { listProjectRegistry } from "../projects/project-registry.js";
 
 const CHECK_ID = "core/doctor/project-clone-shape";
@@ -59,11 +60,35 @@ export async function collectProjectCloneShapeHealthFindings(
             : "";
         if (lease) {
           fetching = true;
-          const stillShallow = !(await repairProjectCloneHistory(project.repoRoot, {
-            env,
-            signal: lease.signal,
-            assertCurrent: () => lease.assertCurrent(),
-          }));
+          requireGitCommandOutput(
+            "git fetch --unshallow",
+            await executeGitCommand(
+              project.repoRoot,
+              [
+                "fetch",
+                "--unshallow",
+                "--filter=blob:none",
+                "--no-auto-maintenance",
+                "--no-prune",
+                "--no-prune-tags",
+                "--no-tags",
+                "--no-write-fetch-head",
+                "--no-recurse-submodules",
+                "origin",
+              ],
+              {
+                env: gitEnvironment({ ...env, GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" }),
+                timeoutMs: 30 * 60_000,
+                maxOutputBytes: 64 * 1024,
+                lowerPriority: true,
+                killProcessTree: true,
+                signal: lease.signal,
+                beforeRun: () => lease.assertCurrent(),
+              },
+            ),
+          );
+          // A shallow origin can make --unshallow exit zero with incomplete history.
+          const stillShallow = (await fs.readdir(gitDir)).includes("shallow");
           report({
             severity: stillShallow ? "warning" : "info",
             path: project.repoRoot,

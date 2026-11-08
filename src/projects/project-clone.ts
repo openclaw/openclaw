@@ -15,6 +15,7 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveProjectDirectory, withProjectCheckoutLifecycle } from "./project-checkout.js";
+import { warnIfProjectCloneShallow } from "./project-clone-preparation.js";
 import {
   cloneProjectCheckout,
   configureProjectCheckoutMaintenance,
@@ -22,7 +23,6 @@ import {
   ProjectCloneError,
   refreshProjectCheckout,
 } from "./project-clone-runtime.js";
-import { ensureProjectCloneHistory } from "./project-clone-shape.js";
 import { parseProjectGitUrl } from "./project-git-url.js";
 import {
   prepareProjectRegistration,
@@ -106,14 +106,7 @@ export async function materializeProjectClone(
               return undefined;
             }
             if (current.source === "cloned") {
-              await ensureProjectCloneHistory(current, {
-                env,
-                signal: checkoutLease.signal,
-                assertCurrent: () => {
-                  assertCloneCurrent();
-                  checkoutLease.assertOwned();
-                },
-              });
+              await warnIfProjectCloneShallow(current.repoRoot, { source: current.source, env });
               await configureProjectCheckoutMaintenance(current.repoRoot, {
                 env,
                 signal: checkoutLease.signal,
@@ -266,11 +259,7 @@ export async function refreshProjectClone(
           "Saved project repository is invalid; select the repository and retry.",
         );
       }
-      await ensureProjectCloneHistory(current, {
-        env,
-        signal: lease.signal,
-        assertCurrent: assertRefreshCurrent,
-      });
+      await warnIfProjectCloneShallow(current.repoRoot, { source: current.source, env });
       await configureProjectCheckoutMaintenance(current.repoRoot, {
         env,
         signal: lease.signal,

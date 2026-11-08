@@ -7,8 +7,8 @@ import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { warnIfProjectCloneShallow } from "../../src/projects/project-clone-preparation.js";
 import { configureProjectCheckoutMaintenance } from "../../src/projects/project-clone-runtime.js";
-import { ensureProjectCloneHistory } from "../../src/projects/project-clone-shape.js";
 
 assert(process.argv[2], "Supply a disposable scratch parent");
 const root = await fs.mkdtemp(path.join(path.resolve(process.argv[2]), "clone-history-"));
@@ -58,7 +58,7 @@ try {
     const cpu = process.cpuUsage();
     const start = performance.now();
     if (variant === "candidate") {
-      await ensureProjectCloneHistory(project, options);
+      await warnIfProjectCloneShallow(base, { ...options, source: project.source });
     }
     await configureProjectCheckoutMaintenance(base, options);
     const wallMs = performance.now() - start;
@@ -88,8 +88,8 @@ try {
     await run("baseline");
     assert.equal(git(base, "rev-parse", "--is-shallow-repository"), "true");
     await run("candidate");
-    assert.equal(git(base, "rev-parse", "--is-shallow-repository"), "false");
-    assert.equal(git(linked, "rev-list", "--count", "HEAD"), "2");
+    assert.equal(git(base, "rev-parse", "--is-shallow-repository"), "true");
+    assert.equal(git(linked, "rev-list", "--count", "HEAD"), "1");
   }
   console.log(
     JSON.stringify(

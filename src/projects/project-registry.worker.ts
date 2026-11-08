@@ -12,7 +12,7 @@ import {
   removeProjectCheckoutReferenceInDatabase,
   removeProjectRegistryInDatabase,
   resolveProjectCloneRefreshOwnerInDatabase,
-  resolveProjectRegistryByRootInDatabase,
+  resolveRecordedProjectRootInDatabase,
   resolveProjectRegistryInDatabase,
 } from "./project-registry.kernel.js";
 import type { ProjectRegistryInsert } from "./project-registry.types.js";
@@ -54,7 +54,7 @@ export const projectRegistryOperations = {
     input: { repoRoot: string; source?: ProjectRegistryInsert["source"] },
     context,
   ) =>
-    resolveProjectRegistryByRootInDatabase(registryDatabase(context), input.repoRoot, input.source),
+    resolveRecordedProjectRootInDatabase(registryDatabase(context), input.repoRoot, input.source),
   "projects.resolve": (input: { id: string }, context) =>
     resolveProjectRegistryInDatabase(registryDatabase(context), input.id),
   "projects.insert": checkoutTransaction(

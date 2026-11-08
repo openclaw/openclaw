@@ -1001,11 +1001,12 @@ For a workspace-bound caller, `path` and the repository root must exactly match 
 
 ## Shared clone history
 
-Managed project preparation repairs a shallow base before reusing it, under the
-project checkout lifecycle lease, using the same full-history fetch as Doctor.
-The repair retains `blob:none` and existing objects. A shallow origin that cannot
-supply complete history stops preparation; restore origin access and run
-`openclaw doctor --fix` before retrying. Operator-registered repositories keep
+Managed project preparation, clone reuse, and refresh warn when the base has
+shallow history and continue without automatic repair. The same condition is
+visible in `openclaw doctor`. Run `openclaw doctor --fix` during a maintenance
+window: fetching full history retains `blob:none` and existing objects, but can
+take minutes while holding the project checkout lifecycle lease. Ordinary
+preparation never starts that repair. Operator-registered repositories keep
 their own history policy.
 
 Linked worktrees share the base's shallow boundary. Do not run `git fetch` or
@@ -1013,7 +1014,7 @@ Linked worktrees share the base's shallow boundary. Do not run `git fetch` or
 base or its linked worktrees. Fetch the required ref without a depth limit;
 Git retains the configured blob filter. Git has no repository setting that
 prevents an explicit depth fetch, so an already-running agent can still make
-the shared clone shallow until the next managed-project preparation repairs it.
+the shared clone shallow until an operator repairs it.
 
 ## Related
 

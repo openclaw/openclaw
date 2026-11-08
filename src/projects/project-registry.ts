@@ -240,12 +240,10 @@ export async function resolveRecordedProjectRoot(
     return undefined;
   }
   const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
-  return (
-    await executeOpenClawStateWorker(context, {
-      type: "projects.findRoot",
-      input: { repoRoot },
-    })
-  )?.repoRoot;
+  return await executeOpenClawStateWorker(context, {
+    type: "projects.findRoot",
+    input: { repoRoot },
+  });
 }
 
 export async function removeProjectRegistry(
