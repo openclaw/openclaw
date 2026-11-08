@@ -74,12 +74,12 @@ it("keeps each pipe's pending-character bound, omission order, and final fragmen
   const boundary = "🦊".repeat(32_768);
   const completed = "w".repeat(65_537);
   mocks.spawn.mockImplementationOnce(() => {
-    const child = new ChildProcess();
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
-    const streams = [child.stdout, child.stderr];
+    const child = Object.assign(new ChildProcess(), {
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+    });
     queueMicrotask(() => {
-      for (const stream of streams) {
+      for (const stream of [child.stdout, child.stderr]) {
         stream.write(boundary);
         stream.write("\r\n");
         stream.write(`${completed}\n`);
