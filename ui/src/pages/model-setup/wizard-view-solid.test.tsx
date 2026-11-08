@@ -97,6 +97,7 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   ));
   flush();
   await container.querySelector("openclaw-modal-dialog")!.updateComplete;
+  const wizard = container.querySelector(".model-setup-wizard");
   expect(document.activeElement?.textContent).toContain("Continue");
   const deviceStep = {
     id: "device-code",
@@ -130,6 +131,10 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   expect(container.querySelector("code")).toBe(code);
   setState({ phase: "done" });
   flush();
+  expect(container.querySelectorAll(".model-setup-wizard")).toHaveLength(1);
+  expect(container.querySelector(".model-setup-wizard")).toBe(wizard);
+  expect(wizard?.textContent).toContain("Provider is connected");
+  expect(container.querySelector(".wizard-sign-in")).toBeNull();
   const primary = container.querySelector<HTMLButtonElement>("[data-login-start-chat]")!;
   expect(document.activeElement).toBe(primary);
   expect(container.querySelector(".wizard-step__spinner")).toBeNull();

@@ -1083,7 +1083,10 @@ try {
               waitForGatewayReady: async () => {
                 const deadline = performance.now() + 120_000;
                 let unavailableAtEpochMs: number | undefined;
-                while (!interrupted && performance.now() < deadline) {
+                while (performance.now() < deadline) {
+                  if (interrupted) {
+                    break;
+                  }
                   const { status, errorKind } = await requestProbeStatus(port, "/readyz");
                   const observedAtEpochMs = performance.timeOrigin + performance.now();
                   if (
@@ -1095,7 +1098,9 @@ try {
                   } else if (status === 200 && unavailableAtEpochMs !== undefined) {
                     return { unavailableAtEpochMs, readyAtEpochMs: observedAtEpochMs };
                   }
-                  await new Promise((resolve) => setTimeout(resolve, 100));
+                  await new Promise((resolve) => {
+                    setTimeout(resolve, 100);
+                  });
                 }
                 throw new Error(
                   unavailableAtEpochMs === undefined

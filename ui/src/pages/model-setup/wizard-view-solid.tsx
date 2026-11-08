@@ -99,18 +99,18 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
         label={t(copy().dialog)}
         onModal-cancel={() => (canCancel() ? props.onCancel() : props.onClose())}
       >
-        {/* Completion replaces the form in place; its header/footer must not move the retained body. */}
-        <Show when={displayPhase() === "done" ? "done" : "active"} keyed>
-          <div
-            class={[
-              "oc-dialog model-setup-wizard",
-              {
-                "model-setup-wizard--auth": props.mode === "auth",
-                "model-setup-wizard--done": displayPhase() === "done",
-                "model-setup-wizard--sign-in": signInStep(),
-              },
-            ]}
-          >
+        <div
+          class={[
+            "oc-dialog model-setup-wizard",
+            {
+              "model-setup-wizard--auth": props.mode === "auth",
+              "model-setup-wizard--done": displayPhase() === "done",
+              "model-setup-wizard--sign-in": signInStep(),
+            },
+          ]}
+        >
+          {/* The modal adopts this container; replace completion contents inside its stable parent. */}
+          <Show when={displayPhase() === "done" ? "done" : "active"} keyed>
             <Show when={signInStep()}>
               <button
                 type="button"
@@ -299,8 +299,8 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                 </Show>
               </openclaw-modal-actions>
             </Show>
-          </div>
-        </Show>
+          </Show>
+        </div>
       </openclaw-modal-dialog>
     </Show>
   );
