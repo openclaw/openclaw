@@ -394,6 +394,9 @@ it.each(["resolve", "reject"])(
       context,
       createRouteLoaderOptions({ pathname: "/skills/settings", search: "", hash: "" }),
     );
+    if ("type" in route) {
+      throw new Error("Expected Skills settings route data");
+    }
     expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" });
     const mounted = mountSkillsPage(context, context.gateway.snapshot, route);
     const input = mounted.find('input[name="skills-filter"]') as HTMLInputElement;
@@ -434,6 +437,9 @@ it("does not prepare Skills inventory without operator read access", async () =>
     context,
     createRouteLoaderOptions({ pathname: "/skills/settings", search: "", hash: "" }),
   );
+  if ("type" in route) {
+    throw new Error("Expected Skills settings route data");
+  }
   mountSkillsPage(context, context.gateway.snapshot, route);
   await waitForSolid(() => expect(request).not.toHaveBeenCalled());
 });
