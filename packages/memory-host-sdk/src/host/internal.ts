@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { Minimatch } from "minimatch";
 import { runWithConcurrency } from "./concurrency.js";
 import { MEMORY_HOST_ROOT_FILENAME, normalizeConfiguredMemoryExtraPaths } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
@@ -97,6 +98,9 @@ function expandHomePath(value: string): string {
 
 type NormalizedExtraMemoryPath = { path: string; pattern?: string; evergreen?: true };
 
+// Parsed patterns live only as long as their configured scan/read entry.
+const extraMemoryPathMatchers = new WeakMap<NormalizedExtraMemoryPath, Minimatch>();
+
 export function normalizeExtraMemoryPathEntries(
   workspaceDir: string,
   extraPaths?: MemoryExtraPath[],
@@ -142,24 +146,22 @@ export function matchesExtraMemoryPathEntry(
       return false;
     }
     const normalizedRelativePath = relativePath.replaceAll(path.sep, "/");
-    if (!options?.directory) {
-      return path.posix.matchesGlob(normalizedRelativePath, entry.pattern);
+    let matcher = extraMemoryPathMatchers.get(entry);
+    if (!matcher || matcher.pattern !== entry.pattern) {
+      matcher = new Minimatch(entry.pattern, {
+        dot: false,
+        nonegate: true,
+        nocomment: true,
+        windowsPathsNoEscape: true,
+        optimizationLevel: 2,
+        // Configured globs use slash-separated relative paths on every host.
+        platform: "linux",
+        nocase: process.platform === "win32" || process.platform === "darwin",
+        nocaseMagicOnly: true,
+      });
+      extraMemoryPathMatchers.set(entry, matcher);
     }
-    const segments = entry.pattern.split("/");
-    // Keep complex patterns conservative; the leaf matcher owns their semantics.
-    if (
-      /[{[(]/.test(entry.pattern) ||
-      segments.some((segment) => segment === "." || segment === "..")
-    ) {
-      return true;
-    }
-    const parentCount = segments.at(-1) === "**" ? segments.length : segments.length - 1;
-    for (let length = 1; length <= parentCount; length += 1) {
-      if (path.posix.matchesGlob(normalizedRelativePath, segments.slice(0, length).join("/"))) {
-        return true;
-      }
-    }
-    return false;
+    return matcher.match(normalizedRelativePath, options?.directory);
   } catch {
     return false;
   }

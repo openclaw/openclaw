@@ -419,13 +419,26 @@ describe("memory host SDK package internals", () => {
     {
       label: "a bare globstar",
       patterns: ["**"],
-      expectedFiles: undefined,
+      expectedFiles: [
+        "root.md",
+        "notes/team/keep.md",
+        "notes/team/deeper/keep.md",
+        "logs.cache/deep/keep.md",
+        "archive/deep/keep.md",
+        "scratch/deep/keep.md",
+      ],
       expectedDirectories: undefined,
     },
     {
       label: "brace alternatives containing separators and extglobs",
       patterns: ["{notes,archive/deep}/**/*.md", "@(logs.cache|scratch)/**/*.md"],
-      expectedFiles: undefined,
+      expectedFiles: [
+        "notes/team/keep.md",
+        "notes/team/deeper/keep.md",
+        "logs.cache/deep/keep.md",
+        "archive/deep/keep.md",
+        "scratch/deep/keep.md",
+      ],
       expectedDirectories: undefined,
     },
     {
@@ -433,6 +446,12 @@ describe("memory host SDK package internals", () => {
       patterns: [".hidden/**/*.md"],
       expectedFiles: [".hidden/deep/keep.md"],
       expectedDirectories: ["", ".hidden", ".hidden/deep"],
+    },
+    {
+      label: "an explicit hidden file",
+      patterns: [".*.md"],
+      expectedFiles: [".secret.md"],
+      expectedDirectories: [""],
     },
     {
       label: "an invalid pattern alongside a valid pattern",
@@ -445,6 +464,7 @@ describe("memory host SDK package internals", () => {
       patterns: ["notes/team/*.md", undefined],
       expectedFiles: [
         "root.md",
+        ".secret.md",
         "notes/team/keep.md",
         "notes/team/deeper/keep.md",
         "logs.cache/deep/keep.md",
@@ -461,6 +481,7 @@ describe("memory host SDK package internals", () => {
       const extraDir = path.join(workspaceDir, "extra");
       const fixtureFiles = [
         "root.md",
+        ".secret.md",
         "notes/team/keep.md",
         "notes/team/deeper/keep.md",
         "logs.cache/deep/keep.md",
@@ -482,16 +503,7 @@ describe("memory host SDK package internals", () => {
 
       expect(
         files.map((file) => path.relative(extraDir, file).replaceAll(path.sep, "/")).toSorted(),
-      ).toEqual(
-        (
-          expectedFiles ??
-          // Node and Bun differ on dotfiles and extglobs. Pruning must preserve
-          // each runtime's existing exhaustive leaf-match results.
-          fixtureFiles.filter((file) =>
-            patterns.some((pattern) => !pattern || path.posix.matchesGlob(file, pattern)),
-          )
-        ).toSorted(),
-      );
+      ).toEqual(expectedFiles.toSorted());
       const scannedDirectories = readdir.mock.calls
         .map(([dir]) => path.resolve(String(dir)))
         .filter((dir) => dir === extraDir || dir.startsWith(`${extraDir}${path.sep}`));
@@ -504,6 +516,29 @@ describe("memory host SDK package internals", () => {
       }
     },
   );
+
+  it("requires an explicit dot pattern to authorize hidden extra memory files", async () => {
+    const workspaceDir = getTmpDir();
+    const extraDir = path.join(workspaceDir, "extra");
+    const hiddenFile = path.join(extraDir, ".secret.md");
+    await fs.mkdir(extraDir);
+    await fs.writeFile(hiddenFile, "private note");
+
+    await expect(
+      readMemoryFile({
+        workspaceDir,
+        extraPaths: [{ path: extraDir, pattern: "*.md" }],
+        relPath: hiddenFile,
+      }),
+    ).rejects.toMatchObject({ code: "MEMORY_PATH_NOT_ALLOWED" });
+    await expect(
+      readMemoryFile({
+        workspaceDir,
+        extraPaths: [{ path: extraDir, pattern: ".*.md" }],
+        relPath: hiddenFile,
+      }),
+    ).resolves.toMatchObject({ text: "private note" });
+  });
 
   it.skipIf(process.platform === "win32")(
     "skips a symlinked workspace root file instead of aborting enumeration",
