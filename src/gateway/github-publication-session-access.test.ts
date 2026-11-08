@@ -9,6 +9,7 @@ import {
 } from "./github-publication.test-support.js";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
@@ -54,6 +55,20 @@ async function worktreeState(
     diff: await workspace.git("diff", "HEAD"),
   };
 }
+
+// Plain Git setup outside the fixture needs its own identity on hosts without one.
+const testGit = (...args: string[]) =>
+  execFileSync("git", args, {
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Publication Test",
+      GIT_AUTHOR_EMAIL: "publication@example.test",
+      GIT_COMMITTER_NAME: "Publication Test",
+      GIT_COMMITTER_EMAIL: "publication@example.test",
+      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_CONFIG_SYSTEM: os.devNull,
+    },
+  });
 
 const LOCAL_CHECKOUT_OUTCOMES = [
   "published",
@@ -267,8 +282,8 @@ describe("local checkout publication", () => {
       if (outcome === "foreign project") {
         projectRoot = path.join(root, "other-repository");
         await fs.mkdir(projectRoot, { recursive: true });
-        execFileSync("git", ["init", "-q", projectRoot]);
-        execFileSync("git", ["-C", projectRoot, "commit", "-q", "--allow-empty", "-m", "init"]);
+        testGit("init", "-q", projectRoot);
+        testGit("-C", projectRoot, "commit", "-q", "--allow-empty", "-m", "init");
       }
       projectId = (await registerProjectRegistry({ path: projectRoot })).id;
       await upsertSessionEntryCore(scope, { projectId });
@@ -278,8 +293,8 @@ describe("local checkout publication", () => {
       const update = mocks.updateIndex.getMockImplementation()!;
       mocks.updateIndex.mockImplementationOnce(async (...args) => {
         await fs.writeFile(path.join(linked, "artifact.txt"), "another chat\n");
-        execFileSync("git", ["-C", linked, "checkout", "-q", "-b", "another-chat"]);
-        execFileSync("git", ["-C", linked, "commit", "-q", "-am", "Another chat's change"]);
+        testGit("-C", linked, "checkout", "-q", "-b", "another-chat");
+        testGit("-C", linked, "commit", "-q", "-am", "Another chat's change");
         return await update(...args);
       });
     }
