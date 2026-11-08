@@ -104,7 +104,13 @@ def _load_frontmatter(frontmatter_text: str):
                 # Merge keys are flattened by SafeConstructor and have no constructor.
                 if key_node.tag == "tag:yaml.org,2002:merge":
                     continue
-                key = self.construct_object(key_node, deep=deep)
+                # The core schema the runtime reader uses keeps YAML 1.1 boolean
+                # spellings like `yes`/`on` as strings, and its duplicate check
+                # compares authored scalar text. SafeLoader would construct both
+                # as True and reject a file the runtime loads.
+                if not isinstance(key_node, yaml.ScalarNode):
+                    continue
+                key = key_node.value
                 if key in keys:
                     raise yaml.constructor.ConstructorError(
                         "while constructing a mapping",

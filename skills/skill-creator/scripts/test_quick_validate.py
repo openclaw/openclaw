@@ -209,6 +209,32 @@ metadata: |
         )
         self.assertTrue(*self.validate_content(content))
 
+    def test_duplicate_key_check_uses_core_schema_scalar_identity(self):
+        # The core schema keeps YAML 1.1 boolean spellings such as yes/on as
+        # distinct strings; SafeLoader would construct both as True here.
+        content = (
+            "---\n"
+            "name: core-keys-skill\n"
+            "description: Summarize meetings\n"
+            "metadata: {yes: enabled, on: active}\n"
+            "---\n"
+            "# Skill\n"
+        )
+        self.assertTrue(*self.validate_content(content))
+
+    def test_duplicate_key_check_still_rejects_actual_duplicates(self):
+        content = (
+            "---\n"
+            "name: duplicate-skill\n"
+            "description: Summarize meetings\n"
+            "metadata: {yes: enabled, yes: active}\n"
+            "---\n"
+            "# Skill\n"
+        )
+        valid, message = self.validate_content(content)
+        self.assertFalse(valid)
+        self.assertIn("found duplicate key", message)
+
     def test_colon_rich_recovery_keeps_other_yaml_errors(self):
         content = (
             "---\n"
