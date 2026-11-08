@@ -33,7 +33,7 @@ INSTALL_TYPESCRIPT
 COPY --chmod=0644 scripts/prepublish-plugin-registry-artifact.mjs /opt/openclaw-e2e/scripts/
 COPY --chmod=0755 scripts/e2e/lib/prepublish-plugin-registry.sh /opt/openclaw-e2e/scripts/e2e/lib/
 COPY scripts/e2e/lib/plugins/npm-registry-server.mjs /opt/openclaw-e2e/scripts/e2e/lib/plugins/
-COPY scripts/lib/bounded-response.mjs /opt/openclaw-e2e/scripts/lib/
+COPY scripts/lib/bounded-response.mjs scripts/lib/release-version.mjs /opt/openclaw-e2e/scripts/lib/
 
 # COPY --chmod can also set modes on newly created parent directories.
 RUN find /opt/openclaw-e2e -type d -exec chmod 0755 {} +
