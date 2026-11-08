@@ -43,7 +43,8 @@ source-build step; release-workflow budgets and package-integrity checks are unc
 
 Precise PR plans can run the complete source-boundary gate first in an existing
 short, serial 8-class tooling job. Both configs retain separate test processes;
-a 90-second boundary reservation must fit the existing 150-second test budget.
+the boundary reservation is 60 seconds for `bun-all` and 90 seconds for other
+runtime policies, within the existing 150-second test budget.
 Other runners, preparation modes, parallel jobs, and full validation keep their
 standalone boundary ownership.
 
