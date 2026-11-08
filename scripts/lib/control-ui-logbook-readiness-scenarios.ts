@@ -40,11 +40,9 @@ export const logbookReadinessScenarios: InteractionScenario[] = [false, true].fl
         "The selected card uses the capture timezone and fresh status settles without duplicate reads.",
       setup: async (page) => {
         const session = await page.context().newCDPSession(page);
-        try {
-          await session.send("Emulation.setTimezoneOverride", { timezoneId: "UTC" });
-        } finally {
-          await session.detach();
-        }
+        // Detaching resets the override. The observation-owned browser closes
+        // this session with the page after all measured requests settle.
+        await session.send("Emulation.setTimezoneOverride", { timezoneId: "UTC" });
       },
       fixtureOverrides: () => ({
         sessions: [],
@@ -58,6 +56,12 @@ export const logbookReadinessScenarios: InteractionScenario[] = [false, true].fl
         },
       }),
       prepare: async (page, gateway) => {
+        const timeZone = await page.evaluate(
+          () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+        );
+        if (timeZone !== "UTC") {
+          throw new Error(`Expected UTC fixture timezone, got ${timeZone}`);
+        }
         if (historical) {
           await openLogbook(page);
           await page.getByText("Current card", { exact: true }).waitFor();
@@ -108,6 +112,10 @@ export const logbookReadinessScenarios: InteractionScenario[] = [false, true].fl
           const statusBefore = (await gateway.getRequests("logbook.status")).length;
           const timelineBefore = (await gateway.getRequests("logbook.timeline")).length;
           const started = await page.evaluate(() => performance.now());
+          // Start status observation at the same boundary in both variants;
+          // serial locator polling after the card would bias settlement latency.
+          const settledStatus = page.getByText(statusMarker, { exact: true }).waitFor();
+          void settledStatus.catch(() => undefined);
           if (historical) {
             await page.getByRole("button", { name: "Previous day", exact: true }).click();
           } else {
@@ -120,7 +128,7 @@ export const logbookReadinessScenarios: InteractionScenario[] = [false, true].fl
           if (!(await page.locator(".logbook-card__time").textContent())?.includes("04:30 PM")) {
             throw new Error("Timeline did not preserve the capture timezone");
           }
-          await page.getByText(statusMarker, { exact: true }).waitFor();
+          await settledStatus;
           await waitForControlUiRoute(page, { routeId: "plugin" });
           await frames(page);
           const fullSettlementMs = await page.evaluate(
@@ -132,7 +140,9 @@ export const logbookReadinessScenarios: InteractionScenario[] = [false, true].fl
           const timelineRequests =
             (await gateway.getRequests("logbook.timeline")).length - timelineBefore;
           if (statusRequests !== 1 || timelineRequests !== 1) {
-            throw new Error("Expected one status and timeline request after settlement");
+            throw new Error(
+              `Expected one status and timeline request after settlement, got ${statusRequests}/${timelineRequests}`,
+            );
           }
           return {
             firstContentMs,
