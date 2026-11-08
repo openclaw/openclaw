@@ -1,0 +1,2 @@
+# Prove the startup-versus-reload auth snapshot shapes compare equal and a real profile change still does not.
+40

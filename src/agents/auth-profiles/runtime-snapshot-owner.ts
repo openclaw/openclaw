@@ -399,12 +399,28 @@ export function classifyRuntimeAuthProfileSnapshotChange(
     | Pick<OwnedRuntimeAuthProfileStoreSnapshotEntry, "store" | "owner" | "legacyCandidates">
     | undefined,
 ): "unchanged" | "availability" | "catalog" {
-  const metadata = (entry: typeof previous, includeAvailability = true) =>
-    entry && {
-      state: runtimeAuthMetadataState(entry.store, includeAvailability),
+  // Startup captures an unresolved store (external-profile fields unset) while the
+  // slow-secrets path records the resolved "no external profiles" shape (empty ids with
+  // authoritative true). Both name the same profile set, so the comparison ignores the
+  // shape difference; otherwise the first reload after a start invalidates every runtime.
+  const metadata = (entry: typeof previous, includeAvailability = true) => {
+    if (!entry) {
+      return entry;
+    }
+    const {
+      runtimeExternalProfileIds,
+      runtimeExternalProfileIdsAuthoritative: _authoritativeShape,
+      ...state
+    } = runtimeAuthMetadataState(entry.store, includeAvailability);
+    return {
+      state: {
+        ...state,
+        runtimeExternalProfileIds: (runtimeExternalProfileIds ?? []).toSorted(),
+      },
       owner: entry.owner,
       legacyCandidates: entry.legacyCandidates,
     };
+  };
   if (isDeepStrictEqual(metadata(previous), metadata(next))) {
     return "unchanged";
   }
