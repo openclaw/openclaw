@@ -116,9 +116,8 @@ async function fixture(interruptible: boolean, signal: AbortSignal, fallback = f
     ) =>
       agent.subscribe((event) => {
         if (event.type !== "agent_end") {
-          return listener(event);
+          listener(event);
         }
-        return undefined;
       }),
   };
   operation.attachBackend({
