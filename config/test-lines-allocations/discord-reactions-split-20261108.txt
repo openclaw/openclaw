@@ -1,0 +1,4 @@
+# Discord real ingress/receipt/replay and gateway occurrence regressions.
+# Includes CLI registry runtime fixture and independent receipt failure controls.
+# Shared scalar unchanged; exact net growth for this sibling.
+375

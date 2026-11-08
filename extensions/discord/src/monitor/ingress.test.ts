@@ -14,7 +14,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createMockPluginRegistry,
@@ -56,7 +55,7 @@ function installIngressTransform(handler: (...args: unknown[]) => unknown) {
 }
 
 let stateDir: string;
-let queue: ChannelIngressQueue<DiscordIngressPayload>;
+let queue: NonNullable<Parameters<typeof createDiscordIngressMonitor>[0]["queue"]>;
 const monitors = new Set<ReturnType<typeof createDiscordIngressMonitor>>();
 beforeEach(async () => {
   stateDir = await fs.realpath(
@@ -310,7 +309,7 @@ describe("Discord durable ingress", () => {
     const gateAppend = vi.fn(appendGate.wait);
     // An idle monitor admits a fresh singleton through the fused append-and-claim.
     const enqueueAndClaim = queue.enqueueAndClaim?.bind(queue);
-    const gatedQueue: ChannelIngressQueue<DiscordIngressPayload> = {
+    const gatedQueue: typeof queue = {
       ...queue,
       enqueue: async (...args) => {
         await gateAppend();

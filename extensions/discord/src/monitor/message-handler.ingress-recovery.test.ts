@@ -35,7 +35,12 @@ type DiscordQueue = NonNullable<Parameters<typeof createDiscordIngressMonitor>[0
 type DiscordIngressPayload = Parameters<DiscordQueue["enqueue"]>[1];
 const priorAttempts = DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1;
 
-const payload = (id: string, receivedAt = 1): DiscordIngressPayload => ({
+const payload = (
+  id: string,
+  receivedAt = 1,
+): Omit<DiscordIngressPayload, "rawMessage"> & {
+  rawMessage: ReturnType<typeof createDiscordMessage>["rawData"];
+} => ({
   version: 1,
   receivedAt,
   rawMessage: createDiscordMessage({

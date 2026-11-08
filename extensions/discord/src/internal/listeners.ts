@@ -8,6 +8,8 @@ import {
   type GatewayGuildCreateDispatchData,
   type GatewayGuildDeleteDispatchData,
   type GatewayMessageCreateDispatchData,
+  type GatewayMessageReactionAddDispatchData,
+  type GatewayMessageReactionRemoveDispatchData,
   type GatewayPresenceUpdateDispatchData,
   type GatewayThreadDeleteDispatchData,
   type GatewayThreadUpdateDispatchData,
@@ -28,7 +30,15 @@ export type DiscordMessageDispatchData = {
   channel?: unknown;
 };
 
+export type DiscordReactionIngressEvent = {
+  kind: "reaction";
+  occurrenceId: string;
+  action: "added" | "removed";
+  data: GatewayMessageReactionAddDispatchData | GatewayMessageReactionRemoveDispatchData;
+};
+
 type DiscordReactionDispatchData = {
+  ingressEvent?: DiscordReactionIngressEvent;
   user_id?: string;
   channel_id: string;
   message_id: string;

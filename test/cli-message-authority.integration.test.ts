@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordPlugin } from "../extensions/discord/api.js";
+import { setDiscordRuntime } from "../extensions/discord/runtime-api.js";
 import { slackPlugin } from "../extensions/slack/api.js";
 import {
   createOperationalRunInstanceRef,
@@ -39,6 +40,7 @@ import {
 } from "../src/gateway/message-action-turn-capability.js";
 import { createRequestGatewayMethodRegistry } from "../src/gateway/server-methods.js";
 import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
+import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
 import { createTestPluginRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import {
@@ -393,7 +395,15 @@ describe("CLI message authority integration", () => {
       if (plugin.id === "discord") {
         registeredDiscordActions = actions;
       }
-      owner.createApi(record, { config: cfg, registrationMode: "full" }).registerChannel({
+      const api = owner.createApi(record, { config: cfg, registrationMode: "full" });
+      // Mirror plugin entry registration: keyed reactions use the registry-owned
+      // state runtime, not an uninitialized channel-only fixture.
+      if (plugin.id === "discord") {
+        expectDefined(getPluginInstance(record), "registered Discord instance").run(() =>
+          setDiscordRuntime(api.runtime),
+        );
+      }
+      api.registerChannel({
         plugin: { ...plugin, status: undefined, ...(actions ? { actions } : {}) },
       });
     }

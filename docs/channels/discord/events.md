@@ -20,7 +20,18 @@ Operational Discord surfaces: reaction and presence wakes, bot presence, gateway
     - `all`
     - `allowlist` (uses `guilds.<id>.users`)
 
-    Reaction events are turned into system events and attached to the routed Discord session.
+    Authorized add/remove reactions enter ordinary conversation dispatch in the
+    routed Discord session, including an existing task-thread binding. They carry
+    the original target identity and permitted bot-message text. The agent may
+    remain silent or use the message tool to respond; a reaction is not task
+    acceptance or approval. Existing native approval controls remain separate.
+
+    Gateway session/sequence identity and durable ingress suppress retained
+    reconnect replays. Events without an occurrence identity do not create a new
+    turn. Keyed outbound reactions use durable transport receipts: confirmed
+    replies are not resent, and uncertain or interrupted sends need reconciliation.
+    The receipt namespace rejects new entries at 5,000 rows instead of evicting
+    dedupe evidence. See [conversational reactions](/plugins/sdk-channel-plugins#conversational-reactions).
 
   </Accordion>
 

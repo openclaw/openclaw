@@ -5,8 +5,9 @@ import {
   readStringParam,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
-import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
+import { jsonResult, resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import type { ReactionReplyReceipt } from "openclaw/plugin-sdk/channel-feedback";
 import {
   adaptMessagePresentationForChannel,
   normalizeLegacyInteractiveReply,
@@ -30,6 +31,7 @@ import {
   DISCORD_PRESENTATION_CAPABILITIES,
   isDiscordComponentSpecWithinMessageLimit,
 } from "../outbound-components.js";
+import { getDiscordRuntime } from "../runtime.js";
 import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
@@ -276,13 +278,47 @@ async function dispatchDiscordMessageAction(
     }
     const emoji = readStringParam(params, "emoji", { allowEmpty: true });
     const remove = readBooleanParam(params, "remove");
-    return await runAction({
-      action: "react",
-      channelId: readTarget(),
-      messageId,
-      emoji,
-      remove,
+    const channelId = readTarget();
+    const send = () => runAction({ action: "react", channelId, messageId, emoji, remove });
+    const key = readStringParam(params, "idempotencyKey");
+    if (!key) {
+      // Existing direct CLI callers without an occurrence key retain their API.
+      return await send();
+    }
+    const { runReactionReplyWithReceipt } = await import("openclaw/plugin-sdk/channel-feedback");
+    const receipt = await runReactionReplyWithReceipt({
+      store: getDiscordRuntime().state.openKeyedStoreV2<
+        ReactionReplyReceipt<AgentToolResult<unknown>>
+      >({
+        namespace: "reaction-replies.v1",
+        maxEntries: 5000,
+        overflowPolicy: "reject-new",
+      }),
+      key,
+      identity: JSON.stringify([
+        accountId ?? "default",
+        channelId,
+        messageId,
+        emoji,
+        Boolean(remove),
+      ]),
+      assertAuthority: () => ctx.assertDirectAdapterHandoff?.(),
+      send,
+      isConfirmed: (result) => asOptionalRecord(result.details)?.ok === true,
     });
+    return receipt.state === "confirmed"
+      ? {
+          ...receipt.result,
+          details: {
+            ...asOptionalRecord(receipt.result.details),
+            reactionReceipt: { state: receipt.state },
+          },
+        }
+      : jsonResult({
+          ok: false,
+          deliveryStatus: receipt.state,
+          reactionReceipt: { state: receipt.state },
+        });
   }
 
   if (action === "reactions") {
