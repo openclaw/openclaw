@@ -308,7 +308,8 @@ async function runCatalogRequest(
     }
     const { prepareAgentCatalogSource } =
       await import("./prepared-model-runtime.scoped-catalog.js");
-    const { prepareFullCatalogFacts } = await import("./prepared-model-runtime.full-catalog.js");
+    const { prepareCatalogPublicationFacts } =
+      await import("./prepared-model-runtime.full-catalog.js");
     const startupProviderIds = new Set(value.providerIds.map(normalizeProviderId));
     const exactAgentFacts = {
       ...value.catalogFacts,
@@ -416,7 +417,7 @@ async function runCatalogRequest(
         providerDiscoveryTimeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
       },
     );
-    const facts = await prepareFullCatalogFacts(
+    const facts = await prepareCatalogPublicationFacts(
       exactAgentFacts,
       catalogGeneration,
       "live",

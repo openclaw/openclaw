@@ -2,6 +2,7 @@
 import path from "node:path";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ModelRegistry as ModelLookup } from "../llm/model-registry.js";
 import type { Model } from "../llm/types.js";
 import {
   resolveAgentDiscoveryAuthFacts,
@@ -14,6 +15,11 @@ import type {
   PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
+import { buildModelRegistryCatalog } from "./sessions/model-registry-catalog.js";
+import {
+  getModelRegistryProviderRequestConfig,
+  hasModelRegistryConfiguredAuth,
+} from "./sessions/model-registry-request-auth.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 
 const CAPTURED_MODELS_JSON_SOURCE_PATH = "captured:models.json";
@@ -60,17 +66,15 @@ function prepareModelRegistryOptions(options?: DiscoverModelsOptions) {
   };
 }
 
-function normalizeOpenClawModelRegistry(
-  registry: ModelRegistry,
+function normalizeOpenClawModelLookup(
+  registry: ModelLookup,
   agentDir: string | undefined,
+  providerMetadataOwners: PluginModelCatalogMetadataSnapshot["owners"] | undefined,
   options?: DiscoverModelsOptions,
-): ModelRegistry {
-  const providerMetadataOwners = registry.getProviderMetadataOwners();
+): () => void {
   const getAll = registry.getAll.bind(registry);
   const getAvailable = registry.getAvailable.bind(registry);
   const find = registry.find.bind(registry);
-  const refresh = registry.refresh.bind(registry);
-  const refreshAsync = registry.refreshAsync.bind(registry);
   const shouldNormalize = options?.normalizeModels !== false;
   const findCache = new Map<string, Model | undefined>();
   const normalizeEntry = (entry: Model) => {
@@ -98,16 +102,71 @@ function normalizeOpenClawModelRegistry(
     findCache.set(key, resolved);
     return resolved;
   };
+  return () => findCache.clear();
+}
+
+function normalizeOpenClawModelRegistry(
+  registry: ModelRegistry,
+  agentDir: string | undefined,
+  options?: DiscoverModelsOptions,
+): ModelRegistry {
+  const clearFindCache = normalizeOpenClawModelLookup(
+    registry,
+    agentDir,
+    registry.getProviderMetadataOwners(),
+    options,
+  );
+  const refresh = registry.refresh.bind(registry);
+  const refreshAsync = registry.refreshAsync.bind(registry);
   registry.refresh = () => {
-    findCache.clear();
+    clearFindCache();
     return refresh();
   };
   registry.refreshAsync = async () => {
     await refreshAsync();
-    findCache.clear();
+    clearFindCache();
   };
-
   return registry;
+}
+
+/** Catalog publication needs lookup and availability, without a mutable session or backup. */
+export function discoverModelCatalog(
+  authStorage: AuthStorage,
+  agentDir: string,
+  options: DiscoverModelsOptions & {
+    modelsJsonContents: string | null;
+    pluginCatalogs: readonly PersistedPluginModelCatalog[];
+  },
+): ModelLookup {
+  const prepared = prepareModelRegistryOptions(options);
+  const { models, providerRequestConfigs } = buildModelRegistryCatalog(
+    authStorage,
+    path.join(agentDir, "models.json"),
+    prepared,
+  );
+  const lookup = createModelCatalogLookup(models, (model) =>
+    hasModelRegistryConfiguredAuth({
+      model,
+      providerConfig: getModelRegistryProviderRequestConfig(model, providerRequestConfigs),
+      authStorage,
+    }),
+  );
+  normalizeOpenClawModelLookup(lookup, agentDir, prepared.pluginMetadataSnapshot?.owners, options);
+  return lookup;
+}
+
+/** Reuse route-scoped availability when projecting accepted serving limits onto catalog rows. */
+export function createModelCatalogLookup(
+  models: Model[],
+  hasConfiguredAuth: ModelLookup["hasConfiguredAuth"],
+): ModelLookup {
+  return {
+    getAll: () => models,
+    getAvailable: () => models.filter(hasConfiguredAuth),
+    find: (provider, modelId) =>
+      models.find((model) => model.provider === provider && model.id === modelId),
+    hasConfiguredAuth,
+  };
 }
 
 /** Captures the effective profile store and its AuthStorage projection as one generation. */

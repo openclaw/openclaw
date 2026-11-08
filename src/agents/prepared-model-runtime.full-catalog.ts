@@ -1,11 +1,16 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import type { ModelRegistry as ModelLookup } from "../llm/model-registry.js";
 import type { Model } from "../llm/types.js";
 import { resolvePreparedProviderStaticConfigs } from "../plugins/provider-discovery.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
-import { discoverModelsAsync } from "./agent-model-discovery.js";
+import {
+  createModelCatalogLookup,
+  discoverModelCatalog,
+  discoverModelsAsync,
+} from "./agent-model-discovery.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import {
   buildInlineProviderModels,
@@ -51,8 +56,7 @@ import { AuthStorage } from "./sessions/auth-storage.js";
 
 const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 
-/** Builds complete inventory before generation-specific runtime capability projection. */
-export async function prepareFullCatalogFacts(
+type CatalogPreparationParams = [
   agentFacts: Parameters<typeof completeConfiguredRuntimeModels>[0] &
     Pick<PreparedModelRuntimeAgentFacts, "templateAuthStorage" | "credentials">,
   pluginGeneration: Pick<
@@ -64,16 +68,82 @@ export async function prepareFullCatalogFacts(
   >,
   catalogMode: PreparedModelRuntimeCatalogMode,
   catalogSource: PreparedModelRuntimeCatalogSource,
-  options: { includeNative?: boolean; providerIds?: readonly string[] } = {},
-): Promise<PreparedModelRuntimeCatalogFacts & { catalogModels: readonly Model[] }> {
+  options?: { includeNative?: boolean; providerIds?: readonly string[] },
+];
+
+function projectCatalogServingLimits(
+  models: readonly Model[],
+  servingLimits: NonNullable<PreparedModelRuntimeCatalogSource["servingLimits"]>,
+): Map<string, Model[]> {
+  const published = new Map<string, Model[]>();
+  for (const model of models) {
+    const providerModels = published.get(model.provider) ?? [];
+    providerModels.push(applyModelServingContextLimit(model, servingLimits));
+    published.set(model.provider, providerModels);
+  }
+  return published;
+}
+
+/** Runtime owners retain an isolated baseline for later session forks. */
+export function prepareFullCatalogFacts(...args: CatalogPreparationParams) {
+  const [{ templateAuthStorage, input }, , , source] = args;
+  return prepareCatalogFacts(
+    async (options) => {
+      const registry = await discoverModelsAsync(templateAuthStorage, input.agentDir, options);
+      return source.servingLimits?.size
+        ? registry.fork(
+            templateAuthStorage,
+            projectCatalogServingLimits(registry.getAll(), source.servingLimits),
+          )
+        : registry;
+    },
+    ...args,
+  );
+}
+
+/** Publication owns rows, not mutable session state or a second full model graph. */
+export async function prepareCatalogPublicationFacts(...args: CatalogPreparationParams) {
+  const [{ templateAuthStorage, input }, , , source] = args;
+  const { templateModelRegistry: _registry, ...publication } = await prepareCatalogFacts(
+    (options) => {
+      const lookup = discoverModelCatalog(templateAuthStorage, input.agentDir, options);
+      // Normalization and serving observations precede configured-model hooks, just as for a fork.
+      return source.servingLimits?.size
+        ? createModelCatalogLookup(
+            [...projectCatalogServingLimits(lookup.getAll(), source.servingLimits).values()].flat(),
+            lookup.hasConfiguredAuth,
+          )
+        : lookup;
+    },
+    ...args,
+  );
+  return publication;
+}
+
+/** Both lifecycle owners use the same inventory and configured-model projection. */
+async function prepareCatalogFacts<T extends ModelLookup>(
+  createRegistry: (options: Parameters<typeof discoverModelCatalog>[2]) => T | Promise<T>,
+  ...[
+    agentFacts,
+    pluginGeneration,
+    catalogMode,
+    catalogSource,
+    options = {},
+  ]: CatalogPreparationParams
+): Promise<
+  Omit<PreparedModelRuntimeCatalogFacts, "templateModelRegistry"> & {
+    templateModelRegistry: T;
+    catalogModels: readonly Model[];
+  }
+> {
   const prepare = async () => {
-    const { env, input, templateAuthStorage } = agentFacts;
+    const { env, input } = agentFacts;
     const { pluginMetadataSnapshot, pluginRegistry, preparedStaticProviderCatalog } =
       pluginGeneration;
     const observedProviders = new Set(
       catalogSource.providerOutcomes?.map(({ provider }) => normalizeProviderId(provider)),
     );
-    let templateModelRegistry = await discoverModelsAsync(templateAuthStorage, input.agentDir, {
+    const templateModelRegistry = await createRegistry({
       config: input.config,
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
       pluginMetadataSnapshot,
@@ -87,18 +157,6 @@ export async function prepareFullCatalogFacts(
         ),
       ),
     });
-    if (catalogSource.servingLimits?.size) {
-      // Serving observations are acquisition facts, not models.json/config fields.
-      // Reuse the registry's immutable publication projection so forks and worker
-      // serialization preserve them after every authored metadata overlay.
-      const published = new Map<string, Model[]>();
-      for (const model of templateModelRegistry.getAll()) {
-        const models = published.get(model.provider) ?? [];
-        models.push(applyModelServingContextLimit(model, catalogSource.servingLimits));
-        published.set(model.provider, models);
-      }
-      templateModelRegistry = templateModelRegistry.fork(templateAuthStorage, published);
-    }
     const catalogModels = templateModelRegistry.getAll();
     const snapshot = await buildPreparedModelCatalogSnapshot({
       agentDir: input.agentDir,

@@ -12,6 +12,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../config/io.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Model } from "../llm/types.js";
+import type { OAuthCredentials } from "../llm/utils/oauth/types.js";
 import { bindPluginMetadataSnapshotCache, createPluginCache } from "../plugins/plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -43,11 +45,13 @@ import {
 } from "./prepared-model-runtime.facts.js";
 import {
   createPreparedModelRuntimeSnapshot,
+  prepareCatalogPublicationFacts,
   prepareFullCatalogFacts,
 } from "./prepared-model-runtime.full-catalog.js";
 import * as inboundRegistry from "./prepared-model-runtime.inbound-registry.js";
 import { discardPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
+import { getAuthStorageOAuthProviderRegistry } from "./sessions/auth-storage-oauth-registry.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 
@@ -176,7 +180,7 @@ describe("prepared catalog source composition", () => {
   it.each([true, false])(
     "admits persisted-only models only with current credentials (%s)",
     async (authenticated) => {
-      const { facts, generation } = persistedFixture();
+      const { facts, generation, catalogs } = persistedFixture();
       await using cache = createPluginCache();
       bindPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot, cache);
       facts.input = { ...facts.input, config: {} };
@@ -214,6 +218,15 @@ describe("prepared catalog source composition", () => {
       };
       const batch = await prepareConfiguredRuntimeFactsBatch(prepared);
       const registry = batch.catalogs.get(facts.input)!.templateModelRegistry;
+      const publication = await prepareCatalogPublicationFacts(
+        prepared.agentFacts[0]!,
+        prepared.pluginGeneration,
+        "static",
+        { modelsJsonContents: null, pluginCatalogs: catalogs },
+      );
+      expect(publication.catalogModels.some((row) => row.id === "persisted-only")).toBe(
+        authenticated,
+      );
       const result = await resolveModelAsync(
         providerId,
         "persisted-only",
@@ -439,6 +452,15 @@ describe("prepared catalog source composition", () => {
       modelsJsonContents,
       pluginCatalogs: [],
     });
+    const publication = await prepareCatalogPublicationFacts(facts, generation, "static", {
+      modelsJsonContents,
+      pluginCatalogs: [],
+    });
+    expect(publication.catalogModels.map((row) => row.id).toSorted()).toEqual([
+      "configured-only",
+      "shared",
+    ]);
+    expect(publication.modelCatalog.staticEntries).toEqual([]);
     for (const catalogFacts of [startup, full]) {
       const snapshot = createPreparedModelRuntimeSnapshot(
         undefined,
@@ -463,6 +485,90 @@ describe("prepared catalog source composition", () => {
         .soft(snapshot.modelCatalog.entries.map((entry) => entry.id).toSorted())
         .toEqual(["configured-only", "shared"]);
       expect.soft(snapshot.modelCatalog.staticEntries ?? []).toEqual([]);
+    }
+  });
+
+  it("completes catalog models after OAuth, normalization and serving-limit projection", async () => {
+    const { facts, generation, modelsJsonContents } = fixture();
+    const normalizedEndpoint = "https://normalized.example.invalid/v1";
+    const oauth = { access: "synthetic-access", refresh: "synthetic-refresh", expires: 9e15 };
+    facts.configuredModelRefs = [{ provider: providerId, modelId: "completed" }];
+    for (const kind of ["missing", "api_key", "oauth"] as const) {
+      for (const prepare of [prepareFullCatalogFacts, prepareCatalogPublicationFacts]) {
+        facts.credentials =
+          kind === "missing"
+            ? {}
+            : {
+                [providerId]:
+                  kind === "oauth"
+                    ? { type: kind, ...oauth }
+                    : { type: kind, key: "synthetic-key" },
+              };
+        facts.templateAuthStorage = AuthStorage.inMemory(facts.credentials);
+        const modifyModels = vi.fn((models: Model[], credential: OAuthCredentials) => {
+          expect(credential).toMatchObject(oauth);
+          return models.map((row) => ({ ...row, name: `OAuth ${row.id}` }));
+        });
+        getAuthStorageOAuthProviderRegistry(facts.templateAuthStorage).register({
+          id: providerId,
+          name: "Source fixture",
+          login: async () => oauth,
+          refreshToken: async (credential) => credential,
+          getApiKey: (credential) => credential.access,
+          modifyModels,
+        });
+        const registry = createEmptyPluginRegistry();
+        const expected = {
+          name: kind === "oauth" ? "Normalized OAuth shared" : "Normalized Current shared",
+          baseUrl: normalizedEndpoint,
+          servingContextLimit: {
+            id: "shared",
+            api: "openai-completions",
+            baseUrl: normalizedEndpoint,
+            tokens: 8192,
+          },
+        };
+        registry.providers.push({
+          pluginId,
+          source: "fixture",
+          provider: {
+            id: providerId,
+            label: "Source fixture",
+            auth: [],
+            normalizeResolvedModel: ({ model }) => ({
+              ...model,
+              name: `Normalized ${model.name}`,
+              baseUrl: normalizedEndpoint,
+            }),
+            resolveDynamicModel: ({ modelId, modelRegistry }) => {
+              const row = modelRegistry.find(providerId, "shared")!;
+              expect(row).toMatchObject(expected);
+              expect(modelRegistry.getAll()).toContainEqual(row);
+              expect(modelRegistry.hasConfiguredAuth(row)).toBe(kind !== "missing");
+              expect(modelRegistry.getAvailable().some((model) => model.id === "shared")).toBe(
+                kind !== "missing",
+              );
+              return { ...row, id: modelId };
+            },
+          },
+        });
+        const result = await prepare(
+          facts,
+          { ...generation, pluginRegistry: registry },
+          "live",
+          {
+            modelsJsonContents,
+            pluginCatalogs: [],
+            servingLimits: new Map([[providerId, [expected.servingContextLimit]]]),
+          },
+          { includeNative: false },
+        );
+        expect(result.catalogModels.find((row) => row.id === "shared")).toMatchObject(expected);
+        expect(result.configuredRuntimeModels).toMatchObject([
+          { provider: providerId, modelId: "completed", model: { ...expected, id: "completed" } },
+        ]);
+        expect(modifyModels).toHaveBeenCalledTimes(kind === "oauth" ? 1 : 0);
+      }
     }
   });
   it.each(["same", "credentials"] as const)(

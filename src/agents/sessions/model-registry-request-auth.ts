@@ -1,5 +1,6 @@
 import type { Model } from "../../llm/types.js";
 import { applyLocalNoAuthHeaders, resolveExplicitProviderNoAuth } from "../model-auth-markers.js";
+import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import type { AuthStorage } from "./auth-storage.js";
 import type { ProviderRequestConfig, ResolvedRequestAuth } from "./model-registry-sources.js";
 import {
@@ -120,4 +121,20 @@ export function hasModelRegistryConfiguredAuth(params: {
     providerConfig?.auth === "aws-sdk" ||
     providerConfig?.apiKey !== undefined
   );
+}
+
+export function getModelRegistryProviderRequestConfig(
+  model: Model,
+  providerRequestConfigs: ReadonlyMap<string, ProviderRequestConfig>,
+): ProviderRequestConfig | undefined {
+  const config = providerRequestConfigs.get(model.provider);
+  if (
+    config?.baseUrls &&
+    !config.baseUrls.some((baseUrl) =>
+      modelTransportRoutesMatch({ baseUrl }, { baseUrl: model.baseUrl }),
+    )
+  ) {
+    return undefined;
+  }
+  return config;
 }

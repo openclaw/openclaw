@@ -8,7 +8,18 @@ const port = parentPort!;
 let task: Catalog.CatalogInspectionTask;
 let sqliteCopies = 0;
 let copyHookObserved: boolean | undefined;
+let modelRegistryConstructions = 0;
+let modelRegistryHookObserved: boolean | undefined;
 let plans: Catalog.CatalogInspection["plans"] = [];
+const registryRuntime = await import("../sessions/model-registry-runtime.js");
+const initializeRegistry = registryRuntime.initializeModelRegistryRuntime;
+mockNativeModuleExports(new URL("../sessions/model-registry-runtime.ts", import.meta.url), {
+  ...registryRuntime,
+  initializeModelRegistryRuntime: (...args: Parameters<typeof initializeRegistry>) => {
+    modelRegistryConstructions += 1;
+    return initializeRegistry(...args);
+  },
+});
 const sqlite = await import("../../infra/sqlite-snapshot-source.js");
 // Bun updates existing namespace bindings when a module is mocked.
 const copySqlite = sqlite.prepareSqliteReadOnlyLocationSync;
@@ -34,15 +45,19 @@ mockNativeModuleExports(new URL("../models-config.ts", import.meta.url), {
     return plan;
   },
 });
+// Node keeps bindings captured before mock installation; both classes transitively load
+// the SQLite and planning consumers whose counters must observe the real worker.
+const { ModelRegistry } = await import("../sessions/model-registry.js");
+const { AuthStorage } = await import("../sessions/auth-storage.js");
 const catalog = await import("../prepared-model-runtime.full-catalog.js");
-const prepareFullCatalogFacts = catalog.prepareFullCatalogFacts;
+const prepareCatalogPublicationFacts = catalog.prepareCatalogPublicationFacts;
 mockNativeModuleExports(new URL("../prepared-model-runtime.full-catalog.ts", import.meta.url), {
   ...catalog,
-  prepareFullCatalogFacts: (...args: Parameters<typeof prepareFullCatalogFacts>) => {
+  prepareCatalogPublicationFacts: (...args: Parameters<typeof prepareCatalogPublicationFacts>) => {
     if (task.inspection?.failCatalog) {
       throw new Error("synthetic catalog construction failure");
     }
-    return prepareFullCatalogFacts(...args);
+    return prepareCatalogPublicationFacts(...args);
   },
 });
 const facts = await import("../../config/resolution-facts.js");
@@ -70,6 +85,13 @@ port.on = (event, listener) => {
         sqliteCopies = 0;
         plans = [];
         copyHookObserved = undefined;
+        modelRegistryConstructions = 0;
+        modelRegistryHookObserved = undefined;
+        if (task.inspection?.probeModelRegistry) {
+          ModelRegistry.inMemory(AuthStorage.inMemory());
+          modelRegistryHookObserved = modelRegistryConstructions === 1;
+          modelRegistryConstructions = 0;
+        }
         if (task.inspection?.copyProbePath) {
           await inspectSharedAuthLegacyRowsReadOnlyAsync(task.inspection.copyProbePath, {
             artifactPreservingReadOnly: true,
@@ -105,6 +127,8 @@ port.postMessage = (message: { status: string; value?: object }, transferList) =
       const inspection: Catalog.CatalogInspection = {
         sqliteCopies,
         ...(copyHookObserved !== undefined ? { copyHookObserved } : {}),
+        modelRegistryConstructions,
+        ...(modelRegistryHookObserved !== undefined ? { modelRegistryHookObserved } : {}),
         plans,
         runtimeFactsAbsent: runtimeFacts === null,
         sourceFactsAbsent: sourceFacts === null,

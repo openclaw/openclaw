@@ -14,7 +14,7 @@ import type {
 } from "./prepared-model-runtime.catalog-contract.js";
 import {
   materializePreparedModelCatalog,
-  prepareFullCatalogFacts,
+  prepareCatalogPublicationFacts,
 } from "./prepared-model-runtime.full-catalog.js";
 import { discardPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
@@ -50,7 +50,7 @@ export async function prepareScopedReadOnlyModelCatalog(
     false,
     catalogMode === "live" ? { providerDiscoveryProviderIds } : {},
   );
-  const { modelCatalog, configuredRuntimeModels } = await prepareFullCatalogFacts(
+  const { modelCatalog, configuredRuntimeModels } = await prepareCatalogPublicationFacts(
     agentFactsForInput,
     pluginGeneration,
     catalogMode,

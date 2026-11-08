@@ -92,12 +92,14 @@ describe("catalog request existing directory ownership", () => {
       for (let tick = 0; tick < 3; tick++) {
         const { inspection, ...result } = await inspector.run(
           value,
-          tick === 0 ? { copyProbePath: database.path } : undefined,
+          tick === 0 ? { copyProbePath: database.path, probeModelRegistry: true } : undefined,
         );
         expect(result).toMatchObject(catalogResult);
         expect(inspection.sqliteCopies).toBe(0);
+        expect(inspection.modelRegistryConstructions).toBe(0);
         if (tick === 0) {
           expect(inspection.copyHookObserved).toBe(true);
+          expect(inspection.modelRegistryHookObserved).toBe(true);
         }
       }
     } finally {
