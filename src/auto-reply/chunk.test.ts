@@ -277,6 +277,28 @@ describe("chunkMarkdownTextWithMode", () => {
   );
 });
 
+describe("non-finite chunk limits", () => {
+  // A computed NaN limit (for example Number(envValue) on a bad plugin setting)
+  // cannot bound text; the message must stay whole instead of vanishing.
+  const fenced = "a fenced reply\n\n```js\nconst x = 1;\n```\n\nwith trailing prose";
+
+  it("keeps the whole message for chunkMarkdownText", () => {
+    expect(chunkMarkdownText(fenced, Number.NaN)).toEqual([fenced]);
+    expect(chunkMarkdownText(fenced, Number.POSITIVE_INFINITY)).toEqual([fenced]);
+  });
+
+  it.each(["length", "newline"] as const)(
+    "keeps the whole message for chunkMarkdownTextWithMode in %s mode",
+    (mode) => {
+      expect(chunkMarkdownTextWithMode(fenced, Number.NaN, mode)).toEqual([fenced]);
+    },
+  );
+
+  it("does not inject empty chunks for chunkByNewline", () => {
+    expect(chunkByNewline("Line one\nLine two", Number.NaN)).toEqual(["Line one\nLine two"]);
+  });
+});
+
 describe("resolveChunkMode", () => {
   const newline = { streaming: { chunkMode: "newline" as const } };
   const providerCfg = { channels: { signal: newline } };

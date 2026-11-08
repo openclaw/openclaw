@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { chunkTextByBreakResolver, splitLongTextLine } from "./text-chunking.js";
+import {
+  chunkTextByBreakResolver,
+  normalizeChunkLimit,
+  splitLongTextLine,
+} from "./text-chunking.js";
 
 it("returns empty for blank input and preserves text that needs no split", () => {
   expect(chunkTextByBreakResolver("", 10, () => 5)).toStrictEqual([]);
@@ -46,6 +50,18 @@ it("normalizes positive fractional limits before splitting", () => {
   expect(chunkTextByBreakResolver("😀😀", 0.5, () => -1)).toEqual(["😀", "😀"]);
   expect(splitLongTextLine("😀😀", 0.5, { preserveWhitespace: true })).toEqual(["😀", "😀"]);
   expect(splitLongTextLine("😀😀", 0.5, { preserveWhitespace: false })).toEqual(["😀", "😀"]);
+});
+
+it("keeps text whole for non-finite limits instead of emitting empty chunks", () => {
+  const text = "an outbound message that must never vanish";
+  expect(normalizeChunkLimit(Number.NaN)).toBe(0);
+  expect(normalizeChunkLimit(Number.POSITIVE_INFINITY)).toBe(0);
+  expect(normalizeChunkLimit(-5)).toBe(-5);
+  expect(chunkTextByBreakResolver(text, Number.NaN, (window) => window.lastIndexOf(" "))).toEqual([
+    text,
+  ]);
+  expect(splitLongTextLine(text, Number.NaN, { preserveWhitespace: false })).toEqual([text]);
+  expect(splitLongTextLine(text, Number.NaN, { preserveWhitespace: true })).toEqual([text]);
 });
 
 it("keeps hard cuts and CJK or CRLF soft breaks on cluster boundaries", () => {
