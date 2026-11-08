@@ -1,3 +1,5 @@
+import { createApiRegistry, createNodeLlmRuntime, type Model } from "@openclaw/ai";
+import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
@@ -457,6 +459,70 @@ describe("bedrock mantle discovery", () => {
       contextWindow: 1_000_000,
       maxTokens: 128_000,
     });
+  });
+
+  it.each([
+    { region: "us-east-1", env: {} },
+    { region: "ap-northeast-1", env: { AWS_REGION: "ap-northeast-1" } },
+    { region: "eu-west-1", env: { AWS_DEFAULT_REGION: "eu-west-1" } },
+  ])("sends discovered models to their regional transport in $region", async ({ region, env }) => {
+    const routes = [
+      { id: "openai.gpt-5.4", path: "/openai/v1/responses" },
+      { id: "openai.gpt-5.4-mini", path: "/openai/v1/responses" },
+      { id: "openai.gpt-oss-120b", path: "/v1/chat/completions" },
+      { id: "openai.gpt-oss-safeguard-120b", path: "/v1/chat/completions" },
+      { id: "other.gpt-5", path: "/v1/chat/completions" },
+      { id: "openai.gpt-example", path: "/v1/chat/completions" },
+    ];
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(modelDiscoveryResponse({ data: routes.map(({ id }) => ({ id })) }));
+    const provider = await resolveImplicitWithDependencies({
+      env: { ...env, AWS_BEARER_TOKEN_BEDROCK: `route-fixture-${region}` },
+      fetchFn,
+    });
+    if (!provider?.api) {
+      throw new Error("expected discovered provider API");
+    }
+    expect(fetchFn).toHaveBeenCalledWith(
+      `https://bedrock-mantle.${region}.api.aws/v1/models`,
+      expect.any(Object),
+    );
+
+    const registry = createApiRegistry();
+    registerBuiltInApiProviders(registry);
+    const requests: Request[] = [];
+    const runtime = createNodeLlmRuntime(registry, {
+      buildModelFetch: () => async (input, init) => {
+        requests.push(new Request(input, init));
+        return Response.json({ error: { message: "synthetic request captured" } }, { status: 400 });
+      },
+    });
+    for (const { id, path } of routes) {
+      const row = provider.models.find((model) => model.id === id);
+      if (!row) {
+        throw new Error(`missing discovered model: ${id}`);
+      }
+      const model: Model = {
+        ...row,
+        api: row.api ?? provider.api,
+        input: row.input.filter((input) => input === "text" || input === "image"),
+        baseUrl: row.baseUrl ?? provider.baseUrl,
+        provider: "amazon-bedrock-mantle",
+      };
+      const result = await runtime.completeSimple(
+        model,
+        { messages: [{ role: "user", content: "Synthetic question", timestamp: 1 }] },
+        { apiKey: "synthetic-unused-key" },
+      );
+      expect(result.errorMessage).toContain("synthetic request captured");
+      const request = requests.at(-1);
+      expect(request?.url).toBe(`https://bedrock-mantle.${region}.api.aws${path}`);
+      expect(request?.method).toBe("POST");
+      expect(request?.headers.get("authorization")).toBe("Bearer synthetic-unused-key");
+      expect(await request?.json()).toMatchObject({ model: id, stream: true });
+    }
+    expect(requests).toHaveLength(routes.length);
   });
 
   it("retries identical IAM failures while logging once per region", async () => {
