@@ -609,8 +609,8 @@ it.skipIf(process.platform === "win32")(
       expect(await fs.readFile(copied, "utf8")).toBe("preserved");
       expect((await fs.realpath(copied)).startsWith(rehearsal.stateDir + path.sep)).toBe(true);
       expect(
-        (await fs.readdir(rehearsal.stateDir, { recursive: true })).some(
-          (entry) => path.basename(entry) === "unrelated",
+        (await listDirectoryTreeStrict(rehearsal.stateDir)).some(
+          ({ relativePath }) => path.basename(relativePath) === "unrelated",
         ),
       ).toBe(false);
       await fs.writeFile(copied, "private");
@@ -633,8 +633,8 @@ it.skipIf(process.platform === "win32")(
     await fs.writeFile(path.join(plugin, "package.json"), '{"name":"plugin"}');
     const source = path.join(targetStateDir, "private.txt");
     await fs.writeFile(source, "private snapshot bytes");
-    const link = path.join(plugin, "config.txt");
-    await fs.symlink(source, link);
+    const linkPath = path.join(plugin, "config.txt");
+    await fs.symlink(source, linkPath);
     await expect(
       prepareUpdateCandidatePlugins({
         config: { plugins: { load: { paths: [plugin] } } },
@@ -644,7 +644,7 @@ it.skipIf(process.platform === "win32")(
       }),
     ).rejects.toThrow("Plugin copy source overlaps update state");
     expect(await fs.readFile(source, "utf8")).toBe("private snapshot bytes");
-    expect(await fs.readlink(link)).toBe(source);
+    expect(await fs.readlink(linkPath)).toBe(source);
   },
 );
 
