@@ -44,11 +44,7 @@ export function resolveSkillConfig(
   config: OpenClawConfig | undefined,
   skillKey: string,
 ): SkillConfig | undefined {
-  const entry = config?.skills?.entries?.[skillKey];
-  if (!entry || typeof entry !== "object") {
-    return undefined;
-  }
-  return entry;
+  return config?.skills?.entries?.[skillKey];
 }
 
 /** Returns whether cold startup isolated this exact skill's configured secret. */
@@ -82,15 +78,12 @@ export function isSkillEnvRequirementSatisfied(params: {
 const BUNDLED_SOURCES = new Set(["openclaw-bundled", "openclaw-custodian"]);
 
 export function resolveBundledAllowlist(config?: OpenClawConfig): ReadonlySet<string> | undefined {
-  const normalized = normalizeStringEntries(config?.skills?.allowBundled);
-  return normalized.length > 0 ? new Set(normalized) : undefined;
+  const configured = config?.skills?.allowBundled;
+  return configured === undefined ? undefined : new Set(normalizeStringEntries(configured));
 }
 
 export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: ReadonlySet<string>): boolean {
-  if (!allowlist || allowlist.size === 0) {
-    return true;
-  }
-  if (!BUNDLED_SOURCES.has(resolveSkillSource(entry.skill))) {
+  if (!allowlist || !BUNDLED_SOURCES.has(resolveSkillSource(entry.skill))) {
     return true;
   }
   const key = resolveSkillKey(entry);
@@ -162,7 +155,7 @@ export async function prepareSkillBinaryProbe(
 ) {
   if (runtime) {
     const available = new Set(runtime.bins);
-    return { hasBin: (bin: string) => available.has(bin), needsRetry: () => false };
+    return { hasBin: (bin: string) => available.has(bin) };
   }
   const bins = new Set<string>();
   const bundledAllowlist = resolveBundledAllowlist(opts?.config);
@@ -194,18 +187,7 @@ export async function prepareSkillBinaryProbe(
     }
   }
   const facts = await prepareBinaryAvailability(bins, assertCurrent);
-  let unprepared = false;
-  return {
-    hasBin: (bin: string) => {
-      // Eligibility can change while probing; prepare newly requested facts before publishing.
-      if (!bins.has(bin)) {
-        unprepared = true;
-        return false;
-      }
-      return facts.hasBinary(bin);
-    },
-    needsRetry: () => unprepared || !facts.isCurrent(),
-  };
+  return { hasBin: facts.hasBinary };
 }
 
 export function resolveSkillRequiredBins(entry: SkillEntry): string[] {

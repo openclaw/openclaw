@@ -9,7 +9,7 @@ import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs
 import type { TranscriptSessionDescriptor } from "../transcripts/provider-types.js";
 import { readTranscriptExportOwnership } from "../transcripts/store-sqlite-read.js";
 import { transcriptSessionExportKey, TranscriptsStore } from "../transcripts/store.js";
-import type { SqliteWorkerOperations, SqliteWorkerStore } from "./sqlite-worker-contract.js";
+import { observeSettlement } from "./sqlite-readonly.test-support.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import * as workerStore from "./sqlite-worker-store.js";
 
@@ -27,60 +27,41 @@ it("retains the export lease while accepted bookkeeping has an unknown settlemen
   await store.writeSession(session);
   const accepted = createDeferred();
   const settlement = createDeferred<SqliteWorkerOperationSettlement>();
-  const deliveryFailure = new Error("Accepted export bookkeeping reply was lost");
-  const settlementFailure = new Error("Export bookkeeping settlement is unknown");
   const original = workerStore.runSqliteWorkerStoreOperation;
   const observer = vi
     .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-    .mockImplementation(
-      <Operations extends SqliteWorkerOperations, T>(
-        target: SqliteWorkerStore<Operations>,
-        operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-        stateContext?: Parameters<typeof original>[2],
-        assertCurrent?: Parameters<typeof original>[3],
-        createAdmission?: Parameters<typeof original>[4],
-      ) => {
-        let exporting = false;
-        return original(
-          target,
-          (scope) =>
-            operation({
-              execute: async (command, options) => {
-                exporting = command.type === "transcripts.markPendingExports";
-                const result = await scope.execute(command, options);
-                if (exporting) {
-                  accepted.resolve();
-                  throw deliveryFailure;
-                }
-                return result;
-              },
-            }),
-          stateContext,
-          assertCurrent,
-          createAdmission &&
-            ((retained) =>
-              createAdmission(
-                exporting
-                  ? {
-                      // Keep the real write and lease owner; replace only its settlement evidence.
-                      settled: retained.settled.then(() => settlement.promise),
-                    }
-                  : retained,
-              )),
-        );
-      },
-    );
-  let observed = false;
-  const result = store.materializeSessionArtifacts(session, "metadata").then(
-    (value) => {
-      observed = true;
-      return { ok: true as const, value };
-    },
-    (error: unknown) => {
-      observed = true;
-      return { ok: false as const, error };
-    },
-  );
+    .mockImplementation((target, operation, stateContext, assertCurrent, createAdmission) => {
+      let exporting = false;
+      return original(
+        target,
+        (scope) =>
+          operation({
+            execute: async (command, options) => {
+              exporting = command.type === "transcripts.markPendingExports";
+              const result = await scope.execute(command, options);
+              if (exporting) {
+                accepted.resolve();
+                throw new Error("Accepted export bookkeeping reply was lost");
+              }
+              return result;
+            },
+          }),
+        stateContext,
+        assertCurrent,
+        createAdmission &&
+          ((retained) =>
+            createAdmission(
+              exporting
+                ? {
+                    // Keep the real write and lease owner; replace only its settlement evidence.
+                    settled: retained.settled.then(() => settlement.promise),
+                  }
+                : retained,
+            )),
+      );
+    });
+  const result = store.materializeSessionArtifacts(session, "metadata");
+  const observed = observeSettlement(result);
   const database = openOpenClawStateDatabase({ env });
   const identity = { scope: "meeting-transcript.export", key: transcriptSessionExportKey(session) };
   try {
@@ -91,7 +72,7 @@ it("retains the export lease while accepted bookkeeping has an unknown settlemen
       }),
     ]);
     await setImmediate();
-    expect(observed).toBe(false);
+    expect(observed.settled).toBe(false);
     const lease = readOpenClawStateLease(database.db, identity);
     expect(lease).toBeDefined();
     expect(readTranscriptExportOwnership(database.db, session)?.export_pending_json).toBe(
@@ -99,16 +80,16 @@ it("retains the export lease while accepted bookkeeping has an unknown settlemen
     );
     expect(existsSync(store.sessionDir(session))).toBe(false);
 
-    settlement.resolve({ kind: "unknown", error: settlementFailure });
-    await expect(result).resolves.toMatchObject({
-      ok: false,
-      error: { code: "outcome-unknown" },
+    settlement.resolve({
+      kind: "unknown",
+      error: new Error("Export bookkeeping settlement is unknown"),
     });
+    await expect(result).rejects.toMatchObject({ code: "outcome-unknown" });
     expect(readOpenClawStateLease(database.db, identity)).toEqual(lease);
     expect(existsSync(store.sessionDir(session))).toBe(false);
   } finally {
     settlement.resolve({ kind: "completed" });
-    await result;
+    await result.catch(() => {});
     observer.mockRestore();
   }
 });

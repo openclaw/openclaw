@@ -47,7 +47,9 @@ final class MacControlServer {
         let listener = LocalSocketServer(
             socketPath: directory.appendingPathComponent(MacControlCredentials.socketFilename).path,
             logger: Self.logger)
-        let handler = MacControlRequestHandler(owner: MacControlLiveOwner())
+        let handler = MacControlRequestHandler(
+            owner: MacControlLiveOwner(),
+            credentialsOnly: AppLaunchRuntimePlan.current.isElevationHost)
         let authenticator = MacControlRequestAuthenticator()
         let previousCleanup = self.startup.cleanup
         self.startup.listener = listener
@@ -79,6 +81,13 @@ final class MacControlServer {
                 self.startup.listener = nil
             }
         }
+    }
+
+    func startAndWait() async -> Bool {
+        self.start()
+        let task = self.startup.task
+        await task?.value
+        return self.startup.listener?.isListening == true
     }
 
     @discardableResult

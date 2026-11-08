@@ -38,7 +38,8 @@ extension OpenClawChatSQLiteTranscriptCache {
               ["toolcall", "tool_call", "tooluse", "tool_use"].contains(type)
         else { return nil }
 
-        if item.name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "tool_call",
+        if let name = item.name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           ["dispatch_action", "tool_call"].contains(name),
            let id = item.arguments?.dictionaryValue?["id"]?.stringValue?
                .trimmingCharacters(in: .whitespacesAndNewlines),
                !id.isEmpty
@@ -48,7 +49,8 @@ extension OpenClawChatSQLiteTranscriptCache {
             arguments["args"] = self.cacheablePatchArguments(name: call.name, args: call.args)
             return AnyCodable(arguments)
         }
-        return self.cacheablePatchArguments(name: item.name, args: item.arguments)
+        let call = ToolDisplayRegistry.displayCall(name: item.name, args: item.arguments)
+        return self.cacheablePatchArguments(name: call.name, args: call.args)
     }
 
     private static func cacheablePatchArguments(name: String?, args: AnyCodable?) -> AnyCodable? {

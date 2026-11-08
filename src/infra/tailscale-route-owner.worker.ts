@@ -2,7 +2,7 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import process from "node:process";
 import { promisify } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { signalProcessTree } from "../process/kill-tree.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -27,11 +27,7 @@ function appendBounded(current: string, chunk: Buffer | string): string {
 function parseStart(raw: string | undefined): RouteOwnerStart {
   const parsed: unknown = JSON.parse(raw ?? "null");
   const argv = isRecord(parsed) ? parsed.argv : undefined;
-  if (
-    !Array.isArray(argv) ||
-    !argv.every((entry) => typeof entry === "string") ||
-    argv.length === 0
-  ) {
+  if (!isStringArray(argv) || argv.length === 0) {
     throw new Error("invalid Tailscale route-owner start payload");
   }
   return { argv };
@@ -60,11 +56,6 @@ export type TailscaleRouteOwnerExit = {
   code: number | null;
   signal: NodeJS.Signals | null;
   stopping: boolean;
-};
-
-export type TailscaleRouteOwnerHandle = {
-  exited: Promise<TailscaleRouteOwnerExit>;
-  stop: () => void;
 };
 
 async function signalChild(
@@ -104,7 +95,10 @@ async function signalChild(
 export function runTailscaleRouteOwner(
   start: RouteOwnerStart,
   sendMessage: (message: TailscaleRouteOwnerMessage) => void = send,
-): TailscaleRouteOwnerHandle {
+): {
+  exited: Promise<TailscaleRouteOwnerExit>;
+  stop: () => void;
+} {
   const command = start.argv[0];
   if (!command) {
     throw new Error("Tailscale route-owner command is empty");

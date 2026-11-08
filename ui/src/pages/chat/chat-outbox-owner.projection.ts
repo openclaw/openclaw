@@ -1,13 +1,107 @@
+import { chatQueueOrderKey } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { storedChatOutboxItemNeedsReview } from "../../lib/chat/outbox-owner-registry.ts";
-import type { StoredChatOutbox } from "../../lib/chat/outbox-store-projection.ts";
+import {
+  outboxPayloadMatchesOwner,
+  outboxStorageScope,
+} from "../../lib/chat/outbox-payload-store.runtime.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
+import { applyStoredChatOutboxScope, type ChatComposerScope } from "../../lib/chat/outbox-store.ts";
+import type { ChatOutboxReloadBinding } from "./chat-outbox-reload-recovery.ts";
+
+export type ChatOutboxHost = ChatComposerScope & {
+  chatQueue: ChatQueueItem[];
+  sessionKey: string;
+  chatQueuedEdit?: { id: string } | null;
+  outboxRecovery?: ChatOutboxReloadBinding;
+};
+
+export type ChatOutboxLiveProjection<Host> = {
+  item: ChatQueueItem;
+  owner: Host;
+  expectedDurableVersion?: ChatQueueItem;
+  submissionIsCurrent?: () => boolean;
+};
 
 export type ChatOutboxHostProjection = {
   byScope: Map<string, { scope: StoredChatOutboxScope; queue: ChatQueueItem[] }>;
   durableSeen: Set<string>;
-  retryable: Set<string>;
 };
+
+export function positionChatOutboxItem(
+  host: ChatComposerScope,
+  scope: StoredChatOutboxScope,
+  item: ChatQueueItem,
+  retained: readonly ChatQueueItem[],
+): ChatQueueItem {
+  const existing = retained.find((entry) => entry.id === item.id);
+  const tail = Math.max(...retained.map(chatQueueOrderKey));
+  // Position belongs to admission, not clocks, storage timing, or state updates.
+  const orderKey = existing
+    ? existing.orderKey
+    : (item.orderKey ?? (item.createdAt <= tail ? tail + 1 : undefined));
+  const positioned = applyStoredChatOutboxScope(
+    { ...item, storageScope: item.storageScope ?? outboxStorageScope(host) },
+    scope,
+  );
+  if (outboxPayloadMatchesOwner(host, positioned)) {
+    if (orderKey === undefined) {
+      delete positioned.orderKey;
+    } else {
+      positioned.orderKey = orderKey;
+    }
+  }
+  return positioned;
+}
+
+export function locateLocalOutboxItem(state: ChatOutboxHostProjection, id: string) {
+  for (const { scope, queue } of state.byScope.values()) {
+    const index = queue.findIndex((item) => item.id === id);
+    if (index >= 0) {
+      return { scope, queue, index };
+    }
+  }
+  return undefined;
+}
+
+export function hasWaitingModelProjection(
+  projections: Iterable<ChatOutboxHostProjection>,
+  key: string,
+  id: string,
+): boolean {
+  return [...projections].some((state) =>
+    state.byScope
+      .get(key)
+      ?.queue.some((item) => item.id === id && item.sendState === "waiting-model"),
+  );
+}
+
+export function retainedOutboxAttachmentIds<Host extends { chatQueue: ChatQueueItem[] }>(
+  hosts: ReadonlyMap<Host, ChatOutboxHostProjection>,
+  live: ReadonlyMap<string, ReadonlyMap<string, { item: ChatQueueItem }>>,
+  volatile: ReadonlyMap<string, { item: ChatQueueItem }>,
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  const include = (item: ChatQueueItem) => {
+    for (const attachment of item.attachments ?? []) {
+      ids.add(attachment.id);
+    }
+  };
+  for (const [host, state] of hosts) {
+    host.chatQueue.forEach(include);
+    for (const { queue } of state.byScope.values()) {
+      queue.forEach(include);
+    }
+  }
+  for (const entries of live.values()) {
+    for (const { item } of entries.values()) {
+      include(item);
+    }
+  }
+  for (const { item } of volatile.values()) {
+    include(item);
+  }
+  return ids;
+}
 
 export function reconcileChatOutboxProjection(
   state: ChatOutboxHostProjection,
@@ -42,33 +136,17 @@ export function projectChatOutboxItem(item: ChatQueueItem, local: ChatQueueItem)
   return projected;
 }
 
-export function projectChatOutboxAttention(
-  outboxes: readonly StoredChatOutbox[],
-  owner?: { needsReview(scope: StoredChatOutboxScope, item: ChatQueueItem): boolean },
-) {
-  return outboxes.flatMap((outbox) =>
-    outbox.queue
-      .filter((item) =>
-        owner ? owner.needsReview(outbox, item) : storedChatOutboxItemNeedsReview(item),
-      )
-      .map((item) => ({
-        id: item.id,
-        sessionKey: outbox.sessionKey,
-        agentId: outbox.agentId,
-        unconfirmed: item.sendState === "unconfirmed" || item.sendState === "held",
-        command: Boolean(item.localCommandName),
-      })),
-  );
-}
-
 export function isActiveLocal(
-  state: { durableSeen: ReadonlySet<string>; retryable: ReadonlySet<string> },
+  state: { durableSeen: ReadonlySet<string> },
   item: ChatQueueItem,
 ): boolean {
   return Boolean(
-    item.pendingRunId ||
-    item.sendState === "waiting-model" ||
-    state.retryable.has(item.id) ||
-    !state.durableSeen.has(item.id),
+    item.pendingRunId || item.sendState === "waiting-model" || !state.durableSeen.has(item.id),
+  );
+}
+
+export function hasActiveChatOutboxProjection(state: ChatOutboxHostProjection): boolean {
+  return [...state.byScope.values()].some(({ queue }) =>
+    queue.some((item) => isActiveLocal(state, item)),
   );
 }

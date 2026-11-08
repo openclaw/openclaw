@@ -42,6 +42,19 @@ type ChildAuthorityEntry = Pick<
 > &
   Partial<Pick<SubagentRunRecord, "requesterSessionKey" | "requesterAgentId">>;
 type SessionIdentity = { sessionId?: string; lifecycleRevision?: string };
+
+export function matchesSubagentChildSessionIdentity(
+  entry: Pick<SubagentRunRecord, "childSessionIdentity">,
+  currentSession: SessionIdentity | null,
+): boolean {
+  const original = entry.childSessionIdentity;
+  return (
+    (!original?.sessionId || original.sessionId === currentSession?.sessionId) &&
+    (!original?.lifecycleRevision ||
+      original.lifecycleRevision === currentSession?.lifecycleRevision)
+  );
+}
+
 type SubagentChildAuthority =
   | {
       status: "verified";
@@ -65,12 +78,7 @@ export function resolveSubagentChildAuthority(
   const original = entry.childSessionIdentity;
   const sessionId = original?.sessionId?.trim();
   const lifecycleRevision = original?.lifecycleRevision?.trim();
-  if (
-    currentSession !== undefined &&
-    ((original?.sessionId && original.sessionId !== currentSession?.sessionId) ||
-      (original?.lifecycleRevision &&
-        original.lifecycleRevision !== currentSession?.lifecycleRevision))
-  ) {
+  if (currentSession !== undefined && !matchesSubagentChildSessionIdentity(entry, currentSession)) {
     return { status: "mismatch", error: refusal("original session incarnation changed") };
   }
   const requesterAgentId = resolveSubagentChildAgentId({
@@ -93,27 +101,6 @@ export function resolveSubagentChildAuthority(
     requesterAgentId,
     sessionIdentity: { sessionId, lifecycleRevision },
   };
-}
-
-// Legacy runs are a closed population (new runs record ownership), so this set stays bounded;
-// an LRU smaller than that population re-warned every run on every recovery sweep.
-const warnedLegacyRuns = new Set<string>();
-export function warnLegacySubagentAuthority(
-  entry: SubagentRunRecord,
-  warn: (message: string, meta?: Record<string, unknown>) => void,
-): void {
-  if (resolveSubagentChildAuthority(entry).status !== "legacy-unverified") {
-    return;
-  }
-  const key = JSON.stringify([entry.runId, entry.createdAt, entry.generation]);
-  if (warnedLegacyRuns.has(key)) {
-    return;
-  }
-  warnedLegacyRuns.add(key);
-  warn(
-    "Subagent original session identity or lifecycle revision is unavailable; requester work continues with child-session effects suppressed.",
-    { runId: entry.runId },
-  );
 }
 
 // Leaf module: registry memory, queries, and generation helpers import this, so it

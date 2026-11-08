@@ -1,3 +1,4 @@
+import type { ExactIdentityReceipt } from "@openclaw/fs-safe/durability";
 import type { Root as FsSafeRoot } from "@openclaw/fs-safe/root";
 import type { FileStore as FsSafeFileStore } from "@openclaw/fs-safe/store";
 import {
@@ -71,7 +72,7 @@ export type CompatibleTempWorkspace = Omit<FsSafeTempWorkspace, "store"> & {
 // Preserve the shipped async workspace options without wrapping native operations.
 export const tempWorkspace: (
   options: Parameters<typeof fsSafeTempWorkspace>[0],
-) => Promise<CompatibleTempWorkspace> = fsSafeTempWorkspace;
+) => Promise<CompatibleTempWorkspace & ExactIdentityReceipt> = fsSafeTempWorkspace;
 export const withTempWorkspace: <T>(
   options: Parameters<typeof fsSafeTempWorkspace>[0],
   run: (workspace: CompatibleTempWorkspace) => Promise<T>,

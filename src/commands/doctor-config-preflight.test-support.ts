@@ -1,13 +1,19 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, expect, onTestFinished, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
+import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { withTempHome } from "../config/test-helpers.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
+import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
+import { retireIdleOpenClawStateReadWorkers } from "../state/openclaw-state-read-worker.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 
 type DoctorFixtureObservation = {
   id: number;
@@ -24,8 +30,21 @@ type DoctorFixtureObservation = {
 };
 
 const fixtureObservation = new AsyncLocalStorage<DoctorFixtureObservation>();
+const fixtureResources = new AsyncLocalStorage<AsyncDisposableStack>();
 const activeObservations = new Set<DoctorFixtureObservation>();
 let nextObservation = 0;
+
+/** Keep transferred preflight inventories alive through assertions, then retire with the home. */
+export function trackDoctorPreflightCache<T extends { pluginCache?: AsyncDisposable }>(
+  result: T,
+): T {
+  const resources = fixtureResources.getStore();
+  if (!resources) {
+    throw new Error("Doctor preflight results require a fixture lifetime");
+  }
+  resources.use(result.pluginCache);
+  return result;
+}
 
 function recordFixturePhase(
   observation: DoctorFixtureObservation,
@@ -91,13 +110,11 @@ export async function observeDoctorConfigStep<T>(
   }
 }
 
-/** Retain inspection imports across repair and reread; changed launch environments still retire the child. */
+/** Retain inspection imports across repair and reread within each temporary home. */
 export function useDoctorConfigPreflightHome(diagnostic?: DoctorFixtureObservation["suite"]) {
-  const workers = createSqliteReadOnlyWorkerScope();
-  afterAll(() => workers.close());
   return <T>(run: (home: string) => Promise<T>): Promise<T> => {
     if (!diagnostic) {
-      return workers.run(() => withDoctorConfigPreflightHome(run));
+      return withDoctorConfigPreflightHome(run);
     }
     const observation: DoctorFixtureObservation = {
       id: ++nextObservation,
@@ -124,18 +141,16 @@ export function useDoctorConfigPreflightHome(diagnostic?: DoctorFixtureObservati
     return fixtureObservation.run(observation, async () => {
       recordFixturePhase(observation, "fixture", "started");
       try {
-        return await workers.run(() =>
-          withDoctorConfigPreflightHome(async (home) => {
-            observation.ownsHome = () => process.env.HOME === home;
-            recordFixturePhase(observation, "body", "started");
-            try {
-              return await run(home);
-            } finally {
-              observation.bodySettled = true;
-              recordFixturePhase(observation, "body", "settled");
-            }
-          }),
-        );
+        return await withDoctorConfigPreflightHome(async (home) => {
+          observation.ownsHome = () => process.env.HOME === home;
+          recordFixturePhase(observation, "body", "started");
+          try {
+            return await run(home);
+          } finally {
+            observation.bodySettled = true;
+            recordFixturePhase(observation, "body", "settled");
+          }
+        });
       } finally {
         observation.fixtureSettled = true;
         recordFixturePhase(observation, "fixture", "settled");
@@ -168,7 +183,55 @@ export async function withDoctorConfigPreflightHome<T>(
       expect(resolveManagedUpdateLeaseDatabasePath()).toBe(
         path.join(control, "managed-update-handoffs.sqlite"),
       );
-      return await withEnvAsync(providerEnv, () => run(home));
+      const workers = createSqliteReadOnlyWorkerScope();
+      const resources = new AsyncDisposableStack();
+      const [outcome] = await Promise.allSettled([
+        workers.run(() =>
+          fixtureResources.run(resources, () => withEnvAsync(providerEnv, () => run(home))),
+        ),
+      ]);
+      if (outcome.status === "rejected" && hasUnjoinedWork(outcome.reason)) {
+        throw outcome.reason;
+      }
+      try {
+        try {
+          await workers.run(async () => {
+            await resources.disposeAsync();
+            // Setup artifacts own worker captures until their inventory retires.
+            clearPluginMetadataLifecycleCaches();
+            expect((await waitForPluginCacheRetirement()).failures).toEqual([]);
+            await cleanupSessionStateForTest({
+              stateDir: path.join(home, ".openclaw"),
+              rootPath: home,
+            });
+          });
+        } finally {
+          await workers.close();
+        }
+        // Rehearsals put the broker socket under this home; retire it before removal.
+        const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+        expect(
+          await retireIdleOpenClawStateReadWorkers(source),
+          `Doctor fixture still owns state readers: ${home}`,
+        ).toBe(true);
+        expect(
+          await source.retireIdleBroker(),
+          `Doctor fixture still owns native workers: ${home}`,
+        ).toBe(true);
+      } catch (error) {
+        if (outcome.status === "rejected") {
+          throw new AggregateError(
+            [outcome.reason, error],
+            "Doctor fixture body and cleanup failed",
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      if (outcome.status === "rejected") {
+        throw outcome.reason;
+      }
+      return outcome.value;
     } finally {
       temporaryRoot.mockRestore();
     }

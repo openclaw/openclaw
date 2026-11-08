@@ -1,5 +1,3 @@
-// Shared OpenClaw banner: the dot-matrix lobster mascot beside the OPENCLAW
-// wordmark, with a short startup animation on rich interactive terminals.
 // Used by the wizard flows (doctor/onboard/configure) and the foreground
 // gateway run; non-TTY and CI paths always get the plain static banner.
 import {
@@ -8,7 +6,7 @@ import {
 } from "../../packages/terminal-core/src/decorative-emoji.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
-import { sleep as defaultSleep } from "../utils/sleep.js";
+import { sleep } from "../utils/sleep.js";
 
 // Mascot and wordmark are separate so they can be tinted independently; the
 // wordmark starts on mascot row 3, keeping the claws above the text line.
@@ -38,17 +36,6 @@ const WORDMARK_ART = [
 const GAP = 3;
 const BANNER_WIDTH = MASCOT_WIDTH + GAP + 48;
 const ROWS = MASCOT_ART.length;
-
-type ClawBannerOptions = {
-  columns?: number;
-  isTty?: boolean;
-  rich?: boolean;
-  env?: NodeJS.ProcessEnv;
-  /** Ends the animation on its static frame when parallel startup work settles. */
-  settleWhen?: PromiseLike<unknown>;
-  sleep?: (ms: number) => Promise<void>;
-  write?: (chunk: string) => void;
-};
 
 export type ClawBannerResult = "static" | "completed" | "settled";
 
@@ -86,20 +73,13 @@ function composeFrame(params: {
   return lines;
 }
 
-function plainTitleLine(): string {
-  const icon = decorativeEmoji("🦞");
-  return supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}` : "OPENCLAW";
-}
-
 // One combined entrance: a left-to-right molt wipe reveals the color, a
 // shimmer band sweeps the wordmark, and the claws snip once. The 330ms sequence
 // ends on the exact static banner.
-async function animateBanner(opts: {
-  settleWhen?: PromiseLike<unknown>;
-  sleep: (ms: number) => Promise<void>;
-  write: (chunk: string) => void;
-}): Promise<Exclude<ClawBannerResult, "static">> {
-  const { settleWhen, sleep, write } = opts;
+async function animateBanner(
+  settleWhen?: PromiseLike<unknown>,
+): Promise<Exclude<ClawBannerResult, "static">> {
+  const write = (chunk: string) => process.stdout.write(chunk);
   let settleRequested = false;
   let interruptedExitCode: number | undefined;
   const settleSignal = settleWhen
@@ -194,28 +174,24 @@ async function animateBanner(opts: {
 
 export async function printClawBanner(
   runtime: RuntimeEnv,
-  options: ClawBannerOptions = {},
+  options: {
+    /** Ends the animation on its static frame when parallel startup work settles. */
+    settleWhen?: PromiseLike<unknown>;
+  } = {},
 ): Promise<ClawBannerResult> {
-  const columns = options.columns ?? process.stdout.columns ?? 80;
+  const columns = process.stdout.columns ?? 80;
   if (columns < BANNER_WIDTH) {
-    runtime.log(`${plainTitleLine()}\n`);
+    const icon = decorativeEmoji("🦞");
+    const title = supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}` : "OPENCLAW";
+    runtime.log(`${title}\n`);
     return "static";
   }
-  const env = options.env ?? process.env;
-  const animate =
-    (options.isTty ?? process.stdout.isTTY ?? false) &&
-    (options.rich ?? isRich()) &&
-    !env.CI &&
-    !env.VITEST;
+  const animate = process.stdout.isTTY && isRich() && !process.env.CI && !process.env.VITEST;
   if (!animate) {
     runtime.log(`${composeFrame({}).join("\n")}\n`);
     return "static";
   }
-  const result = await animateBanner({
-    settleWhen: options.settleWhen,
-    sleep: options.sleep ?? defaultSleep,
-    write: options.write ?? ((chunk) => process.stdout.write(chunk)),
-  });
-  (options.write ?? ((chunk: string) => process.stdout.write(chunk)))("\n");
+  const result = await animateBanner(options.settleWhen);
+  process.stdout.write("\n");
   return result;
 }

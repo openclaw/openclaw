@@ -26,7 +26,7 @@ import { isGatewayAdmin } from "../session-sharing.js";
 import { formatForLog } from "../ws-log.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams, type Validator } from "./validation.js";
+import { defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
 function transcriptMethod<T>(
   method: string,
@@ -38,15 +38,15 @@ function transcriptMethod<T>(
     assertCurrent: () => void,
   ) => Promise<unknown>,
 ): GatewayRequestHandler {
-  return async (options) => {
+  return defineValidatedGatewayHandler(method, validate, async (options) => {
     const { params, context, client, respond } = options;
-    if (!assertValidParams(params, validate, method, respond)) {
-      return;
-    }
     const cfg = context.getRuntimeConfig();
     // Meeting rows have agent attribution but no person owner. Mirror global
     // aggregate visibility; an agent filter cannot make hidden archive data readable.
-    if (!isGatewayAdmin(client) && operatorSessionCap(client, cfg) === "none") {
+    if (
+      !isGatewayAdmin(client) &&
+      ["none", "invited"].includes(operatorSessionCap(client, cfg) ?? "")
+    ) {
       respond(
         false,
         undefined,
@@ -68,7 +68,7 @@ function transcriptMethod<T>(
         authority.assertCurrent();
         if (
           !isGatewayAdmin(client) &&
-          operatorSessionCap(client, context.getRuntimeConfig()) === "none"
+          ["none", "invited"].includes(operatorSessionCap(client, context.getRuntimeConfig()) ?? "")
         ) {
           throw new Error("Transcript archive access changed");
         }
@@ -96,7 +96,7 @@ function transcriptMethod<T>(
             ),
       );
     }
-  };
+  });
 }
 
 export const transcriptsHandlers: GatewayRequestHandlers = {
@@ -148,16 +148,15 @@ export const transcriptsHandlers: GatewayRequestHandlers = {
 function providerNames(config: OpenClawConfig) {
   const names = new Map<string, string | undefined>();
   return (providerId: string) => {
-    if (!names.has(providerId)) {
-      names.set(
-        providerId,
-        resolveSourceProvider(providerId, {
-          config,
-          stateDir: resolveStateDir(),
-          logger: console,
-        })?.name,
-      );
+    if (names.has(providerId)) {
+      return names.get(providerId);
     }
-    return names.get(providerId);
+    const name = resolveSourceProvider(providerId, {
+      config,
+      stateDir: resolveStateDir(),
+      logger: console,
+    })?.name;
+    names.set(providerId, name);
+    return name;
   };
 }

@@ -1,0 +1,2 @@
+28
+# Cover Darwin supersession and the shared workflow shell's pipe-backed redirection.

@@ -41,10 +41,16 @@ final class ShareViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        self.preferredContentSize = CGSize(width: UIScreen.main.bounds.width, height: 420)
         self.composeView.onSend = { [weak self] in self?.handleSendTap() }
         self.composeView.onCancel = { [weak self] in
             self?.extensionContext?.completeRequest(returningItems: nil)
+        }
+    }
+
+    override func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
+        if let screen = self.view.window?.windowScene?.screen {
+            self.preferredContentSize = CGSize(width: screen.bounds.width, height: 420)
         }
     }
 
@@ -56,21 +62,14 @@ final class ShareViewController: UIViewController {
     }
 
     private func prepareDraft() async {
-        let traceId = UUID().uuidString
         ShareGatewayRelaySettings.saveLastEvent("Share opened.")
         self.composeView.apply(.preparing)
-        self.logger.info("share begin trace=\(traceId, privacy: .public)")
         let extracted = await self.extractSharedContent()
         let payload = extracted.payload
         self.pendingAttachments = extracted.attachments.map(\.payload)
         self.attachmentBlockReason = ShareAttachmentBlockReason.resolve(
             hasImageProcessingError: extracted.attachmentError != nil,
             summary: extracted.attachmentSummary)
-        self.logger.info("share payload trace=\(traceId, privacy: .public)")
-        self.logger.info(
-            "share payload title=\(payload.title?.count ?? 0) text=\(payload.text?.count ?? 0)")
-        self.logger.info(
-            "share attachments hasURL=\(payload.url != nil) images=\(self.pendingAttachments.count)")
         let message = ShareDraftComposer.compose(from: payload)
         self.composeView.setDraft(message)
         self.composeView.setAttachmentPreviews(extracted.attachments.map(\.preview))
@@ -156,20 +155,10 @@ final class ShareViewController: UIViewController {
             credentials: GatewayNodeSessionCredentials(
                 token: config.token,
                 password: config.password),
-            connectOptions: GatewayConnectOptions(
-                role: "node",
-                scopes: [],
-                caps: [],
-                commands: [],
-                permissions: [:],
-                clientId: "openclaw-ios",
-                clientMode: "node",
-                clientDisplayName: "OpenClaw Share",
-                deviceIdentityProfile: .shareExtension,
-                includeDeviceIdentity: true,
-                allowStoredDeviceAuth: config.gatewayStableID != nil,
-                deviceAuthGatewayID: config.gatewayStableID),
-            sessionBox: nil,
+            connectOptions: ShareGatewayRelaySettings.connectOptions(gatewayStableID: config.gatewayStableID),
+            sessionBox: ShareGatewayRelaySettings.webSocketSessionBox(
+                tlsFingerprintSHA256: config.tlsFingerprintSHA256),
+            extraHeadersProvider: { try ShareGatewayRelaySettings.currentCustomHeaders(for: config) },
             onConnected: {},
             onDisconnected: { _ in },
             onInvoke: { req in
@@ -215,7 +204,8 @@ final class ShareViewController: UIViewController {
         let json = String(bytes: data, encoding: .utf8)!
         let eventData = try JSONEncoder().encode(NodeEventParams(event: "agent.request", payloadjson: json))
         let nodeEventParams = String(bytes: eventData, encoding: .utf8)!
-        _ = try await gateway.request(method: "node.event", paramsJSON: nodeEventParams, timeoutSeconds: 25)
+        let result = try await gateway.request(method: "node.event", paramsJSON: nodeEventParams, timeoutSeconds: 25)
+        try ShareSendAdmissionError.requireAccepted(result)
     }
 
     private static func gatewayError(_ code: Int, message: String) -> NSError {

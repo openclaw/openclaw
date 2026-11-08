@@ -232,9 +232,6 @@ object WearProtocolCodec {
       "Wear message exceeds JSON depth ${WearProtocol.MAX_JSON_DEPTH}"
     }
     val encoded = json.encodeToString(WearMessage.serializer(), message)
-    require(!exceedsJsonDepth(encoded)) {
-      "Wear message exceeds JSON depth ${WearProtocol.MAX_JSON_DEPTH}"
-    }
     val bytes =
       encoded.encodeToByteArray(throwOnInvalidSequence = true)
     require(bytes.size <= WearProtocol.MAX_MESSAGE_BYTES) {

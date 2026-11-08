@@ -1,9 +1,3 @@
-export type SessionUpstreamJsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | SessionUpstreamJsonValue[]
-  | { [key: string]: SessionUpstreamJsonValue };
+export type { PluginJsonValue as SessionUpstreamJsonValue } from "./host-hook-json.js";
 
 export type SessionUpstreamKind = "claude-cli" | "codex-app-server" | "opencode-cli" | "pi-cli";

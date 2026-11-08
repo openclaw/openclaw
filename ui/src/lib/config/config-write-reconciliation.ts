@@ -243,7 +243,7 @@ export function createConfigWriteReconciliation({
       // never rebased the originals), so the reload below would replace
       // it with the committed bytes. Capture it for restoration.
       const captureDraft = () => ({
-        form: structuredClone(state.configForm ?? {}),
+        form: state.configForm ?? {},
         raw: state.configRaw,
         mode: state.configFormMode,
         originalRaw: state.configRawOriginal,

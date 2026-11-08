@@ -656,7 +656,7 @@ struct OnboardingView: View {
         case startingService
     }
 
-    @State var currentPage = 0
+    @State private var requestedPage = 0
     @State var installingCLI = false
     @State var cliInstallPhase: CLIInstallPhase = .idle
     @State var cliStatus: String?
@@ -744,6 +744,16 @@ struct OnboardingView: View {
 
     var pageCount: Int {
         self.pageOrder.count
+    }
+
+    /// CLI readiness can remove a page after the initial selection.
+    var currentPage: Int {
+        get { Self.visiblePageCursor(self.requestedPage, pageCount: self.pageCount) }
+        nonmutating set { self.requestedPage = newValue }
+    }
+
+    static func visiblePageCursor(_ cursor: Int, pageCount: Int) -> Int {
+        min(max(0, cursor), max(0, pageCount - 1))
     }
 
     var activePageIndex: Int {

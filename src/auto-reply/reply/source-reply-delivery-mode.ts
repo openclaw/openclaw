@@ -1,5 +1,6 @@
 import {
   isSyntheticSourceReplyTurn,
+  resolveCommandReplyExpectation,
   type ReplyExpectation,
 } from "../../agents/reply-completion.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -29,6 +30,7 @@ export type SourceReplyDeliveryModeContext = Pick<
   | "CommandTurn"
   | "BotUsername"
   | "WasMentioned"
+  | "MentionSource"
   | "InputProvenance"
 >;
 
@@ -94,12 +96,24 @@ export function resolveSourceReplyDeliveryMode(params: {
 export function resolveSourceReplyExpectation(params: {
   ctx: SourceReplyDeliveryModeContext;
   cfg: OpenClawConfig;
-  isHeartbeat?: boolean;
+  scheduledAutomation?: boolean;
 }): ReplyExpectation {
+  // Scheduling permits silence even when the saved session has an internal source.
+  if (params.scheduledAutomation) {
+    return "optional";
+  }
+  const commandExpectation = resolveCommandReplyExpectation({
+    cfg: params.cfg,
+    sessionKey: params.ctx.SessionKey,
+    messageChannel: params.ctx.Provider ?? params.ctx.Surface,
+    opts: { inputProvenance: params.ctx.InputProvenance },
+  });
+  if (commandExpectation === "result-required") {
+    return commandExpectation;
+  }
   if (
     isSyntheticSourceReplyTurn({
       inputProvenance: params.ctx.InputProvenance,
-      isHeartbeat: params.isHeartbeat,
     })
   ) {
     return "optional";
@@ -118,7 +132,8 @@ export function resolveSourceReplyExpectation(params: {
   });
   if (
     conversationType === "group" &&
-    params.ctx.WasMentioned !== true &&
+    // Thread participation admits the message but does not explicitly request a reply.
+    (params.ctx.WasMentioned !== true || params.ctx.MentionSource === "implicit_thread") &&
     resolveSilentReplySettings({
       cfg: params.cfg,
       surface: params.ctx.Surface ?? params.ctx.Provider,
@@ -135,10 +150,13 @@ export function resolveFollowupReplyExpectation(queued: FollowupRun, cfg: OpenCl
     queued.run.terminalReplyExpectation ??
     resolveSourceReplyExpectation({
       ctx: {
+        Provider: queued.run.messageProvider,
+        SessionKey: queued.run.sessionKey,
         InboundEventKind: queued.currentInboundEventKind,
         InputProvenance: queued.run.inputProvenance,
       },
       cfg,
+      scheduledAutomation: queued.run.scheduledAutomation !== undefined,
     })
   );
 }
@@ -146,6 +164,7 @@ export function resolveFollowupReplyExpectation(queued: FollowupRun, cfg: OpenCl
 export function resolveSourceReplyVisibilityPolicy(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
+  scheduledAutomation?: boolean;
   requested?: SourceReplyDeliveryMode;
   strictMessageToolOnly?: boolean;
   sendPolicy: SessionSendPolicyDecision;
@@ -161,15 +180,17 @@ export function resolveSourceReplyVisibilityPolicy(params: {
    */
   sessionStableMessageToolAvailable?: boolean;
   defaultVisibleReplies?: "automatic" | "message_tool";
-  isHeartbeat?: boolean;
 }) {
   const sourceReplyDeliveryMode = resolveSourceReplyDeliveryMode(params);
   const hasStableTurnOverride =
     !isSyntheticSourceReplyTurn({
       inputProvenance: params.ctx.InputProvenance,
-      isHeartbeat: params.isHeartbeat,
+      scheduledAutomation: params.scheduledAutomation,
     }) &&
-    (params.requested !== undefined || isExplicitCommandTurnContext(params.ctx, params.cfg));
+    // Channel room-event requests force tool-only delivery for that turn, but
+    // must not split the session-stable CLI policy hash against mentioned turns.
+    (isExplicitCommandTurnContext(params.ctx, params.cfg) ||
+      (params.requested !== undefined && params.ctx.InboundEventKind !== "room_event"));
   const sessionStableSourceReplyDeliveryMode = hasStableTurnOverride
     ? sourceReplyDeliveryMode
     : resolveSourceReplyDeliveryMode({

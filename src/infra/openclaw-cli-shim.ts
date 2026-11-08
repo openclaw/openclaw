@@ -8,10 +8,8 @@ import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import { renderCmdSetAssignment } from "../daemon/cmd-set.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { writeTextAtomic } from "./json-files.js";
-import {
-  resolveCurrentOpenClawCliInvocation,
-  type OpenClawCliInvocation,
-} from "./openclaw-cli-invocation.js";
+import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
+import { resolveStableNodePath } from "./stable-node-path.js";
 
 const AGENT_CLI_BIN_DIR = path.join("tmp", "agent-cli");
 const GATEWAY_AGENT_CLI_STATE_KEY = Symbol.for("openclaw.gatewayAgentCliShim");
@@ -23,53 +21,43 @@ const gatewayAgentCliState = resolveGlobalSingleton(
   },
 );
 
-function renderCliShim(
-  invocation: OpenClawCliInvocation,
-  profile: string | null,
-  windows: boolean,
-): string {
-  const args = [...invocation.args, ...(profile ? ["--profile", profile] : [])];
-  const context = { delayedExpansion: false };
-  const environment = Object.entries(invocation.env ?? {}).map(([key, value]) =>
-    windows ? renderCmdSetAssignment(key, value, context) : `export ${key}=${quoteCliArg(value)}`,
-  );
-  if (windows) {
-    const command = [invocation.command, ...args].map((arg) => quoteCmdScriptArg(arg, context));
-    // Own expansion before assigning source paths or forwarding literal user bangs.
-    return [
-      "@echo off",
-      "setlocal DisableDelayedExpansion",
-      ...environment,
-      `${command.join(" ")} %*`,
-      "",
-    ].join("\r\n");
-  }
-  return `#!/bin/sh
-set -eu
-${environment.join("\n")}
-exec ${[invocation.command, ...args].map(quoteCliArg).join(" ")} "$@"
-`;
-}
-
 /**
  * Materialize the exact running Gateway CLI as an agent-visible PATH command.
  * The generated launcher is a runtime tool contract, not persisted product state.
  */
-export async function prepareGatewayAgentCliShim(
-  options: {
-    env?: NodeJS.ProcessEnv;
-    invocation?: OpenClawCliInvocation;
-    platform?: NodeJS.Platform;
-    stateDir?: string;
-  } = {},
-): Promise<void> {
-  const env = options.env ?? process.env;
-  const platform = options.platform ?? process.platform;
-  const invocation = options.invocation ?? resolveCurrentOpenClawCliInvocation([]);
+export async function prepareGatewayAgentCliShim(): Promise<void> {
+  const env = process.env;
+  const platform = process.platform;
+  const invocation = resolveCurrentOpenClawCliInvocation([]);
+  // The launcher outlives this process: a version-pinned interpreter (Homebrew
+  // Cellar) is removed by the next runtime upgrade and strands every shim call
+  // until the Gateway restarts, so prefer an upgrade-stable path when one exists.
+  const command = await resolveStableNodePath(invocation.command);
   const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
-  const binDir = path.join(options.stateDir ?? resolveStateDir(env), AGENT_CLI_BIN_DIR);
+  const binDir = path.join(resolveStateDir(env), AGENT_CLI_BIN_DIR);
   const executablePath = path.join(binDir, platform === "win32" ? "openclaw.cmd" : "openclaw");
-  const content = renderCliShim(invocation, profile, platform === "win32");
+  const args = [...invocation.args, ...(profile ? ["--profile", profile] : [])];
+  const context = { delayedExpansion: false };
+  const environment = Object.entries(invocation.env ?? {}).map(([key, value]) =>
+    platform === "win32"
+      ? renderCmdSetAssignment(key, value, context)
+      : `export ${key}=${quoteCliArg(value)}`,
+  );
+  const content =
+    platform === "win32"
+      ? [
+          // Own expansion before assigning source paths or forwarding literal user bangs.
+          "@echo off",
+          "setlocal DisableDelayedExpansion",
+          ...environment,
+          `${[command, ...args].map((arg) => quoteCmdScriptArg(arg, context)).join(" ")} %*`,
+          "",
+        ].join("\r\n")
+      : `#!/bin/sh
+set -eu
+${environment.join("\n")}
+exec ${[command, ...args].map(quoteCliArg).join(" ")} "$@"
+`;
 
   await fs.mkdir(binDir, { recursive: true, mode: 0o700 });
   await fs.chmod(binDir, 0o700).catch(() => undefined);

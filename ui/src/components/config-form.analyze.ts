@@ -1,15 +1,13 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import {
   arrayItemSchema,
   arrayItemSchemaIndexes,
   collectAllOfSchemas,
-} from "./config-form.array-items.ts";
-import {
   objectAdditionalPropertiesSchema,
   objectPropertyKeys,
   objectPropertySchema,
   requiredPropertyKeys,
-} from "./config-form.constraints.ts";
+} from "./config-form.array-items.ts";
 import {
   pathKey,
   schemaMayAcceptString,
@@ -95,11 +93,7 @@ function uniqueSchemaValues(values: unknown[]): unknown[] {
   return unique;
 }
 
-function inferredSchemaTypes(schema: JsonSchema, seen = new Set<JsonSchema>()): Set<string> {
-  if (seen.has(schema)) {
-    return new Set();
-  }
-  seen.add(schema);
+function inferredSchemaTypes(schema: JsonSchema): Set<string> {
   const types = new Set<string>();
   const declared = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
   for (const type of declared) {
@@ -111,11 +105,10 @@ function inferredSchemaTypes(schema: JsonSchema, seen = new Set<JsonSchema>()): 
     types.add("object");
   }
   for (const entry of schema.allOf ?? []) {
-    for (const type of inferredSchemaTypes(entry, seen)) {
+    for (const type of inferredSchemaTypes(entry)) {
       types.add(type);
     }
   }
-  seen.delete(schema);
   return types;
 }
 
@@ -160,9 +153,8 @@ function hasOnlySupportedFormKeywords(schema: JsonSchema): boolean {
   }
   const required = schema.not.required;
   return (
-    Array.isArray(required) &&
+    isStringArray(required) &&
     required.length > 0 &&
-    required.every((key) => typeof key === "string") &&
     Object.keys(schema.not).every((key) => key === "required" || META_KEYS.has(key))
   );
 }
@@ -181,11 +173,7 @@ function hasOnlySupportedKeywords(schema: JsonSchema, supported: ReadonlySet<str
   );
 }
 
-function schemaAllowsNull(schema: JsonSchema, seen = new Set<JsonSchema>()): boolean {
-  if (seen.has(schema)) {
-    return false;
-  }
-  seen.add(schema);
+function schemaAllowsNull(schema: JsonSchema): boolean {
   const declaredTypes = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
   let allowsNull =
     schema.nullable === true || declaredTypes.length === 0 || declaredTypes.includes("null");
@@ -196,16 +184,14 @@ function schemaAllowsNull(schema: JsonSchema, seen = new Set<JsonSchema>()): boo
     allowsNull = allowsNull && schema.enum.some((entry) => entry === null);
   }
   if (schema.allOf) {
-    allowsNull = allowsNull && schema.allOf.every((entry) => schemaAllowsNull(entry, seen));
+    allowsNull = allowsNull && schema.allOf.every(schemaAllowsNull);
   }
   if (schema.anyOf) {
-    allowsNull = allowsNull && schema.anyOf.some((entry) => schemaAllowsNull(entry, seen));
+    allowsNull = allowsNull && schema.anyOf.some(schemaAllowsNull);
   }
   if (schema.oneOf) {
-    allowsNull =
-      allowsNull && schema.oneOf.filter((entry) => schemaAllowsNull(entry, seen)).length === 1;
+    allowsNull = allowsNull && schema.oneOf.filter(schemaAllowsNull).length === 1;
   }
-  seen.delete(schema);
   return allowsNull;
 }
 

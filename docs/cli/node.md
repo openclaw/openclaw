@@ -85,6 +85,9 @@ Or paste a short-lived node setup link from the Control UI Devices page:
 openclaw node run --pair "oc-pair://<setup-code>"
 ```
 
+Stopping a foreground node also cancels startup. If termination arrives before
+the Gateway connection is ready, the node drains its prepared resources and exits.
+
 Options:
 
 - `--host <host>`: Gateway WebSocket host (default: `127.0.0.1`)
@@ -209,7 +212,7 @@ Options:
 - `--all-commands`: Advertise the full default command surface and forget any saved `--commands` allowlist. Cannot be combined with `--commands`.
 - `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
 - `--no-share-installed-apps`: Disable installed application sharing
-- `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
+- `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 - `--runtime-path <path>`: Pin an absolute Node/Bun executable that passes runtime capability checks.
 - `--auth-from-env`: Persist environment Gateway credentials and select them explicitly on service restarts
 - `--force`: Reinstall/overwrite if already installed
@@ -257,12 +260,21 @@ Service commands accept `--json` for machine-readable output.
 managed node service is installed; run `openclaw node install` first. Stopping
 an absent service remains a successful no-op.
 
+Profile node commands leave conflicting Gateway service definitions unchanged.
+On Linux, a profile's node name can match another profile's legacy Gateway name
+(for example, profile `work` uses `openclaw-node-work.service`). If a command
+reports that the selected service is not a node service, move the conflicting
+Gateway service to its current name before installing or managing the node.
+
 The node host retries Gateway restart and network closes in-process. If the
 Gateway reports a terminal token/password/bootstrap auth pause, the node host
 logs the close detail and exits non-zero so launchd/systemd/Task Scheduler can
 restart it with fresh config and credentials. While device pairing is pending,
 the node keeps reconnecting with exponential backoff capped at 30 seconds and
-connects automatically after approval.
+connects automatically after approval. Startup failures, such as an expired
+setup code or an unavailable Gateway credential, print a redacted
+`[openclaw] Reason:` without requiring debug mode, including in service logs.
+Set `OPENCLAW_DEBUG=1` to include stack traces.
 
 ## Automatic updates
 
@@ -333,7 +345,10 @@ openclaw node identity --json
 ```
 
 It prints the device ID and public key from the `primary` row in
-`state/openclaw.sqlite` and never creates the database or a new identity.
+`client/credentials.sqlite` and never creates the database or a new identity.
+Use `--identity node` or `--identity shareExtension` to inspect the corresponding
+native identity profile. An incomplete credential migration requires
+`openclaw doctor --fix` from the matching installation.
 
 On tightly controlled node networks, the Gateway operator can explicitly opt in
 to auto-approving first-time node pairing from trusted CIDRs:
@@ -369,11 +384,11 @@ identity that the Gateway uses for pairing and routing. This state lives in the
 OpenClaw state directory (`~/.openclaw` by default, or `$OPENCLAW_STATE_DIR`
 when set):
 
-| State                                                                   | Purpose                                                                                                                          |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `state/openclaw.sqlite` (`config_machine_state`, key `nodeHost.config`) | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
-| `state/openclaw.sqlite` (`device_identities`, `primary`)                | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
-| `state/openclaw.sqlite` (`device_auth_tokens`)                          | Paired device tokens, keyed by cryptographic device ID and role.                                                                 |
+| State                                                                              | Purpose                                                                                                                          |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `state/openclaw.sqlite` (`config_machine_state`, key `nodeHost.config`)            | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
+| `client/credentials.sqlite` (`device_identities`, `primary`)                       | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
+| `client/credentials.sqlite` (`device_auth_tokens`, `gateway_origin_device_tokens`) | Paired device tokens, keyed by cryptographic device ID, role, and Gateway scope.                                                 |
 
 `gatewayLocal` in `node.list` and `node.describe` marks an exact match with the
 primary device identity in the Gateway's state directory. Overriding `--node-id`
@@ -406,16 +421,20 @@ a separate check.
 
 Older OpenClaw releases stored node-host state in `node.json`, the signed
 identity in `identity/device.json`, and paired auth in
-`identity/device-auth.json`. Stop the node host and run
-`openclaw doctor --fix` once; Doctor validates the retired inputs, imports and
-verifies their stored SQLite rows, then removes the old files. Node startup,
-including the macOS app's worker, leaves these inputs for Doctor. Pending device
-auth or exec approvals stop startup before capabilities are prepared. A missing
-stored identity plus retired identity data or an interrupted import claim
-also stops startup before a new key can be created. An existing valid stored
-identity remains authoritative when an older release recreates `identity/device.json`;
-Doctor owns that stale file's cleanup. Keep `state/openclaw.sqlite` private;
-it contains the device keypair and auth tokens.
+`identity/device-auth.json`. Node startup, including the macOS app's worker,
+automatically prepares legacy credentials and exec approvals before capabilities
+are prepared. It uses the same backup and migration owner as Doctor, preserving
+the existing keypair and pairing tokens. Retained credential JSON stays consumed
+even if an older release recreates it; an existing valid stored identity remains
+authoritative. Malformed or conflicting sources remain unchanged and require the
+repair described in the diagnostic. Keep `client/credentials.sqlite` private;
+it contains the device keypair and auth tokens. Other retired node state remains
+part of `openclaw doctor --fix`.
+
+Retired `node.json` and interrupted Doctor claims must contain valid UTF-8.
+Doctor reports malformed text as a recoverable warning and preserves its bytes
+for repair. Keep a backup, correct the encoding in a copy, replace the affected
+file, then rerun `openclaw doctor --fix` before starting the node host.
 
 ## Exec approvals
 
@@ -436,5 +455,50 @@ created are rejected instead of changing what the node executes.
 ## Related
 
 - [CLI reference](/cli)
-- [Connect a machine](/cli/connect)
+- [Connect a device](/cli/connect)
 - [Nodes](/nodes)
+
+## Labs: OpenClaw ID tunnel targets
+
+An OpenClaw ID node target connects through `openclaw/tunnel/1` over iroh instead
+of a LAN address, Tailscale, or SSH. This is a Labs transport; enrollment with
+`openclaw node join` is a separate workstream, not part of this transport preview.
+After enrollment has saved an OpenClaw ID target, `openclaw node run` without
+Gateway endpoint flags resumes that target. Explicit `--host` / `--port` options
+continue to select the existing WebSocket transport.
+
+The saved target contains the claw id, root fingerprint, highest verified binding
+sequence, signed ServerBinding, and relay hint. The node verifies the binding and
+dials only its `K_srv`; a failed tunnel never falls back to a direct WebSocket.
+IP transports remain enabled so iroh can establish a direct encrypted path.
+
+The public target can also retain `discoveryUrl`, the deployment-selected Discovery
+API origin for future enrollment and descriptor refresh. It is never inferred from
+the claw hostname or relay URL. This transport-only preview does not select a
+Discovery default or implement `node join`; enrollment will resolve the configured
+origin and `--discovery-url` override. The origin must use HTTPS (HTTP is allowed
+only for localhost testbeds), without credentials, a path, query, or fragment.
+
+The node's iroh secret key is generated locally and stored separately at
+`$OPENCLAW_STATE_DIR/node-openclaw-id/endpoint.key` (32 bytes, mode `0600`). It is
+not a Gateway token and is never written into configuration or worker descriptors.
+Do not delete or copy that key to another node: a new key requires new enrollment.
+
+The main WebSocket, worker WebSocket, desktop and portal attachment streams,
+worker bundle downloads, and workspace transfers share the authenticated tunnel through an owner-only Unix socket
+(`0600` inside a `0700` directory). There is no localhost TCP proxy. This preview
+supports Unix hosts and native-process workers; Windows and container-isolated
+workers require a separate transport integration.
+
+Saved OpenClaw ID targets do not inherit Cloudflare Access or Gateway bearer
+credentials from the installing shell; the service resumes its enrolled key.
+
+The transport sends QUIC keep-alives, probes silent connections, and backs off
+when the relay denies admission. A removed or unadmitted node key stops the host
+with **“re-join this node”** rather than retrying indefinitely. Ordinary Gateway
+pairing-pending responses retain the existing wait-and-retry behavior.
+
+Node is the qualified runtime for this preview. The native addon loads and binds
+on Linux Bun 1.4.4, but streaming HTTP integration under the pinned Bun runtime
+stalled and the tunnel child missed health pings; Bun transport qualification is
+still pending.

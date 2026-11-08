@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."projects" (
+CREATE TABLE "projects" (
   "id" text COLLATE "C" NOT NULL,
   "display_name" text COLLATE "C" NOT NULL,
   "repo_root" text COLLATE "C" NOT NULL,
@@ -15,5 +11,3 @@ CREATE TABLE "openclaw_state"."projects" (
   PRIMARY KEY ("id"),
   CHECK (("source" IN ('registered', 'cloned')))
 );
-
-COMMIT;

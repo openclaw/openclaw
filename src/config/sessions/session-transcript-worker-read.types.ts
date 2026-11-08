@@ -1,4 +1,8 @@
-import type { BuildSessionEntryOptions } from "../../../packages/memory-host-sdk/src/host/session-files.js";
+import type {
+  BuildSessionEntryOptions,
+  SessionFileEntry,
+} from "../../../packages/memory-host-sdk/src/host/session-files.js";
+import type { SessionResetRecallCutoff } from "../../../packages/memory-host-sdk/src/host/session-reset-recall.js";
 import type { BoardReadOperations } from "../../boards/sqlite-board-operations.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
@@ -26,6 +30,8 @@ import type { SessionEntryReadWorkerInput } from "./session-entry-read.types.js"
 import type {
   SessionModelContextLimits,
   SessionTranscriptEventMatch,
+  SessionTranscriptMatchCaller,
+  SessionTranscriptMatchDiagnostics,
 } from "./session-history-read.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
@@ -74,6 +80,8 @@ export type SessionArchivedEvictionCandidatesWorkerInput = Omit<
 export type SessionTranscriptEventMatchRequest = {
   target: ResolvedTranscriptReadScope;
   match: SessionTranscriptEventMatch;
+  caller?: SessionTranscriptMatchCaller;
+  diagnostics?: SessionTranscriptMatchDiagnostics;
 };
 
 export type SessionTranscriptMatchWorkerInput = {
@@ -211,3 +219,15 @@ type SessionEntryWorkerRequest = {
 
 export type SessionEntryWorkerInput = SessionEntryWorkerRequest &
   ({ mode?: "entry" } | { mode: "snapshot"; includeOriginalMessages: boolean });
+
+export type SessionEntriesWorkerInput = {
+  kind: "session-entries";
+  entries: Omit<SessionEntryWorkerRequest, "kind">[];
+};
+
+export type SessionEntriesWorkerResult = {
+  entries: (
+    | { entry: SessionFileEntry | null; resetRecallCutoff: SessionResetRecallCutoff }
+    | { cold: true }
+  )[];
+};

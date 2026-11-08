@@ -1,4 +1,3 @@
-// Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -14,6 +13,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
 import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
@@ -63,8 +63,11 @@ const unavailableCron: GatewayCronServiceContract = {
   quiesceJobs: cronUnavailable,
   run: cronUnavailable,
   enqueueRun: cronUnavailable,
+  readEventSources: cronUnavailable,
+  runEvent: cronUnavailable,
   waitForManualRun: cronUnavailable,
   getJob: () => undefined,
+  getLoadedJobs: () => undefined,
   readJob: async () => undefined,
   readScratch: cronUnavailable,
   writeScratch: cronUnavailable,
@@ -108,6 +111,7 @@ async function createLocalGatewayRequestContext(
     cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     resolveSessionRequestTargets: (request) =>
       resolveSessionRequestTargets({ ...request, context }),
     // Embedded calls have no running Gateway application owner.
@@ -122,8 +126,11 @@ async function createLocalGatewayRequestContext(
     loadGatewayModelCatalogSnapshot: loadCatalogSnapshot,
     readPreparedGatewayModelCatalog: (loadParams) =>
       readPreparedGatewayModelCatalog({ ...loadParams, getConfig: params.getRuntimeConfig }),
-    readPreparedGatewayModelCatalogBatch: (agentIds) =>
-      readPreparedGatewayModelCatalogBatch(agentIds, { getConfig: params.getRuntimeConfig }),
+    readPreparedGatewayModelCatalogBatch: (agentIds, options) =>
+      readPreparedGatewayModelCatalogBatch(agentIds, {
+        ...options,
+        getConfig: params.getRuntimeConfig,
+      }),
     readChatMetadata: async () => {
       throw new Error("Chat metadata is unavailable in local embedded agent gateway context.");
     },
@@ -146,8 +153,6 @@ async function createLocalGatewayRequestContext(
     hasConnectedTalkNode: async () => false,
     nodeRegistry: new NodeRegistry(),
     agentRunSeq: new Map(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     chatRunState,
     addChatRun: chatRunState.registry.add,
     removeChatRun: chatRunState.registry.remove,

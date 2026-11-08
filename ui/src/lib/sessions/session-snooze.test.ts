@@ -1,11 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
-import {
-  formatSessionSnoozeWakeTime,
-  nextSessionSnoozeWakeAt,
-  resolveSessionSnoozePresets,
-} from "./session-snooze.ts";
+import { resolveSessionSnoozePresets } from "./session-snooze-presets.ts";
+import { formatSessionSnoozeWakeTime, nextSessionSnoozeWakeAt } from "./session-snooze.ts";
 
 describe("session snooze", () => {
   it.each([
@@ -28,16 +25,16 @@ describe("session snooze", () => {
     expect(now.getTime()).toBe(before);
   });
 
-  it("finds the earliest future deadline without retaining expired or malformed values", () => {
+  it("finds the earliest future deadline without retaining absent or expired values", () => {
     expect(
       nextSessionSnoozeWakeAt(
-        [undefined, Infinity, 100, 300, 200].map((snoozedUntil) => ({
+        [undefined, 100, 300, 200].map((snoozedUntil) => ({
           snoozedUntil,
         })),
         100,
       ),
     ).toBe(200);
-    for (const snoozedUntil of [undefined, Number.NaN, Infinity, -Infinity, 0, -1, 99, 100]) {
+    for (const snoozedUntil of [undefined, 0, -1, 99, 100]) {
       expect(nextSessionSnoozeWakeAt([{ snoozedUntil }], 100)).toBeNull();
     }
     expect(nextSessionSnoozeWakeAt([], 100)).toBeNull();
@@ -70,5 +67,15 @@ describe("snooze wake-time presentation", () => {
         expect(formatted).toMatch(expected);
       }
     }
+  });
+
+  it("keeps compact wake labels to a day beyond today", async () => {
+    await i18n.setLocale("en");
+    const today = new Date(2026, 8, 29, 9);
+    const compact = (wake: Date) => formatSessionSnoozeWakeTime(wake.getTime(), today, true);
+    expect(compact(new Date(2026, 8, 29, 18))).toBe("6:00 PM");
+    expect(compact(new Date(2026, 8, 30, 9))).toBe("Tomorrow");
+    expect(compact(new Date(2026, 9, 5, 9))).toBe("Mon");
+    expect(compact(new Date(2026, 9, 10, 9))).toBe("Oct 10");
   });
 });

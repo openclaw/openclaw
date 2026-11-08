@@ -289,38 +289,31 @@ final class WatchDirectNode {
             role: "node",
             gatewayID: configuration.gatewayID,
             profile: .primary)?.token
-        let response: WatchNodeConnectResponse
-        let usedBootstrap: Bool
+        let observedTokens = DeviceAuthStore.observeTokens(
+            deviceId: identity.deviceId,
+            gatewayID: configuration.gatewayID)
+        var credential: ConnectCredential
         if let bootstrapToken = link.bootstrapToken {
-            do {
-                response = try await self.establishSession(
-                    identity: identity,
-                    baseURL: baseURL,
-                    credential: .bootstrap(bootstrapToken))
-                usedBootstrap = true
-            } catch let error as HTTPError where error.status == 401 {
-                guard let storedToken else { throw error }
-                response = try await self.establishSession(
-                    identity: identity,
-                    baseURL: baseURL,
-                    credential: .device(storedToken))
-                usedBootstrap = false
-            }
+            credential = .bootstrap(bootstrapToken)
         } else if let storedToken {
-            response = try await self.establishSession(
-                identity: identity,
-                baseURL: baseURL,
-                credential: .device(storedToken))
-            usedBootstrap = false
+            credential = .device(storedToken)
         } else {
             throw HTTPError(status: 401, detail: String(localized: "No watch device credential"))
+        }
+        let response: WatchNodeConnectResponse
+        do {
+            response = try await self.establishSession(identity: identity, baseURL: baseURL, credential: credential)
+        } catch let error as HTTPError where error.status == 401 {
+            guard case .bootstrap = credential, let storedToken else { throw error }
+            credential = .device(storedToken)
+            response = try await self.establishSession(identity: identity, baseURL: baseURL, credential: credential)
         }
         // A successful bootstrap response has already consumed the one-time code.
         // Finish that durable handoff across background/toggle cancellation, but
         // never let an obsolete attempt overwrite a forgotten or newer setup.
         do {
             guard self.isInstalledConfiguration(configuration) else { throw CancellationError() }
-            guard usedBootstrap || response.voiceCredential == nil else {
+            if case .device = credential, response.voiceCredential != nil {
                 throw HTTPError(
                     status: 0,
                     detail: String(localized: "Voice access requires a new setup from iPhone Settings."))
@@ -331,7 +324,9 @@ final class WatchDirectNode {
                 token: response.deviceToken,
                 scopes: [],
                 gatewayID: configuration.gatewayID,
-                profile: .primary)
+                profile: .primary,
+                expectedToken: observedTokens["node"],
+                onlyIfUnchanged: true)
             else {
                 throw HTTPError(
                     status: 0,
@@ -344,7 +339,9 @@ final class WatchDirectNode {
                    token: voice.deviceToken,
                    scopes: voice.scopes,
                    gatewayID: configuration.gatewayID,
-                   profile: .primary)
+                   profile: .primary,
+                   expectedToken: observedTokens[voice.role],
+                   onlyIfUnchanged: true)
             {
                 throw HTTPError(
                     status: 0,
@@ -593,14 +590,7 @@ final class WatchDirectNode {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        switch params.priority ?? .active {
-        case .passive:
-            content.interruptionLevel = .passive
-        case .timeSensitive:
-            content.interruptionLevel = .timeSensitive
-        case .active:
-            content.interruptionLevel = .active
-        }
+        content.interruptionLevel = (params.priority ?? .active).interruptionLevel
         let sound = params.sound?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         content.sound = sound.map { ["none", "silent", "off"].contains($0) } == true ? nil : .default
         try await self.notificationCenter.add(UNNotificationRequest(

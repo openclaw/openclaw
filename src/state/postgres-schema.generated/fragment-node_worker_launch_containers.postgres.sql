@@ -1,13 +1,7 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."node_worker_launch_containers" (
+CREATE TABLE "node_worker_launch_containers" (
   "launch_id" text COLLATE "C" NOT NULL,
   "container_json" text COLLATE "C",
   PRIMARY KEY ("launch_id")
 );
-
-COMMIT;

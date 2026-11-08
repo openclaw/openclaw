@@ -1,4 +1,5 @@
 import { COMMAND_PALETTE_SHORTCUTS } from "../../../src/shared/keyboard-shortcuts.ts";
+import type { ChatAttachment } from "../lib/chat/chat-types.ts";
 import { matchesShortcutCombo } from "../lib/keyboard-shortcut-contract.ts";
 
 export const COMMAND_PALETTE_DIALOG_STYLE =
@@ -14,8 +15,10 @@ export type CommandPaletteOpenInput = CommandPaletteInputSnapshot & {
   submitRequested?: true;
   /** Position of an explicitly typed @ retained only during the cold-input handoff. */
   mentionTrigger?: number;
-  /** Clipboard Files remain in memory until the canonical draft admits and reads them. */
-  imageFiles?: readonly File[];
+  /** Dropped/clipboard Files remain in memory until the canonical draft admits and reads them. */
+  attachmentFiles?: readonly File[];
+  /** Composer-ready attachments, such as a transcript excerpt, staged into the new draft. */
+  attachments?: readonly ChatAttachment[];
 };
 
 /** Read the live cold input when replacement focus is accepted; undefined means retired. */
@@ -23,6 +26,27 @@ export type CommandPaletteInputHandoff = () => CommandPaletteOpenInput | undefin
 
 export const COMMAND_PALETTE_TARGET_EVENT = "openclaw-command-palette-target";
 export const COMMAND_PALETTE_OPEN_EVENT = "openclaw:command-palette-open";
+
+type CommandPaletteOpenDetail = { attachments: readonly ChatAttachment[] };
+
+/** Opens the new-session launcher with attachments; the shell keeps them in memory only. */
+export function openCommandPaletteWithAttachments(attachments: readonly ChatAttachment[]): void {
+  window.dispatchEvent(
+    new CustomEvent<CommandPaletteOpenDetail>(COMMAND_PALETTE_OPEN_EVENT, {
+      detail: { attachments },
+    }),
+  );
+}
+
+export function commandPaletteOpenAttachments(event: Event | undefined): readonly ChatAttachment[] {
+  const detail: unknown = event instanceof CustomEvent ? event.detail : undefined;
+  return detail &&
+    typeof detail === "object" &&
+    "attachments" in detail &&
+    Array.isArray(detail.attachments)
+    ? detail.attachments
+    : [];
+}
 export const SHELL_NAV_DRAWER_TOGGLE_EVENT = "openclaw:shell-nav-drawer-toggle";
 
 export type ShellNavDrawerToggleDetail = {
@@ -57,9 +81,9 @@ function isCommandPaletteTargetDetail(value: unknown): value is CommandPaletteTa
 }
 
 export function applyCommandPaletteTargetEvent(
-  host: HTMLElement & {
+  host: {
     commandPaletteTarget: CommandPaletteTargetDetail | undefined;
-    requestUpdate(): void;
+    invalidate(): void;
   },
   event: Event,
 ): void {
@@ -72,13 +96,14 @@ export function applyCommandPaletteTargetEvent(
     : host.commandPaletteTarget?.owner === detail.owner
       ? undefined
       : host.commandPaletteTarget;
-  host.requestUpdate();
+  host.invalidate();
 }
 
 export type CommandPaletteElement = HTMLElement & {
   custodianAvailable: boolean;
   desktopAvailable: boolean;
-  isOpen: boolean;
+  /** The native getter is installed by the first committed palette setup. */
+  isOpen?: boolean;
   openPalette: (input?: CommandPaletteOpenInput | CommandPaletteInputHandoff) => void;
   togglePalette: () => void;
 };

@@ -48,12 +48,7 @@ import {
 import { remoteSourceBootstrap } from "./crabbox-source-receiver.mts";
 import { preserveCrabboxArtifacts } from "./crabbox-staging-artifacts.mts";
 import { captureClaimNamespace } from "./crabbox-staging-claims.mts";
-import {
-  createStaging,
-  discoverStaging,
-  recoverDiscoveredStaging,
-  type StagingHandle,
-} from "./crabbox-staging.mts";
+import { createStaging, type StagingHandle } from "./crabbox-staging.mts";
 import {
   canonicalProviderName,
   isProviderAdvertised,
@@ -323,7 +318,7 @@ const jsRuntimeEntrypoints = new Set([
 ]);
 const awsMacosCorepackEntrypoints = new Set(["pnpm", "yarn", "corepack"]);
 const awsMacosBunEntrypoints = new Set(["bun", "bunx"]);
-const awsMacosBunVersion = "1.4.2";
+const awsMacosBunVersion = "1.4.4";
 const awsMacosSwiftEntrypoints = new Set(["swift", "xcodebuild"]);
 const awsMacosSwiftScriptTargets = new Set([
   "mac:package",
@@ -2687,7 +2682,7 @@ function remoteAwsMacosJsBootstrap({
   bun = false,
   sourceBootstrap = "",
 } = {}) {
-  const nodeVersion = process.env.OPENCLAW_CRABBOX_MACOS_NODE_VERSION?.trim() || "24.21.0";
+  const nodeVersion = process.env.OPENCLAW_CRABBOX_MACOS_NODE_VERSION?.trim() || "24.22.1";
   const bootstrap = [
     "openclaw_crabbox_bootstrap_macos_js() {",
     'tool_root="${OPENCLAW_CRABBOX_MACOS_TOOLCHAIN_DIR:-$HOME/.openclaw-crabbox-toolchain}";',
@@ -2785,7 +2780,7 @@ function remoteAwsMacosJsBootstrap({
 }
 
 function remoteWsl2JsBootstrap({ packageManager = false, sourceBootstrap = "" } = {}) {
-  const nodeVersion = process.env.OPENCLAW_CRABBOX_WSL2_NODE_VERSION?.trim() || "24.21.0";
+  const nodeVersion = process.env.OPENCLAW_CRABBOX_WSL2_NODE_VERSION?.trim() || "24.22.1";
   const bootstrap = [
     "openclaw_crabbox_bootstrap_wsl2_js() {",
     'tool_root="${OPENCLAW_CRABBOX_WSL2_TOOLCHAIN_DIR:-$HOME/.openclaw-crabbox-toolchain}";',
@@ -3919,13 +3914,8 @@ if (canonicalProvider === "blacksmith-testbox") {
     : envProviderLocal
       ? "from CRABBOX_PROVIDER"
       : "from config";
-  const fallback = commandProviderValue
-    ? "rerun without --provider to use .crabbox.yaml"
-    : envProviderLocal
-      ? "unset CRABBOX_PROVIDER to use .crabbox.yaml"
-      : "pass another --provider to override it";
   console.error(
-    `[crabbox] provider=blacksmith-testbox ${source}; if Testbox is queued or down, ${fallback}`,
+    `[crabbox] provider=blacksmith-testbox ${source}; if queued or unavailable, stop this task's allocation and use PR CI or a safe local scope. Keep platform-specific proof pending; do not chain providers.`,
   );
   console.error(
     "[crabbox] delegated Testbox proof uses the wrapper exitCode and timing JSON; the linked Actions run can show cancelled during external lease cleanup",
@@ -3936,17 +3926,19 @@ if (canonicalProvider === "blacksmith-testbox") {
 let testboxLeaseFreshness: ReturnType<typeof prepareTestboxLeaseFreshness>;
 try {
   testboxLeaseFreshness = prepareTestboxLeaseFreshness({
-    // Reuse the native-help parser's boundary; payload flags are never lease
-    // options. Equals form preserves option-looking values and Go's last value.
-    args: [
-      normalizedArgs[0] ?? "",
-      ...parseCommandInvocation(help.text, normalizedArgs).optionEntries.map(
-        ({ name, value, index }) =>
+    operation: normalizedArgs[0] ?? "",
+    // Preserve the native-help parser's payload boundary and Go's last value.
+    // The invocation's lookup map is first-wins; fold its ordered entries here.
+    options: new Map(
+      parseCommandInvocation(help.text, normalizedArgs).optionEntries.map(
+        ({ name, value, index }) => [
+          name,
           normalizedArgs[index]?.includes("=") || commandValueOptionsFromHelp.has(name)
-            ? `--${name}=${value}`
-            : `--${name}`,
+            ? value
+            : "true",
+        ],
       ),
-    ],
+    ),
     command: normalizedArgs,
     env: { ...process.env, CI: process.env.CI || "true" },
     provider: canonicalProvider,
@@ -4009,55 +4001,6 @@ for (const signal of signalExitCodes.keys()) {
   });
 }
 process.once("exit", cleanupOnce);
-
-function transfersSource(commandArgs: string[]) {
-  if (
-    hasOption(commandArgs, "--help") ||
-    hasOption(commandArgs, "-h") ||
-    hasOption(commandArgs, "--dry-run") ||
-    hasOption(commandArgs, "--no-sync")
-  ) {
-    return false;
-  }
-  const [command, operation] = commandArgs;
-  if (["run", "watch", "shard"].includes(command ?? "")) {
-    return true;
-  }
-  if ((command === "job" || command === "bench") && operation === "run") {
-    return true;
-  }
-  if (command === "capsule" && operation === "replay") {
-    return true;
-  }
-  if (command === "checkpoint" && operation === "fork") {
-    const separator = commandArgs.indexOf("--");
-    return separator >= 0 && separator + 1 < commandArgs.length;
-  }
-  if (command === "actions" && operation === "hydrate") {
-    return true;
-  }
-  return command === "prewarm" && !hasOption(commandArgs, "--no-hydrate");
-}
-
-const sourceTransfer = transfersSource(normalizedArgs);
-let discoveredStaging: ReturnType<typeof discoverStaging> | undefined;
-if (sourceTransfer) {
-  try {
-    discoveredStaging = discoverStaging(fullCheckoutSyncRoot(false));
-    if (discoveredStaging.entries.length || discoveredStaging.incomplete) {
-      const count = (status: string) =>
-        discoveredStaging!.entries.filter((entry) => entry.status === status).length;
-      console.error(
-        `[crabbox] staging discovery: ${count("active")} active, ${count("protected")} protected, ${count("candidate")} candidates${discoveredStaging.incomplete ? "; scan will continue on later runs" : ""}. Use staging inspect for reasons.`,
-      );
-    }
-  } catch (error) {
-    console.error(
-      "[crabbox] staging discovery unavailable: " +
-        (error instanceof Error ? error.message : String(error)),
-    );
-  }
-}
 
 async function readScriptStdin() {
   return (await consumeStream(addAbortSignal(preparationAbort.signal, process.stdin))).toString(
@@ -4461,26 +4404,6 @@ async function finishChildExit(code: number | null, signal: Signal | null) {
   }
   if (cancellationSignal || signal) {
     process.exit(signalExitCodes.get(cancellationSignal ?? signal!) ?? 1);
-  }
-  if (finalExitCode === 0 && discoveredStaging && !cancellationSignal && !signal) {
-    try {
-      const recovered = await recoverDiscoveredStaging(
-        fullCheckoutSyncRoot(false),
-        discoveredStaging,
-        { binary, cwd: repoRoot, signal: preparationAbort.signal },
-      );
-      if (recovered) {
-        console.error(`[crabbox] staging ${recovered.id}: ${recovered.reason}`);
-      }
-    } catch (error) {
-      console.error(
-        "[crabbox] deferred staging recovery retained its inputs: " +
-          (error instanceof Error ? error.message : String(error)),
-      );
-    }
-  }
-  if (cancellationSignal) {
-    process.exit(signalExitCodes.get(cancellationSignal) ?? 1);
   }
   if (
     finalExitCode !== 0 &&

@@ -40,10 +40,16 @@ export function registerOutboundQueueAckTests({
   setMatrixMessageAdapter,
   createMatrixMessageSendResult,
 }: QueueAckFixture) {
-  it("runs sent-result commit hooks when marker fallback ack precedes a partial failure", async () => {
+  const requiredDelivery = (overrides: Partial<Parameters<typeof deliverMatrix>[0]> = {}) =>
+    deliverMatrix({ payloads: [{ text: "hi" }], queuePolicy: "required", ...overrides });
+  const failMarker = () =>
     queueMocks.markDeliveryPlatformOutcomeUnknown.mockRejectedValueOnce(
       new Error("unknown marker offline"),
     );
+  const failAck = () => queueMocks.ackDelivery.mockRejectedValueOnce(new Error("ack offline"));
+
+  it("runs sent-result commit hooks when marker fallback ack precedes a partial failure", async () => {
+    failMarker();
     const afterCommit = vi.fn();
     const messageSendText = vi
       .fn()
@@ -55,10 +61,9 @@ export function registerOutboundQueueAckTests({
       send: { lifecycle: { afterCommit }, text: messageSendText },
     });
 
-    const results = await deliverMatrix({
+    const results = await requiredDelivery({
       payloads: [{ text: "first" }, { text: "second" }],
       bestEffort: true,
-      queuePolicy: "required",
     });
 
     expect(results).toHaveLength(1);
@@ -86,10 +91,9 @@ export function registerOutboundQueueAckTests({
       .mockRejectedValueOnce(new Error("second send failed"));
     setTestOutbound({ sendText });
 
-    const results = await deliverMatrix({
+    const results = await requiredDelivery({
       payloads: [{ text: "identityless first payload" }, { text: "failed second payload" }],
       bestEffort: true,
-      queuePolicy: "required",
     });
 
     expect(results).toEqual([]);
@@ -104,17 +108,11 @@ export function registerOutboundQueueAckTests({
   });
 
   it("retains unknown-after-send evidence when both the marker and direct ack fail", async () => {
-    queueMocks.markDeliveryPlatformOutcomeUnknown.mockRejectedValueOnce(
-      new Error("unknown marker offline"),
-    );
-    queueMocks.ackDelivery.mockRejectedValueOnce(new Error("ack offline"));
+    failMarker();
+    failAck();
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1" });
 
-    await deliverMatrix({
-      payloads: [{ text: "hi" }],
-      deps: { matrix: sendMatrix },
-      queuePolicy: "required",
-    });
+    await requiredDelivery({ deps: { matrix: sendMatrix } });
 
     expect(queueMocks.failDeliveryAfterPlatformSend).toHaveBeenCalledWith(
       "mock-queue-id",
@@ -124,16 +122,10 @@ export function registerOutboundQueueAckTests({
   });
 
   it("fails required delivery when queue ack fails after platform send", async () => {
-    queueMocks.ackDelivery.mockRejectedValueOnce(new Error("ack offline"));
+    failAck();
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1" });
 
-    await expect(
-      deliverMatrix({
-        payloads: [{ text: "hi" }],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-      }),
-    ).rejects.toThrow("ack offline");
+    await expect(requiredDelivery({ deps: { matrix: sendMatrix } })).rejects.toThrow("ack offline");
 
     expect(sendMatrix).toHaveBeenCalled();
     expect(queueMocks.markDeliveryPlatformOutcomeUnknown).toHaveBeenCalledWith("mock-queue-id");

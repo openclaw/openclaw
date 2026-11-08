@@ -5,7 +5,6 @@ import OpenClawKit
 actor IOSSourceResourceLoader {
     private let gateway: GatewayNodeSession
     private let connectionProvider: IOSMediaArtifactLoader.ConnectionProvider
-    private var revision: UInt64 = 0
     private var cached: (
         route: GatewayNodeSessionRoute,
         connection: IOSMediaArtifactLoader.Connection,
@@ -17,7 +16,6 @@ actor IOSSourceResourceLoader {
     }
 
     func invalidate() async {
-        self.revision &+= 1
         let previous = self.cached?.loader
         self.cached = nil
         await previous?.invalidate()
@@ -40,11 +38,9 @@ actor IOSSourceResourceLoader {
             return cached.loader
         }
         if let previous = self.cached {
-            self.revision &+= 1
             self.cached = nil
             Task { await previous.loader.invalidate() }
         }
-        let revision = self.revision
         let gateway = self.gateway
         let loader = OpenClawChatSourceResources(
             gatewayURL: connection.config.url,
@@ -52,14 +48,14 @@ actor IOSSourceResourceLoader {
             request: { [weak self] url, maximumBytes in
                 guard let self else { throw CancellationError() }
                 return try await self.request(
-                    url: url, maximumBytes: maximumBytes, connection: connection, route: route, revision: revision)
+                    url: url, maximumBytes: maximumBytes, connection: connection, route: route)
             },
             loadConfig: {
                 try? await gateway.request(
                     method: "config.get", paramsJSON: "{}", ifCurrentRoute: route)
             },
             isCurrent: { [weak self] in
-                await self?.isCurrent(connection: connection, route: route, revision: revision) == true
+                await self?.isCurrent(connection: connection, route: route) == true
             })
         cached = (route, connection, loader)
         return loader
@@ -67,14 +63,13 @@ actor IOSSourceResourceLoader {
 
     private func isCurrent(
         connection: IOSMediaArtifactLoader.Connection,
-        route: GatewayNodeSessionRoute,
-        revision: UInt64) async -> Bool
+        route: GatewayNodeSessionRoute) async -> Bool
     {
         guard let current = await connectionProvider(),
               Self.sameConnection(current, connection),
               await gateway.currentRoute() == route
         else { return false }
-        return self.revision == revision
+        return true
     }
 
     private static func sameConnection(
@@ -89,8 +84,7 @@ actor IOSSourceResourceLoader {
         url: URL,
         maximumBytes: Int,
         connection: IOSMediaArtifactLoader.Connection,
-        route: GatewayNodeSessionRoute,
-        revision: UInt64) async throws -> (Data, URLResponse)
+        route: GatewayNodeSessionRoute) async throws -> (Data, URLResponse)
     {
         guard let authorization = await gateway.httpResourceAuthorization(ifCurrentRoute: route),
               authorization.url == connection.config.url
@@ -114,11 +108,11 @@ actor IOSSourceResourceLoader {
         return try await OpenClawChatSourceResources.performAuthenticatedRequest(
             request, bearer: authorization.bearer)
         { request in
-            guard await self.isCurrent(connection: connection, route: route, revision: revision) else {
+            guard await self.isCurrent(connection: connection, route: route) else {
                 throw CancellationError()
             }
             let response = try await session.data(for: request, maximumBytes: maximumBytes)
-            guard await self.isCurrent(connection: connection, route: route, revision: revision) else {
+            guard await self.isCurrent(connection: connection, route: route) else {
                 throw CancellationError()
             }
             return response

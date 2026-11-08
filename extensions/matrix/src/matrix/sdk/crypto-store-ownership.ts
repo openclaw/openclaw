@@ -19,8 +19,6 @@ import {
 } from "../crypto-state-store.js";
 
 const MATRIX_CRYPTO_STORE_OWNER_ACTIVE_ERROR_CODE = "matrix_crypto_store_owner_active";
-const RETRY_MS = 200;
-const WAIT_TIMEOUT_MS = 120_000;
 const GUARD_BYTES = 33;
 
 class MatrixCryptoStoreOwnerActiveError extends Error {
@@ -173,53 +171,24 @@ export async function sealMatrixCryptoStoreRecovery(
   await sealMatrixIdbSnapshotOwnerGeneration(path.dirname(snapshotPath), generation, stateRuntime);
 }
 
-async function waitRetry(signal?: AbortSignal): Promise<void> {
-  const abortError = () => {
-    if (signal?.reason instanceof Error) {
-      return signal.reason;
-    }
-    const error = new Error("Matrix crypto ownership wait aborted", { cause: signal?.reason });
-    error.name = "AbortError";
-    return error;
-  };
-  await new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(abortError());
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, RETRY_MS);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(abortError());
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 export async function acquireMatrixCryptoStoreOwnership(
   snapshotPath: string,
   options: { signal?: AbortSignal; stateRuntime?: MatrixSnapshotStateRuntime } = {},
 ): Promise<MatrixCryptoStoreOwnership> {
   const stateRuntime = options.stateRuntime ?? getMatrixRuntime().state;
-  const deadline = Date.now() + WAIT_TIMEOUT_MS;
   let lock: FileLockHandle;
-  while (true) {
-    options.signal?.throwIfAborted();
-    try {
-      lock = await acquireFileLock(`${snapshotPath}.owner`, LOCK_OPTIONS);
-      break;
-    } catch (error) {
-      if (!isContention(error)) {
-        throw error;
-      }
-      if (Date.now() >= deadline) {
-        throw new MatrixCryptoStoreOwnerActiveError(error);
-      }
-      await waitRetry(options.signal);
+  options.signal?.throwIfAborted();
+  try {
+    // Slow shutdown can retain crypto beyond the Gateway's bounded channel close.
+    lock = await acquireFileLock(`${snapshotPath}.owner`, {
+      ...LOCK_OPTIONS,
+      retries: { retries: 25, factor: 1, minTimeout: 200, maxTimeout: 200 },
+    });
+  } catch (error) {
+    if (isContention(error)) {
+      throw new MatrixCryptoStoreOwnerActiveError(error);
     }
+    throw error;
   }
   let previousGuard: string | null;
   try {
@@ -240,73 +209,53 @@ export async function acquireMatrixCryptoStoreOwnership(
 
   const generation = randomUUID().replaceAll("-", "");
   let guardChanged = false;
-  let sealed = false;
   let armPromise: Promise<void> | undefined;
-  let pending = Promise.resolve();
-  let releasePromise: Promise<void> | undefined;
-  const underCustody = (run: () => Promise<void>): Promise<void> => {
-    if (releasePromise) {
-      return Promise.reject(new Error("Matrix crypto ownership has been released"));
-    }
-    const task = pending.then(run);
-    pending = task.catch(() => {});
-    return task;
-  };
+  // Client initialization and shutdown already await these operations in lifecycle order.
   return {
-    armUnsafeState: () =>
-      underCustody(async () => {
-        if (sealed) {
-          throw new Error("Matrix crypto generation has already been sealed");
-        }
-        armPromise ??= writeOwnerGuard(snapshotPath, generation, previousGuard === null, () => {
-          // Cancellation must undo even a write whose durability operation failed.
-          guardChanged = true;
-        });
-        await armPromise;
-      }),
-    cancelUnsafeState: () =>
-      underCustody(async () => {
-        // Only initialization that never entered Rust may restore the previously admitted guard.
-        if (!guardChanged) {
-          return;
-        }
-        if (previousGuard === null) {
-          await fs.unlink(poisonPath(snapshotPath));
-          await syncParentDirectory(poisonPath(snapshotPath));
-        } else {
-          await writeOwnerGuard(snapshotPath, previousGuard, false);
-        }
-        guardChanged = false;
-        armPromise = undefined;
-      }),
-    sealSafeState: () =>
-      underCustody(async () => {
-        if (!guardChanged) {
-          return;
-        }
-        await armPromise;
-        try {
-          await sealMatrixIdbSnapshotOwnerGeneration(
-            path.dirname(snapshotPath),
-            generation,
-            stateRuntime,
-          );
-        } catch (error) {
-          // A lost write acknowledgment can be reconciled without surrendering custody.
-          const committed = await readMatrixIdbSnapshotOwnerGeneration(
-            path.dirname(snapshotPath),
-            stateRuntime,
-          ).catch(() => undefined);
-          if (committed !== generation) {
-            throw error;
-          }
-        }
-        guardChanged = false;
-        sealed = true;
-      }),
-    release: () => {
-      releasePromise ??= pending.then(() => lock.release());
-      return releasePromise;
+    armUnsafeState: async () => {
+      armPromise ??= writeOwnerGuard(snapshotPath, generation, previousGuard === null, () => {
+        // Cancellation must undo even a write whose durability operation failed.
+        guardChanged = true;
+      });
+      await armPromise;
     },
+    cancelUnsafeState: async () => {
+      // Only initialization that never entered Rust may restore the previously admitted guard.
+      if (!guardChanged) {
+        return;
+      }
+      if (previousGuard === null) {
+        await fs.unlink(poisonPath(snapshotPath));
+        await syncParentDirectory(poisonPath(snapshotPath));
+      } else {
+        await writeOwnerGuard(snapshotPath, previousGuard, false);
+      }
+      guardChanged = false;
+      armPromise = undefined;
+    },
+    sealSafeState: async () => {
+      if (!guardChanged) {
+        return;
+      }
+      await armPromise;
+      try {
+        await sealMatrixIdbSnapshotOwnerGeneration(
+          path.dirname(snapshotPath),
+          generation,
+          stateRuntime,
+        );
+      } catch (error) {
+        // A lost write acknowledgment can be reconciled without surrendering custody.
+        const committed = await readMatrixIdbSnapshotOwnerGeneration(
+          path.dirname(snapshotPath),
+          stateRuntime,
+        ).catch(() => undefined);
+        if (committed !== generation) {
+          throw error;
+        }
+      }
+      guardChanged = false;
+    },
+    release: () => lock.release(),
   };
 }

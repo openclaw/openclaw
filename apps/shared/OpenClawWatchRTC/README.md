@@ -1,6 +1,6 @@
 # Native Watch WebRTC
 
-This module exposes a small C ABI over pinned `str0m` 0.24.0. It does not open
+This module exposes a small C ABI over pinned `str0m` 0.24.1. It does not open
 sockets: `WatchRealtimeTransport` owns UDP through Network.framework, and
 `WatchRealtimeAudioIO` owns capture, native Opus conversion and playback.
 The Gateway owns provider credentials, tools and transcripts through

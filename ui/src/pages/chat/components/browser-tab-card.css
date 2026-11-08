@@ -3,7 +3,6 @@ openclaw-browser-tab-card {
   max-width: 480px;
   margin-block: 6px;
   .card {
-    box-sizing: border-box;
     max-width: 320px;
     overflow: hidden;
     background: var(--card);
@@ -54,7 +53,6 @@ openclaw-browser-tab-card {
     height: 16px;
   }
   .icon img {
-    box-sizing: border-box;
     width: 20px;
     height: 20px;
     padding: 2px;
@@ -93,10 +91,10 @@ openclaw-browser-tab-card {
   }
   .card:hover .actions,
   .card:focus-within .actions,
-  .actions:has(wa-dropdown[open]) {
+  .actions:has([aria-expanded="true"]) {
     opacity: 1;
   }
-  .actions button {
+  .actions button:not(.oc-menu-item) {
     display: flex;
     align-items: center;
     padding: 4px 8px;
@@ -108,10 +106,10 @@ openclaw-browser-tab-card {
     border-radius: var(--radius-sm);
     cursor: default;
   }
-  .actions button:hover {
+  .actions button:not(.oc-menu-item):hover {
     background: var(--panel-hover);
   }
-  .actions button:focus-visible {
+  .actions button:not(.oc-menu-item):focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: -2px;
   }
@@ -185,11 +183,11 @@ openclaw-browser-tab-card {
   .tweet .actions {
     opacity: 1;
   }
-  .tweet .actions button {
+  .tweet .actions button:not(.oc-menu-item) {
     min-height: 32px;
   }
   .shot[data-new-tab-action],
-  .actions button[data-new-tab-action] {
+  .actions button:not(.oc-menu-item)[data-new-tab-action] {
     cursor: pointer;
   }
 }

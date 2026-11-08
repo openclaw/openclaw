@@ -1,7 +1,7 @@
 import type {
   WorkerGatewayToolCancelParams,
   WorkerGatewayToolInvokeParams,
-  WorkerGatewayToolResult,
+  WorkerGatewayToolInvokeResult,
   WorkerGatewayToolUpdateFrame,
   WorkerToolSurface,
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
@@ -12,6 +12,7 @@ export type WorkerGatewayToolSink = { send(frame: WorkerGatewayToolUpdateFrame):
 
 export type WorkerGatewayToolRuntime = {
   applyPromptToolsAllow(toolsAllow?: string[]): string[];
+  getAdditionalInheritedToolNames(): readonly string[];
   getSurface(identity: WorkerConnectionIdentity): Promise<WorkerToolSurface>;
   getPromptProjection(identity: WorkerConnectionIdentity): Promise<{
     tools: NonNullable<WorkerInferenceContext["tools"]>;
@@ -22,7 +23,7 @@ export type WorkerGatewayToolRuntime = {
     request: WorkerGatewayToolInvokeParams,
     sink: WorkerGatewayToolSink,
     connectionSignal?: AbortSignal,
-  ): Promise<WorkerGatewayToolResult>;
+  ): Promise<WorkerGatewayToolInvokeResult>;
   cancel(request: WorkerGatewayToolCancelParams): { cancelled: boolean };
   abort(): void;
   close(): Promise<void>;

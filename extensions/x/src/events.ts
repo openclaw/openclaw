@@ -1,6 +1,8 @@
 import { nextTick } from "node:process";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  X_ACTIVITY_POST_EVENT_TYPES,
   XApiError,
   parseXPostEnvelope,
   type XApiClient,
@@ -34,8 +36,22 @@ type XReceiveOptions = {
   onPost: (envelope: XPostEnvelope) => Promise<void>;
   onStatus?: (status: XEventStatus) => void;
   onWarning?: (message: string) => void;
+  onStreamTiming?: (step: string, elapsedMs: number) => void;
   signal: AbortSignal;
 };
+
+async function timeStreamStep<T>(
+  options: XReceiveOptions,
+  step: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const started = performance.now();
+  try {
+    return await operation();
+  } finally {
+    options.onStreamTiming?.(step, performance.now() - started);
+  }
+}
 
 function laterId(a: string | undefined, b: string): string {
   return !a || BigInt(b) > BigInt(a) ? b : a;
@@ -134,39 +150,24 @@ async function pollXMentions(options: XReceiveOptions): Promise<void> {
   }
 }
 
-function wait(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    signal.throwIfAborted();
-    const abort = () => {
-      clearTimeout(timer);
-      reject(signal.reason instanceof Error ? signal.reason : new Error("X event source aborted"));
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", abort);
-      resolve();
-    }, ms);
-    signal.addEventListener("abort", abort, { once: true });
-  });
-}
-
 export async function waitForXBudgetReset(until: number, signal: AbortSignal): Promise<void> {
   while (Date.now() < until) {
     // A billing-cycle pause can exceed the maximum delay accepted by setTimeout.
-    await wait(Math.min(until - Date.now(), 2_147_483_647), signal);
+    await sleepWithAbort(until - Date.now(), signal);
   }
   signal.throwIfAborted();
 }
 
 function eventEnvelope(value: unknown): XPostEnvelope | undefined {
   const event = asRecord(asRecord(value).data);
-  if (event.event_type !== "post.mention.create") {
+  if (!X_ACTIVITY_POST_EVENT_TYPES.some((type) => type === event.event_type)) {
     return undefined;
   }
   return parseXPostEnvelope({ post: event.payload, users: asRecord(event.includes).users });
 }
 
 async function receiveStream(
-  options: XReceiveOptions & { onBudgetPause: (until: number) => void },
+  options: XReceiveOptions & { onBudgetPause: (until: number) => void; onConnected: () => void },
   backfillMs: number,
 ): Promise<void> {
   const controller = new AbortController();
@@ -182,14 +183,22 @@ async function receiveStream(
   let receiveError: Error | undefined;
   let wakeReader: (() => void) | undefined;
   let wakeConsumer: (() => void) | undefined;
-  const charges = new Set<Promise<void>>();
-  const batches: { events: unknown[]; charged: Promise<void> }[] = [];
+  let wakeCapacity: (() => void) | undefined;
+  let chargesSettled = Promise.resolve();
+  // Pause the reader once a slow onPost retains this many batches or this much
+  // event text. The pending-line guard below does not cover batches already queued.
+  const queuedBatchLimit = 32;
+  const queuedCharLimit = 1_048_576;
+  let queuedChars = 0;
+  const batches: { events: unknown[]; charged: Promise<void>; chars: number }[] = [];
+  const backlogFull = () => batches.length >= queuedBatchLimit || queuedChars >= queuedCharLimit;
   const cancelOnAbort = () => {
     void reader?.cancel().catch(() => {});
   };
   const requestDrain = () => {
     drainRequested = true;
     wakeReader?.();
+    wakeCapacity?.();
   };
   const pause = (until: number) => {
     budgetPaused = true;
@@ -214,19 +223,48 @@ async function receiveStream(
   const unsubscribe = options.api.spend.subscribe(() => {
     void checkBudget().catch((error: unknown) => controller.abort(error));
   });
-  const armIdleTimer = () => {
+  const disarmIdleTimer = () => {
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(
-      () => controller.abort(new Error("X activity stream idle timeout")),
-      25_000,
-    );
+    idleTimer = undefined;
+  };
+  const armIdleTimer = () => {
+    disarmIdleTimer();
+    const timer = setTimeout(() => {
+      // After a local stall, let buffered socket reads run before declaring X idle.
+      setImmediate(() => {
+        if (idleTimer === timer) {
+          controller.abort(new Error("X activity stream idle timeout"));
+        }
+      });
+    }, 25_000);
+    idleTimer = timer;
   };
   const receiveBatches = async (source: ReadableStreamDefaultReader<Uint8Array>) => {
     const decoder = new TextDecoder();
+    const started = performance.now();
+    let firstByte = true;
     let pending = "";
     try {
       for (;;) {
         options.signal.throwIfAborted();
+        if (!drainRequested && !controller.signal.aborted && backlogFull()) {
+          // Stay paused until the consumer drains below the bound, or drain/abort.
+          // The idle timer stays disarmed: this wait is local backpressure, not a dead stream.
+          await new Promise<void>((resolve) => {
+            const finish = () => {
+              options.signal.removeEventListener("abort", finish);
+              controller.signal.removeEventListener("abort", finish);
+              if (wakeCapacity === finish) {
+                wakeCapacity = undefined;
+              }
+              resolve();
+            };
+            wakeCapacity = finish;
+            options.signal.addEventListener("abort", finish, { once: true });
+            controller.signal.addEventListener("abort", finish, { once: true });
+          });
+          continue;
+        }
         const read = source.read();
         let ready = false;
         void read.then(
@@ -249,7 +287,7 @@ async function receiveStream(
             });
           } finally {
             wakeReader = undefined;
-            clearTimeout(idleTimer);
+            disarmIdleTimer();
           }
         }
         if (drainRequested && !ready) {
@@ -271,11 +309,16 @@ async function receiveStream(
           }
           throw new Error("X activity stream disconnected");
         }
+        if (firstByte && result.value.byteLength) {
+          firstByte = false;
+          options.onStreamTiming?.("first-byte", performance.now() - started);
+        }
         pending += decoder.decode(result.value, { stream: true });
         if (pending.length > 1_048_576) {
           throw new Error("X activity stream event exceeded 1 MiB");
         }
         const events: unknown[] = [];
+        let chars = 0;
         let boundary: number;
         while ((boundary = pending.indexOf("\n")) !== -1) {
           const line = pending.slice(0, boundary).trim();
@@ -283,6 +326,7 @@ async function receiveStream(
           if (!line) {
             continue;
           }
+          chars += line.length;
           try {
             events.push(JSON.parse(line));
           } catch {
@@ -295,17 +339,12 @@ async function receiveStream(
         }
         const cost = events.reduce<number>((total, event) => total + xActivityCost(event), 0);
         const charged = cost ? options.api.spend.charge(cost) : Promise.resolve();
-        charges.add(charged);
-        void charged.then(
-          () => {
-            charges.delete(charged);
-          },
-          (error: unknown) => {
-            charges.delete(charged);
-            fail(error);
-          },
-        );
-        batches.push({ events, charged });
+        if (cost) {
+          // The spend owner serializes charges; its latest receipt joins every earlier charge.
+          chargesSettled = charged.catch(fail);
+        }
+        queuedChars += chars;
+        batches.push({ events, charged, chars });
         wakeConsumer?.();
       }
     } catch (error) {
@@ -315,16 +354,18 @@ async function receiveStream(
     } finally {
       receiveDone = true;
       wakeConsumer?.();
-      clearTimeout(idleTimer);
+      disarmIdleTimer();
     }
   };
   try {
-    await checkBudget();
+    await timeStreamStep(options, "budget-check", checkBudget);
     if (budgetPaused) {
       return;
     }
     armIdleTimer();
-    const response = await options.api.openActivityStream(signal);
+    const response = await timeStreamStep(options, "response-headers", () =>
+      options.api.openActivityStream(signal),
+    );
     if (!response.body) {
       throw new Error("X activity stream has no response body");
     }
@@ -333,7 +374,8 @@ async function receiveStream(
     if (signal.aborted) {
       cancelOnAbort();
     }
-    clearTimeout(idleTimer);
+    disarmIdleTimer();
+    options.onConnected();
     options.onStatus?.({
       eventMode: "stream",
       streamConnected: true,
@@ -358,7 +400,7 @@ async function receiveStream(
         if (drainRequested) {
           return;
         }
-        await wait(backfillMs, signal);
+        await sleepWithAbort(backfillMs, signal);
         if (signal.aborted || drainRequested) {
           return;
         }
@@ -397,6 +439,8 @@ async function receiveStream(
         wakeConsumer = undefined;
         continue;
       }
+      queuedChars -= batch.chars;
+      wakeCapacity?.();
       await batch.charged;
       for (const value of batch.events) {
         options.signal.throwIfAborted();
@@ -404,7 +448,10 @@ async function receiveStream(
         if (!envelope) {
           const event = asRecord(value);
           const type = asRecord(event.data).event_type;
-          if (typeof type === "string" && type !== "post.mention.create") {
+          if (
+            typeof type === "string" &&
+            !X_ACTIVITY_POST_EVENT_TYPES.some((eventType) => eventType === type)
+          ) {
             continue;
           }
           if (++unparsed === 3) {
@@ -460,13 +507,13 @@ async function receiveStream(
   } finally {
     closed = true;
     unsubscribe();
-    clearTimeout(idleTimer);
+    disarmIdleTimer();
     controller.abort();
     await backfill;
     signal.removeEventListener("abort", cancelOnAbort);
     await reader?.cancel().catch(() => {});
     await receiver;
-    await Promise.allSettled(charges);
+    await chargesSettled;
     reader?.releaseLock();
     options.onStatus?.({
       streamConnected: false,
@@ -499,22 +546,25 @@ export async function runXEvents(
       message: pollMessage,
     });
   };
-  if (stream) {
-    try {
-      await options.api.ensureActivitySubscriptions(options.userId, options.signal);
-    } catch (error) {
-      options.signal.throwIfAborted();
-      if (options.mode !== "stream" || (error instanceof XApiError && error.status === 403)) {
-        fallback(error);
-      } else {
-        throw error;
+  try {
+    if (stream) {
+      try {
+        await options.api.ensureActivitySubscriptions(options.userId, options.signal);
+      } catch (error) {
+        options.signal.throwIfAborted();
+        if (options.mode !== "stream" || (error instanceof XApiError && error.status === 403)) {
+          fallback(error);
+        } else {
+          throw error;
+        }
       }
     }
-  }
-  try {
     while (!options.signal.aborted) {
       if (stream && Date.now() >= streamPausedUntil) {
-        streamPausedUntil = (await options.api.spend.streamResumeAt()) ?? 0;
+        streamPausedUntil =
+          (await timeStreamStep(options, "budget-preflight", () =>
+            options.api.spend.streamResumeAt(),
+          )) ?? 0;
       }
       if (!stream || Date.now() < streamPausedUntil) {
         options.onStatus?.({
@@ -538,7 +588,7 @@ export async function runXEvents(
           options.onStatus?.({ message: "mentions poll failed; retrying after the poll interval" });
         }
         const pollWait = Math.max(15, options.pollSeconds ?? 60) * 1000;
-        await wait(
+        await sleepWithAbort(
           streamPausedUntil > Date.now()
             ? Math.min(pollWait, streamPausedUntil - Date.now())
             : pollWait,
@@ -548,7 +598,13 @@ export async function runXEvents(
       }
       try {
         await receiveStream(
-          { ...options, onBudgetPause: pauseStream },
+          {
+            ...options,
+            onBudgetPause: pauseStream,
+            onConnected: () => {
+              backoffMs = 1_000;
+            },
+          },
           Math.max(60, (options.pollSeconds ?? 60) * 4) * 1000,
         );
       } catch (error) {
@@ -562,7 +618,7 @@ export async function runXEvents(
           streamBackoffMs: backoffMs,
           message: "activity stream reconnect backoff",
         });
-        await wait(backoffMs, options.signal);
+        await timeStreamStep(options, "backoff", () => sleepWithAbort(backoffMs, options.signal));
         backoffMs = Math.min(backoffMs * 2, 60_000);
       }
     }

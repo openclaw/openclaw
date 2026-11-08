@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."worker_session_placement_moves" (
+CREATE TABLE "worker_session_placement_moves" (
   "operation_id" text COLLATE "C" NOT NULL,
   "session_id" text COLLATE "C" NOT NULL,
   "source_generation" bigint NOT NULL,
@@ -27,6 +23,4 @@ CREATE TABLE "openclaw_state"."worker_session_placement_moves" (
   UNIQUE ("session_id")
 );
 
-ALTER TABLE "openclaw_state"."worker_session_placement_moves" ADD FOREIGN KEY ("session_id") REFERENCES "openclaw_state"."worker_session_placements" ("session_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
-
-COMMIT;
+ALTER TABLE "worker_session_placement_moves" ADD FOREIGN KEY ("session_id") REFERENCES "worker_session_placements" ("session_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;

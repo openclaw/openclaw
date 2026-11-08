@@ -5,12 +5,9 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import {
   browserFallbackResult,
   submitGithubIssue,
-  type GithubIssueSubmitHooks,
   type GithubIssueSubmitResult,
-  type GithubIssueReconcileHooks,
   type GithubIssueReconcileResult,
   reconcileGithubIssue,
-  type PreparedGithubIssue,
 } from "./github-issue.js";
 import {
   beginStaleUpdateFailureReportReceiptCleanup,
@@ -25,22 +22,18 @@ import {
   type UpdateFailureReportReceipt,
 } from "./restart-sentinel.js";
 import {
-  cleanRetiredUpdateFailureReportArtifacts,
-  type UpdateFailureReportSweepHooks,
-  type UpdateFailureReportSweepReceipt,
-} from "./update-failure-report-artifact-sweep.js";
-import {
   bindSavedReportArtifact,
   discardSavedUpdateFailureReport,
   discardSavedUpdateFailureReportBestEffort,
+  listRetiredUpdateFailureReportArtifacts,
   publishPreparedUpdateFailureReport,
+  removeRetiredUpdateFailureReportArtifacts,
   savePreparedUpdateFailureReport,
 } from "./update-failure-report-artifact.js";
 import {
   assertUpdateReportPreCreateState,
   assertUpdateReportSubmissionAuthority,
-  retryUpdateReportStateWrite,
-  retryUpdateReportStateWriteAfterNoStart,
+  tryUpdateReportStateWrite,
   UpdateReportPreCreateGuardError,
 } from "./update-failure-report-precreate.js";
 import type { PreparedUpdateFailureReport } from "./update-failure-report-prepare.js";
@@ -51,6 +44,11 @@ export type {
   PreparedUpdateFailureReport,
   UpdateFailureReportInput,
 } from "./update-failure-report-prepare.js";
+
+type UpdateFailureReportSweepReceipt = Pick<
+  UpdateFailureReportReceipt,
+  "artifactSweep" | "previewDigest" | "replacementReady" | "reservationId"
+>;
 
 export type UpdateFailureReportSubmitResult =
   | { message?: string; savedReportPath: string; status: "created"; url: string }
@@ -121,30 +119,12 @@ export async function submitUpdateFailureReport(
   prepared: PreparedUpdateFailureReport,
   previewDigest: string,
   options: {
-    createIssue?: (
-      issue: PreparedGithubIssue,
-      hooks: GithubIssueSubmitHooks,
-    ) => GithubIssueSubmitResult | Promise<GithubIssueSubmitResult>;
     env?: NodeJS.ProcessEnv;
     /** Browser-only callers must never use the host account, even for reconciliation. */
     publicationMode?: "host" | "browser" | "reconcile";
     /** Interactive CLI retries stay in the terminal instead of publishing a browser handoff. */
     allowBrowserFallback?: boolean;
-    artifactSweepHooks?: UpdateFailureReportSweepHooks;
-    finalizeReceipt?: (
-      ...args: Parameters<typeof finalizeUpdateFailureReportReceipt>
-    ) => boolean | Promise<boolean>;
     hasCurrentAuthority?: () => boolean;
-    markPending?: (
-      ...args: Parameters<typeof markUpdateFailureReportReceiptPending>
-    ) => boolean | Promise<boolean>;
-    readReceipt?: (
-      ...args: Parameters<typeof readUpdateFailureReportReceipt>
-    ) => UpdateFailureReportReceipt | null | Promise<UpdateFailureReportReceipt | null>;
-    reconcileIssue?: (
-      issue: PreparedGithubIssue,
-      hooks: GithubIssueReconcileHooks,
-    ) => Promise<GithubIssueReconcileResult>;
     stateDir?: string;
     validateCurrentAttempt?: () => boolean | Promise<boolean>;
   } = {},
@@ -162,21 +142,41 @@ export async function submitUpdateFailureReport(
     }
   };
   ensureAuthority("submission");
-  const finalizeReceipt = options.finalizeReceipt ?? finalizeUpdateFailureReportReceipt;
-  const readReceipt = options.readReceipt ?? readUpdateFailureReportReceipt;
   const ensureReconciliationAuthority = () => ensureAuthority("reconciliation");
-  const cleanRetiredArtifacts = (receipt: UpdateFailureReportSweepReceipt, keepCurrent: boolean) =>
-    cleanRetiredUpdateFailureReportArtifacts(
-      prepared,
-      receipt,
-      stateEnv,
-      keepCurrent,
-      options.artifactSweepHooks,
-      context,
+  const cleanRetiredArtifacts = async (
+    receipt: UpdateFailureReportSweepReceipt,
+    keepCurrent: boolean,
+  ): Promise<void> => {
+    const candidates = await listRetiredUpdateFailureReportArtifacts(prepared);
+    const current = await readUpdateFailureReportReceipt(prepared.attemptId, stateEnv, context);
+    const keep = [
+      ...(keepCurrent && !receipt.replacementReady ? [receipt] : []),
+      ...(current &&
+      current.status !== "created" &&
+      current.cleanup !== "pending" &&
+      !current.replacementReady
+        ? [current]
+        : []),
+    ];
+    const keepPaths = new Set(
+      keep.flatMap((owner) => {
+        const { savedReportPath } = bindSavedReportArtifact(
+          prepared,
+          owner.reservationId,
+          owner.previewDigest,
+        );
+        return [savedReportPath, `${savedReportPath}.pending`];
+      }),
     );
+    // Protect a successor already listed; later reservations use names outside this captured set.
+    context.admission.assertCurrent();
+    await removeRetiredUpdateFailureReportArtifacts(
+      candidates.filter((candidate) => !keepPaths.has(candidate)),
+    );
+  };
   const cleanOwnedArtifact = async (receipt: UpdateFailureReportSweepReceipt): Promise<boolean> => {
-    if (receipt.artifactSweep && !(await cleanRetiredArtifacts(receipt, false))) {
-      return false;
+    if (receipt.artifactSweep) {
+      await cleanRetiredArtifacts(receipt, false);
     }
     const ownedPrepared = bindSavedReportArtifact(
       prepared,
@@ -189,7 +189,7 @@ export async function submitUpdateFailureReport(
     } catch {
       return false;
     }
-    return retryUpdateReportStateWrite(() =>
+    return tryUpdateReportStateWrite(() =>
       completeUpdateFailureReportReceiptCleanup(
         prepared.attemptId,
         receipt.reservationId,
@@ -202,7 +202,7 @@ export async function submitUpdateFailureReport(
     receipt: UpdateFailureReportSweepReceipt,
     beginCleanup = beginUpdateFailureReportReceiptCleanup,
   ): Promise<boolean> => {
-    const cleanupRecorded = await retryUpdateReportStateWrite(() =>
+    const cleanupRecorded = await tryUpdateReportStateWrite(() =>
       beginCleanup(prepared.attemptId, receipt.reservationId, stateEnv, context),
     );
     return cleanupRecorded ? cleanOwnedArtifact(receipt) : false;
@@ -215,13 +215,13 @@ export async function submitUpdateFailureReport(
       status: "created",
       url,
     };
-    const finalized = await retryUpdateReportStateWrite(() =>
-      finalizeReceipt(prepared.attemptId, receipt, stateEnv, context),
+    const finalized = await tryUpdateReportStateWrite(() =>
+      finalizeUpdateFailureReportReceipt(prepared.attemptId, receipt, stateEnv, context),
     );
     if (
       !finalized &&
       !(await confirmUpdateFailureReportReceipt(
-        () => readReceipt(prepared.attemptId, stateEnv, context),
+        () => readUpdateFailureReportReceipt(prepared.attemptId, stateEnv, context),
         receipt,
       ))
     ) {
@@ -233,24 +233,14 @@ export async function submitUpdateFailureReport(
   const persistKnownNoStartReceipt = async (
     receipt: UpdateFailureReportReceipt,
   ): Promise<boolean> =>
-    await retryUpdateReportStateWriteAfterNoStart(async () => {
-      try {
-        if (await finalizeReceipt(prepared.attemptId, receipt, stateEnv, context)) {
-          return true;
-        }
-      } catch (error) {
-        if (
-          await confirmUpdateFailureReportReceipt(
-            () => readReceipt(prepared.attemptId, stateEnv, context),
-            receipt,
-          )
-        ) {
-          return true;
-        }
-        throw error;
+    await tryUpdateReportStateWrite(async () => {
+      if (
+        await finalizeUpdateFailureReportReceipt(prepared.attemptId, receipt, stateEnv, context)
+      ) {
+        return true;
       }
       return confirmUpdateFailureReportReceipt(
-        () => readReceipt(prepared.attemptId, stateEnv, context),
+        () => readUpdateFailureReportReceipt(prepared.attemptId, stateEnv, context),
         receipt,
       );
     });
@@ -262,23 +252,19 @@ export async function submitUpdateFailureReport(
     }
     return resultFromExistingReceipt(receipt, prepared);
   };
-  let existingReceipt = await readReceipt(prepared.attemptId, stateEnv, context);
+  let existingReceipt = await readUpdateFailureReportReceipt(prepared.attemptId, stateEnv, context);
   if (existingReceipt?.cleanup === "pending") {
     await cleanOwnedArtifact(existingReceipt);
-    existingReceipt = await readReceipt(prepared.attemptId, stateEnv, context);
+    existingReceipt = await readUpdateFailureReportReceipt(prepared.attemptId, stateEnv, context);
   }
   if (
     existingReceipt?.status === "pending" &&
     options.publicationMode !== "browser" &&
     existingReceipt.previewDigest === prepared.previewDigest
   ) {
-    const reconcileIssue =
-      options.reconcileIssue ??
-      ((issue: PreparedGithubIssue, hooks: GithubIssueReconcileHooks) =>
-        reconcileGithubIssue(issue, undefined, hooks));
     let reconciled: GithubIssueReconcileResult;
     try {
-      reconciled = await reconcileIssue(prepared, {
+      reconciled = await reconcileGithubIssue(prepared, undefined, {
         beforeIssueLookup: ensureReconciliationAuthority,
       });
       ensureReconciliationAuthority();
@@ -326,16 +312,13 @@ export async function submitUpdateFailureReport(
   }
   if (existingReceipt?.status === "preparing" || existingReceipt?.status === "prepared") {
     await cleanPreparation(existingReceipt, beginStaleUpdateFailureReportReceiptCleanup);
-    existingReceipt = await readReceipt(prepared.attemptId, stateEnv, context);
+    existingReceipt = await readUpdateFailureReportReceipt(prepared.attemptId, stateEnv, context);
   }
   if (existingReceipt?.status === "retryable" && existingReceipt.replacementReady !== true) {
     await cleanPreparation(existingReceipt);
   }
   if (existingReceipt?.status === "retryable" && existingReceipt.replacementReady === true) {
-    if (!(await cleanRetiredArtifacts(existingReceipt, false))) {
-      const currentReceipt = await readReceipt(prepared.attemptId, stateEnv, context);
-      return resultFromExistingReceipt(currentReceipt, prepared);
-    }
+    await cleanRetiredArtifacts(existingReceipt, false);
   }
 
   const reservationId = randomUUID();
@@ -358,7 +341,7 @@ export async function submitUpdateFailureReport(
   });
   const currentResult = async () =>
     resultFromExistingReceipt(
-      await readReceipt(prepared.attemptId, stateEnv, context),
+      await readUpdateFailureReportReceipt(prepared.attemptId, stateEnv, context),
       prepared,
       ownedPrepared.savedReportPath,
     );
@@ -373,7 +356,7 @@ export async function submitUpdateFailureReport(
       return ownedResult("stale", "This failed update attempt is stale or unavailable.");
     }
     ensureAuthority("submission");
-    const publicationReserved = await retryUpdateReportStateWrite(() =>
+    const publicationReserved = await tryUpdateReportStateWrite(() =>
       markUpdateFailureReportReceiptPrepared(
         prepared.attemptId,
         reservationId,
@@ -406,34 +389,14 @@ export async function submitUpdateFailureReport(
   };
   const beforeIssueCreate = async () => {
     assertPublicationCurrent();
-    const markPending = options.markPending ?? markUpdateFailureReportReceiptPending;
-    let marked: boolean;
-    try {
-      marked = await markPending(
-        prepared.attemptId,
-        reservationId,
-        prepared.previewDigest,
-        stateEnv,
-        context,
-        assertPublicationCurrent,
-      );
-    } catch (error) {
-      // If both worker replies were lost, the exact durable pending row still proves admission.
-      let current: UpdateFailureReportReceipt | null;
-      try {
-        current = await readReceipt(prepared.attemptId, stateEnv, context);
-      } catch {
-        throw error;
-      }
-      if (
-        current?.status !== "pending" ||
-        current.reservationId !== reservationId ||
-        current.previewDigest !== prepared.previewDigest
-      ) {
-        throw error;
-      }
-      marked = true;
-    }
+    const marked = await markUpdateFailureReportReceiptPending(
+      prepared.attemptId,
+      reservationId,
+      prepared.previewDigest,
+      stateEnv,
+      context,
+      assertPublicationCurrent,
+    );
     if (!marked) {
       throw new UpdateReportPreCreateGuardError(
         "Update report preparation is no longer owned by this request.",
@@ -447,10 +410,6 @@ export async function submitUpdateFailureReport(
       assertPublicationCurrent();
     };
   };
-  const createIssue =
-    options.createIssue ??
-    ((issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) =>
-      submitGithubIssue(issue, undefined, hooks));
   let created: GithubIssueSubmitResult;
   try {
     // Publication yields; fence host authentication as well as issue creation.
@@ -460,7 +419,7 @@ export async function submitUpdateFailureReport(
       created = browserFallbackResult(prepared, "browser-requested");
     } else {
       try {
-        created = await createIssue(prepared, {
+        created = await submitGithubIssue(prepared, undefined, {
           afterAuthPreflight: assertCurrentPreCreateState,
           beforeIssueCreate,
           beforeIssueLookup: ensureReconciliationAuthority,
@@ -549,7 +508,7 @@ export async function submitUpdateFailureReport(
       : created.reason === "authentication-unavailable"
         ? "GitHub authentication is unavailable. Review and submit the prefilled issue in your browser."
         : "GitHub submission is unavailable. Review and submit the prefilled issue in your browser.";
-  const preparationRefreshed = await retryUpdateReportStateWrite(() =>
+  const preparationRefreshed = await tryUpdateReportStateWrite(() =>
     refreshUpdateFailureReportReceiptPreparation(
       prepared.attemptId,
       reservationId,
@@ -560,7 +519,7 @@ export async function submitUpdateFailureReport(
   if (!preparationRefreshed) {
     let replacement: UpdateFailureReportReceipt | null = null;
     try {
-      replacement = await readReceipt(prepared.attemptId, stateEnv, context);
+      replacement = await readUpdateFailureReportReceipt(prepared.attemptId, stateEnv, context);
     } catch {
       // Without an authoritative owner, a browser link must not be published or persisted.
     }

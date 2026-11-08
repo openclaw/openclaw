@@ -77,6 +77,14 @@ function buildApprovedPairedDevice(params: {
   approvedVia: PairedDeviceApprovalKind;
   accessMetadata?: DevicePairingAccessMetadata;
 }): PairedDevice {
+  // A replaced installation does not inherit the old node key's role provenance.
+  if (
+    params.existing &&
+    params.existing.publicKey !== params.pending.publicKey &&
+    params.tokens.node
+  ) {
+    delete params.tokens.node.approval;
+  }
   return {
     deviceId: params.pending.deviceId,
     publicKey: params.pending.publicKey,
@@ -203,19 +211,19 @@ export function approveDevicePairingInWorker(
   return withPendingDevicePairingApproval(requestId, nowMs, (state, pendingRecord, existing) => {
     const autoApproveScopes = options?.autoApproveNewDeviceScopes;
     const requestedRoles = resolveRequestedDeviceRoles(pendingRecord);
-    // Trusted-proxy connects carry an SSO-authenticated user, and the connect
-    // handshake has already proven possession of the pending public key. A
+    // Trusted proxy and remote ingress connects carry authenticated front-door
+    // authority, and the handshake has proven possession of the pending key. A
     // matching key on the paired record is therefore the same physical device
     // re-requesting (typically a scope upgrade) and may auto-approve; a key
     // mismatch is a real repair — possibly a deviceId squat — and stays a
     // manual owner decision.
-    const trustedProxySameKeyDevice =
-      options?.approvedVia === "trusted-proxy" &&
+    const trustedIngressSameKeyDevice =
+      (options?.approvedVia === "trusted-proxy" || options?.approvedVia === "remote-ingress") &&
       existing !== undefined &&
       existing.publicKey === pendingRecord.publicKey;
     if (
       autoApproveScopes &&
-      (((pendingRecord.isRepair || existing) && !trustedProxySameKeyDevice) ||
+      (((pendingRecord.isRepair || existing) && !trustedIngressSameKeyDevice) ||
         !sameDevicePairingStringSet(requestedRoles, [OPERATOR_ROLE]))
     ) {
       return null;

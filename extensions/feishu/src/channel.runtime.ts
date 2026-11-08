@@ -18,7 +18,7 @@ export const feishuChannelRuntime = {
   buildFeishuDirectChatMembers,
   listFeishuDirectoryGroupsLive,
   listFeishuDirectoryPeersLive,
-  feishuOutbound: { ...feishuOutbound },
+  feishuOutbound,
   createPinFeishu,
   listPinsFeishu,
   removePinFeishu,

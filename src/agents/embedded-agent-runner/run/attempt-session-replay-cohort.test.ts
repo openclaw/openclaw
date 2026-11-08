@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { loadTranscriptEventsSync } from "../../../config/sessions/session-accessor.sqlite-read.js";
-import { SessionEntryChangedDuringReadError } from "../../../config/sessions/session-entry-read-errors.js";
 import * as transcriptReaders from "../../../config/sessions/session-transcript-execution-read.js";
+import { SessionTranscriptProjectionUnavailableError } from "../../../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptProjection } from "../../../config/sessions/session-transcript-reconcile.js";
 import * as historyReaders from "../../../config/sessions/session-transcript-worker-readers.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -120,10 +120,8 @@ describe("transcript replay cohorts", () => {
           });
         try {
           const prepared = await fixture.prepare();
-          if (change === "admitted-receipt") {
-            expect(hydrationReads).toBe(1);
-            expect(messagePresenceReads).toBe(0);
-          }
+          expect(hydrationReads).toBe(change === "admitted-receipt" ? 1 : 2);
+          expect(messagePresenceReads).toBe(0);
           expect(reload).not.toHaveBeenCalled();
           expect(fixture.attempt.userTurnTranscriptRecorder?.getAdmissionReceipt()).toMatchObject({
             agentId: fixture.target.agentId,
@@ -255,7 +253,8 @@ describe("transcript replay cohorts", () => {
                     };
                   });
           const consume = vi.fn();
-          const pending = phase === "selected-initial" ? fixture.prepare() : admit!(consume);
+          const preparation = phase === "selected-initial" ? fixture.prepare() : undefined;
+          const pending = preparation ?? admit!(consume);
           let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
           try {
             await awaitGateBeforeSettlement(
@@ -271,8 +270,15 @@ describe("transcript replay cohorts", () => {
               fixture.revoke();
             }
             release.resolve();
-            if (change === "rewrite" && phase !== "legacy-final") {
-              await expect(pending).rejects.toBeInstanceOf(SessionEntryChangedDuringReadError);
+            if (change === "rewrite" && phase === "selected-initial") {
+              // Hydration refreshes after the mutation; the removed user cannot authorize replay.
+              const refreshed = await preparation!;
+              expect(refreshed.prepareInitialUserTurnReplay).toBeUndefined();
+              expect(refreshed.sessionManager.getBranch()).toEqual([]);
+            } else if (change === "rewrite" && phase === "selected-final") {
+              await expect(pending).rejects.toBeInstanceOf(
+                SessionTranscriptProjectionUnavailableError,
+              );
             } else {
               await expect(pending).rejects.toThrow(/replay|revoked|closed|current|admission/i);
             }

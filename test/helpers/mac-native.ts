@@ -1,6 +1,9 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { runMacFixtureTool } from "../scripts/mac-native-fixtures.test-support.js";
+import {
+  macObjectFixture,
+  runMacFixtureTool,
+} from "../scripts/mac-native-fixtures.test-support.js";
 import type { MacScriptFixture } from "../scripts/mac-script-fixture.test-support.js";
 
 // SDK mach-o/{loader,fat}.h layouts; classification uses the host's real tools.
@@ -36,17 +39,6 @@ export function machoFixture(bits = 64, little = true, fat = false, fileType = 2
   return result;
 }
 
-async function writeNativeObject(filename: string, arch: string, mac: MacScriptFixture) {
-  const source = `${filename}.c`;
-  await writeFile(source, "int native_fixture(void) { return 0; }\n");
-  await runMacFixtureTool(
-    "/usr/bin/xcrun",
-    ["clang", "-arch", arch, "-x", "c", "-c", source, "-o", filename],
-    path.dirname(filename),
-    mac,
-  );
-}
-
 export async function nativeObjectFixture(
   root: string,
   format: "thin" | "fat32" | "fat64",
@@ -54,9 +46,11 @@ export async function nativeObjectFixture(
 ): Promise<Buffer> {
   await mkdir(root);
   const inputs = [];
-  for (const arch of format === "thin" ? ["arm64"] : ["arm64", "x86_64"]) {
+  const arches: readonly ("arm64" | "x86_64")[] =
+    format === "thin" ? ["arm64"] : ["arm64", "x86_64"];
+  for (const arch of arches) {
     const filename = path.join(root, `${arch}.o`);
-    await writeNativeObject(filename, arch, mac);
+    await writeFile(filename, await macObjectFixture(root, arch, mac));
     inputs.push(filename);
   }
   if (format === "thin") {
@@ -80,7 +74,7 @@ export async function universalArchiveFixture(
 ): Promise<Buffer> {
   await mkdir(root);
   const inputs: string[] = [];
-  for (const arch of ["arm64", "x86_64"]) {
+  for (const arch of ["arm64", "x86_64"] as const) {
     const object = path.join(root, `${arch}.o`);
     if (mixed && arch === "x86_64") {
       await runMacFixtureTool(
@@ -92,7 +86,7 @@ export async function universalArchiveFixture(
       inputs.push(object);
       continue;
     }
-    await writeNativeObject(object, arch, mac);
+    await writeFile(object, await macObjectFixture(root, arch, mac));
     const archive = path.join(root, `${arch}.a`);
     await runMacFixtureTool("/usr/bin/ar", ["rcs", archive, object], root, mac);
     inputs.push(archive);

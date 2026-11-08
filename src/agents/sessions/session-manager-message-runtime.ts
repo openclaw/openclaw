@@ -14,7 +14,10 @@ import {
   type PreparedTranscriptMessageAppend,
 } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
-import type { SessionMetadataWorkerOperations } from "../../config/sessions/session-manager-write-contract.js";
+import type {
+  SessionMetadataOperations,
+  SessionMetadataWorkerOperations,
+} from "../../config/sessions/session-manager-write-contract.js";
 import {
   assertSessionStoreReadCandidate,
   type SessionStoreReadCandidate,
@@ -95,6 +98,55 @@ type CommittedTranscriptMessage = {
   lifecycleRevision?: string;
 };
 
+function readCommittedMessage(
+  append: SessionMetadataOperations["session.transcript.appendMessage"]["output"],
+  prepared: PreparedTranscriptMessage,
+): CommittedTranscriptMessage {
+  const persisted = append.snapshot;
+  if (!persisted.ok) {
+    throw new Error("Session transcript message was not persisted", { cause: persisted.error });
+  }
+  const result = persisted.value.result;
+  if (!result) {
+    throw new Error("Session transcript message was not persisted");
+  }
+  return {
+    result: {
+      messageId: result.messageId,
+      message: result.message ?? prepared.persistedMessage,
+      appended: result.appended,
+      currentTail: isTranscriptMessageAppendCurrentTail(persisted.value),
+    },
+    version: persisted.value.after,
+    lifecycleRevision: persisted.value.lifecycleRevision,
+  };
+}
+
+function throwTranscriptAppendError(
+  error: unknown,
+  committed: CommittedTranscriptMessage | undefined,
+  target: TranscriptAppendInput<TranscriptAppendMessage>["target"],
+): never {
+  if (committed) {
+    throw new SessionTranscriptMessageCommittedError(
+      committed.result.messageId,
+      error,
+      target,
+      committed.version,
+      committed.lifecycleRevision,
+    );
+  }
+  if (
+    error instanceof Error &&
+    collectNestedErrorCandidates(error).some((cause) =>
+      isSqliteWorkerError(cause, "outcome-unknown"),
+    )
+  ) {
+    recordModelFallbackStop(error);
+  }
+  throw error;
+}
+
 async function appendOwnedActorTranscriptMessage(
   input: TranscriptAppendInput<TranscriptAppendMessage>,
   prepared: PreparedTranscriptMessage,
@@ -115,6 +167,7 @@ async function appendOwnedActorTranscriptMessage(
     const receipt = await appendSessionManagerActor({
       actor,
       toolResult: false,
+      message: prepared.persistedMessage,
       assertCurrent,
       append: {
         kind: "message",
@@ -128,26 +181,7 @@ async function appendOwnedActorTranscriptMessage(
         if (append.kind !== "message") {
           throw new Error("Session actor omitted the committed transcript message");
         }
-        const snapshot = append.value.snapshot;
-        if (!snapshot.ok) {
-          throw new Error("Session transcript message was not persisted", {
-            cause: snapshot.error,
-          });
-        }
-        const result = snapshot.value.result;
-        if (!result) {
-          throw new Error("Session transcript message was not persisted");
-        }
-        committed = {
-          result: {
-            messageId: result.messageId,
-            message: result.message ?? prepared.persistedMessage,
-            appended: result.appended,
-            currentTail: isTranscriptMessageAppendCurrentTail(snapshot.value),
-          },
-          version: snapshot.value.after,
-          lifecycleRevision: snapshot.value.lifecycleRevision,
-        };
+        committed = readCommittedMessage(append.value, prepared);
       },
     });
     if (receipt.failure) {
@@ -165,24 +199,7 @@ async function appendOwnedActorTranscriptMessage(
     }
     return committed.result;
   } catch (error) {
-    if (committed) {
-      throw new SessionTranscriptMessageCommittedError(
-        committed.result.messageId,
-        error,
-        input.target,
-        committed.version,
-        committed.lifecycleRevision,
-      );
-    }
-    if (
-      error instanceof Error &&
-      collectNestedErrorCandidates(error).some((cause) =>
-        isSqliteWorkerError(cause, "outcome-unknown"),
-      )
-    ) {
-      recordModelFallbackStop(error);
-    }
-    throw error;
+    return throwTranscriptAppendError(error, committed, input.target);
   }
 }
 
@@ -199,7 +216,11 @@ async function appendUnboundSdkTranscriptMessage(
     assertSessionStoreReadCandidate(databasePath, [input.candidate]);
   };
   assertCurrent();
-  const admission = captureSessionMessageAdmission(assertCurrent);
+  const admission = captureSessionMessageAdmission(
+    assertCurrent,
+    undefined,
+    prepared.persistedMessage,
+  );
   const execution = captureOpenClawAgentDatabaseExecution(options);
   const publication = createSessionManagerPublicationHooks({
     agentId: input.target.agentId,
@@ -239,23 +260,7 @@ async function appendUnboundSdkTranscriptMessage(
       if (!reply.ok) {
         throw new SessionTranscriptWriterClaimReboundError(reply.refusal);
       }
-      const snapshot = reply.value.snapshot;
-      if (!snapshot.ok) {
-        throw new Error("Session transcript message was not persisted", { cause: snapshot.error });
-      }
-      if (!snapshot.value.result) {
-        throw new Error("Session transcript message was not persisted");
-      }
-      committed = {
-        result: {
-          messageId: snapshot.value.result.messageId,
-          message: snapshot.value.result.message ?? prepared.persistedMessage,
-          appended: snapshot.value.result.appended,
-          currentTail: isTranscriptMessageAppendCurrentTail(snapshot.value),
-        },
-        version: snapshot.value.after,
-        lifecycleRevision: snapshot.value.lifecycleRevision,
-      };
+      committed = readCommittedMessage(reply.value, prepared);
       admission.publish(reply.value.pendingInputReceipt);
       assertCurrent();
       if (reply.value.projectionNeedsReconcile) {
@@ -289,24 +294,7 @@ async function appendUnboundSdkTranscriptMessage(
     }
     assertCurrent();
   } catch (error) {
-    if (committed) {
-      throw new SessionTranscriptMessageCommittedError(
-        committed.result.messageId,
-        error,
-        input.target,
-        committed.version,
-        committed.lifecycleRevision,
-      );
-    }
-    if (
-      error instanceof Error &&
-      collectNestedErrorCandidates(error).some((cause) =>
-        isSqliteWorkerError(cause, "outcome-unknown"),
-      )
-    ) {
-      recordModelFallbackStop(error);
-    }
-    throw error;
+    return throwTranscriptAppendError(error, committed, input.target);
   }
   if (!committed) {
     throw new Error("Session transcript message was not persisted");

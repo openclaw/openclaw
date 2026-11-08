@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { withFastReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import {
   clearConfigCache,
@@ -19,30 +19,17 @@ import { buildMockOpenAiResponsesProvider } from "../../../../src/gateway/test-o
 import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
 import { resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
-import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
+import { createDeferred } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
-
-const ISOLATED_GATEWAY_ENV_KEYS = [
-  "HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_GATEWAY_URL",
-  "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
-  "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
-  "OPENCLAW_TEST_MINIMAL_GATEWAY",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-] as const;
+import {
+  isolatedGatewayEnv,
+  listenLoopback,
+  writeFixtureReply,
+} from "./gateway-recovery.test-support.js";
 
 let sequence = 0;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type CronJob = { id: string; name: string; enabled: boolean };
 
 function nextId(prefix: string): string {
   return `${prefix}-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${sequence++}`;
@@ -58,318 +45,224 @@ function resetGatewayState(): void {
 }
 
 function writeAssistantResponse(response: ServerResponse, text: string): void {
-  const message = {
-    type: "message",
-    id: nextId("provider-message"),
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  writeOpenAiResponsesSse(response, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...message, status: "in_progress", content: [] },
-    },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    {
-      type: "response.completed",
-      response: {
-        id: nextId("provider-response"),
-        status: "completed",
-        output: [message],
-        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-      },
-    },
-  ]);
+  writeFixtureReply(response, text, nextId("provider-message"), nextId("provider-response"));
 }
 
-describe("Gateway run cancellation and automation RPCs", () => {
-  beforeEach(resetGatewayState);
-  afterEach(resetGatewayState);
+beforeEach(resetGatewayState);
+afterEach(resetGatewayState);
 
-  it(
-    "persists cron CRUD, wakes the heartbeat, and cancels an agent run through chat.abort",
-    { timeout: 90_000 },
-    async () => {
-      const envSnapshot = captureEnv([...ISOLATED_GATEWAY_ENV_KEYS]);
-      const tempHome = tempDirs.make("openclaw-gateway-automation-");
-      const stateDir = path.join(tempHome, ".openclaw");
-      const workspaceDir = path.join(tempHome, "workspace");
-      const bundledPluginsDir = path.join(tempHome, "empty-bundled-plugins");
-      const configPath = path.join(stateDir, "openclaw.json");
-      await Promise.all([
-        fs.mkdir(workspaceDir, { recursive: true }),
-        fs.mkdir(bundledPluginsDir, { recursive: true }),
-        fs.mkdir(path.dirname(configPath), { recursive: true }),
-      ]);
-      await fs.writeFile(
-        path.join(workspaceDir, "HEARTBEAT.md"),
-        "Handle pending system events, then reply with a concise acknowledgement.\n",
-      );
+it(
+  "persists cron jobs, wakes ordinary session work, and aborts runs",
+  { timeout: 90_000 },
+  async () => {
+    const tempHome = tempDirs.make("openclaw-gateway-automation-");
+    const stateDir = path.join(tempHome, ".openclaw");
+    const workspaceDir = path.join(tempHome, "workspace");
+    const bundledPluginsDir = path.join(tempHome, "empty-bundled-plugins");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await Promise.all([
+      fs.mkdir(workspaceDir, { recursive: true }),
+      fs.mkdir(bundledPluginsDir, { recursive: true }),
+      fs.mkdir(path.dirname(configPath), { recursive: true }),
+    ]);
 
-      const token = nextId("gateway-automation-token");
-      for (const [key, value] of Object.entries({
-        HOME: tempHome,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_GATEWAY_TOKEN: token,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "0",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      })) {
+    const token = nextId("gateway-automation-token");
+    const envPatch = {
+      ...isolatedGatewayEnv,
+      HOME: tempHome,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_GATEWAY_TOKEN: token,
+      OPENCLAW_SKIP_CRON: "0",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+      OPENCLAW_CONFIG_PATH: undefined,
+      OPENCLAW_GATEWAY_URL: undefined,
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+    };
+    const envSnapshot = captureEnv([
+      ...Object.keys(envPatch),
+      "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
+      "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
+    ]);
+    for (const [key, value] of Object.entries(envPatch)) {
+      if (value === undefined) {
+        deleteTestEnvValue(key);
+      } else {
         setTestEnvValue(key, value);
       }
-      deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-      deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
-      deleteTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY");
+    }
 
-      const taskPrompt = nextId("create-tracked-task");
-      const wakeText = nextId("wake-heartbeat");
-      const providerRequests: Array<Record<string, unknown>> = [];
-      let releaseTaskResponse: (() => void) | undefined;
-      const taskResponseGate = new Promise<void>((resolve) => {
-        releaseTaskResponse = resolve;
-      });
-      const providerServer = createServer((request, response) => {
-        void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          }
-          if (request.method !== "POST" || request.url !== "/v1/responses") {
-            response.writeHead(404).end();
-            return;
-          }
-          const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<
-            string,
-            unknown
-          >;
-          providerRequests.push(body);
-          const serialized = JSON.stringify(body);
-          if (providerRequests.length === 1 && serialized.includes(taskPrompt)) {
-            await taskResponseGate;
-            writeAssistantResponse(response, "Tracked task completed.");
-            return;
-          }
-          writeAssistantResponse(response, `Heartbeat handled: ${wakeText}`);
-        })().catch((error: unknown) => {
-          response.writeHead(500).end(error instanceof Error ? error.message : String(error));
-        });
-      });
-
-      let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-      try {
-        await new Promise<void>((resolve, reject) => {
-          providerServer.once("error", reject);
-          providerServer.listen(0, "127.0.0.1", resolve);
-        });
-        const providerAddress = providerServer.address();
-        if (!providerAddress || typeof providerAddress === "string") {
-          throw new Error("mock OpenAI Responses server did not bind a loopback port");
+    const taskPrompt = nextId("create-tracked-task");
+    const wakeText = nextId("wake-session");
+    const providerRequests: Array<Record<string, unknown>> = [];
+    const taskResponseGate = createDeferred();
+    const providerServer = createServer((request, response) => {
+      void (async () => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
         }
-        const provider = buildMockOpenAiResponsesProvider(
-          `http://127.0.0.1:${providerAddress.port}/v1`,
-          "gpt-gateway-automation",
-        );
-        const config = {
-          agents: {
-            defaults: {
-              workspace: workspaceDir,
-              skipBootstrap: true,
-              heartbeat: { every: "5m", target: "none" },
-              model: { primary: provider.modelRef },
-              models: {
-                [provider.modelRef]: {
-                  params: { transport: "sse", openaiWsWarmup: false },
-                },
-              },
-            },
-            entries: { main: {} },
-          },
-          models: {
-            mode: "replace",
-            providers: {
-              [provider.providerId]: {
-                ...provider.config,
-                models: provider.config.models.map((model) =>
-                  Object.assign({}, model, { input: Array.from(model.input) }),
-                ),
+        if (request.method !== "POST" || request.url !== "/v1/responses") {
+          response.writeHead(404).end();
+          return;
+        }
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        providerRequests.push(body);
+        const serialized = JSON.stringify(body);
+        if (providerRequests.length === 1 && serialized.includes(taskPrompt)) {
+          await taskResponseGate.promise;
+          writeAssistantResponse(response, "Tracked task completed.");
+          return;
+        }
+        writeAssistantResponse(response, `Wake handled: ${wakeText}`);
+      })().catch((error: unknown) => {
+        response.writeHead(500).end(error instanceof Error ? error.message : String(error));
+      });
+    });
+
+    let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    try {
+      const providerUrl = await listenLoopback(providerServer, "mock provider did not bind");
+      const provider = buildMockOpenAiResponsesProvider(
+        `${providerUrl}/v1`,
+        "gpt-gateway-automation",
+      );
+      const config = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            skipBootstrap: true,
+            model: { primary: provider.modelRef },
+            models: {
+              [provider.modelRef]: {
+                params: { transport: "sse", openaiWsWarmup: false },
               },
             },
           },
-          gateway: { auth: { mode: "token", token } },
-          plugins: { slots: { memory: "none" } },
-        } satisfies OpenClawConfig;
-
-        gateway = await startGatewayWithClient({
-          cfg: config,
-          configPath,
-          token,
-          clientDisplayName: "vitest-gateway-rpc-automation",
-        });
-        const runtimeConfig = getRuntimeConfigSnapshot();
-        if (!runtimeConfig) {
-          throw new Error("gateway runtime config snapshot was not initialized");
-        }
-        withFastReplyConfig(runtimeConfig);
-        const client = gateway.client;
-
-        const added = await client.request<{ id: string; name: string }>("cron.add", {
-          name: "Gateway automation evidence",
-          enabled: true,
-          schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "Future automation evidence" },
-        });
-        expect(added).toMatchObject({ name: "Gateway automation evidence" });
-
-        const read = await client.request<{ id: string; name: string }>("cron.get", {
-          id: added.id,
-        });
-        expect(read).toMatchObject({ id: added.id, name: "Gateway automation evidence" });
-
-        const listed = await client.request<{
-          jobs: Array<{ id: string; name: string; enabled: boolean }>;
-        }>("cron.list", { includeDisabled: true });
-        expect(listed.jobs).toContainEqual(
-          expect.objectContaining({ id: added.id, name: added.name, enabled: true }),
-        );
-
-        const updated = await client.request<{ id: string; name: string; enabled: boolean }>(
-          "cron.update",
-          {
-            id: added.id,
-            patch: { name: "Gateway automation evidence updated", enabled: false },
+          entries: { main: {} },
+        },
+        models: {
+          mode: "replace",
+          providers: {
+            [provider.providerId]: {
+              ...provider.config,
+              models: provider.config.models.map((model) =>
+                Object.assign({}, model, { input: Array.from(model.input) }),
+              ),
+            },
           },
-        );
-        expect(updated).toMatchObject({
-          id: added.id,
-          name: "Gateway automation evidence updated",
-          enabled: false,
-        });
+        },
+        gateway: { auth: { mode: "token", token } },
+        plugins: { slots: { memory: "none" } },
+      } satisfies OpenClawConfig;
 
-        const listedAfterUpdate = await client.request<{
-          jobs: Array<{ id: string; name: string; enabled: boolean }>;
-        }>("cron.list", { includeDisabled: true });
-        expect(listedAfterUpdate.jobs).toContainEqual(
-          expect.objectContaining({
-            id: added.id,
-            name: "Gateway automation evidence updated",
-            enabled: false,
-          }),
-        );
-
-        const removed = await client.request<{ removed: boolean }>("cron.remove", { id: added.id });
-        expect(removed.removed).toBe(true);
-        const listedAfterRemove = await client.request<{
-          jobs: Array<{ id: string }>;
-        }>("cron.list", { includeDisabled: true });
-        expect(listedAfterRemove.jobs).not.toContainEqual(
-          expect.objectContaining({ id: added.id }),
-        );
-
-        const sessionKey = "agent:main:main";
-        const runId = nextId("gateway-automation-agent");
-        const started = await client.request<{ runId: string; status: string }>(
-          "agent",
-          {
-            sessionKey,
-            message: taskPrompt,
-            deliver: false,
-            idempotencyKey: runId,
-          },
-          { expectFinal: false },
-        );
-        expect(started).toMatchObject({ runId, status: "accepted" });
-
-        await expect
-          .poll(() => providerRequests.some((body) => JSON.stringify(body).includes(taskPrompt)), {
-            timeout: 10_000,
-            interval: 50,
-          })
-          .toBe(true);
-        await expect(client.request("chat.abort", { sessionKey, runId })).resolves.toMatchObject({
-          aborted: true,
-          runIds: [runId],
-        });
-        const releaseResponse = releaseTaskResponse;
-        if (!releaseResponse) {
-          throw new Error("task response gate was not initialized");
-        }
-        releaseResponse();
-        releaseTaskResponse = undefined;
-        const agentWait = await client.request<{ status: string; error?: string }>(
-          "agent.wait",
-          { runId: started.runId, timeoutMs: 30_000 },
-          { timeoutMs: 35_000 },
-        );
-        expect(agentWait).toMatchObject({ status: "error", stopReason: "rpc" });
-        const requestsBeforeWake = providerRequests.length;
-        const wakeRequestedAt = Date.now();
-        await expect(
-          client.request<{ ok: boolean }>("wake", {
-            mode: "now",
-            text: wakeText,
-            sessionKey,
-            agentId: "main",
-          }),
-        ).resolves.toEqual({ ok: true });
-        await expect
-          .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
-          .toBeGreaterThan(requestsBeforeWake);
-        let observedHeartbeat: {
-          ts: number;
-          status: string;
-          reason?: string;
-          message?: string;
-          preview?: string;
-        } | null = null;
-        try {
-          await expect
-            .poll(
-              async () => {
-                observedHeartbeat = await client.request<{
-                  ts: number;
-                  status: string;
-                  reason?: string;
-                  message?: string;
-                  preview?: string;
-                }>("last-heartbeat", {});
-                return (
-                  observedHeartbeat.ts >= wakeRequestedAt &&
-                  observedHeartbeat.status === "skipped" &&
-                  observedHeartbeat.reason === "target-none" &&
-                  observedHeartbeat.message ===
-                    "Heartbeat delivery is disabled by configuration (target: none)." &&
-                  observedHeartbeat.preview === `Heartbeat handled: ${wakeText}`
-                );
-              },
-              { timeout: 15_000, interval: 50 },
-            )
-            .toBe(true);
-        } catch (error) {
-          throw new Error(`Unexpected last-heartbeat state: ${JSON.stringify(observedHeartbeat)}`, {
-            cause: error,
-          });
-        }
-      } finally {
-        if (gateway) {
-          await disconnectGatewayClient(gateway.client);
-          await gateway.server.close({ reason: "Gateway RPC automation test complete" });
-        }
-        releaseTaskResponse?.();
-        providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
-        envSnapshot.restore();
+      gateway = await startGatewayWithClient({
+        cfg: config,
+        configPath,
+        token,
+        clientDisplayName: "vitest-gateway-rpc-automation",
+      });
+      const runtimeConfig = getRuntimeConfigSnapshot();
+      if (!runtimeConfig) {
+        throw new Error("gateway runtime config snapshot was not initialized");
       }
-    },
-  );
-});
+      withFastReplyConfig(runtimeConfig);
+      const client = gateway.client;
+
+      const added = await client.request<CronJob>("cron.add", {
+        name: "automation",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "Future automation evidence" },
+      });
+      expect(added).toMatchObject({ name: "automation" });
+
+      const read = await client.request<CronJob>("cron.get", { id: added.id });
+      expect(read).toMatchObject({ id: added.id, name: "automation" });
+
+      const listJobs = () =>
+        client.request<{ jobs: CronJob[] }>("cron.list", { includeDisabled: true });
+      const listed = await listJobs();
+      expect(listed.jobs).toContainEqual(
+        expect.objectContaining({ id: added.id, name: added.name, enabled: true }),
+      );
+
+      const patch = { name: "updated", enabled: false };
+      const updatedJob = { id: added.id, ...patch };
+      await expect(client.request("cron.update", { id: added.id, patch })).resolves.toMatchObject(
+        updatedJob,
+      );
+
+      const listedAfterUpdate = await listJobs();
+      expect(listedAfterUpdate.jobs).toContainEqual(expect.objectContaining(updatedJob));
+
+      const removed = await client.request<{ removed: boolean }>("cron.remove", { id: added.id });
+      expect(removed.removed).toBe(true);
+      const listedAfterRemove = await listJobs();
+      expect(listedAfterRemove.jobs).not.toContainEqual(expect.objectContaining({ id: added.id }));
+
+      const sessionKey = "agent:main:main";
+      const runId = nextId("gateway-automation-agent");
+      const started = await client.request<{ runId: string; status: string }>(
+        "agent",
+        {
+          sessionKey,
+          message: taskPrompt,
+          deliver: false,
+          idempotencyKey: runId,
+        },
+        { expectFinal: false },
+      );
+      expect(started).toMatchObject({ runId, status: "accepted" });
+
+      await expect
+        .poll(() => providerRequests.some((body) => JSON.stringify(body).includes(taskPrompt)), {
+          timeout: 10_000,
+          interval: 50,
+        })
+        .toBe(true);
+      await expect(client.request("chat.abort", { sessionKey, runId })).resolves.toMatchObject({
+        aborted: true,
+        runIds: [runId],
+      });
+      taskResponseGate.resolve();
+      const agentWait = await client.request<{ status: string; error?: string }>(
+        "agent.wait",
+        { runId: started.runId, timeoutMs: 30_000 },
+        { timeoutMs: 35_000 },
+      );
+      expect(agentWait).toMatchObject({ status: "error", stopReason: "rpc" });
+      const requestsBeforeWake = providerRequests.length;
+      await expect(
+        client.request<{ ok: boolean }>("wake", {
+          mode: "now",
+          text: wakeText,
+          sessionKey,
+          agentId: "main",
+        }),
+      ).resolves.toEqual({ ok: true });
+      await expect
+        .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
+        .toBeGreaterThan(requestsBeforeWake);
+      await expect
+        .poll(async () => JSON.stringify(await client.request("chat.history", { sessionKey })), {
+          timeout: 15_000,
+          interval: 50,
+        })
+        .toContain(`Wake handled: ${wakeText}`);
+      expect(JSON.stringify(providerRequests[requestsBeforeWake])).toContain(wakeText);
+    } finally {
+      if (gateway) {
+        await disconnectGatewayClient(gateway.client);
+        await gateway.server.close({ reason: "Gateway RPC automation test complete" });
+      }
+      taskResponseGate.resolve();
+      providerServer.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        providerServer.close(() => resolve());
+      });
+      envSnapshot.restore();
+    }
+  },
+);

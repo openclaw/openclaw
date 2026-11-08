@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."node_worker_launch_process_scopes" (
+CREATE TABLE "node_worker_launch_process_scopes" (
   "launch_id" text COLLATE "C" NOT NULL,
   "scope_kind" text COLLATE "C" NOT NULL,
   "descendants_reaped" bigint,
@@ -13,6 +9,4 @@ CREATE TABLE "openclaw_state"."node_worker_launch_process_scopes" (
   CHECK ("descendants_reaped" IS NULL OR ("descendants_reaped" = 1))
 );
 
-ALTER TABLE "openclaw_state"."node_worker_launch_process_scopes" ADD FOREIGN KEY ("launch_id") REFERENCES "openclaw_state"."node_worker_launches" ("launch_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
-
-COMMIT;
+ALTER TABLE "node_worker_launch_process_scopes" ADD FOREIGN KEY ("launch_id") REFERENCES "node_worker_launches" ("launch_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;

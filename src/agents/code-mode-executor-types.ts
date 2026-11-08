@@ -27,6 +27,9 @@ export type CodeModeExecutorResumeInput = Omit<
 >;
 
 export type CodeModeExecutorInlineHost = {
+  gcAttribution?: { runId: string; sessionKeyHash?: string };
+  onWorkerAssigned?: (workerId: string) => void;
+  onFailure?: (error: unknown, phase: CodeModeFailurePhase, workerId?: string) => void;
   onNetworkContent?: () => void;
   onInputConsumed?: () => void;
   onBoundary: (

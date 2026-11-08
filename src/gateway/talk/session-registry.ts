@@ -1,4 +1,6 @@
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
+import { GatewayRetainedWorkTimeoutError } from "../../shared/async-work-scope.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
   prepareClientVoiceSessionClose,
@@ -23,6 +25,7 @@ type UnifiedTalkSessionRecord =
       kind: "transcription-relay";
       connId: string;
       transcriptionSessionId: string;
+      sessionTarget?: PreparedTalkSessionTarget;
     }
   | {
       kind: "managed-room";
@@ -170,9 +173,15 @@ export function prepareTalkConnectionClose(
     async drain() {
       try {
         beginClose();
-        await pending;
-      } finally {
+        // Cleanup is itself retained. Join the bounded owner first so a provider
+        // ignoring abort cannot hide its unsettled custody behind this promise.
         await persistence.drain();
+        await pending;
+      } catch (error) {
+        if (error instanceof GatewayRetainedWorkTimeoutError) {
+          log.warn(error.message);
+        }
+        throw error;
       }
     },
   };
@@ -191,12 +200,7 @@ async function closeTalkConnections(connIds: Iterable<string>): Promise<void> {
     }
   }
   const results = await Promise.allSettled(pending);
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "Talk provider cleanup did not complete");
-  }
+  throwSettledAggregate(results, "Talk provider cleanup did not complete");
 }
 
 export function rememberUnifiedTalkSession(
@@ -207,7 +211,7 @@ export function rememberUnifiedTalkSession(
 }
 
 export function getUnifiedTalkSession(sessionId: string): UnifiedTalkSessionRecord {
-  const session = unifiedTalkSessions.get(sessionId);
+  const session = unifiedTalkSessions.get(sessionId.trim());
   if (!session) {
     throw new Error("Unknown Talk session");
   }
@@ -216,23 +220,31 @@ export function getUnifiedTalkSession(sessionId: string): UnifiedTalkSessionReco
 
 /** Retains the realtime relay's admitted target without reinterpreting current defaults. */
 export function resolveUnifiedTalkSessionTarget(sessionId: string, connId: string | undefined) {
-  const session = unifiedTalkSessions.get(sessionId);
-  if (session?.kind !== "realtime-relay") {
+  const id = sessionId.trim();
+  const session = unifiedTalkSessions.get(id);
+  if (
+    (session?.kind !== "realtime-relay" && session?.kind !== "transcription-relay") ||
+    !session.sessionTarget
+  ) {
     return undefined;
   }
-  requireUnifiedTalkSessionConn(session, connId);
+  // Target discovery runs before the request error boundary. A foreign connection
+  // has no target; the handler owns the normal denied-recording response.
+  if (!connId || session.connId !== connId) {
+    return undefined;
+  }
   const target = session.sessionTarget;
   return {
     target,
     isCurrent: () =>
-      unifiedTalkSessions.get(sessionId) === session &&
+      unifiedTalkSessions.get(id) === session &&
       session.connId === connId &&
       session.sessionTarget === target,
   };
 }
 
 export function forgetUnifiedTalkSession(sessionId: string): void {
-  unifiedTalkSessions.delete(sessionId);
+  unifiedTalkSessions.delete(sessionId.trim());
 }
 
 export function requireUnifiedTalkSessionConn(

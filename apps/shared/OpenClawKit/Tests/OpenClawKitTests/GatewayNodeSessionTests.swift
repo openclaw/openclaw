@@ -1,5 +1,7 @@
+import CryptoKit
 import Foundation
 import OpenClawProtocol
+import Synchronization
 import Testing
 @testable import OpenClawKit
 
@@ -126,10 +128,12 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private let helloMethods: [String]
     private let helloCapabilities: [String]
     private let helloSessionDefaults: [String: Any]?
+    private let helloControlUiBasePath: String?
     private let helloDelayNanoseconds: UInt64
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
     private let challengeCapabilities: [String]
     private let connectError: [String: Any]?
+    private let onConnectSent: (@Sendable () -> Void)?
     private var _state: URLSessionTask.State = .suspended
     private var resumeCount = 0
     private var connectRequestId: String?
@@ -150,19 +154,23 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
         helloMethods: [String] = [],
         helloCapabilities: [String] = [],
         helloSessionDefaults: [String: Any]? = nil,
+        helloControlUiBasePath: String? = nil,
         helloDelayNanoseconds: UInt64 = 0,
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
         challengeCapabilities: [String] = [],
-        connectError: [String: Any]? = nil)
+        connectError: [String: Any]? = nil,
+        onConnectSent: (@Sendable () -> Void)? = nil)
     {
         self.helloAuth = helloAuth
         self.helloMethods = helloMethods
         self.helloCapabilities = helloCapabilities
         self.helloSessionDefaults = helloSessionDefaults
+        self.helloControlUiBasePath = helloControlUiBasePath
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.challenge = challenge
         self.challengeCapabilities = challengeCapabilities
         self.connectError = connectError
+        self.onConnectSent = onConnectSent
     }
 
     var state: URLSessionTask.State {
@@ -220,6 +228,7 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
                 self.connectDevice = device
                 self.waiters.resumeSatisfied()
             }
+            self.onConnectSent?()
         }
     }
 
@@ -337,7 +346,8 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
                     auth: self.helloAuth,
                     methods: self.helloMethods,
                     capabilities: self.helloCapabilities,
-                    sessionDefaults: self.helloSessionDefaults))
+                    sessionDefaults: self.helloSessionDefaults,
+                    controlUiBasePath: self.helloControlUiBasePath))
             }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
@@ -349,7 +359,8 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
             auth: self.helloAuth,
             methods: self.helloMethods,
             capabilities: self.helloCapabilities,
-            sessionDefaults: self.helloSessionDefaults))
+            sessionDefaults: self.helloSessionDefaults,
+            controlUiBasePath: self.helloControlUiBasePath))
     }
 
     func receive(
@@ -455,7 +466,8 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
         auth: [String: Any]? = nil,
         methods: [String] = [],
         capabilities: [String] = [],
-        sessionDefaults: [String: Any]? = nil) -> Data
+        sessionDefaults: [String: Any]? = nil,
+        controlUiBasePath: String? = nil) -> Data
     {
         var payload: [String: Any] = [
             "type": "hello-ok",
@@ -487,6 +499,9 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
         ]
         if let auth {
             payload["auth"] = auth
+        }
+        if let controlUiBasePath {
+            payload["controlUiBasePath"] = controlUiBasePath
         }
         if let sessionDefaults {
             payload["snapshot"] = [
@@ -551,10 +566,12 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
     private let helloMethods: [String]
     private let helloCapabilities: [String]
     private let helloSessionDefaults: [String: Any]?
+    private let helloControlUiBasePath: String?
     private let helloDelayNanoseconds: UInt64
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
     private let challengeCapabilities: [String]
     private let connectError: [String: Any]?
+    private let onConnectSent: (@Sendable () -> Void)?
     let effectiveTLSFingerprintSHA256: String?
     private var tasks: [FakeGatewayWebSocketTask] = []
     private var requests: [URLRequest] = []
@@ -566,21 +583,25 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
         helloMethods: [String] = [],
         helloCapabilities: [String] = [],
         helloSessionDefaults: [String: Any]? = nil,
+        helloControlUiBasePath: String? = nil,
         helloDelayNanoseconds: UInt64 = 0,
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
         challengeCapabilities: [String] = [],
         connectError: [String: Any]? = nil,
-        effectiveTLSFingerprintSHA256: String? = nil)
+        effectiveTLSFingerprintSHA256: String? = nil,
+        onConnectSent: (@Sendable () -> Void)? = nil)
     {
         self.helloAuth = helloAuth
         self.helloMethods = helloMethods
         self.helloCapabilities = helloCapabilities
         self.helloSessionDefaults = helloSessionDefaults
+        self.helloControlUiBasePath = helloControlUiBasePath
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.challenge = challenge
         self.challengeCapabilities = challengeCapabilities
         self.connectError = connectError
         self.effectiveTLSFingerprintSHA256 = effectiveTLSFingerprintSHA256
+        self.onConnectSent = onConnectSent
     }
 
     func waitForTasks(count: Int) async {
@@ -621,10 +642,12 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
                 helloMethods: self.helloMethods,
                 helloCapabilities: self.helloCapabilities,
                 helloSessionDefaults: self.helloSessionDefaults,
+                helloControlUiBasePath: self.helloControlUiBasePath,
                 helloDelayNanoseconds: self.helloDelayNanoseconds,
                 challenge: self.challenge,
                 challengeCapabilities: self.challengeCapabilities,
-                connectError: self.connectError)
+                connectError: self.connectError,
+                onConnectSent: self.onConnectSent)
             self.tasks.append(task)
             self.waiters.resumeSatisfied()
             return WebSocketTaskBox(task: task)
@@ -925,6 +948,60 @@ extension GatewayChannelActor {
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
+    @Test(arguments: [false, true])
+    func `wire presence is reconstructed before bounded delivery and gaps resynchronize`(
+        versionGap: Bool) async throws
+    {
+        let session = FakeGatewayWebSocketSession()
+        let events = AsyncStream<EventFrame>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let patched = AsyncGate()
+        let disconnected = AsyncGate()
+        let channel = try GatewayChannelActor(
+            url: testURL("ws://gateway.example.invalid"), token: nil,
+            session: WebSocketSessionBox(session: session),
+            pushHandler: { push, _ in
+                guard case let .event(event) = push else { return }
+                events.continuation.yield(event)
+                if event.seq == 2 { await patched.markStarted() }
+            },
+            connectOptions: operatorConnectOptions(),
+            disconnectHandler: { _, _ in await disconnected.markStarted() })
+        do {
+            try await channel.connect()
+            let socket = try #require(session.latestTask())
+            let request = try #require(socket.sentRequests(method: "connect").first)
+            let params = try #require(request["params"] as? [String: Any])
+            #expect((params["caps"] as? [String])?.contains("presence-deltas") == true)
+            try socket.emitEvent(EventFrame(type: "event", event: "presence", payload: AnyCodable([
+                "reset": true, "version": 1, "keys": ["opaque"],
+                "presence": [["ts": 1, "connectionId": "one", "watchedSessions": ["old"]]],
+            ]), seq: 1))
+            try socket.emitEvent(EventFrame(type: "event", event: "presence", payload: AnyCodable([
+                "base": 1, "version": 2,
+                "upsert": [["key": "opaque", "set": ["ts": 2], "unset": ["watchedSessions"]]],
+                "remove": [], "order": ["opaque"],
+            ]), seq: 2))
+            await patched.waitUntilStarted()
+            var iterator = events.stream.makeAsyncIterator()
+            let event = try #require(await iterator.next())
+            #expect(event.payload == AnyCodable(["presence": [["ts": 2, "connectionId": "one"]]]))
+
+            try socket.emitEvent(EventFrame(type: "event", event: "presence", payload: AnyCodable([
+                "base": versionGap ? 3 : 2, "version": 4,
+                "upsert": [], "remove": ["opaque"], "order": [],
+            ]), seq: versionGap ? 3 : 4))
+            await disconnected.waitUntilStarted()
+            #expect(socket.state == .canceling)
+            await channel.shutdown()
+            events.continuation.finish()
+            #expect(await iterator.next() == nil)
+        } catch {
+            await channel.shutdown()
+            events.continuation.finish()
+            throw error
+        }
+    }
+
     @Test(arguments: [false, true])
     func `wire text is projected before bounded native delivery and loss retires the socket`(
         missingBaseline: Bool) async throws
@@ -3029,13 +3106,16 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
-    func `node invoke result preserves structured worker payload`() async throws {
-        let session = FakeGatewayWebSocketSession()
+    @Test(arguments: [false, true])
+    func `node invoke result preserves worker payload and negotiates permission details`(
+        permissionErrorsSupported: Bool) async throws
+    {
+        let session = FakeGatewayWebSocketSession(
+            helloCapabilities: permissionErrorsSupported ? ["node-permission-errors"] : [])
         let gateway = GatewayNodeSession()
         let options = nodeConnectOptions(
             caps: ["mcp"],
-            commands: ["mcp.tools.call.v1"],
+            commands: ["mcp.tools.call.v1", "system.run"],
             clientId: "openclaw-macos",
             clientDisplayName: "macOS Test")
 
@@ -3044,7 +3124,16 @@ struct GatewayNodeSessionTests {
             options: options,
             session: session,
             onInvoke: { request in
-                BridgeInvokeResponse(
+                if request.id == "permission-structured" {
+                    return BridgeInvokeResponse(
+                        id: request.id,
+                        ok: false,
+                        error: .init(
+                            code: .permissionMissing,
+                            message: "PERMISSION_MISSING: screenRecording",
+                            details: .init(capabilities: ["screenRecording"], state: .restartRequired)))
+                }
+                return BridgeInvokeResponse(
                     id: request.id,
                     ok: true,
                     payload: AnyCodable(["content": [["type": "text", "text": "worker-ok"]]]))
@@ -3059,6 +3148,24 @@ struct GatewayNodeSessionTests {
         let payload = try #require(params["payload"] as? [String: Any])
         let content = try #require(payload["content"] as? [[String: Any]])
         #expect(content.first?["text"] as? String == "worker-ok")
+
+        task.emitInvokeRequest(id: "permission-structured", command: "system.run")
+        await task.waitForSentRequests(method: "node.invoke.result", count: 2)
+        let permissionResult = try #require(task.sentRequests(method: "node.invoke.result").last)
+        let permissionParams = try #require(permissionResult["params"] as? [String: Any])
+        #expect(permissionParams["ok"] as? Bool == false)
+        let error = try #require(permissionParams["error"] as? [String: Any])
+        #expect(error["code"] as? String == "PERMISSION_MISSING")
+        #expect(error["message"] as? String == "PERMISSION_MISSING: screenRecording")
+        if permissionErrorsSupported {
+            let details = try #require(error["details"] as? [String: Any])
+            #expect(Set(details.keys) == ["capabilities", "state"])
+            #expect(details["capabilities"] as? [String] == ["screenRecording"])
+            #expect(details["state"] as? String == "restart-required")
+        } else {
+            // The released v2026.10.2 node-invoke result decoder rejects extra error keys.
+            #expect(Set(error.keys) == ["code", "message"])
+        }
 
         await gateway.disconnect()
     }
@@ -3282,6 +3389,140 @@ struct GatewayNodeSessionTests {
     }
 
     @Test(.stateDirectoryIsolated)
+    func `Dashboard challenge signs the accepted operator grant with the native client identity`() async throws {
+        let gatewayID = "dashboard-auth-\(UUID().uuidString)"
+        let identity = DeviceIdentityStore.loadOrCreate()
+        defer { DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID) }
+        _ = DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "accepted-dashboard-grant",
+            scopes: ["operator.read", "operator.admin"],
+            gatewayID: gatewayID)
+
+        let scopes = ["operator.admin", "operator.read"]
+        let socket = FakeGatewayWebSocketSession(helloAuth: [
+            "deviceToken": "accepted-dashboard-grant",
+            "role": "operator",
+            "scopes": scopes,
+        ])
+        let gateway = GatewayNodeSession()
+        try await gateway.connectForTest(
+            testURL("wss://dashboard-auth.example.invalid"),
+            options: operatorConnectOptions(
+                scopes: scopes,
+                clientId: "openclaw-ios",
+                includeDeviceIdentity: true,
+                deviceAuthGatewayID: gatewayID),
+            session: socket)
+
+        let route = try #require(await gateway.currentRoute(ifGatewayID: gatewayID))
+        let data = try await gateway.controlUIDashboardAuthorization(
+            ifCurrentRoute: route,
+            nonce: "dashboard-nonce",
+            signedAtMs: 1_800_000_000_000)
+        let response = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let client = try #require(response["client"] as? [String: Any])
+        let auth = try #require(response["auth"] as? [String: String])
+        let device = try #require(response["device"] as? [String: Any])
+
+        #expect(client["id"] as? String == "openclaw-ios")
+        #expect(client["mode"] as? String == "ui")
+        #expect(auth == ["deviceToken": "accepted-dashboard-grant"])
+        #expect(response["scopes"] as? [String] == scopes)
+        #expect(device["id"] as? String == identity.deviceId)
+        #expect(device["nonce"] as? String == "dashboard-nonce")
+        #expect(device["signedAt"] as? Int64 == 1_800_000_000_000)
+        #expect(device["signature"] as? String != nil)
+        #expect(response["privateKey"] == nil)
+        #expect(await gateway.controlUIDashboardLegacyCredentials(ifCurrentRoute: route) == nil)
+        await gateway.disconnect()
+    }
+
+    @Test(.stateDirectoryIsolated)
+    func `Dashboard challenge denies a route without native device authority and rejects a retired route`() async throws {
+        let socket = FakeGatewayWebSocketSession(helloAuth: [
+            "role": "operator",
+            "scopes": ["operator.admin"],
+        ])
+        let gateway = GatewayNodeSession()
+        try await gateway.connectForTest(
+            testURL("wss://dashboard-denial.example.invalid"),
+            credentials: .init(password: "accepted-password"),
+            options: operatorConnectOptions(includeDeviceIdentity: false),
+            session: socket)
+        let route = try #require(await gateway.currentRoute())
+        do {
+            _ = try await gateway.controlUIDashboardAuthorization(
+                ifCurrentRoute: route,
+                nonce: "dashboard-nonce",
+                signedAtMs: 1_800_000_000_000)
+            Issue.record("A route without device identity must not sign Dashboard challenges")
+        } catch is CancellationError {
+            // Expected: the operator connection has no accepted native identity.
+        }
+        #expect(await gateway.controlUIDashboardLegacyCredentials(ifCurrentRoute: route) == nil)
+
+        await gateway.disconnect()
+        do {
+            _ = try await gateway.controlUIDashboardAuthorization(
+                ifCurrentRoute: route,
+                nonce: "dashboard-nonce",
+                signedAtMs: 1_800_000_000_000)
+            Issue.record("A retired route must not sign Dashboard challenges")
+        } catch is CancellationError {
+            // Expected: the physical operator route has been retired.
+        }
+    }
+
+    @Test(.stateDirectoryIsolated)
+    func `Dashboard legacy bootstrap uses only the accepted shared credential`() async throws {
+        let sharedGateway = GatewayNodeSession()
+        let sharedSocket = FakeGatewayWebSocketSession(helloAuth: [
+            "role": "operator",
+            "scopes": ["operator.admin"],
+        ])
+        try await sharedGateway.connectForTest(
+            testURL("wss://dashboard-shared.example.invalid"),
+            credentials: .init(token: "accepted-shared-token"),
+            options: operatorConnectOptions(includeDeviceIdentity: true),
+            session: sharedSocket)
+        let sharedRoute = try #require(await sharedGateway.currentRoute())
+        #expect(await sharedGateway.controlUIDashboardLegacyCredentials(ifCurrentRoute: sharedRoute) == [
+            "token": "accepted-shared-token",
+        ])
+        await sharedGateway.disconnect()
+
+        let identity = DeviceIdentityStore.loadOrCreate()
+        let gatewayID = "dashboard-bootstrap-\(UUID().uuidString)"
+        defer { DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID) }
+        let bootstrapGateway = GatewayNodeSession()
+        let bootstrapSocket = FakeGatewayWebSocketSession(helloAuth: [
+            "deviceToken": "gateway-issued-dashboard-grant",
+            "role": "operator",
+            "scopes": ["operator.admin", "operator.read"],
+        ])
+        try await bootstrapGateway.connectForTest(
+            testURL("wss://dashboard-bootstrap.example.invalid"),
+            credentials: .init(bootstrapToken: "pairing-bootstrap-secret"),
+            options: operatorConnectOptions(
+                includeDeviceIdentity: true,
+                deviceAuthGatewayID: gatewayID),
+            session: bootstrapSocket)
+        let bootstrapRoute = try #require(await bootstrapGateway.currentRoute(ifGatewayID: gatewayID))
+        #expect(await bootstrapGateway.controlUIDashboardLegacyCredentials(ifCurrentRoute: bootstrapRoute) == nil)
+        let authData = try await bootstrapGateway.controlUIDashboardAuthorization(
+            ifCurrentRoute: bootstrapRoute,
+            nonce: "post-pairing-dashboard-nonce",
+            signedAtMs: 1_800_000_000_000)
+        let authResult = try #require(JSONSerialization.jsonObject(with: authData) as? [String: Any])
+        #expect((authResult["auth"] as? [String: String]) == [
+            "deviceToken": "gateway-issued-dashboard-grant",
+        ])
+        await bootstrapGateway.disconnect()
+    }
+
+    @Test(.stateDirectoryIsolated)
     func `scanned setup code prefers bootstrap auth over stored device token`() async throws {
         let identity = DeviceIdentityStore.loadOrCreate()
         _ = DeviceAuthStore.storeToken(
@@ -3304,6 +3545,59 @@ struct GatewayNodeSessionTests {
         #expect(auth["token"] == nil)
         #expect(auth["deviceToken"] == nil)
 
+        await gateway.disconnect()
+    }
+
+    @Test(.stateDirectoryIsolated, arguments: [false, true])
+    func `credential-free issuance replaces only the retained token observed before connect`(
+        newerWrite: Bool) async throws
+    {
+        let identity = DeviceIdentityStore.loadOrCreate()
+        let gatewayID = "native-ingress-repair"
+        _ = DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId, role: "node", token: "retained-node-token", gatewayID: gatewayID)
+        let session = FakeGatewayWebSocketSession(
+            helloAuth: ["deviceToken": "fresh-node-token", "role": "node", "scopes": []],
+            onConnectSent: {
+                if newerWrite {
+                    // This separate writer lands after auth selection and before the issued hello.
+                    _ = DeviceAuthStore.storeToken(
+                        deviceId: identity.deviceId, role: "node", token: "newer-node-token", gatewayID: gatewayID)
+                }
+            })
+        let gateway = GatewayNodeSession()
+        do {
+            try await gateway.connectForTest(
+                testURL("wss://ingress.example.invalid"),
+                options: nodeConnectOptions(
+                    includeDeviceIdentity: true, allowStoredDeviceAuth: false, deviceAuthGatewayID: gatewayID),
+                session: session)
+
+            let task = try #require(session.latestTask())
+            #expect(try #require(task.latestConnectAuth()).isEmpty)
+            let device = try #require(task.latestConnectDevice())
+            #expect(device["id"] as? String == identity.deviceId)
+            #expect(device["nonce"] as? String == "nonce-1")
+            #expect((device["signedAt"] as? NSNumber)?.int64Value == 1_800_000_000_000)
+            let signatureText = try #require(device["signature"] as? String)
+                .replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+            let signature = try #require(Data(base64Encoded: signatureText +
+                    String(repeating: "=", count: (4 - signatureText.count % 4) % 4)))
+            let key = try Curve25519.Signing
+                .PublicKey(rawRepresentation: #require(Data(base64Encoded: identity.publicKey)))
+            let expectedPayload = "v2|\(identity.deviceId)|openclaw-ios-test|node|node||1800000000000||nonce-1"
+            #expect(key.isValidSignature(signature, for: Data(expectedPayload.utf8)))
+
+            let stored = try #require(DeviceAuthStore.loadToken(
+                deviceId: identity.deviceId, role: "node", gatewayID: gatewayID))
+            #expect(stored.token == (newerWrite ? "newer-node-token" : "fresh-node-token"))
+            let roles = await gateway.currentDeviceAuthRoles()
+            #expect(roles.received == ["node"])
+            #expect(roles.persisted == (newerWrite ? [] : ["node"]))
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
         await gateway.disconnect()
     }
 
@@ -3515,7 +3809,7 @@ struct GatewayNodeSessionTests {
         let request = try #require(task.sentRequests(method: "connect").first)
         let params = try #require(request["params"] as? [String: Any])
         #expect(params["modelCatalog"] == nil)
-        #expect(params["caps"] as? [String] == [])
+        #expect(params["caps"] as? [String] == ["presence-deltas", "health-summary"])
         await gateway.disconnect()
     }
 
@@ -3622,13 +3916,16 @@ struct GatewayNodeSessionTests {
     @Test(.stateDirectoryIsolated)
     func `failed device token write retains issuance without claiming persistence`() async throws {
         let gatewayID = "blocked-storage-gateway"
-        let stateDir = try #require(ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"])
-        let blocker = URL(fileURLWithPath: stateDir, isDirectory: true)
-            .appendingPathComponent("identity", isDirectory: false)
-        try Data().write(to: blocker)
-        // Block only the legacy auth directory. SQLite identity creation must
-        // still succeed so this test reaches the token persistence failure.
-        defer { try? FileManager.default.removeItem(at: blocker) }
+        let attemptedTokens = Mutex<[String]>([])
+        DeviceCredentialAccess.install { root, operation in
+            if operation.kind == .tokenReplace {
+                attemptedTokens.withLock { $0.append(operation.token?.token ?? "") }
+                throw CocoaError(.fileWriteNoPermission)
+            }
+            return try DeviceCredentialAccess.executeOffline(root: root, operation: operation)
+        }
+        defer { DeviceCredentialAccess.close() }
+        let identity = try DeviceIdentityStore.loadOrCreatePersistedOrThrow()
 
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "node-device-token",
@@ -3647,8 +3944,10 @@ struct GatewayNodeSessionTests {
             session: session)
 
         let authRoles = await gateway.currentDeviceAuthRoles()
+        #expect(attemptedTokens.withLock { $0 } == ["node-device-token"])
         #expect(authRoles.received == ["node"])
         #expect(authRoles.persisted.isEmpty)
+        #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node", gatewayID: gatewayID) == nil)
         await gateway.disconnect()
     }
 
@@ -4203,6 +4502,23 @@ struct GatewayNodeSessionTests {
 
         await gateway.disconnect()
         #expect(await gateway.waitForCurrentMainSessionKey(ifCurrentRoute: route) == nil)
+    }
+
+    @Test
+    func `control UI base path follows the current hello route`() async throws {
+        let session = FakeGatewayWebSocketSession(helloControlUiBasePath: " /gateway ")
+        let gateway = GatewayNodeSession()
+
+        try await gateway.connectForTest(
+            testURL("ws://example.invalid"),
+            options: operatorConnectOptions(),
+            session: session)
+
+        let route = try #require(await gateway.currentRoute())
+        #expect(await gateway.currentControlUiBasePath(ifCurrentRoute: route) == "/gateway")
+
+        await gateway.disconnect()
+        #expect(await gateway.currentControlUiBasePath(ifCurrentRoute: route) == nil)
     }
 
     @Test

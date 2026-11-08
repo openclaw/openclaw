@@ -17,7 +17,7 @@ import {
   type PackageActivationDescriptor,
   type PackageActivationRecord,
   createPackageActivationJournal,
-  openPackageActivationJournal,
+  openPackageActivationSettlementJournal,
   isPackageActivationComplete,
   assertPackageActivationLayout,
   resolvePackageActivationControl,
@@ -135,7 +135,7 @@ export async function preparePackageActivationJournal(
   }
   let sqliteLibrary: string | undefined;
   if (runtime.kind === "bun") {
-    const info = await resolveBunRuntimeInfo(node, undefined, runtime.env ?? process.env);
+    const info = await resolveBunRuntimeInfo(node, runtime.env ?? process.env);
     if (info.status !== "supported") {
       throw new Error("Recovery requires a supported external Bun executable.", {
         cause: info.status === "probe-failed" ? info.error : undefined,
@@ -199,7 +199,7 @@ export async function preparePackageActivationJournal(
   const priorJournal = fs.lstatSync(resolvePackageActivationControl(anchor), {
     throwIfNoEntry: false,
   })
-    ? openPackageActivationJournal(anchor)
+    ? openPackageActivationSettlementJournal(anchor)
     : undefined;
   const prior = priorJournal?.read();
   if (prior && !isPackageActivationComplete(anchor, prior)) {

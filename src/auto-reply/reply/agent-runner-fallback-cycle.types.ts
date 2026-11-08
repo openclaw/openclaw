@@ -7,6 +7,7 @@ import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CronRunInference } from "../../cron/run-inference.js";
 import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
 import type { ThinkLevel } from "../thinking.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -26,6 +27,8 @@ import type { DirectBlockDelivery } from "./reply-delivery.js";
 
 type AgentFallbackRunContext = {
   preparedRunAdmission: PreparedAgentRunAdmission;
+  scheduledMessageActionTurnCapability?: string;
+  scheduledInference?: CronRunInference;
   turn: AgentTurnParams;
   runtimeConfig: OpenClawConfig;
   runId: string;
@@ -55,6 +58,10 @@ export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions &
     signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
     prepareAgentRunStart: () => void | Promise<void>;
     notifyAgentRunStart: (transcriptStart?: PreparedReplyTranscriptStart | null) => void;
+    notifyScheduledExecutionStarted: (
+      lifecycleBackstop: AgentLifecycleTerminalBackstop,
+      resolveSessionKey: () => string | undefined,
+    ) => Promise<void>;
     preserveProgressCallbackStartOrder: boolean;
     onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => void;
     deferredLifecycle: DeferredEmbeddedRunLifecycleManager;
@@ -81,24 +88,17 @@ export type AgentFallbackCycleState = {
   };
 };
 
-type CompletedFallbackCycle = {
-  kind: "completed";
-  runResult: EmbeddedAgentRunResult;
-  fallbackProvider: string;
-  fallbackModel: string;
-  fallbackExhausted: boolean;
-  fallbackAttempts: RuntimeFallbackAttempt[];
-  terminalRunFailed: boolean;
-};
-
 export type AgentFallbackCycleResult =
-  | CompletedFallbackCycle
+  | {
+      kind: "completed";
+      runResult: EmbeddedAgentRunResult;
+      fallbackProvider: string;
+      fallbackModel: string;
+      fallbackExhausted: boolean;
+      fallbackAttempts: RuntimeFallbackAttempt[];
+      terminalRunFailed: boolean;
+    }
   | Extract<AgentTurnInternalResult, { kind: "final" | "aborted" }>;
-
-type AgentFallbackModelPatch = {
-  captureFallbackFailure: (attempts: RuntimeFallbackAttempt[]) => boolean | undefined;
-  captureFailure: (error: unknown) => void;
-};
 
 export type AgentFallbackCycleParams = AgentFallbackRunContext & {
   effectiveRun: FollowupRun["run"];
@@ -111,9 +111,12 @@ export type AgentFallbackCycleParams = AgentFallbackRunContext & {
   createAgentRunStartCallbacks: () => Pick<
     AgentFallbackCandidateCommonParams,
     "prepareAgentRunStart" | "notifyAgentRunStart" | "signalExecutionPhaseForTyping"
-  > & { close: () => void };
+  > & { hasAgentRunStarted: () => boolean; close: () => void };
   notifyUserAboutCompaction: boolean;
-  modelPatch: AgentFallbackModelPatch;
+  modelPatch: {
+    captureFallbackFailure: (attempts: RuntimeFallbackAttempt[]) => boolean | undefined;
+    captureFailure: (error: unknown) => void;
+  };
   shouldSurfaceToControlUi: boolean;
   commitTerminalOutcome: () => void;
   clearRecoveredAutoFallbackPrimaryProbe: (candidate: {

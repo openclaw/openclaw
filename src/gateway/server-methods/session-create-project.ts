@@ -8,9 +8,9 @@ import {
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import {
   sessionEntryCommitGuardOptions,
   composeSessionSourceAssertion,
@@ -25,28 +25,32 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { materializeProjectClone, refreshProjectClone } from "../../projects/project-clone.js";
 import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.runtime.js";
 import { resolveProjectDirectory } from "../../projects/project-registry.js";
+import {
+  getRpcSourceIdentity,
+  getRpcSourceLifecycleGeneration,
+  getRpcSourceProjectSessionActive,
+  isRpcSourceRegistered,
+  requestRpcSourceCancellation,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { githubApiToken } from "../github-public-api.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { projectRequesterForClient } from "../project-access.js";
 import { prepareGatewayProjectGitHubIdentity } from "../project-github-identity.js";
-import type {
-  PrepareGatewaySessionLifecycle,
-  PreparedGatewaySessionLifecycle,
-} from "../session-create-service.types.js";
+import type { PreparedGatewaySessionLifecycle } from "../session-create-service.types.js";
 import { commitPreparedSessionWorkspace } from "../session-lifecycle-preparation.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { resolveExplicitSessionName } from "../session-title-state.js";
 import {
   prepareSessionWorktree,
+  resolveSessionProjectRoot,
   resolveSessionWorktreeBase,
 } from "../session-worktree-preparation.js";
 import { hasActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
+import type { GatewayClient } from "./client-types.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionCreateFilesystemRoot } from "./session-create-root.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -56,6 +60,20 @@ const SESSION_PROJECT_OWNERSHIP_ERROR =
 const workspacePreparations = new KeyedAsyncQueue();
 
 type RepositorySource = NonNullable<SessionsCreateParams["repository"]>;
+
+/** A hidden registry project reads as an unknown id to restricted requesters. */
+export async function resolveRequestedSessionProjectRoot(
+  cfg: OpenClawConfig,
+  params: Pick<SessionsCreateParams, "projectId" | "worktree">,
+  client: GatewayClient | null,
+): Promise<Result<string | undefined, ErrorShape>> {
+  const projectId = normalizeOptionalString(params.projectId);
+  if (!projectId) {
+    return ok(undefined);
+  }
+  const requester = projectRequesterForClient(client);
+  return await resolveSessionProjectRoot(cfg, projectId, params.worktree === true, requester);
+}
 
 export function resolveSessionRepositoryCreation(
   params: SessionsCreateParams,
@@ -91,77 +109,6 @@ export function resolveSessionRepositoryCreation(
     );
   }
   return ok({ url, ...(ref ? { ref } : {}) });
-}
-
-export function prepareSessionRepositoryWorkspace(
-  repository: RepositorySource,
-  options: { runSetupScript: boolean; assertCurrent: () => void },
-): PrepareGatewaySessionLifecycle {
-  const { assertCurrent } = options;
-  return async (target) => {
-    const store = getSessionRepositoryWorkspaceStore();
-    const source = captureOpenClawStateWorkerContext({ path: store.path });
-    const assertSourceCurrent = () => {
-      source.admission.assertCurrent();
-      assertCurrent();
-    };
-    const existing = await store.find({ agentId: target.agentId, sessionKey: target.key });
-    if (
-      target.entry &&
-      (!target.entry.repositoryWorkspaceId ||
-        target.entry.repositoryWorkspaceId !== existing?.workspaceId)
-    ) {
-      return invalidSessionRequest("repository source requires a new repository session");
-    }
-    if (
-      existing &&
-      (existing.url !== repository.url || existing.requestedRef !== (repository.ref ?? null))
-    ) {
-      return invalidSessionRequest("session repository source cannot be changed");
-    }
-    assertSourceCurrent();
-    const workspace = await store.create({
-      agentId: target.agentId,
-      sessionKey: target.key,
-      url: repository.url,
-      requestedRef: repository.ref,
-      runSetupScript: options.runSetupScript,
-      assertCurrent: assertSourceCurrent,
-    });
-    const withCommit: NonNullable<PreparedGatewaySessionLifecycle["withCommit"]> = (run) =>
-      runOpenClawStateWorkerOperation(source, () => run(assertSourceCurrent), {
-        assertCurrent: assertSourceCurrent,
-      });
-    return ok({
-      repositoryWorkspaceId: workspace.workspaceId,
-      withCommit,
-      ...(!existing
-        ? {
-            rollback: async () => {
-              // Creation still holds the session lifecycle lock. Cleanup owns only the
-              // untouched row it allocated, even when the initiating caller has gone away.
-              source.admission.assertCurrent();
-              const prepared = await store.prepare(workspace.workspaceId);
-              await store.delete({
-                workspaceId: workspace.workspaceId,
-                assertCurrent: () => {
-                  source.admission.assertCurrent();
-                  const current = prepared.current();
-                  if (
-                    current &&
-                    (current.agentId !== target.agentId ||
-                      current.sessionKey !== target.key ||
-                      current.revision !== workspace.revision)
-                  ) {
-                    throw new Error("Repository preparation changed before rollback");
-                  }
-                },
-              });
-            },
-          }
-        : {}),
-    });
-  };
 }
 
 export function validateSessionWorktreeSelection(
@@ -255,22 +202,21 @@ export function prepareSessionWorkspace(params: {
   if (!entry) {
     throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
   }
-  const { controller } = admission.activeRunAbort;
-  const signal = controller.signal;
+  const signal = admission.activeRunAbort.entry.input.abortSignal;
   const assertRunOwnership = () => {
     signal.throwIfAborted();
-    const activeRun = context.chatAbortControllers.get(clientRunId);
+    const activeRun = admission.activeRunAbort.entry;
+    const activeRunIdentity = getRpcSourceIdentity(activeRun);
     if (
-      !activeRun ||
-      activeRun !== admission.activeRunAbort.entry ||
-      activeRun.controller !== controller ||
-      activeRun.sessionKey !== sessionKey ||
-      activeRun.sessionId !== entry.sessionId ||
+      !isRpcSourceRegistered(activeRun) ||
+      activeRun.input.abortSignal !== signal ||
+      activeRunIdentity.sessionKey !== sessionKey ||
+      activeRunIdentity.sessionId !== entry.sessionId ||
       entry.sessionId !== admission.admittedSessionId ||
-      activeRun.lifecycleGeneration !== admission.lifecycleGeneration ||
-      activeRun.projectSessionActive === false ||
-      activeRun.projectSessionTerminalPending === true ||
-      activeRun.projectSessionTerminalPersisted === true ||
+      getRpcSourceLifecycleGeneration(activeRun) !== admission.lifecycleGeneration ||
+      getRpcSourceProjectSessionActive(activeRun) === false ||
+      activeRun.adapter.projectSessionTerminalPending === true ||
+      activeRun.adapter.projectSessionTerminalPersisted === true ||
       !hasActiveAgentRuntimeAuthority(client, context)
     ) {
       throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
@@ -319,7 +265,7 @@ export function prepareSessionWorkspace(params: {
           error,
           "Workspace preparation failed; check the repository and retry.",
         );
-        controller.abort(preparationFailure);
+        requestRpcSourceCancellation(admission.activeRunAbort.entry, preparationFailure);
       }
       const failure = preparationFailure ?? error;
       promptReady.reject(failure);
@@ -363,19 +309,13 @@ export async function prepareSessionWorkspaceForRun(params: {
     signal,
   } = params;
   const target = { agentId, sessionKey, storePath };
-  const incognito = captureIncognitoSessionSource(target);
-  const metadata = captureSessionEntryMetadataRead(target);
-  const claim =
-    incognito && !("kind" in incognito)
-      ? incognito.actor.sessions.captureCurrent(sessionKey)
-      : undefined;
+  const metadata = captureSessionEntryMetadataRead(target, params.assertCurrent);
   const assertRunOwnership = composeSessionSourceAssertion(
     [params.assertCurrent],
     (assertSources) => {
       signal.throwIfAborted();
       assertSources();
       metadata?.assertCurrent();
-      claim?.assertCurrent();
     },
   );
   assertRunOwnership();
@@ -390,18 +330,17 @@ export async function prepareSessionWorkspaceForRun(params: {
   const prepare = () =>
     workspacePreparations.enqueue(`${storePath}\0${sessionKey}`, async () => {
       assertRunOwnership();
-      const saved = incognito
-        ? await (
-            await import("../../config/sessions/session-entry-read-runtime.js")
-          ).readSessionEntryReadOnlyInWorker(target, assertRunOwnership)
+      const initial = metadata
+        ? metadata.readCurrent()
         : await readSessionEntryReadOnlyInWorker(target, assertRunOwnership);
       if (
-        !saved ||
-        saved.sessionId !== entry.sessionId ||
-        saved.lifecycleRevision !== entry.lifecycleRevision
+        !initial ||
+        initial.sessionId !== entry.sessionId ||
+        initial.lifecycleRevision !== entry.lifecycleRevision
       ) {
         throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
       }
+      let saved = initial;
       let pending = saved.pendingWorktree;
       const assertSavedWorkspaceIntent = (current: Partial<typeof saved> | undefined) => {
         assertRunOwnership();
@@ -521,7 +460,7 @@ export async function prepareSessionWorkspaceForRun(params: {
           if (!updated) {
             throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
           }
-          Object.assign(saved, updated);
+          saved = { ...saved, ...updated };
           pending = next;
         }
         // Retries inherit workspace intent, not a previous caller's setup authority.
@@ -544,7 +483,14 @@ export async function prepareSessionWorkspaceForRun(params: {
           runSetupScript: !cfg.cloudWorkers?.requiredProfile && params.runSetupScript,
           signal,
           commitGuard: assertProjectCurrent,
-          onProgress: (stage) => status(stage === "setup" ? "running_setup" : "creating_worktree"),
+          onProgress: (stage) =>
+            status(
+              stage === "base"
+                ? "preparing_worktree_base"
+                : stage === "setup"
+                  ? "running_setup"
+                  : "creating_worktree",
+            ),
           acceptedSource: pending.source,
           onPromptReady: params.onPromptReady
             ? async (promptWorkspace) => {
@@ -553,6 +499,7 @@ export async function prepareSessionWorkspaceForRun(params: {
                 // initialize its prompt in the final execution directory.
                 const bound = await commitPreparedSessionWorkspace({
                   prepared: promptWorkspace,
+                  signal,
                   target,
                   projectId: project?.id,
                   assertCurrent: assertRunOwnership,
@@ -562,7 +509,7 @@ export async function prepareSessionWorkspaceForRun(params: {
                 });
                 // Subsequent Git effects must accept the project binding this
                 // preparation just published, while retaining its pending intent.
-                Object.assign(saved, bound);
+                saved = { ...saved, ...bound };
                 Object.assign(entry, bound);
                 params.onPromptReady?.();
               }
@@ -575,6 +522,7 @@ export async function prepareSessionWorkspaceForRun(params: {
       }
       const bound = await commitPreparedSessionWorkspace({
         prepared,
+        signal,
         target,
         projectId: project?.id,
         assertCurrent: assertRunOwnership,
@@ -591,8 +539,19 @@ export async function prepareSessionWorkspaceForRun(params: {
       assertRunOwnership();
       emitSessionsChanged(context, { sessionKey, agentId, reason: "project" });
     });
-  await (incognito && !("kind" in incognito)
-    ? incognito.actor.sessions.withSharedState(prepare)
-    : prepare());
+  const handled = await withSessionActorStorage(
+    target,
+    {
+      lifetime: { assertCurrent: assertRunOwnership, assertReadable: assertRunOwnership },
+      authority: { assertCurrent: assertRunOwnership, authorize() {} },
+    },
+    async () => {
+      await prepare();
+      return true;
+    },
+  );
+  if (!handled) {
+    await prepare();
+  }
   assertRunOwnership();
 }

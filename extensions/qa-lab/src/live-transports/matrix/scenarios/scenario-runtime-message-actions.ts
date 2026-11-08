@@ -49,7 +49,6 @@ export async function runPublicMessageActionsScenario(context: MatrixQaScenarioC
           accessToken: context.observerAccessToken,
           baseUrl: context.baseUrl,
           endpoint: `${roomPath}/${suffix}`,
-          fetchImpl: fetch,
           method: "GET",
         })
       ).body,
@@ -174,18 +173,6 @@ export async function runPublicMessageActionsScenario(context: MatrixQaScenarioC
     completed.push(`pin=${pinId}->${messageId}`);
 
     return {
-      artifacts: {
-        accountId: context.sutAccountId,
-        roomKey: room.key,
-        roomId: room.roomId,
-        rootEventId: messageId,
-        editEventId: editId,
-        reactionEventId: reactionId,
-        reactionTargetEventId: messageId,
-        reactionEmoji: emoji,
-        token: marker,
-        editedToken: editedMarker,
-      },
       details: [
         "Five public Gateway message.action operations independently observed on Matrix.",
         `SUT room power=${sutPower}; pin requirement=${pinPower}`,

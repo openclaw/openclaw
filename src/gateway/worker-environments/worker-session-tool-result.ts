@@ -4,7 +4,7 @@ import { Value } from "typebox/value";
 import {
   isWorkerGatewayToolFrameWithinBudget,
   WorkerGatewayToolResultSchema,
-  type WorkerGatewayToolResult,
+  type WorkerGatewayToolInvokeResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
@@ -53,32 +53,65 @@ export async function executeWorkerSessionToolWithReplay<T>(
   }
 }
 
+const MAX_WORKER_TOOL_ERROR_LENGTH = 1_024;
+
 export function workerSessionToolErrorResult(error: unknown) {
   const message = error instanceof Error ? error.message : "Worker session operation failed";
-  return jsonResult({
-    status: "error",
-    error: truncateUtf16Safe(message, 1_024),
-  });
+  return {
+    ...jsonResult({
+      status: "error",
+      error: truncateUtf16Safe(message, MAX_WORKER_TOOL_ERROR_LENGTH),
+    }),
+    isError: true,
+  };
 }
 
 export function serializeWorkerSessionToolError(error: unknown): string {
   return serializeWorkerSessionToolResult(workerSessionToolErrorResult(error));
 }
 
-export function boundWorkerToolResult(result: unknown): WorkerGatewayToolResult {
-  if (
-    Value.Check(WorkerGatewayToolResultSchema, result) &&
-    isWorkerGatewayToolFrameWithinBudget(
-      {
-        type: "res",
-        id: "x".repeat(WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH),
-        ok: true,
-        payload: result,
-      },
-      result,
-    )
-  ) {
-    return result;
+function fitsWorkerToolResponse(result: WorkerGatewayToolInvokeResult): boolean {
+  return isWorkerGatewayToolFrameWithinBudget(
+    {
+      type: "res",
+      id: "x".repeat(WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH),
+      ok: true,
+      payload: result,
+    },
+    result,
+  );
+}
+
+export function boundWorkerMcpRefusal(
+  result: unknown,
+  reason: string,
+): WorkerGatewayToolInvokeResult {
+  const mcpBlockedReason = truncateUtf16Safe(reason, MAX_WORKER_TOOL_ERROR_LENGTH);
+  if (Value.Check(WorkerGatewayToolResultSchema, result)) {
+    const denied = { ...result, mcpBlockedReason };
+    if (fitsWorkerToolResponse(denied)) {
+      return denied;
+    }
+  }
+  // Even a large hook receipt must convey the trusted denial to the guest.
+  return { ...workerSessionToolErrorResult(new Error(mcpBlockedReason)), mcpBlockedReason };
+}
+
+export function boundWorkerToolResult(
+  result: unknown,
+  mcpGuestResult?: unknown,
+): WorkerGatewayToolInvokeResult {
+  if (Value.Check(WorkerGatewayToolResultSchema, result)) {
+    if (mcpGuestResult !== undefined) {
+      const payload = { ...result, mcpGuestResult };
+      if (fitsWorkerToolResponse(payload)) {
+        return payload;
+      }
+    }
+    // A large private snapshot must not hide an otherwise deliverable tool receipt.
+    if (fitsWorkerToolResponse(result)) {
+      return result;
+    }
   }
   return workerSessionToolErrorResult(
     new Error("Worker tool result exceeded the transport contract"),

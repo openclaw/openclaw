@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."user_background_images" (
+CREATE TABLE "user_background_images" (
   "profile_id" text COLLATE "C" NOT NULL,
   "asset_id" text COLLATE "C" NOT NULL,
   "image" bytea NOT NULL,
@@ -17,6 +13,4 @@ CREATE TABLE "openclaw_state"."user_background_images" (
   UNIQUE ("asset_id")
 );
 
-ALTER TABLE "openclaw_state"."user_background_images" ADD FOREIGN KEY ("profile_id") REFERENCES "openclaw_state"."user_profiles" ("id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
-
-COMMIT;
+ALTER TABLE "user_background_images" ADD FOREIGN KEY ("profile_id") REFERENCES "user_profiles" ("id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;

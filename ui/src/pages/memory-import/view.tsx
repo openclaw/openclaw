@@ -1,13 +1,17 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type {
   MemoryMigrationItem,
   MemoryMigrationProviderPlan,
   MigrationsMemoryApplyResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import "../../components/agent-select-registration.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
@@ -19,10 +23,11 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerMemoryImportEnglish } from "../../i18n/locales/en-memory-import.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import type { MemoryImportViewProps } from "./view-types.ts";
+import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import "../../styles/memory-import.css";
+import type { MemoryImportViewProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerMemoryImportEnglish);
 
@@ -30,6 +35,15 @@ type MemoryCollection = {
   label: string;
   items: MemoryMigrationItem[];
 };
+
+function renderReadError(error: () => unknown) {
+  return (
+    <InlineAlert tone="danger" role="alert">
+      <div>{t("memoryImport.loadFailed")}</div>
+      {formatUiError(error())}
+    </InlineAlert>
+  );
+}
 
 function detailString(item: MemoryMigrationItem, key: string): string | undefined {
   const value = item.details?.[key];
@@ -88,8 +102,7 @@ function Collection(props: {
     <div class="settings-row settings-row--stacked memory-import__collection">
       <div class="memory-import__collection-header">
         <label class="memory-import__collection-choice">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={checked()}
             disabled={selectableIds().length === 0 || props.disabled}
             onChange={(event) =>
@@ -123,7 +136,10 @@ function Collection(props: {
                 </span>
                 <code title={item().source ?? artifactLabel(item())}>{artifactLabel(item())}</code>
                 <span
-                  class={`memory-import__file-status memory-import__file-status--${item().status}`}
+                  class={[
+                    "memory-import__file-status",
+                    `memory-import__file-status--${item().status}`,
+                  ]}
                 >
                   {item().status === "planned"
                     ? t("memoryImport.ready")
@@ -235,7 +251,7 @@ function Provider(props: { view: MemoryImportViewProps; provider: MemoryMigratio
       <SettingsSection
         title={
           <span class="memory-import__provider-title">
-            <ProviderBrandIcon
+            <ModelProviderIcon
               provider={props.provider.providerId}
               class="memory-import__provider-icon"
             />
@@ -263,9 +279,9 @@ function Provider(props: { view: MemoryImportViewProps; provider: MemoryMigratio
         <Show
           when={!props.provider.error}
           fallback={
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               {formatUiExternalText(props.provider.error)}
-            </div>
+            </InlineAlert>
           }
         >
           <Show
@@ -307,7 +323,7 @@ function Provider(props: { view: MemoryImportViewProps; provider: MemoryMigratio
                 <button
                   class="btn primary"
                   data-test-id="memory-import-provider-button"
-                  disabled={selectedIds().size === 0 || disabled()}
+                  disabled={!props.view.connected || selectedIds().size === 0 || disabled()}
                   onClick={() => props.view.onRequestImport(props.provider.providerId)}
                 >
                   {props.view.applyingProviderId === props.provider.providerId
@@ -355,29 +371,40 @@ function Confirmation(props: { view: MemoryImportViewProps; backfill?: boolean }
   return (
     <Show when={props.backfill ? props.view.backfillRollbackPending : provider()}>
       <openclaw-modal-dialog label={title()} description={description()} onModal-cancel={cancel}>
-        <div class="exec-approval-card memory-import__confirm">
-          <div class="exec-approval-header">
-            <div>
-              <div class="exec-approval-title">{title()}</div>
-              <div class="exec-approval-sub">{description()}</div>
+        <div class="oc-dialog memory-import__confirm">
+          <DialogHeader
+            title={title()}
+            description={<p>{description()}</p>}
+            closeDisabled={busy()}
+            onClose={cancel}
+          />
+          <div class="oc-dialog__body">
+            <div class={["callout", { warn: props.backfill || props.view.replaceExisting }]}>
+              {t(
+                props.backfill
+                  ? "memoryImport.backfill.rollbackWarning"
+                  : props.view.replaceExisting
+                    ? "memoryImport.confirmReplace"
+                    : "memoryImport.confirmBackup",
+              )}
             </div>
+            <Show when={!props.backfill && props.view.applyError}>
+              <InlineAlert tone="danger" role="alert">
+                <div>{t("memoryImport.importFailed")}</div>
+                {props.view.applyError}
+              </InlineAlert>
+            </Show>
           </div>
-          <div class={["callout", { warn: props.backfill || props.view.replaceExisting }]}>
-            {t(
-              props.backfill
-                ? "memoryImport.backfill.rollbackWarning"
-                : props.view.replaceExisting
-                  ? "memoryImport.confirmReplace"
-                  : "memoryImport.confirmBackup",
-            )}
-          </div>
-          <div class="exec-approval-actions">
+          <openclaw-modal-actions class="oc-dialog__footer">
+            <button class="btn" disabled={busy()} onClick={cancel}>
+              {t("common.cancel")}
+            </button>
             <button
-              class={["btn", { danger: props.backfill, primary: !props.backfill }]}
+              class={["btn", props.backfill || props.view.replaceExisting ? "danger" : "primary"]}
               data-test-id={
                 props.backfill ? "memory-backfill-rollback-confirm" : "memory-import-confirm"
               }
-              disabled={busy()}
+              disabled={!props.view.connected || busy()}
               onClick={() =>
                 props.backfill
                   ? props.view.onBackfillRollbackConfirm()
@@ -386,10 +413,7 @@ function Confirmation(props: { view: MemoryImportViewProps; backfill?: boolean }
             >
               {t(props.backfill ? "memoryImport.backfill.rollback" : "memoryImport.confirmImport")}
             </button>
-            <button class="btn" disabled={busy()} onClick={cancel}>
-              {t("common.cancel")}
-            </button>
-          </div>
+          </openclaw-modal-actions>
         </div>
       </openclaw-modal-dialog>
     </Show>
@@ -406,9 +430,12 @@ function IntroSection(props: { view: MemoryImportViewProps }) {
       title={t("memoryImport.title")}
       description={t("memoryImport.subtitle")}
       actions={
-        <button class="btn btn--sm" disabled={busy()} onClick={props.view.onRefresh}>
-          {t(props.view.loading ? "common.refreshing" : "common.refresh")}
-        </button>
+        <RefreshButton
+          label={t("common.refresh")}
+          busy={props.view.loading}
+          disabled={!props.view.connected || busy()}
+          onClick={() => props.view.onRefresh()}
+        />
       }
     >
       <Show when={props.view.agents.length > 1}>
@@ -489,8 +516,8 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
                 <button
                   class="btn"
                   data-test-id="memory-backfill-preview"
-                  disabled={busy()}
-                  onClick={props.view.onBackfillPreview}
+                  disabled={!props.view.connected || busy()}
+                  onClick={() => props.view.onBackfillPreview()}
                 >
                   {t(
                     props.view.backfillBusy === "preview"
@@ -501,8 +528,8 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
                 <button
                   class="btn primary"
                   data-test-id="memory-backfill-apply"
-                  disabled={busy()}
-                  onClick={props.view.onBackfillApply}
+                  disabled={!props.view.connected || busy()}
+                  onClick={() => props.view.onBackfillApply()}
                 >
                   {t(
                     props.view.backfillBusy === "apply"
@@ -513,8 +540,8 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
                 <button
                   class="btn danger"
                   data-test-id="memory-backfill-rollback"
-                  disabled={busy()}
-                  onClick={props.view.onBackfillRollbackRequest}
+                  disabled={!props.view.connected || busy()}
+                  onClick={() => props.view.onBackfillRollbackRequest()}
                 >
                   {t("memoryImport.backfill.rollback")}
                 </button>
@@ -522,51 +549,58 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
             }
           />
           <Show when={props.view.backfillError}>
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
+              <div>{t("memoryImport.backfillFailed")}</div>
               {props.view.backfillError}
-            </div>
+            </InlineAlert>
           </Show>
-          <Show when={props.view.backfillPreview}>
-            {(result) => (
-              <div class="settings-row settings-row--stacked memory-import__backfill-preview">
-                <strong role="status">
-                  {t("memoryImport.backfill.previewSummary", {
-                    candidates: String(result().candidates),
-                    days: String(result().days),
-                  })}
-                </strong>
-                <Show
-                  when={result().perDay.length > 0}
-                  fallback={<span>{t("memoryImport.backfill.noCandidates")}</span>}
-                >
-                  <ul>
-                    <For each={result().perDay} keyed={(day) => day.day}>
-                      {(day) => (
-                        <li>
-                          <div>
-                            <strong>{day().day}</strong>
-                            <span>
-                              {t("memoryImport.backfill.candidateCount", {
-                                count: String(day().candidateCount),
-                              })}
-                            </span>
-                          </div>
-                          <Show when={day().sample.length > 0}>
-                            <ul>
-                              <For each={day().sample}>{(sample) => <li>{sample}</li>}</For>
-                            </ul>
-                          </Show>
-                        </li>
-                      )}
-                    </For>
-                  </ul>
-                </Show>
-                <Show when={result().truncated}>
-                  <div class="callout warn">{t("memoryImport.backfill.previewTruncated")}</div>
-                </Show>
-              </div>
-            )}
-          </Show>
+          <Errored fallback={renderReadError}>
+            <Loading on={props.view.readScope}>
+              <Show when={props.view.readPreview()}>
+                {(result) => (
+                  <div class="settings-row settings-row--stacked memory-import__backfill-preview">
+                    <strong role="status">
+                      {t("memoryImport.backfill.previewSummary", {
+                        candidates: String(result().candidates),
+                        days: String(result().days),
+                      })}
+                    </strong>
+                    <Show
+                      when={result().perDay.length > 0}
+                      fallback={<span>{t("memoryImport.backfill.noCandidates")}</span>}
+                    >
+                      <ul>
+                        <For each={result().perDay} keyed={(day) => day.day}>
+                          {(day) => (
+                            <li>
+                              <div>
+                                <strong>{day().day}</strong>
+                                <span>
+                                  {t("memoryImport.backfill.candidateCount", {
+                                    count: String(day().candidateCount),
+                                  })}
+                                </span>
+                              </div>
+                              <Show when={day().sample.length > 0}>
+                                <ul>
+                                  <For each={day().sample}>{(sample) => <li>{sample}</li>}</For>
+                                </ul>
+                              </Show>
+                            </li>
+                          )}
+                        </For>
+                      </ul>
+                    </Show>
+                    <Show when={result().truncated}>
+                      <InlineAlert tone="warning">
+                        {t("memoryImport.backfill.previewTruncated")}
+                      </InlineAlert>
+                    </Show>
+                  </div>
+                )}
+              </Show>
+            </Loading>
+          </Errored>
           <Show when={props.view.backfillProgress}>
             {(progress) => (
               <div
@@ -613,52 +647,56 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
 export function MemoryImport(props: MemoryImportViewProps) {
   return (
     <Show
-      when={props.connected}
+      when={props.canAdmin}
       fallback={
         <SettingsPage>
-          <SettingsEmpty message={t("memoryImport.disconnected")} />
+          <SettingsEmpty
+            message={t(
+              props.actorAuth && !hasOperatorAdminAccess(props.actorAuth)
+                ? "memoryImport.adminRequired"
+                : "memoryImport.disconnected",
+            )}
+          />
         </SettingsPage>
       }
     >
-      <Show
-        when={props.canAdmin}
-        fallback={
-          <SettingsPage>
-            <SettingsEmpty message={t("memoryImport.adminRequired")} />
-          </SettingsPage>
-        }
-      >
-        <div class="memory-import" data-test-id="memory-import-page">
-          <SettingsPage>
-            <IntroSection view={props} />
-            <BackfillSection view={props} />
-            <Show when={props.error}>
-              <div class="callout danger" role="alert">
-                {props.error}
-              </div>
-            </Show>
-            <Show when={props.applyError}>
-              <div class="callout danger" role="alert">
-                {props.applyError}
-              </div>
-            </Show>
-            <Show
-              when={props.loading && !props.plan}
+      <div class="memory-import" data-test-id="memory-import-page">
+        <SettingsPage>
+          <IntroSection view={props} />
+          <BackfillSection view={props} />
+          <Show when={props.error}>
+            <InlineAlert tone="danger" role="alert">
+              <div>{t("memoryImport.loadFailed")}</div>
+              {props.error}
+            </InlineAlert>
+          </Show>
+          <Show when={props.applyError && !props.pendingProviderId}>
+            <InlineAlert tone="danger" role="alert">
+              <div>{t("memoryImport.importFailed")}</div>
+              {props.applyError}
+            </InlineAlert>
+          </Show>
+          <Errored fallback={renderReadError}>
+            <Loading
+              on={[props.readScope, props.loading && !props.plan]}
               fallback={
-                <For each={props.plan?.providers ?? []} keyed={(provider) => provider.providerId}>
-                  {(provider) => <Provider view={props} provider={provider()} />}
-                </For>
+                <div class="settings-group memory-import__loading" aria-busy="true">
+                  <div class="skeleton memory-import__skeleton" />
+                  <div class="skeleton memory-import__skeleton" />
+                </div>
               }
             >
-              <div class="settings-group memory-import__loading" aria-busy="true">
-                <div class="skeleton memory-import__skeleton" />
-                <div class="skeleton memory-import__skeleton" />
-              </div>
-            </Show>
-            <Confirmation view={props} />
-          </SettingsPage>
-        </div>
-      </Show>
+              <For
+                each={props.readPlan()?.providers ?? []}
+                keyed={(provider) => provider.providerId}
+              >
+                {(provider) => <Provider view={props} provider={provider()} />}
+              </For>
+            </Loading>
+          </Errored>
+          <Confirmation view={props} />
+        </SettingsPage>
+      </div>
     </Show>
   );
 }

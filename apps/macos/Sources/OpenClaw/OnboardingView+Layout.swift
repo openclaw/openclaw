@@ -87,7 +87,7 @@ extension OnboardingView {
 
     func activePageIndex(for pageCursor: Int) -> Int {
         guard !pageOrder.isEmpty else { return 0 }
-        let clamped = min(max(0, pageCursor), pageOrder.count - 1)
+        let clamped = Self.visiblePageCursor(pageCursor, pageCount: pageOrder.count)
         return pageOrder[clamped]
     }
 

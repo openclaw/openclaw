@@ -1,27 +1,10 @@
 // Browser tests cover control-client timeoutMs forwarding into fetchWithSsrFGuard.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const authMocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
-  resolveBrowserControlAuth: vi.fn(() => ({})),
-  getBridgeAuthForPort: vi.fn(() => undefined),
-}));
+import "./client-fetch.auth.test-support.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const browserControlUrl = "http://127.0.0.1:18791/ok";
 
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
-  >("openclaw/plugin-sdk/runtime-config-snapshot");
-  return { ...actual, readRuntimeConfig: authMocks.loadConfig, loadConfig: authMocks.loadConfig };
-});
-vi.mock("./control-auth.js", () => ({
-  resolveBrowserControlAuth: authMocks.resolveBrowserControlAuth,
-}));
-vi.mock("./bridge-auth-registry.js", () => ({
-  getBridgeAuthForPort: authMocks.getBridgeAuthForPort,
-}));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
   return {
@@ -36,13 +19,10 @@ describe("fetchBrowserJson timeout forwarding", () => {
   beforeEach(() => fetchWithSsrFGuardMock.mockReset());
 
   it("forwards the caller-provided timeout to the guarded fetch", async () => {
-    const init = { timeoutMs: 1_500 };
+    const init = { timeoutMs: 1_500, signal: new AbortController().signal };
     const expectedTimeoutMs = 1_500;
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ ok: true }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+      response: Response.json({ ok: true }),
       finalUrl: browserControlUrl,
       release: async () => {},
     });
@@ -54,7 +34,7 @@ describe("fetchBrowserJson timeout forwarding", () => {
       expect.objectContaining({
         url: browserControlUrl,
         timeoutMs: expectedTimeoutMs,
-        signal: expect.any(AbortSignal),
+        init: expect.objectContaining({ signal: init.signal }),
         auditContext: "browser-control-client",
         policy: { allowPrivateNetwork: true },
       }),

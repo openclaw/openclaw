@@ -487,7 +487,6 @@ export async function prepareAgentWorkspaceAttachments(params: {
   const notes = new Set<string>();
   let noteChars = 0;
   for (const [index, media] of batches.entries()) {
-    assertCurrent();
     let note: string | undefined;
     if (access?.prepareTurnAttachments) {
       note = await access.prepareTurnAttachments(
@@ -503,7 +502,6 @@ export async function prepareAgentWorkspaceAttachments(params: {
       );
     } else if (localExecution) {
       const { prepareLocalWorkspaceAttachments } = await import("./workspace-attachments.local.js");
-      assertCurrent();
       note = await prepareLocalWorkspaceAttachments({
         media,
         execution: localExecution,
@@ -516,7 +514,7 @@ export async function prepareAgentWorkspaceAttachments(params: {
     }
     if (!note?.trim()) {
       throw new Error(
-        `Workspace attachment ${index + 1} could not be prepared; ensure every attachment is available to the registered attachment provider before retrying`,
+        `Workspace attachment ${index + 1} could not be prepared; check that every attachment is available to the registered attachment provider before retrying`,
       );
     }
     if (!notes.has(note)) {

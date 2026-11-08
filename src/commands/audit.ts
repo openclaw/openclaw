@@ -394,6 +394,9 @@ function decisionLines(receipt: DecisionReceiptDisplayV1): string[] {
     `    Reason: ${safe(receipt.decision.reasonCode)}`,
     `    Display producer: ${safe(producer)}`,
     `    Evidence: ${evidence}`,
+    ...(receipt.representedSubject
+      ? [`    Recorded authority subject: ${principalText(receipt.representedSubject.principal)}`]
+      : []),
     `    Policy refs: ${receipt.enforcement.policyCount}`,
     `    Grant refs: ${receipt.enforcement.grantCount}`,
     `    Context used: ${receipt.enforcement.contextFieldsUsed.length > 0 ? receipt.enforcement.contextFieldsUsed.map(safe).join(", ") : "none"}`,

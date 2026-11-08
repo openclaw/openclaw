@@ -1,12 +1,34 @@
 import { existsSync } from "node:fs";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
+import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
 import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateDatabaseSchemaMigration,
 } from "./openclaw-state-db-contract.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
+import { isStatePostgres } from "./openclaw-state-db-engine.js";
+import {
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
+} from "./openclaw-state-db-readonly.js";
 import { detectOpenClawStateDatabaseSchemaMigrationsFromDatabase } from "./openclaw-state-db-schema-repair.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
+
+/** Doctor prepares its private source before entering synchronous schema inspection. */
+export async function detectOpenClawStateDatabaseSchemaMigrationsAsync(
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<OpenClawStateDatabaseSchemaMigration[]> {
+  const pathname = resolveDatabasePath(options);
+  return (
+    (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+      ({ db }) =>
+        isPostgresSqlConnection(db)
+          ? []
+          : detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname),
+      { ...options, path: pathname },
+    )) ?? []
+  );
+}
 
 export function detectOpenClawStateDatabaseSchemaMigrations(
   options: OpenClawStateDatabaseOptions = {},
@@ -16,10 +38,20 @@ export function detectOpenClawStateDatabaseSchemaMigrations(
   if (!existsSync(pathname)) {
     return [];
   }
-  if (behavior.artifactPreservingReadOnly) {
+  if (
+    isStatePostgres() ||
+    behavior.artifactPreservingReadOnly ||
+    hasUpdateDoctorMigrationCapture()
+  ) {
     return (
       withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-        ({ db }) => detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname),
+        ({ db }) => {
+          if (isPostgresSqlConnection(db)) {
+            // PostgreSQL's engine owner admits its migrations; these inspect legacy SQLite layouts.
+            return [];
+          }
+          return detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname);
+        },
         { ...options, path: pathname },
       ) ?? []
     );

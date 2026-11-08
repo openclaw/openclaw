@@ -26,7 +26,6 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type NativeTranslationArtifact = {
-  glossaryHash: string;
   locale: string;
   translations: Record<string, string>;
   version: 2;
@@ -662,6 +661,15 @@ describe("native app i18n inventory", () => {
 
   it("collects stable Android and Apple UI entries", async () => {
     const entries = await collectNativeI18nEntries();
+    const expectSourceAtSite = (
+      source: string,
+      predicate: (site: NativeI18nEntry["sites"][number]) => boolean,
+    ) => {
+      expect(
+        entries.some((entry) => hasSite(entry, predicate) && entry.source === source),
+        source,
+      ).toBe(true);
+    };
     const surfaces = new Set(entries.map((entry) => entry.surface));
 
     const sources = new Set(entries.map((entry) => entry.source));
@@ -764,15 +772,10 @@ describe("native app i18n inventory", () => {
           ),
         ),
     ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) => site.path === "apps/android/wear/src/main/res/values/strings.xml",
-          ) && entry.source === "Current session",
-      ),
-    ).toBe(true);
+    expectSourceAtSite(
+      "Current session",
+      (site) => site.path === "apps/android/wear/src/main/res/values/strings.xml",
+    );
     // Wear-only entries do not reach phone resources; the phone owner must declare its modes.
     expect(
       entries
@@ -788,24 +791,14 @@ describe("native app i18n inventory", () => {
         )
         .map((entry) => entry.source),
     ).toEqual(expect.arrayContaining(["System", "Dark", "Light"]));
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(entry, (site) =>
-            site.path.endsWith(
-              "/thirdParty/java/ai/openclaw/app/ui/SensitivePhoneCapabilitiesSettings.kt",
-            ),
-          ) && entry.source === "Control other apps",
+    expectSourceAtSite("Control other apps", (site) =>
+      site.path.endsWith(
+        "/thirdParty/java/ai/openclaw/app/ui/SensitivePhoneCapabilitiesSettings.kt",
       ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(entry, (site) =>
-            site.path.endsWith("/accessibility/AccessibilityDevActivity.kt"),
-          ) && entry.source === "Accessibility executor",
-      ),
-    ).toBe(true);
+    );
+    expectSourceAtSite("Accessibility executor", (site) =>
+      site.path.endsWith("/accessibility/AccessibilityDevActivity.kt"),
+    );
     expect(
       entries.some((entry) =>
         new Set(["Request ID: \\(value)", "Request ID: %@"]).has(entry.source),
@@ -845,47 +838,18 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some((entry) => entry.surface === "android" && entry.source === "Search OpenClaw"),
     ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(entry, (site) => site.path.endsWith("/ChatMessageActions.kt")) &&
-          entry.source === "Message actions",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(entry, (site) => site.path.endsWith("/ChatMessageActions.kt")) &&
-          entry.source === "Reply",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(entry, (site) => site.path.endsWith("/ChatMessageActions.kt")) &&
-          entry.source === "Share message",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) =>
-              site.path ===
-              "apps/ios/Sources/Settings/DeviceSettings/IOSDeviceSettingsConsent.swift",
-          ) && entry.source === "Share Apple Health summaries with the Gateway?",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) => site.path === "apps/ios/Sources/Settings/DashboardPageScreen.swift",
-          ) && entry.source === "Done",
-      ),
-    ).toBe(true);
+    expectSourceAtSite("Message actions", (site) => site.path.endsWith("/ChatMessageActions.kt"));
+    expectSourceAtSite("Reply", (site) => site.path.endsWith("/ChatMessageActions.kt"));
+    expectSourceAtSite("Share message", (site) => site.path.endsWith("/ChatMessageActions.kt"));
+    expectSourceAtSite(
+      "Share Apple Health summaries with the Gateway?",
+      (site) =>
+        site.path === "apps/ios/Sources/Settings/DeviceSettings/IOSDeviceSettingsConsent.swift",
+    );
+    expectSourceAtSite(
+      "Done",
+      (site) => site.path === "apps/ios/Sources/Settings/DashboardPageScreen.swift",
+    );
     expect
       .soft(
         entries
@@ -907,24 +871,11 @@ describe("native app i18n inventory", () => {
           .map((entry) => entry.surface),
       )
       .toEqual(["apple"]);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(entry, (site) => site.path.endsWith("/ChatSheets.swift")) &&
-          entry.source === "Search threads",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) => site.path === "apps/ios/WatchApp/Sources/WatchInboxView.swift",
-          ) &&
-          entry.source ===
-            "Direct mode supports device info, status, and notifications. Voice is included when you connect from iPhone Settings → Apple Watch. Chat and approvals still use the iPhone.",
-      ),
-    ).toBe(true);
+    expectSourceAtSite("Search threads", (site) => site.path.endsWith("/ChatSheets.swift"));
+    expectSourceAtSite(
+      "Direct mode supports device info, status, and notifications. Voice is included when you connect from iPhone Settings → Apple Watch. Chat and approvals still use the iPhone.",
+      (site) => site.path === "apps/ios/WatchApp/Sources/WatchInboxView.swift",
+    );
     expect(
       entries.some((entry) =>
         [
@@ -935,32 +886,18 @@ describe("native app i18n inventory", () => {
         ].includes(entry.source),
       ),
     ).toBe(false);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) =>
-              site.path === "apps/ios/Sources/Gateway/GatewayConnectionSupport.swift" &&
-              site.kind === "ui-localized-call-multiline",
-          ) &&
-          entry.source ===
-            "Enable Gateway TLS, or enter your Tailscale Serve HTTPS host in Manual Setup. Use Unencrypted only with a trusted private-LAN address.",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) =>
-              site.path === "apps/ios/Sources/Gateway/GatewayConnectionSupport.swift" &&
-              site.kind === "ui-localized-call-multiline",
-          ) &&
-          entry.source ===
-            "Can't reach gateway at %1$@:%2$@. Check the address and your network connection.",
-      ),
-    ).toBe(true);
+    expectSourceAtSite(
+      "Enable Gateway TLS, or enter your Tailscale Serve HTTPS host in Manual Setup. Use Unencrypted only with a trusted private-LAN address.",
+      (site) =>
+        site.path === "apps/ios/Sources/Gateway/GatewayConnectionSupport.swift" &&
+        site.kind === "ui-localized-call-multiline",
+    );
+    expectSourceAtSite(
+      "Can't reach gateway at %1$@:%2$@. Check the address and your network connection.",
+      (site) =>
+        site.path === "apps/ios/Sources/Gateway/GatewayConnectionSupport.swift" &&
+        site.kind === "ui-localized-call-multiline",
+    );
     expect(entries.some((entry) => entry.source === "Approve this device on the gateway.\n")).toBe(
       false,
     );
@@ -983,30 +920,16 @@ describe("native app i18n inventory", () => {
           entry.surface === "android" && ["off", "talk-orb", "pulse"].includes(entry.source),
       ),
     ).toBe(false);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
-          ) &&
-          entry.source ===
-            "The watch receives a one-time pairing code and its own device credentials. Voice is included with read and Talk access, without admin access. The microphone starts only when you tap Start on the watch. A reachable secure Gateway URL is required away from the iPhone.",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) =>
-              site.path === "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift" &&
-              site.kind === "ui-localized-call-multiline",
-          ) &&
-          entry.source ===
-            "Include existing %@ conversations in the sidebar. This discovers them in place; it does not copy transcripts.",
-      ),
-    ).toBe(true);
+    expectSourceAtSite(
+      "The watch receives a one-time pairing code and its own device credentials. Voice is included with read and Talk access, without admin access. The microphone starts only when you tap Start on the watch. A reachable secure Gateway URL is required away from the iPhone.",
+      (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
+    );
+    expectSourceAtSite(
+      "Include existing %@ conversations in the sidebar. This discovers them in place; it does not copy transcripts.",
+      (site) =>
+        site.path === "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift" &&
+        site.kind === "ui-localized-call-multiline",
+    );
     expect(
       entries.some((entry) => hasSite(entry, (site) => site.path.endsWith("Info.plist"))),
     ).toBe(true);
@@ -1059,7 +982,6 @@ describe("native app i18n inventory", () => {
         {
           version: 1,
           locale: "sv",
-          glossaryHash: "legacy",
           entries: [
             { id: "native.android.open-a", source: "Open", translated: "Öppna" },
             { id: "native.android.open-b", source: "Open", translated: "Öppna" },
@@ -1074,7 +996,6 @@ describe("native app i18n inventory", () => {
       )}\n`,
     );
     const migrated = await syncNativeLocale("sv", entries, {
-      glossary: [],
       translationsDir,
       translate: async () => {
         throw new Error("v1 migration must not call the translation provider");
@@ -1094,7 +1015,6 @@ describe("native app i18n inventory", () => {
     const firstModifiedAt = (await stat(artifactPath)).mtimeMs;
     await expect(
       syncNativeLocale("sv", entries, {
-        glossary: [],
         translationsDir,
         translate: async () => {
           throw new Error("no-op refresh must not call the provider");
@@ -1117,7 +1037,6 @@ describe("native app i18n inventory", () => {
       "edited Android source entry",
     );
     await syncNativeLocale("sv", [editedAndroid, appleOpen, newString], {
-      glossary: [],
       translationsDir,
       translate: async (pending) => new Map(pending.map((entry) => [entry.id, entry.source])),
     });
@@ -1135,9 +1054,8 @@ describe("native app i18n inventory", () => {
 
     await expect(
       syncNativeLocale("sv", [entry], {
-        glossary: [],
         translationsDir,
-        translate: async (_pending, locale, _glossary, validateTranslation) => {
+        translate: async (_pending, locale, validateTranslation) => {
           const translated = "Bearbetade %@";
           validateTranslation?.(entry.source, translated, entry.id, locale);
           translatorReturned = true;
@@ -1152,13 +1070,11 @@ describe("native app i18n inventory", () => {
     const translationsDir = tempDirs.make("openclaw-native-i18n-");
     const entry = testEntry("native.apple.open", "apple", "Open");
     await syncNativeLocale("sv", [entry], {
-      glossary: [],
       translationsDir,
       translate: async () => new Map([[entry.id, "Tidigare"]]),
     });
     const refreshed = await syncNativeLocale("sv", [entry], {
       force: true,
-      glossary: [],
       translationsDir,
       translate: async (pending) => new Map(pending.map((item) => [item.id, "Öppna"])),
     });
@@ -1168,7 +1084,7 @@ describe("native app i18n inventory", () => {
     ).toEqual({ [entry.id]: "Öppna" });
   });
 
-  it.each(["clean", "missing", "glossary", "legacy", "legacy-missing", "legacy-glossary"])(
+  it.each(["clean", "missing", "legacy", "legacy-missing"])(
     "adds selected refresh to ordinary %s locale work",
     async (scenario) => {
       const translationsDir = tempDirs.make("openclaw-native-i18n-");
@@ -1176,7 +1092,6 @@ describe("native app i18n inventory", () => {
       const other = testEntry("native.apple.close", "apple", "Close");
       const artifactPath = path.join(translationsDir, "sv.json");
       await syncNativeLocale("sv", [selected, other], {
-        glossary: [],
         translationsDir,
         translate: async () =>
           new Map([
@@ -1203,7 +1118,6 @@ describe("native app i18n inventory", () => {
       const pendingIds: string[] = [];
       await syncNativeLocale("sv", [selected, other], {
         refreshIds: [selected.id, selected.id],
-        glossary: scenario.endsWith("glossary") ? [{ source: "Close", target: "Stäng" }] : [],
         translationsDir,
         translate: async (pending) => {
           pendingIds.push(...pending.map((entry) => entry.id));
@@ -1229,7 +1143,6 @@ describe("native app i18n inventory", () => {
     await expect(
       syncNativeLocale("sv", [testEntry("native.apple.open", "apple", "Open")], {
         refreshIds: ["native.apple.unknown"],
-        glossary: [],
         translationsDir,
         translate: async () => {
           called = true;
@@ -1315,7 +1228,6 @@ describe("native app i18n inventory", () => {
     for (const { entry, translated } of cases) {
       await expect(
         syncNativeLocale("sv", [entry], {
-          glossary: [],
           translationsDir,
           translate: async () => new Map([[entry.id, translated]]),
         }),
@@ -1337,11 +1249,9 @@ describe("native app i18n inventory", () => {
     ];
     const greeting = expectDefined(inventory[0], "native greeting inventory entry");
     const other = expectDefined(inventory[1], "native other inventory entry");
-    const emptyGlossaryHash = createHash("sha256").update(JSON.stringify([])).digest("hex");
     const createArtifact = (): NativeTranslationArtifact => ({
       version: 2,
       locale: "sv",
-      glossaryHash: emptyGlossaryHash,
       translations: {
         [greeting.id]: "Hej ${name}\nNästa",
         [other.id]: "Annat",
@@ -1358,10 +1268,6 @@ describe("native app i18n inventory", () => {
       {
         expected: 'locale must be "sv"',
         mutate: (artifact) => ({ ...artifact, locale: "de" }),
-      },
-      {
-        expected: "glossaryHash must be",
-        mutate: (artifact) => ({ ...artifact, glossaryHash: "stale" }),
       },
       {
         expected: "translations must be a plain object",
@@ -1418,9 +1324,7 @@ describe("native app i18n inventory", () => {
     };
     const warnings: string[] = [];
     expect(
-      validateNativeLocaleArtifact("sv", inventory, obsolete, [], (message) =>
-        warnings.push(message),
-      ),
+      validateNativeLocaleArtifact("sv", inventory, obsolete, (message) => warnings.push(message)),
     ).toEqual([]);
     expect(warnings).toEqual(['native locale sv: unknown translation id "native.apple.unknown"']);
     for (const testCase of cases) {
@@ -1429,7 +1333,7 @@ describe("native app i18n inventory", () => {
       ).toThrow(testCase.expected);
       if (testCase.expected !== 'unknown translation id "native.apple.unknown"') {
         expect(() =>
-          validateNativeLocaleArtifact("sv", inventory, testCase.mutate(obsolete), [], (message) =>
+          validateNativeLocaleArtifact("sv", inventory, testCase.mutate(obsolete), (message) =>
             warnings.push(message),
           ),
         ).toThrow(testCase.expected);
@@ -1462,7 +1366,6 @@ describe("native app i18n inventory", () => {
     const artifact: NativeTranslationArtifact = {
       version: 2,
       locale: "id",
-      glossaryHash: createHash("sha256").update(JSON.stringify([])).digest("hex"),
       translations: {
         [languagePicker.id]: languagePicker.source,
         [androidInspect.id]: androidInspect.source,

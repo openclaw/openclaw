@@ -3,7 +3,7 @@ import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts"
 import type { BoardWidgetAppViewState } from "../../lib/board/provider.ts";
 import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardGrantDecision, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 
 export const BOARD_SIZE_PRESETS = {
   sm: { w: 3, h: 3 },
@@ -11,13 +11,6 @@ export const BOARD_SIZE_PRESETS = {
   lg: { w: 8, h: 6 },
   xl: { w: 12, h: 8 },
 } as const;
-
-export function closeBoardWidgetMenu(root: ParentNode): void {
-  const menu = root.querySelector<HTMLElement & { open: boolean }>(".board-widget__menu");
-  if (menu) {
-    menu.open = false;
-  }
-}
 
 export type BoardWidgetPageMenu = {
   widget: BoardWidget;
@@ -27,6 +20,7 @@ export type BoardWidgetPageMenu = {
 };
 
 export type BoardWidgetCellCallbacks = {
+  presentationReady?: () => void;
   appViewGeneration: () => number;
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
   movePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
@@ -69,6 +63,7 @@ export type BoardWidgetCellProps = {
 };
 export type BoardWidgetCellHandle = {
   readonly presentationReady: boolean;
+  focusWidget(): void;
   selectMenuItem(value: string | undefined): void;
   teardown(): Promise<void>;
   restartAfterTeardown(): void;

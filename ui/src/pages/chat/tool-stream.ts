@@ -1,7 +1,6 @@
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
-import { Value } from "typebox/value";
-import { AgentActivityItemSchema } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import {
   MAX_TOOL_APPROVAL_REVIEWS,
   normalizeToolApprovalReview,
@@ -16,6 +15,10 @@ import {
 import { readLiveDiffStat } from "../../lib/chat/tool-call-diff.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
+import {
+  cleanAgentActivityItem,
+  isAgentActivityItem,
+} from "../../lib/protocol-validators.generated/activity.js";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { updateChatReasoning } from "./chat-reasoning.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
@@ -180,8 +183,6 @@ function publishToolStreamEntry(host: ToolStreamHost, entry: ToolStreamEntry, fo
   }
   host.toolStreamSyncTimer = window.setTimeout(() => {
     flushToolStreamSync(host);
-    // The initial event rendered before this deferred projection existed.
-    host.requestUpdate?.();
   }, TOOL_STREAM_THROTTLE_MS);
 }
 
@@ -266,19 +267,21 @@ function handleUsageEvent(host: ToolStreamHost, payload: AgentEventPayload): boo
   } else if (!host.chatRunId || payload.runId !== host.chatRunId) {
     return true;
   }
+  const unavailable = readRecord(payload.data?.usageReport)?.state === "unavailable";
   const rawOutputTokens = payload.data?.outputTokens;
-  if (typeof rawOutputTokens !== "number" || !Number.isFinite(rawOutputTokens)) {
+  if (!unavailable && (typeof rawOutputTokens !== "number" || !Number.isFinite(rawOutputTokens))) {
     return true;
   }
-  const outputTokens = Math.floor(rawOutputTokens);
-  if (outputTokens < 0) {
+  const outputTokens =
+    typeof rawOutputTokens === "number" && !unavailable ? Math.floor(rawOutputTokens) : null;
+  if (outputTokens !== null && outputTokens < 0) {
     return true;
   }
   const current = host.chatRunUsageById?.get(payload.runId);
   if (current && payload.seq <= current.seq) {
     return true;
   }
-  // Keep the sequence with its count across stream resets and terminal events:
+  // Keep the sequence with its count or unavailable fact across stream resets:
   // recovery snapshots must not overwrite newer live usage or erase the recap.
   const usageByRun = new Map(host.chatRunUsageById);
   usageByRun.delete(payload.runId);
@@ -402,6 +405,13 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
     timestamp: payload.ts,
     kind,
   };
+  if (systemNotice && data.kind === "permission_missing") {
+    const request = readNodePermissionRequest(data.permissionMissing);
+    if (!request) {
+      return true;
+    }
+    notice.permissionMissing = request;
+  }
   if (systemNotice) {
     notice.source = "system";
   }
@@ -417,49 +427,6 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
       ? [...current.slice(-49), notice]
       : current.map((candidate, index) => (index === existingIndex ? notice : candidate));
   return true;
-}
-
-function applyToolReviewEvent(
-  host: ToolStreamHost,
-  payload: AgentEventPayload,
-  entry: ToolStreamEntry,
-  review: ToolApprovalReview,
-) {
-  const ownerIdentity = toolActivityIdentity(payload.runId, entry.toolCallId);
-  const sequences = (host.activityEventSeqById ??= new Map());
-  const sequenceFor = (candidate: ToolApprovalReview) =>
-    sequences.get(toolReviewSequenceIdentity(ownerIdentity, candidate.id)) ?? 0;
-  const reviewFloorKey = `${ownerIdentity}:review-floor`;
-  const currentReviews = readToolApprovalReviews(entry.details);
-  const newestReviewSeq = Math.max(
-    sequences.get(reviewFloorKey) ?? 0,
-    ...currentReviews.map(sequenceFor),
-  );
-  const reviews = [
-    ...currentReviews.filter((candidate) => candidate.id !== review.id),
-    review,
-  ].toSorted((left, right) => sequenceFor(left) - sequenceFor(right));
-  const evicted = reviews.slice(0, -MAX_TOOL_APPROVAL_REVIEWS);
-  const retainedReviews = reviews.slice(-MAX_TOOL_APPROVAL_REVIEWS);
-  if (evicted.length > 0) {
-    sequences.set(
-      reviewFloorKey,
-      Math.max(sequences.get(reviewFloorKey) ?? 0, ...evicted.map(sequenceFor)),
-    );
-    for (const candidate of evicted) {
-      sequences.delete(toolReviewSequenceIdentity(ownerIdentity, candidate.id));
-    }
-  }
-  const reportedOutcome = readToolApprovalReviewOutcome(payload.data);
-  const derivedOutcome = resolveToolApprovalReviewOutcome(retainedReviews);
-  const currentOutcome = readToolApprovalReviewOutcome(entry.details);
-  const nextOutcome =
-    currentOutcome === "denied" ? "denied" : (reportedOutcome ?? derivedOutcome ?? undefined);
-  entry.details = withToolApprovalReviews(
-    entry.details,
-    retainedReviews,
-    nextOutcome && payload.seq >= newestReviewSeq ? nextOutcome : currentOutcome,
-  );
 }
 
 export function handleAgentEvent(
@@ -484,7 +451,10 @@ export function handleAgentEvent(
   if (!acceptActivityEvent(host, payload)) {
     return false;
   }
-  if (payload.stream === "lifecycle" || payload.stream === "tool") {
+  if ((payload.stream === "tool" || payload.stream === "item") && payload.data.display === false) {
+    return false;
+  }
+  if (payload.stream === "lifecycle" || payload.stream === "tool" || payload.stream === "item") {
     const runId = toTrimmedString(payload.runId);
     if (runId) {
       (host.knownAgentRunIds ??= new Set()).add(runId);
@@ -523,16 +493,17 @@ export function handleAgentEvent(
   }
 
   const activityItem =
-    payload.stream === "item"
-      ? Value.Clean(AgentActivityItemSchema, { ...payload.data })
-      : undefined;
-  if (Value.Check(AgentActivityItemSchema, activityItem)) {
+    payload.stream === "item" ? cleanAgentActivityItem({ ...payload.data }) : undefined;
+  if (isAgentActivityItem(activityItem)) {
     // Analysis items (Codex reasoning, context compaction) are not tool calls;
     // a tool card would show a fabricated empty input and a completion.
     if (!acceptsToolStreamSession(host, payload) || activityItem.kind === "analysis") {
       return true;
     }
     const item = activityItem;
+    if (item.kind === "tool" && item.phase === "start") {
+      reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    }
     const toolCallId = item.toolCallId ?? item.itemId;
     const identity = buildToolStreamIdentity(payload.runId, toolCallId);
     let entry = host.toolStreamById.get(identity);
@@ -540,7 +511,6 @@ export function handleAgentEvent(
       entry = {
         toolCallId,
         runId: payload.runId,
-        sessionKey,
         name: item.name ?? item.title,
         startedAt: item.startedAt ?? payload.ts,
         receivedAt: Date.now(),
@@ -618,7 +588,6 @@ export function handleAgentEvent(
     entry = {
       toolCallId,
       runId: payload.runId,
-      sessionKey,
       name,
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       receivedAt: now,
@@ -661,7 +630,41 @@ export function handleAgentEvent(
   }
 
   if (approvalReview) {
-    applyToolReviewEvent(host, payload, entry, approvalReview);
+    const ownerIdentity = toolActivityIdentity(payload.runId, entry.toolCallId);
+    const sequences = (host.activityEventSeqById ??= new Map());
+    const sequenceFor = (candidate: ToolApprovalReview) =>
+      sequences.get(toolReviewSequenceIdentity(ownerIdentity, candidate.id)) ?? 0;
+    const reviewFloorKey = `${ownerIdentity}:review-floor`;
+    const currentReviews = readToolApprovalReviews(entry.details);
+    const newestReviewSeq = Math.max(
+      sequences.get(reviewFloorKey) ?? 0,
+      ...currentReviews.map(sequenceFor),
+    );
+    const reviews = [
+      ...currentReviews.filter((candidate) => candidate.id !== approvalReview.id),
+      approvalReview,
+    ].toSorted((left, right) => sequenceFor(left) - sequenceFor(right));
+    const evicted = reviews.slice(0, -MAX_TOOL_APPROVAL_REVIEWS);
+    const retainedReviews = reviews.slice(-MAX_TOOL_APPROVAL_REVIEWS);
+    if (evicted.length > 0) {
+      sequences.set(
+        reviewFloorKey,
+        Math.max(sequences.get(reviewFloorKey) ?? 0, ...evicted.map(sequenceFor)),
+      );
+      for (const candidate of evicted) {
+        sequences.delete(toolReviewSequenceIdentity(ownerIdentity, candidate.id));
+      }
+    }
+    const reportedOutcome = readToolApprovalReviewOutcome(payload.data);
+    const derivedOutcome = resolveToolApprovalReviewOutcome(retainedReviews);
+    const currentOutcome = readToolApprovalReviewOutcome(entry.details);
+    const nextOutcome =
+      currentOutcome === "denied" ? "denied" : (reportedOutcome ?? derivedOutcome ?? undefined);
+    entry.details = withToolApprovalReviews(
+      entry.details,
+      retainedReviews,
+      nextOutcome && payload.seq >= newestReviewSeq ? nextOutcome : currentOutcome,
+    );
   }
   publishToolStreamEntry(host, entry, phase === "result" || approvalReview !== null);
   return true;

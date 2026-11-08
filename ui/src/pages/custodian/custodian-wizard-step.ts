@@ -1,20 +1,17 @@
 import type { WizardAnswer } from "@openclaw/gateway-protocol";
-import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
+import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.ts";
 import type { WizardStep } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayCapabilityAdvertised } from "../../lib/gateway-methods.ts";
 
-type CustodianWizardSubmission = {
-  answer: WizardAnswer;
-  display: string;
-};
-
-/** Build the typed answer sent by a client rendering the current wizard step. */
 export function custodianWizardSubmission(
   step: WizardStep,
   value: unknown,
-): CustodianWizardSubmission | null {
+): {
+  answer: WizardAnswer;
+  display: string;
+} | null {
   if (step.type === "note" || step.type === "action" || step.type === "progress") {
     return { answer: { stepId: step.id }, display: t("common.continue") };
   }

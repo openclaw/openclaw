@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."node_worker_prepared_workspaces" (
+CREATE TABLE "node_worker_prepared_workspaces" (
   "preparation_key" text COLLATE "C" NOT NULL,
   "cache_key" text COLLATE "C" NOT NULL,
   "gateway_namespace" text COLLATE "C" NOT NULL,
@@ -38,5 +34,3 @@ CREATE TABLE "openclaw_state"."node_worker_prepared_workspaces" (
   CHECK ((("state" = 'available') AND "bound_at_ms" IS NULL AND "retired_at_ms" IS NULL) OR (("state" = 'bound') AND "bound_at_ms" IS NOT NULL AND "retired_at_ms" IS NULL) OR (("state" = 'retiring') AND "retired_at_ms" IS NULL) OR (("state" = 'retired') AND "retired_at_ms" IS NOT NULL)),
   UNIQUE ("workspace_dir")
 );
-
-COMMIT;

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { isNodeRuntime } from "../daemon/runtime-binary.js";
 import type { UpdateRepairValidation } from "../infra/update-repair-protocol.js";
@@ -29,27 +30,22 @@ export async function validateTriageDoctor(params: {
   }
   // A fresh child reads the repaired installation and can be cancelled without
   // leaving Doctor's temporary process-global state active in this CLI.
-  const doctorCommand = await runUtf8CommandWithTimeout(
-    [
-      isNodeRuntime(process.execPath) ? process.execPath : "node",
-      entrypoint,
-      "doctor",
-      "--lint",
-      "--json",
-      "--severity-min",
-      "error",
-    ],
-    {
-      cwd: installRoot,
-      baseEnv: {},
-      env,
-      input: "",
-      signal,
-      killProcessTree: true,
-      maxOutputBytes: { stdout: 1024 * 1024, stderr: 16 * 1024 },
-      terminateOnOutputLimit: true,
-    },
-  );
+  const invocation = resolveOpenClawCliInvocation({
+    execPath: isNodeRuntime(process.execPath) ? process.execPath : "node",
+    entryPath: entrypoint,
+    execArgv: [],
+    args: ["doctor", "--lint", "--json", "--severity-min", "error"],
+  });
+  const doctorCommand = await runUtf8CommandWithTimeout([invocation.command, ...invocation.args], {
+    cwd: installRoot,
+    baseEnv: {},
+    env,
+    input: "",
+    signal,
+    killProcessTree: true,
+    maxOutputBytes: { stdout: 1024 * 1024, stderr: 16 * 1024 },
+    terminateOnOutputLimit: true,
+  });
   signal.throwIfAborted();
   if (doctorCommand.termination !== "exit" || doctorCommand.outputLimitExceeded) {
     throw new Error("Doctor lint did not complete within its execution or output budget.");

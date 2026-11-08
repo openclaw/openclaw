@@ -1,14 +1,23 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
+import {
+  getSqliteDatabaseAdmissionIdentityForPath,
+  hasSqliteDatabaseSchemaAdmissionForPath,
+  hasSqliteDatabaseSchemaAdmissionForIdentity,
+} from "../../infra/sqlite-database-admission.js";
+import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  captureAgentDatabaseAdmission,
+  runWithAgentDatabaseReadAdmissionTurn,
+} from "../../state/agent-database-admission.js";
+import { getAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
 import { readSessionActorProjectionReceipt } from "./session-actor-replica.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
-import { withSessionHistoryReadAdmission } from "./session-transcript-worker-read-admission.js";
 import {
   createSessionHistoryWorkerReaders,
   type SessionHistoryWorkerRequestRunner,
@@ -16,13 +25,14 @@ import {
 import {
   acquireHistoryDatabaseResource,
   armDatabaseWorkerIdleRetirement,
-  historyClearTimeout,
+  clearDatabaseWorkerIdleRetirement,
   historyLane,
   maintenanceLane,
   pruneHistoryDatabases,
   refreshDatabaseWorkerPressureSubscription,
   rotateDatabaseWorkers,
   settleSessionHistoryWorkerEviction,
+  targetDiscoveryLane,
   type HistoryDatabaseResource,
   type SessionHistoryDatabaseTarget,
   type SessionHistoryWorkerLane,
@@ -32,10 +42,15 @@ import type {
   SessionHistoryWorkerInput,
   SessionHistoryWorkerPreparedInput,
   SessionTranscriptWorkerRequest,
+  SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
+
+type ReadAdmission = <T>(
+  dispatch: (signal: AbortSignal | undefined, remainingMs: number) => Promise<T>,
+) => Promise<T>;
 
 const log = createSubsystemLogger("sessions/history-worker");
 const historyPrewarms = new WeakMap<
@@ -45,6 +60,8 @@ const historyPrewarms = new WeakMap<
 
 function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
   switch (input.kind) {
+    case "history-page":
+      return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
     case "transcript-hydration":
     case "current-turn-entry":
     case "recent-active-events":
@@ -52,8 +69,6 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
       return input.resolvedScope;
     case "transcript-anchors":
       return input.resolved;
-    case "session-row-backfill":
-      return input.params;
     case "session-activity-summary-source":
       return input.scope;
     default:
@@ -63,7 +78,7 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
 
 export function runSessionBranchSummaryWorkerRequest(
   request: SessionBranchSummaryReadRequest,
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ) {
   const { database, ...read } = request;
   return withSessionHistoryWorkerDatabase(
@@ -74,7 +89,7 @@ export function runSessionBranchSummaryWorkerRequest(
 }
 
 export function isSessionHistoryWorkerCold(lane: SessionHistoryWorkerLane = historyLane): boolean {
-  return lane.pending === 0 && lane.nativeSequence <= lane.retiredSequence;
+  return lane.pending === 0 && !lane.native;
 }
 
 /** Reuse normal reader custody; repeated warmups never refresh the idle deadline. */
@@ -90,7 +105,7 @@ export async function prewarmSessionHistoryWorker(
       historyPrewarms.set(resource, prewarms);
     }
     const existing = prewarms.get(lane);
-    if (existing && (existing.pending || resource.nativeSequences.has(lane))) {
+    if (existing && (existing.pending || resource.nativeLanes.has(lane))) {
       return await existing.promise;
     }
     const prewarm: { promise: Promise<void>; pending: boolean } = {
@@ -126,13 +141,17 @@ export function retainSessionHistoryWorkerDatabase(
 ) {
   const owned = acquireHistoryDatabaseResource(options);
   const { database } = owned;
+  const assertAgentAdmitted = captureAgentDatabaseAdmission(database.agentId, {
+    env: options.env,
+    access: "read",
+  });
   let knownSource = false;
   const assertCurrent = () => {
     if (owned.revoked) {
       throw new WorkerTaskError("Session history database read was revoked", "unavailable");
     }
   };
-  historyClearTimeout(lane.idleTimer);
+  clearDatabaseWorkerIdleRetirement(lane);
   lane.pending++;
   owned.pending++;
   refreshDatabaseWorkerPressureSubscription();
@@ -156,38 +175,158 @@ export function retainSessionHistoryWorkerDatabase(
       onRequest,
       timeoutMs = 60_000,
     ) => {
-      const validation = captureOpenClawAgentDatabaseReadValidation(database);
       let retirement: Promise<void> | undefined;
+      const preserveSourceArtifacts = isArtifactPreservingStateRead("agent", database.path);
+      let inspectionIdentity: DatabaseFileIdentity | undefined;
       const hostEffects = new Set<Promise<WorkerTaskResponse>>();
-      return withSessionHistoryReadAdmission(
-        { ...options, ...database, lane },
-        {
-          knownSource,
-          timeoutMs,
-          signal,
-          aborters: owned.aborters,
-        },
-        async (admit, requestLane) => {
-          try {
-            const reply = await admit((requestSignal, remaining) =>
-              runWithSqliteDatabaseAdmissionTurn([database.path], () =>
-                requestLane.pool.run(
+      /** Retain schema admission through reply processing without locking the consumer. */
+      const readAdmissionOptions = {
+        ...options,
+        ...database,
+        lane,
+        readIdentities: options.readIdentity
+          ? new Map([[database.path, options.readIdentity]])
+          : undefined,
+      };
+      const readRequest = {
+        knownSource,
+        timeoutMs,
+        signal,
+        aborters: owned.aborters,
+      };
+      const { lane: requestedLane, ...readOptions } = readAdmissionOptions;
+      const deadline = performance.now() + readRequest.timeoutMs;
+      const remainingTime = () => {
+        const remaining = deadline - performance.now();
+        if (remaining <= 0) {
+          throw new WorkerTaskError("worker task timed out", "timeout");
+        }
+        return remaining;
+      };
+      let additionalLane: SessionHistoryWorkerLane | undefined;
+      try {
+        const cold =
+          !readRequest.knownSource &&
+          !(options.readIdentity
+            ? hasSqliteDatabaseSchemaAdmissionForIdentity(options.readIdentity)
+            : hasSqliteDatabaseSchemaAdmissionForPath(readOptions.path));
+        const requestLane = cold ? targetDiscoveryLane : requestedLane;
+        if (requestLane !== requestedLane) {
+          clearDatabaseWorkerIdleRetirement(requestLane);
+          requestLane.pending++;
+          additionalLane = requestLane;
+          refreshDatabaseWorkerPressureSubscription();
+        }
+        const admit: ReadAdmission = async (dispatch) => {
+          const start = (admissionSignal: AbortSignal | undefined) => {
+            return dispatch(admissionSignal, remainingTime());
+          };
+          const dispatchCold = async () => {
+            const controller = new AbortController();
+            const admissionSignal = readRequest.signal
+              ? AbortSignal.any([readRequest.signal, controller.signal])
+              : controller.signal;
+            const abort = () =>
+              controller.abort(
+                new WorkerTaskError("Session history database read was revoked", "unavailable"),
+              );
+            readRequest.aborters.add(abort);
+            const timer = setTimeout(
+              () => controller.abort(new WorkerTaskError("worker task timed out", "timeout")),
+              Math.max(1, deadline - performance.now()),
+            );
+            timer.unref?.();
+            try {
+              return await runWithAgentDatabaseReadAdmissionTurn(
+                [readOptions.path],
+                () => {
+                  // The pool owns dispatch and host-response budgets after admission.
+                  clearTimeout(timer);
+                  return start(admissionSignal);
+                },
+                [],
+                admissionSignal,
+                readAdmissionOptions,
+              );
+            } finally {
+              clearTimeout(timer);
+              readRequest.aborters.delete(abort);
+            }
+          };
+          // First creation shares schema admission; pure reads never reserve the writer.
+          return cold ? dispatchCold() : start(readRequest.signal);
+        };
+        try {
+          const reply = await admit((requestSignal, remaining) => {
+            return runWithAgentDatabaseReadAdmissionTurn(
+              [database.path],
+              () => {
+                // A preceding writer can renew this physical proof while admission waits.
+                const validation = preserveSourceArtifacts
+                  ? undefined
+                  : captureOpenClawAgentDatabaseReadValidation(
+                      database,
+                      owned.nativeLanes.has(requestLane) ? "retained" : "admission",
+                    );
+                return requestLane.pool.run(
                   () => {
                     assertCurrent();
+                    const cleanup = getAgentDeletionDatabaseCleanup(readOptions);
+                    if (cleanup) {
+                      cleanup.assertCurrentHost();
+                    } else if (!preserveSourceArtifacts) {
+                      assertAgentAdmitted();
+                    }
+                    options.prepareRead?.();
                     const input = prepare();
+                    if (preserveSourceArtifacts && input.kind === "session-exact-entries") {
+                      inspectionIdentity =
+                        options.readIdentity ??
+                        getSqliteDatabaseAdmissionIdentityForPath(database.path);
+                      if (
+                        inspectionIdentity &&
+                        input.expectedIdentity &&
+                        (input.expectedIdentity.key !== inspectionIdentity.key ||
+                          input.expectedIdentity.birthtime !== inspectionIdentity.birthtime)
+                      ) {
+                        throw new Error(
+                          "Session authority inspection source changed before dispatch",
+                        );
+                      }
+                      input.preserveSourceArtifacts = true;
+                      input.inspectionSourcePath = options.readSourcePath;
+                      inspectionIdentity ??= input.expectedIdentity;
+                      if (inspectionIdentity) {
+                        input.expectedIdentity = {
+                          ...inspectionIdentity,
+                          canonicalPath: database.path,
+                        };
+                      }
+                    }
                     const projection = projectionTarget(input);
-                    owned.nativeSequences.set(requestLane, ++requestLane.nativeSequence);
+                    const projectionReceipt = projection?.sessionId
+                      ? readSessionActorProjectionReceipt({
+                          path: database.path,
+                          sessionKey: projection.sessionKey,
+                          sessionId: projection.sessionId,
+                        })
+                      : undefined;
+                    requestLane.native = true;
+                    owned.nativeLanes.add(requestLane);
                     return {
                       ...input,
                       database,
                       validation: validation?.validation,
-                      projectionReceipt: projection?.sessionId
-                        ? readSessionActorProjectionReceipt({
-                            path: database.path,
-                            sessionKey: projection.sessionKey,
-                            sessionId: projection.sessionId,
-                          })
-                        : undefined,
+                      projectionReceipt:
+                        projectionReceipt &&
+                        (input.kind === "history-page"
+                          ? {
+                              ...projectionReceipt,
+                              entrySessionKey: undefined,
+                              facts: undefined,
+                              contextOnly: true,
+                            }
+                          : projectionReceipt),
                     } satisfies SessionTranscriptWorkerRequest;
                   },
                   {
@@ -218,42 +357,77 @@ export function retainSessionHistoryWorkerDatabase(
                       }
                     },
                   },
-                ),
-              ),
+                );
+              },
+              [],
+              requestSignal,
+              readAdmissionOptions,
             );
-            await retirement;
-            const received =
-              unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
-            if (
-              typeof received !== "boolean" &&
-              !Array.isArray(received) &&
-              (received.kind === "session-entry-read" ||
-                received.kind === "session-entry-list" ||
-                received.kind === "session-cleanup" ||
-                received.kind === "session-exact-entries" ||
-                received.kind === "session-entry-current" ||
-                received.kind === "session-runtime-target" ||
-                received.kind === "session-diagnostic-text") &&
-              received.source
-            ) {
-              knownSource = true;
-            }
-            const value = receive(received);
-            if (reply.ok && reply.closedHistoryDatabase) {
-              await settleSessionHistoryWorkerEviction(requestLane, reply.closedHistoryDatabase);
-            }
-            return value;
-          } finally {
-            // Cancellation removes queued effects; accepted writes still retain settlement custody.
-            await Promise.allSettled(hostEffects);
+          });
+          await retirement;
+          const received =
+            unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
+          if (
+            typeof received !== "boolean" &&
+            !Array.isArray(received) &&
+            (received.kind === "session-entry-read" ||
+              received.kind === "session-entry-list" ||
+              received.kind === "session-cleanup" ||
+              received.kind === "session-exact-entries" ||
+              received.kind === "session-entry-current" ||
+              received.kind === "session-runtime-target") &&
+            received.source
+          ) {
+            knownSource = true;
           }
-        },
-      );
+          if (
+            typeof received === "object" &&
+            received !== null &&
+            !Array.isArray(received) &&
+            received.kind === "session-exact-entries" &&
+            received.snapshotSource
+          ) {
+            const source = received.snapshotSource;
+            assertCurrent();
+            const currentIdentity = getSqliteDatabaseAdmissionIdentityForPath(database.path);
+            if (
+              source.agentId !== database.agentId ||
+              source.path !== database.path ||
+              [inspectionIdentity, currentIdentity].some(
+                (identity) =>
+                  identity &&
+                  (`file:${source.databaseIdentity}` !== identity.key ||
+                    source.databaseBirthtime !== identity.birthtime),
+              )
+            ) {
+              throw new Error("Session authority snapshot lost its admitted original source");
+            }
+            // Physical revalidation belongs to the worker; this owner retains revocation custody.
+          }
+          // SAFETY: The pool pairs this reply with the exact prepared request above.
+          const paired = received as SessionTranscriptWorkerValues[ReturnType<
+            typeof prepare
+          >["kind"]];
+          const value = receive(paired);
+          if (reply.ok && reply.closedHistoryDatabase) {
+            await settleSessionHistoryWorkerEviction(requestLane, reply.closedHistoryDatabase);
+          }
+          return value;
+        } finally {
+          // Cancellation removes queued effects; accepted writes still retain settlement custody.
+          await Promise.allSettled(hostEffects);
+        }
+      } finally {
+        if (additionalLane) {
+          additionalLane.pending--;
+          armDatabaseWorkerIdleRetirement(additionalLane);
+        }
+      }
     };
-    const owner: SessionHistoryWorkerDatabase = {
-      assertCurrent,
-      ...createSessionHistoryWorkerReaders(runRequest),
-    };
+    const owner: SessionHistoryWorkerDatabase = Object.assign(
+      createSessionHistoryWorkerReaders(runRequest),
+      { assertCurrent },
+    );
     return { owner, release };
   } catch (error) {
     release();
@@ -280,17 +454,18 @@ export async function withSessionHistoryWorkerDatabases<T>(
   }
 }
 
-/** Single-target callers retain the same batch admission and revocation boundary. */
-export function withSessionHistoryWorkerDatabase<T>(
+/** Single-target callers retain the same admission and revocation boundary. */
+export async function withSessionHistoryWorkerDatabase<T>(
   options: SessionHistoryDatabaseTarget,
   operation: (owner: SessionHistoryWorkerDatabase) => Promise<T>,
   lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<T> {
-  return withSessionHistoryWorkerDatabases(
-    [options],
-    (owners) => operation(expectDefined(owners[0], "retained session history reader")),
-    lane,
-  );
+  const retained = retainSessionHistoryWorkerDatabase(options, lane);
+  try {
+    return await operation(retained.owner);
+  } finally {
+    retained.release();
+  }
 }
 
 /** Process-held sources exchange bounded pages without reopening their memory database. */
@@ -300,8 +475,7 @@ export async function runProcessHeldHistoryTask(
   signal?: AbortSignal,
 ) {
   historyLane.pending++;
-  historyClearTimeout(historyLane.idleTimer);
-  historyLane.idleTimer = undefined;
+  clearDatabaseWorkerIdleRetirement(historyLane);
   refreshDatabaseWorkerPressureSubscription();
   let retirement: Promise<void> | undefined;
   try {
@@ -309,7 +483,7 @@ export async function runProcessHeldHistoryTask(
     const value = unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(
       await historyLane.pool.run(
         () => {
-          historyLane.nativeSequence++;
+          historyLane.native = true;
           return { kind: "cli-process-history", request };
         },
         {

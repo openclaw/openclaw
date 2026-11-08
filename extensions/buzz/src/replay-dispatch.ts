@@ -143,8 +143,5 @@ export function createBuzzReplayDispatchQueue(params: { onTaskError: (error: unk
 
 export function resolveBuzzRoomHistoryLimit(roomCount: number): number {
   const totalCapacity = BUZZ_REPLAY_DISPATCH_MAX_PENDING + REPLAY_DISPATCH_CONCURRENCY;
-  return Math.min(
-    REPLAY_HISTORY_MAX_PER_ROOM,
-    Math.max(1, Math.floor(totalCapacity / Math.max(1, roomCount))),
-  );
+  return Math.min(REPLAY_HISTORY_MAX_PER_ROOM, Math.floor(totalCapacity / roomCount));
 }

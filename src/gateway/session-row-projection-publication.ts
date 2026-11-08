@@ -12,6 +12,7 @@ import {
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import * as records from "./session-row-projection-record.js";
+import { observeSessionRowProjectionRetention } from "./session-row-projection-retention.js";
 import type { createSessionRowProjectionRevisions } from "./session-row-projection-revisions.js";
 
 /** Apply committed metadata before observers without reacquiring it from SQLite. */
@@ -50,6 +51,7 @@ export function createSessionRowPublication(owner: {
           publishedSource: row.publishedSource,
           storedEntry: entry,
           sharingEntry: entry,
+          entryAcquisitionPending: true,
         });
         return;
       }
@@ -83,10 +85,7 @@ export function createSessionRowPublication(owner: {
     const store = owner.store(row.storeTarget.storePath);
     if (
       prepared &&
-      (!source ||
-        store?.identity !== source.identity ||
-        store.birthtime !== source.birthtime ||
-        store.filename !== source.filename)
+      (!source || store?.identity !== source.identity || store.birthtime !== source.birthtime)
     ) {
       return;
     }
@@ -154,6 +153,10 @@ export function createSessionRowPublication(owner: {
     const activitySummaryWatermark =
       projection?.activitySummaryWatermark ??
       (sameSession ? previousFacts.activitySummaryWatermark : undefined);
+    const sameTranscript =
+      sameSession &&
+      previousFacts.activitySummaryWatermark?.generation === activitySummaryWatermark?.generation &&
+      previousFacts.activitySummaryWatermark?.maxSeq === activitySummaryWatermark?.maxSeq;
     // Entry-only writes preserve Board/transcript facts. Shared facets retain their
     // independent lifetime; a changed binding requires preparation by that owner.
     const databaseFacts: records.RetainedSessionRowDatabaseFacts | undefined =
@@ -163,13 +166,13 @@ export function createSessionRowPublication(owner: {
             entry,
             hasBoard: projection.hasBoard,
             activitySummaryWatermark,
-            transcriptPreview:
-              sameSession &&
-              previousFacts.activitySummaryWatermark?.generation ===
-                activitySummaryWatermark?.generation &&
-              previousFacts.activitySummaryWatermark?.maxSeq === activitySummaryWatermark?.maxSeq
-                ? previousFacts.transcriptPreview
-                : undefined,
+            transcriptPreview: sameTranscript ? previousFacts.transcriptPreview : undefined,
+            transcriptAssistantMessage: sameTranscript
+              ? previousFacts.transcriptAssistantMessage
+              : "unknown",
+            transcriptTerminalModel: sameTranscript
+              ? previousFacts.transcriptTerminalModel
+              : undefined,
             runtimeOwnership: sameRuntimeOwner ? previousFacts.runtimeOwnership : undefined,
             runtimeOwnershipDependencies: sameRuntimeOwner
               ? previousFacts.runtimeOwnershipDependencies
@@ -330,29 +333,31 @@ export function subscribeSessionRowPublications({
   mutateGeneration: Parameters<typeof onSessionIdentityMutation>[0];
 }): Array<() => void> {
   return [
+    observeSessionRowProjectionRetention(rows),
     pluginStatePublication.subscribeFacts((change) => {
+      if (change.kind === "pending" || change.kind === "settled") {
+        return;
+      }
       const changed: records.Row[] = [];
-      for (const row of rows.values()) {
+      // Plugin writes are frequent; avoid an iterator result for every resident row.
+      rows.forEach((row) => {
         if (
-          !row.runtimeOwnershipDependencies ||
+          !row.runtimeOwnershipDependencies?.length ||
           !pluginStateReadDependenciesAffected(row.runtimeOwnershipDependencies, change)
         ) {
-          continue;
+          return;
         }
-        row.databaseFactsRevision++;
-        row.pendingDatabaseFacts = undefined;
-        if (row.retainedDatabaseFacts) {
-          row.retainedDatabaseFacts = {
+        records.invalidateDatabaseFacts(
+          row,
+          row.retainedDatabaseFacts && {
             ...row.retainedDatabaseFacts,
             runtimeOwnership: undefined,
             runtimeOwnershipDependencies: undefined,
-          };
-        }
-        row.preparedRuntimeOwnership = undefined;
-        row.runtimeOwnershipDependencies = undefined;
+          },
+        );
         dirty.add(records.identity(row));
         changed.push(row);
-      }
+      });
       if (changed.length > 0) {
         advanceRevision();
         revisions.invalidate(true);

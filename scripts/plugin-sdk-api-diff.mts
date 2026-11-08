@@ -23,6 +23,7 @@ import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmPreflightSdkSelectors } from "./openclaw-npm-extended-stable-release.mjs";
 import {
   createPluginSdkApiDiffSet,
+  encodePluginSdkApiArtifact,
   createPluginSdkApiReleaseEvidence,
   createPluginSdkApiReleaseEvidenceSet,
 } from "./plugin-sdk-api-release-evidence.mjs";
@@ -40,6 +41,7 @@ type Args = {
 
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const TSX_PRELOAD_PATH = import.meta.resolve("tsx");
 
 function usage(): never {
   console.error(
@@ -215,7 +217,7 @@ async function renderRevision(
     args: [
       "--max-old-space-size=6144",
       "--import",
-      "tsx",
+      TSX_PRELOAD_PATH,
       SCRIPT_PATH,
       "--render-root",
       revisionRoot,
@@ -437,7 +439,7 @@ async function main(): Promise<void> {
           ),
         )
       : primary.diff;
-    await writeFile(args.jsonPath, `${JSON.stringify(diff, null, 2)}\n`);
+    await writeFile(args.jsonPath, `${JSON.stringify(encodePluginSdkApiArtifact(diff))}\n`);
   }
   if (args.evidencePath) {
     const evidence = args.bases
@@ -447,7 +449,7 @@ async function main(): Promise<void> {
           ),
         )
       : primary.evidence;
-    await writeFile(args.evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+    await writeFile(args.evidencePath, `${JSON.stringify(encodePluginSdkApiArtifact(evidence))}\n`);
   }
   if (args.summaryPath) {
     await writeFile(args.summaryPath, report);

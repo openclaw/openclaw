@@ -6,10 +6,9 @@ import {
   resolveChannelApprovalCapability,
 } from "../channels/plugins/index.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { captureMemoryExactSessionReader } from "../config/sessions/session-accessor.memory-exact-read.js";
 import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -104,18 +103,27 @@ export function prepareApprovalChannelCustody(params: {
         return active && configCurrent() && existing.authorized && existing.isCurrent();
       }
       assertCurrent();
-      const sessionKey = request.request.sessionKey?.trim();
+      const sessionKey = request.request.sessionKey?.trim() ?? "";
       const agentId =
-        parseAgentSessionKey(sessionKey ?? "")?.agentId ?? request.request.agentId ?? "main";
+        parseAgentSessionKey(sessionKey)?.agentId ?? request.request.agentId ?? "main";
       let delivery: ApprovalRequestSessionDelivery | null = null;
       let isCurrent = () => true;
       let release = () => {};
-      const memory = sessionKey && getSessionActorStorageBinding({ sessionKey, agentId });
+      const memory =
+        sessionKey &&
+        captureMemoryExactSessionReader(
+          {
+            sessionKey,
+            agentId,
+            storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+          },
+          assertCurrent,
+        );
       try {
         if (memory) {
-          const entry = memory.actor.snapshot(memory.authority)?.entry;
+          const entry = memory.read(sessionKey, "list");
           delivery = entry ?? null;
-          isCurrent = () => sameDelivery(entry, memory.actor.snapshot(memory.authority)?.entry);
+          isCurrent = () => sameDelivery(entry, memory.read(sessionKey, "list"));
         } else if (
           sessionKey &&
           (!request.request.turnSourceAccountId ||
@@ -143,16 +151,6 @@ export function prepareApprovalChannelCustody(params: {
               });
               isCurrent = retained.isCurrent;
               release = retained.release;
-            } else if (owner.kind === "native") {
-              // Native incognito retains its existing owner until the incognito cutover.
-              isCurrent = () => sameDelivery(read.value, loadSessionEntryReadOnly(scope));
-            } else if (owner.incognito) {
-              const binding = owner.incognito;
-              isCurrent = () => {
-                binding.admissionSignal?.throwIfAborted();
-                binding.actor.assertReadable();
-                return sameDelivery(read.value, binding.actor.sessions.readDelivery(sessionKey));
-              };
             }
           });
         }

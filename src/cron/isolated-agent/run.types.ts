@@ -1,4 +1,4 @@
-import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
+import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 /** Execution and result contracts for isolated cron agent runs. */
@@ -10,7 +10,16 @@ import type {
   CronRunTelemetry,
 } from "../types.js";
 
-export type CronLaneWaitCallback = (info?: { waiting?: boolean }) => void;
+/**
+ * Lane wait transitions for isolated cron work. `waiting: false` ends a wait;
+ * only signals without `stage` come from the execution lane and mean the run was admitted.
+ * Session preparation reports its own waits so callers can pause timers without
+ * treating per-session lane entry as execution admission.
+ */
+export type CronLaneWaitCallback = (info?: {
+  waiting?: boolean;
+  stage?: "session-preparation";
+}) => void;
 
 /** Pre-run disposition returned when isolated cron work never enters an agent runner. */
 export type CronAgentAdmissionDisposition = "session-conflict" | "rejected";
@@ -23,8 +32,6 @@ export type RunCronAgentTurnResult = {
   deliveryState?: CronResolvedDeliveryState;
   /** Last non-empty agent text output (not truncated). */
   outputText?: string;
-  /** Terminal model-reply fact without exposing reply text. */
-  replyDisposition?: AgentRunTerminalReplySnapshot["disposition"];
   /** Confirmed target delivery, including matching message-tool sends; unknown is omitted. */
   delivered?: boolean;
   /**
@@ -53,6 +60,7 @@ export type CronRunnerStartedInfo = {
 /** Completed prompt result recorded by the outer execution owner. */
 export type CronCompletedPromptRun = {
   runResult: EmbeddedAgentRunResult;
+  currentContextSnapshot?: CompactionAccountingFact["currentContextSnapshot"];
   fallbackProvider: string;
   fallbackModel: string;
   runStartedAt: number;

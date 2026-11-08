@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveConfigWidePluginMetadataSnapshot } from "../../../config/io.plugin-metadata.js";
-import { findLegacyConfigRuleIssues } from "../../../config/legacy.js";
+import { findLegacyConfigRuleIssues } from "../../../config/legacy.shared.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import {
@@ -8,6 +8,7 @@ import {
   withDeferredPluginConfigCompletion,
 } from "../../../infra/deferred-plugin-migrations.js";
 import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
+import { preparePluginDoctorContractModules } from "../../../plugins/doctor-contract-preparation.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
   collectDoctorConfigRepairPluginIds,
@@ -50,7 +51,7 @@ export async function preparePluginUpdateConfigMigration(params: {
       return withPluginMetadataSnapshotScope(metadata, () => run(metadata), { config });
     });
   try {
-    const prepared = inspect(params.config, (metadata) => {
+    const prepared = await inspect(params.config, async (metadata) => {
       const selectedIds = new Set(params.installOwners);
       for (const plugin of metadata.plugins) {
         const installOwner = resolvePluginManifestInstallOwner(plugin);
@@ -59,6 +60,14 @@ export async function preparePluginUpdateConfigMigration(params: {
         }
       }
       const selectedPending = pending.filter((entry) => selectedIds.has(entry.pluginId));
+      await preparePluginDoctorContractModules({
+        config: params.config,
+        pluginIds: [...selectedIds],
+        manifestRegistry: metadata.manifestRegistry,
+        surfaces: ["configRepair"],
+        assertCurrent: params.assertCurrent,
+      });
+      params.assertCurrent();
       const inspected = new Map<string, boolean>();
       const migrated = applyPluginDoctorCompatibilityMigrations(params.config, {
         historicalWebhookListeners: HISTORICAL_WEBHOOK_CHANNELS.some((id) => selectedIds.has(id)),
@@ -91,6 +100,14 @@ export async function preparePluginUpdateConfigMigration(params: {
         restoreDoctorConfigEnvRefs(
           migrated.config,
           prepareDoctorConfigReferenceSource(params.snapshot),
+          undefined,
+          {
+            // Policy migration must not send reference replay to the prior package generation.
+            pluginCompatibility: {
+              pluginIds: [...selectedIds],
+              manifestRegistry: metadata.manifestRegistry,
+            },
+          },
         ),
       );
       return { config, selectedIds, selectedPending, inspected };
@@ -100,6 +117,7 @@ export async function preparePluginUpdateConfigMigration(params: {
     let activationWarning: string | undefined;
     return {
       config,
+      deferredPluginMigrations: pending,
       changed: selectedPending.length > 0 || !isDeepStrictEqual(config, params.config),
       get activationWarning() {
         return activationWarning;
@@ -122,7 +140,15 @@ export async function preparePluginUpdateConfigMigration(params: {
         params.assertCurrent();
         // Install owns enablement after normalization. Inspect state obligations against
         // that final policy; inactive owners retain their inputs without running state work.
-        const resolvedPluginIds = inspect(activationConfig, (metadata) => {
+        const resolvedPluginIds = await inspect(activationConfig, async (metadata) => {
+          await preparePluginDoctorContractModules({
+            config: activationConfig,
+            pluginIds: [...selectedIds],
+            manifestRegistry: metadata.manifestRegistry,
+            surfaces: ["configRepair", "stateMigrations"],
+            assertCurrent: params.assertCurrent,
+          });
+          params.assertCurrent();
           const rules = listPluginDoctorLegacyConfigRules({
             config: activationConfig,
             pluginIds: [...selectedIds],

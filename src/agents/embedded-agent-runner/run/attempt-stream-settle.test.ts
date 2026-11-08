@@ -1,6 +1,3 @@
-// Settlement liveness: a wedged block-reply flush must not park the turn.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +5,7 @@ import { createPluginMetadataSnapshot } from "../../../config/plugin-auto-enable
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
+import { createChangeListeners } from "../../../shared/listeners.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
@@ -42,27 +39,32 @@ import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-
 
 type SettleInput = Parameters<typeof settleEmbeddedAttemptStream>[0];
 
-function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
-  const sessionManager = SessionManager.inMemory();
+type SettleOverrides = Partial<Omit<SettleInput, "attempt" | "state" | "subscription">> & {
+  attempt?: Partial<SettleInput["attempt"]>;
+  state?: Partial<SettleInput["state"]>;
+  subscription?: Partial<SettleInput["subscription"]>;
+};
+function createSettleFixture({
+  attempt,
+  state,
+  subscription,
+  ...overrides
+}: SettleOverrides = {}): SettleInput {
+  const sessionId = "sess-settle-1";
   const runAbortDeadlineAtMs = Date.now() + 600_000;
   return {
     attempt: {
       runId: "run-settle-1",
-      sessionId: "sess-settle-1",
+      sessionId,
       sessionKey: "agent:main:test",
       provider: "openai",
       modelId: "gpt-5.6-luna",
       model: { api: "openai-responses" },
       config: {},
-      promptCacheKey: undefined,
+      ...attempt,
     },
-    activeSession: {
-      sessionId: "sess-settle-1",
-      isCompacting: false,
-      isStreaming: false,
-      messages: [],
-    },
-    sessionManager,
+    activeSession: { sessionId, isCompacting: false, isStreaming: false, messages: [] },
+    sessionManager: SessionManager.inMemory(),
     toolResultPromptProjectionState: createToolResultPromptProjectionState(),
     withOwnedTranscriptWrite: async (operation: () => unknown) => await operation(),
     subscription: {
@@ -73,30 +75,37 @@ function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
       getCurrentAttemptAssistant: () => undefined,
       getUsageTotals: () => undefined,
       getLastAssistantUsage: () => undefined,
+      ...subscription,
     },
-    state: {
-      promptError: null,
-      promptErrorSource: null,
-      yieldAborted: false,
-    },
+    state: { promptError: null, promptErrorSource: null, yieldAborted: false, ...state },
     readLifecycleState: () => ({
-      aborted: false,
+      aborted: overrides.runAbortSignal?.aborted ?? false,
       timedOut: false,
       timedOutDuringCompaction: false,
     }),
     markTimedOutDuringCompaction: vi.fn(),
     getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
+    onRunAbortDeadlineChanged: () => () => {},
     runAbortSignal: new AbortController().signal,
     isProbeSession: true,
     abortable: async <T>(promise: Promise<T>) => await promise,
     prePromptMessageCount: 0,
     nestedToolActivityState: createAttemptNestedToolActivityState(),
-    cache: {
-      retention: undefined,
-    },
+    cache: { retention: undefined },
     shouldFlushForContextEngine: false,
     ...overrides,
   } as unknown as SettleInput;
+}
+
+const cacheTtlConfig = { agents: { defaults: { contextPruning: { mode: "cache-ttl" as const } } } };
+function settleWithPlugins(input: SettleInput) {
+  const metadataSnapshot = createPluginMetadataSnapshot({
+    config: input.attempt.config,
+    manifestRegistry: { plugins: [], diagnostics: [] },
+  });
+  return withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
+    settleEmbeddedAttemptStream(input),
+  );
 }
 
 describe("settleEmbeddedAttemptStream liveness", () => {
@@ -104,65 +113,88 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     vi.useRealTimers();
   });
 
-  it.each([{ withMetadata: true, timedOut: false }])(
-    "settles cancellation with active media, metadata=$withMetadata timeout=$timedOut",
-    async ({ withMetadata, timedOut }) => {
-      resetGeneratedMediaTaskActivityForTests();
-      const sessionKey = "agent:main:cron:settle:run:cancel";
-      const task = createMediaGenerationOperation({
-        taskId: "stream-cancel",
-        runId: "stream-cancel",
-        task: "Stream cancellation proof",
-        requesterSessionKey: sessionKey,
-        taskKind: "image_generation",
-        status: "running",
-        createdAt: Date.now(),
-      });
-      const controller = new AbortController();
-      const input = createSettleFixture({
-        runAbortSignal: controller.signal,
-        readLifecycleState: () => ({
-          aborted: controller.signal.aborted,
-          timedOut: timedOut && controller.signal.aborted,
-          timedOutDuringCompaction: false,
-        }),
-      });
-      input.attempt.sessionKey = sessionKey;
-      input.subscription.toolMetas = withMetadata
-        ? [{ toolName: "image_generate", asyncStarted: true, asyncTaskRunId: task.runId }]
-        : [];
-      const settlement = settleEmbeddedAttemptStream(input);
-      try {
-        controller.abort();
-        const result = await settlement;
-        expect(result.promptError).toBeNull();
-        expect(result.sessionIdUsed).toBe("sess-settle-1");
-        expect(findMediaGenerationOperation(task.runId!)).toMatchObject({ status: "running" });
-      } finally {
-        await Promise.allSettled([settlement]);
-        resetGeneratedMediaTaskActivityForTests();
-      }
-    },
-  );
-
-  it("settles past a held block-reply flush", async () => {
-    vi.useFakeTimers();
-    // A wedged delivery lane (including the supported blockReplyTimeoutMs: 0
-    // path) previously parked settlement until the 48h run budget.
-    const release = createDeferredCore();
-    const input = createSettleFixture({ onBlockReplyFlush: () => release.promise });
-
+  it.each(["cancel", "deadline"])("settles active media at %s", async (completion) => {
+    if (completion === "deadline") {
+      vi.useFakeTimers();
+    }
+    resetGeneratedMediaTaskActivityForTests();
+    const sessionKey = `agent:main:cron:settle:run:${completion}`;
+    const task = createMediaGenerationOperation({
+      taskId: `stream-${completion}`,
+      runId: `stream-${completion}`,
+      requesterSessionKey: sessionKey,
+      taskKind: "image_generation",
+      status: "running",
+    });
+    const controller = new AbortController();
+    const deadlineChanges = createChangeListeners();
+    let deadlineAtMs = Date.now() + 1_500;
     let settled = false;
-    const settle = settleEmbeddedAttemptStream(input).then((result) => {
+    const settlement = settleEmbeddedAttemptStream(
+      createSettleFixture({
+        attempt: { sessionKey },
+        ...(completion === "deadline"
+          ? {
+              getRunAbortDeadlineAtMs: () => deadlineAtMs,
+              onRunAbortDeadlineChanged: deadlineChanges.subscribe,
+            }
+          : {
+              runAbortSignal: controller.signal,
+              subscription: {
+                toolMetas: [
+                  { toolName: "image_generate", asyncStarted: true, asyncTaskRunId: task.runId },
+                ],
+              },
+            }),
+      }),
+    ).then((result) => {
       settled = true;
       return result;
     });
     try {
-      await vi.advanceTimersByTimeAsync(RUN_LIVENESS_JOIN_TIMEOUT_MS - 1);
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      const result = await settle;
-      expect(result.sessionIdUsed).toBe("sess-settle-1");
+      if (completion === "deadline") {
+        await vi.advanceTimersByTimeAsync(250);
+        deadlineAtMs = Date.now() + 2_000;
+        deadlineChanges.publish();
+        await vi.advanceTimersByTimeAsync(1_499);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect((await settlement).promptError).toEqual(
+          new Error(`Timed out waiting for async task completion: ${task.runId}`),
+        );
+      } else {
+        controller.abort();
+        expect(await settlement).toMatchObject({
+          promptError: null,
+          sessionIdUsed: "sess-settle-1",
+        });
+      }
+      expect(findMediaGenerationOperation(task.taskId)?.status).toBe("running");
+    } finally {
+      await Promise.allSettled([settlement]);
+      resetGeneratedMediaTaskActivityForTests();
+    }
+  });
+
+  it.each([false, true])("settles block-reply flush (held=%s)", async (held) => {
+    vi.useFakeTimers();
+    const release = createDeferredCore();
+    const flushed = vi.fn(() => (held ? release.promise : Promise.resolve()));
+    let settled = false;
+    const settle = settleEmbeddedAttemptStream(
+      createSettleFixture({ onBlockReplyFlush: flushed }),
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+    try {
+      if (held) {
+        await vi.advanceTimersByTimeAsync(RUN_LIVENESS_JOIN_TIMEOUT_MS - 1);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      expect((await settle).sessionIdUsed).toBe("sess-settle-1");
+      expect(flushed).toHaveBeenCalledWith({ reason: "pre_compaction", attemptAccepted: false });
     } finally {
       release.resolve();
       await settle;
@@ -195,16 +227,6 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     });
   });
 
-  it("settles normally when the flush resolves", async () => {
-    const flushed = vi.fn(async () => {});
-    const input = createSettleFixture({
-      onBlockReplyFlush: flushed,
-    } as Partial<SettleInput>);
-    const result = await settleEmbeddedAttemptStream(input);
-    expect(flushed).toHaveBeenCalledWith({ reason: "pre_compaction", attemptAccepted: false });
-    expect(result.sessionIdUsed).toBe("sess-settle-1");
-  });
-
   it.each(["active provider failure", "aborted during admission", "storage failure"] as const)(
     "records prompt errors only while its writer is live: %s",
     async (scenario) => {
@@ -225,35 +247,21 @@ describe("settleEmbeddedAttemptStream liveness", () => {
         const originalEntries = sessionManager.getEntries();
         const controller = new AbortController();
         const promptError = new Error("synthetic provider failure");
-        const assistant = createAssistant(
-          testModel,
-          [{ type: "text", text: "partial reply" }],
-          "error",
-        );
+        const assistant = createAssistant(testModel, "partial reply", "error");
         const usage = { input: 100, output: 20 };
         const input = createSettleFixture({
           sessionManager,
           runAbortSignal: controller.signal,
-          readLifecycleState: () => ({
-            aborted: controller.signal.aborted,
-            timedOut: false,
-            timedOutDuringCompaction: false,
-          }),
+          attempt: {
+            ...target,
+            sessionTarget: target,
+            sessionManager,
+            abortSignal: controller.signal,
+          },
+          state: { promptError, promptErrorSource: "prompt" },
+          subscription: { getUsageTotals: () => usage },
         });
         input.activeSession.messages.push(assistant);
-        input.subscription.getUsageTotals = () => usage;
-        input.attempt = {
-          ...input.attempt,
-          ...target,
-          sessionTarget: target,
-          sessionManager,
-          abortSignal: controller.signal,
-        };
-        input.state = {
-          ...input.state,
-          promptError,
-          promptErrorSource: "prompt",
-        };
         const prepared = await prepareEmbeddedAttemptTranscriptLifecycle({
           attempt: input.attempt,
           externalAbortController: {
@@ -298,10 +306,12 @@ describe("settleEmbeddedAttemptStream liveness", () => {
           }
           const result = await settlement;
           expect(result.promptError).toBe(promptError);
-          expect(result.promptErrorSource).toBe("prompt");
-          expect(result.messagesSnapshot).toEqual([assistant]);
+          expect([result.promptErrorSource, result.messagesSnapshot, result.attemptUsage]).toEqual([
+            "prompt",
+            [assistant],
+            usage,
+          ]);
           expect(result.currentAttemptAssistant).toBe(assistant);
-          expect(result.attemptUsage).toEqual(usage);
           const entries = (await SessionManager.openAsync(target, state.workspaceDir)).getEntries();
           if (scenario === "active provider failure") {
             expect(entries).toHaveLength(originalEntries.length + 1);
@@ -342,39 +352,27 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     });
     state.sourceHashByKey.set(key, "original-source-hash");
     state.frozen.add(key);
-    const input = {
-      ...createSettleFixture(),
+    const input = createSettleFixture({
       toolResultPromptProjectionState: state,
-    };
-    input.attempt = {
-      ...input.attempt,
-      sessionId,
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-      model: { ...input.attempt.model, api: "anthropic-messages" },
-      config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
-    };
+      attempt: {
+        sessionId,
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        config: cacheTtlConfig,
+      },
+    });
+    input.attempt.model = { ...input.attempt.model, api: "anthropic-messages" };
     try {
       clearEmbeddedSessionPromptStates([sessionId]);
       using replacement = retainEmbeddedSessionPromptState(sessionId);
       expect(replacement.state.toolResults).not.toBe(state);
-
-      // Production supplies this generation before entering the attempt runner.
-      const metadataSnapshot = createPluginMetadataSnapshot({
-        config: input.attempt.config,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-      });
-      await withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
-        settleEmbeddedAttemptStream(input),
-      );
+      await settleWithPlugins(input);
 
       expect(input.sessionManager.getEntries()).toContainEqual(
         expect.objectContaining({
           type: "custom",
           customType: "openclaw.cache-ttl",
-          data: expect.objectContaining({
-            prunedToolResults: [{ key, mode: "soft" }],
-          }),
+          data: expect.objectContaining({ prunedToolResults: [{ key, mode: "soft" }] }),
         }),
       );
     } finally {
@@ -387,129 +385,119 @@ describe("attempt projection persistence through settlement", () => {
   registerAgentSessionLoopTestLifecycle();
 
   it("keeps one snapshot across unchanged dispatch, TTL settlement, and reopen", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-projection-settle-"));
-    const scope = {
-      agentId: "main",
-      sessionId: "projection-settle",
-      sessionKey: "agent:main:projection-settle",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    const model = { ...testModel, provider: "anthropic", id: "claude-sonnet-4-6" };
-    try {
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      let manager = SessionManager.open(scope, dir);
-      manager.appendMessage({ role: "user", content: "read file", timestamp: 1 });
-      manager.appendMessage(
-        createAssistant(
-          model,
-          [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }],
-          "toolUse",
-        ),
-      );
-      const toolResult = {
-        role: "toolResult" as const,
-        toolCallId: "read-1",
-        toolName: "read",
-        content: [{ type: "text" as const, text: "x".repeat(6_000) }],
-        isError: false,
-        timestamp: 2,
+    await withOpenClawTestState({ label: "projection-settle", applyEnv: false }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "projection-settle",
+        sessionKey: "agent:main:projection-settle",
+        storePath: path.join(state.agentDir(), "sessions.json"),
       };
-      manager.appendMessage(toolResult);
-      manager.appendMessage(createAssistant(model, [{ type: "text", text: "read complete" }]));
-      let previousSnapshot: ReturnType<typeof serializeCacheTtlToolResultProjections> | undefined;
-      for (let turn = 0; turn < 3; turn++) {
-        using turnLease = retainEmbeddedSessionPromptState(scope.sessionId);
-        const sessionPromptState = turnLease.state;
-        const projectionState = sessionPromptState.toolResults;
-        restoreCacheTtlToolResultProjections(projectionState, manager.getBranch());
-        if (previousSnapshot) {
-          expect(serializeCacheTtlToolResultProjections(projectionState)).toEqual(previousSnapshot);
-        }
-        const { session } = await createTestSession({ sessionManager: manager, model });
-        const input = createSettleFixture({
-          activeSession: session,
-          sessionManager: manager,
-          toolResultPromptProjectionState: projectionState,
-        });
-        input.attempt = {
-          ...input.attempt,
-          sessionId: scope.sessionId,
-          provider: model.provider,
-          modelId: model.id,
-          config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
+      const model = { ...testModel, provider: "anthropic", id: "claude-sonnet-4-6" };
+      try {
+        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+        let manager = SessionManager.open(scope, state.workspaceDir);
+        manager.appendMessage({ role: "user", content: "read file", timestamp: 1 });
+        manager.appendMessage(
+          createAssistant(
+            model,
+            [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }],
+            "toolUse",
+          ),
+        );
+        const toolResult = {
+          role: "toolResult" as const,
+          toolCallId: "read-1",
+          toolName: "read",
+          content: [{ type: "text" as const, text: "x".repeat(6_000) }],
+          isError: false,
+          timestamp: 2,
         };
-        const markers = () =>
-          manager
-            .getBranch()
-            .filter(
-              (entry) => entry.type === "custom" && entry.customType === "openclaw.cache-ttl",
+        manager.appendMessage(toolResult);
+        manager.appendMessage(createAssistant(model, "read complete"));
+        let previousSnapshot: ReturnType<typeof serializeCacheTtlToolResultProjections> | undefined;
+        for (let turn = 0; turn < 3; turn++) {
+          using turnLease = retainEmbeddedSessionPromptState(scope.sessionId);
+          const projectionState = turnLease.state.toolResults;
+          restoreCacheTtlToolResultProjections(projectionState, manager.getBranch());
+          if (previousSnapshot) {
+            expect(serializeCacheTtlToolResultProjections(projectionState)).toEqual(
+              previousSnapshot,
             );
-        const snapshotMarkers = () =>
-          markers().filter(
-            (entry) =>
-              entry.type === "custom" && Object.hasOwn(entry.data as object, "frozenToolResults"),
-          );
-        session.agent.streamFn = () => {
+          }
+          const { session } = await createTestSession({ sessionManager: manager, model });
+          const input = createSettleFixture({
+            activeSession: session,
+            sessionManager: manager,
+            toolResultPromptProjectionState: projectionState,
+            attempt: {
+              sessionId: scope.sessionId,
+              provider: model.provider,
+              modelId: model.id,
+              config: cacheTtlConfig,
+            },
+          });
+          const markers = () =>
+            manager
+              .getBranch()
+              .filter(
+                (entry) => entry.type === "custom" && entry.customType === "openclaw.cache-ttl",
+              );
+          const snapshotMarkers = () =>
+            markers().filter(
+              (entry) =>
+                entry.type === "custom" && Object.hasOwn(entry.data as object, "frozenToolResults"),
+            );
+          session.agent.streamFn = () => {
+            expect(snapshotMarkers()).toHaveLength(1);
+            return createAssistantResultStream(createAssistant(model, "done"));
+          };
+          await submitEmbeddedAttemptPrompt({
+            attempt: input.attempt,
+            activeSession: session,
+            contextTokenBudget: 8_000,
+            images: [],
+            modelPrompt: "continue",
+            onFinalPromptText: () => {},
+            persistToolResultProjections: async () => {
+              await persistToolResultProjections(projectionState, (customType, data) =>
+                manager.appendCustomEntryAsync(customType, data),
+              );
+            },
+            promptActiveSession: (prompt, options) => session.prompt(prompt, options),
+            runtimeOnly: false,
+            systemPrompt: "test prompt",
+            toolResultAggregateMaxChars: 8_000,
+            toolResultMaxChars: 4_000,
+            toolResultPromptProjectionState: projectionState,
+            trajectoryRecorder: null,
+            transcriptLeafId: null,
+            transcriptPrompt: "continue",
+          });
+          await settleWithPlugins(input);
           expect(snapshotMarkers()).toHaveLength(1);
-          return createAssistantResultStream(
-            createAssistant(model, [{ type: "text", text: "done" }]),
+          expect(markers()).toHaveLength(turn + 2);
+          const touch = markers().at(-1);
+          expect(touch?.type === "custom" && touch.data).toEqual({
+            timestamp: expect.any(Number),
+            provider: model.provider,
+            modelId: model.id,
+          });
+          expect(
+            readLastCacheTtlTimestamp(manager, { provider: model.provider, modelId: model.id }),
+          ).toBe(touch?.type === "custom" && (touch.data as { timestamp: number }).timestamp);
+          expect(manager.getBranch()).toContainEqual(
+            expect.objectContaining({ type: "message", message: toolResult }),
           );
-        };
-        await submitEmbeddedAttemptPrompt({
-          attempt: input.attempt,
-          activeSession: session,
-          contextTokenBudget: 8_000,
-          images: [],
-          modelPrompt: "continue",
-          onFinalPromptText: () => {},
-          onSteeringAcknowledged: () => {},
-          persistToolResultProjections: async () => {
-            await persistToolResultProjections(projectionState, (customType, data) =>
-              manager.appendCustomEntryAsync(customType, data),
-            );
-          },
-          promptActiveSession: (prompt, options) => session.prompt(prompt, options),
-          runtimeOnly: false,
-          systemPrompt: "test prompt",
-          toolResultAggregateMaxChars: 8_000,
-          toolResultMaxChars: 4_000,
-          toolResultPromptProjectionState: projectionState,
-          trajectoryRecorder: null,
-          transcriptLeafId: null,
-          transcriptPrompt: "continue",
-        });
-        const metadataSnapshot = createPluginMetadataSnapshot({
-          config: input.attempt.config,
-          manifestRegistry: { plugins: [], diagnostics: [] },
-        });
-        await withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
-          settleEmbeddedAttemptStream(input),
-        );
-        expect(snapshotMarkers()).toHaveLength(1);
-        expect(markers()).toHaveLength(turn + 2);
-        const touch = markers().at(-1);
-        expect(touch?.type === "custom" && touch.data).toEqual({
-          timestamp: expect.any(Number),
-          provider: model.provider,
-          modelId: model.id,
-        });
-        expect(
-          readLastCacheTtlTimestamp(manager, { provider: model.provider, modelId: model.id }),
-        ).toBe(touch?.type === "custom" && (touch.data as { timestamp: number }).timestamp);
-        expect(manager.getBranch()).toContainEqual(
-          expect.objectContaining({ type: "message", message: toolResult }),
-        );
-        previousSnapshot = serializeCacheTtlToolResultProjections(projectionState);
-        expect(previousSnapshot.frozenToolResults[0]?.texts?.[0]?.length).toBeLessThan(6_000);
-        session.dispose();
-        manager.flushPendingPersistence();
+          previousSnapshot = serializeCacheTtlToolResultProjections(projectionState);
+          expect(previousSnapshot.frozenToolResults[0]?.texts?.[0]?.length).toBeLessThan(6_000);
+          session.dispose();
+          manager.flushPendingPersistence();
+          clearEmbeddedSessionPromptStates([scope.sessionId]);
+          manager = SessionManager.open(scope, state.workspaceDir);
+        }
+      } finally {
         clearEmbeddedSessionPromptStates([scope.sessionId]);
-        manager = SessionManager.open(scope, dir);
       }
-    } finally {
-      clearEmbeddedSessionPromptStates([scope.sessionId]);
-      await closeOpenClawAgentDatabasesAsync(dir);
-      await fs.rm(dir, { recursive: true, force: true });
-    }
+    });
   });
 });

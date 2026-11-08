@@ -1,4 +1,5 @@
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 
 type CacheEntry<T> = { expiresAt: number } & (
@@ -20,13 +21,13 @@ export function createStaleWhileRevalidateCache<T>(options: {
   return {
     async read(
       key: string,
-      load: () => Promise<T>,
+      load: (previous: T | undefined) => Promise<T>,
       readOptions: { allowStale?: boolean; refresh?: boolean } = {},
     ): Promise<{ value: T; stale: boolean }> {
       const entries = values;
       const loads = pending;
       const cached = entries.get(key);
-      if (!readOptions.refresh && cached && cached.expiresAt > Date.now()) {
+      if (!readOptions.refresh && cached && cached.expiresAt > monotonicNow()) {
         if (cached.kind === "error") {
           throw cached.error;
         }
@@ -54,7 +55,7 @@ export function createStaleWhileRevalidateCache<T>(options: {
         () => {
           active += 1;
           // Start synchronously; settle only after the promise is installed in the map.
-          return (async () => load())()
+          return (async () => load(cached?.kind === "value" ? cached.value : undefined))()
             .then((value) => {
               if (loads.get(key) !== refresh) {
                 return value;
@@ -63,7 +64,7 @@ export function createStaleWhileRevalidateCache<T>(options: {
                 entries.set(key, {
                   kind: "value",
                   value,
-                  expiresAt: Date.now() + options.ttlMs,
+                  expiresAt: monotonicNow() + options.ttlMs,
                 });
                 pruneMapToMaxSize(entries, options.maxEntries);
               } else {
@@ -76,7 +77,7 @@ export function createStaleWhileRevalidateCache<T>(options: {
                 entries.delete(key);
                 const ttl = options.errorTtlMs?.(error) ?? 0;
                 if (ttl > 0) {
-                  entries.set(key, { kind: "error", error, expiresAt: Date.now() + ttl });
+                  entries.set(key, { kind: "error", error, expiresAt: monotonicNow() + ttl });
                   pruneMapToMaxSize(entries, options.maxEntries);
                 }
                 if (stale) {
@@ -96,6 +97,14 @@ export function createStaleWhileRevalidateCache<T>(options: {
         return { value: stale.value, stale: true };
       }
       return { value: await refresh, stale: false };
+    },
+    deleteValue(value: T) {
+      // Retire these facts without superseding an already-running replacement.
+      for (const [key, entry] of values) {
+        if (entry.kind === "value" && entry.value === value) {
+          values.delete(key);
+        }
+      }
     },
     clear() {
       // Existing loads may settle, but only into the retired maps they captured.
