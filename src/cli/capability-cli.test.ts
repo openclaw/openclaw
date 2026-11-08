@@ -795,16 +795,26 @@ describe("capability cli", () => {
   it.each([false, true])(
     "prepares local model content and instructions (ChatGPT API: %s)",
     async (chatGpt) => {
-      const tempInput = path.join(tempDirs.make("openclaw-model-run-image-"), "input.png");
+      const directory = tempDirs.make("openclaw-model-run-image-");
+      const tempInput = path.join(directory, "physical", "input.png");
+      let selectedInput = tempInput;
       if (chatGpt) {
         primeChatGptModel("openai", "gpt-5.5");
       } else {
+        await fs.mkdir(path.join(directory, "physical", "nested"), { recursive: true });
         await fs.writeFile(tempInput, Buffer.from(PNG_1X1_BASE64, "base64"));
+        await fs.writeFile(path.join(directory, "input.png"), "lexical decoy");
+        if (process.platform !== "win32") {
+          await fs.symlink("physical/nested", path.join(directory, "link"), "dir");
+          selectedInput = `${directory}/link/../input.png`;
+        }
       }
       await runModelProbe(
         "--prompt",
         chatGpt ? "hello" : "describe this",
-        ...(chatGpt ? ["--model", "openai/gpt-5.5"] : ["--file", tempInput, "--thinking", "high"]),
+        ...(chatGpt
+          ? ["--model", "openai/gpt-5.5"]
+          : ["--file", selectedInput, "--thinking", "high"]),
       );
       const call = firstCompletionCall();
       expect(call?.context?.messages?.[0]?.role).toBe("user");
@@ -1534,27 +1544,6 @@ describe("capability cli", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each([
-    ["audio", "transcribe", "memo.wav"],
-    ["video", "describe", "clip.mp4"],
-  ] as const)("reads the selected %s through a symlink parent", async (kind, action, name) => {
-    const root = await fs.realpath(tempDirs.make("infer-media-parent-"));
-    const physical = path.join(root, "physical");
-    const selected = path.join(physical, name);
-    await fs.mkdir(path.join(physical, "nested"), { recursive: true });
-    await fs.symlink(path.join(physical, "nested"), path.join(root, "link"), "dir");
-    await fs.writeFile(path.join(physical, "payload.bin"), "selected input bytes");
-    await fs.symlink("payload.bin", selected);
-    await fs.writeFile(path.join(root, name), "lexical decoy bytes");
-    const runtime = kind === "audio" ? mocks.transcribeAudioFile : mocks.describeVideoFile;
-    runtime.mockImplementationOnce(async ({ filePath }) => ({
-      text: await fs.readFile(filePath, "utf8"),
-    }));
-    await runCap("infer", kind, action, "--file", `${root}/link/../${name}`, "--json");
-    expect(firstJsonOutput()).toMatchObject({
-      outputs: [{ path: selected, text: "selected input bytes" }],
-    });
-  });
   it("reports actual audio attribution and forwards request hints", async () => {
     const hints = { language: "en", prompt: "Focus on names" };
     mocks.transcribeAudioFile.mockResolvedValueOnce({

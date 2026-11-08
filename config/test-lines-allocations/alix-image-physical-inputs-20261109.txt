@@ -1,0 +1,2 @@
+# Physical-parent input regression across model run, image edit/describe/describe-many; preserves existing audio/video controls in a bounded sibling test fixture.
+65

@@ -7,6 +7,7 @@ import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
 import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import { collectOption } from "../program/helpers.js";
+import { resolveMediaFilePath } from "./media-input-path.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
@@ -113,7 +114,7 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
             file && file.length > 0
               ? await Promise.all(
                   file.map(async (filePath) => {
-                    const resolvedPath = path.resolve(filePath);
+                    const resolvedPath = await resolveMediaFilePath(filePath);
                     const { readRegularFile } = await import("../../infra/fs-safe.js");
                     const { buffer } = await readRegularFile({
                       filePath: await realpath(resolvedPath),
@@ -245,7 +246,9 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const outputs = await Promise.all(
             files.map(async (filePath) => {
               const trimmed = filePath.trim();
-              const resolvedPath = /^https?:\/\//i.test(trimmed) ? trimmed : path.resolve(filePath);
+              const resolvedPath = /^https?:\/\//i.test(trimmed)
+                ? trimmed
+                : await resolveMediaFilePath(filePath);
               const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
               const preparedImage = activeModel
                 ? await prepareImageDescriptionInput(
