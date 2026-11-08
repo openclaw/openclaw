@@ -470,6 +470,42 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(document.activeElement).toBe(searchToggle());
   });
 
+  it.each(["desktop", "mobile"] as const)(
+    "keeps the IME-confirming Enter from moving to the next match in %s",
+    async (presentation) => {
+      await desktopViewport();
+      const panel = await mountFile(
+        file('["雪",\n"雪",\n"雪"]', { path: "search.json", name: "search.json" }),
+        presentation === "desktop" ? 720 : 360,
+        presentation,
+      );
+      if (presentation === "desktop") {
+        await click(panel, "File actions");
+      }
+      await click(panel, "Search in file");
+      const input = panel.querySelector<HTMLInputElement>('input[type="search"]')!;
+      await userEvent.fill(input, "雪");
+      const counter = () => panel.querySelector('[role="status"]')?.textContent?.trim();
+      expect(counter()).toBe("1/3");
+      const enter = (init: KeyboardEventInit = {}) =>
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init });
+      for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
+        const composed = enter(composition);
+        input.dispatchEvent(composed);
+        expect(composed.defaultPrevented).toBe(false);
+      }
+      const end = new CompositionEvent("compositionend", { bubbles: true });
+      input.dispatchEvent(end);
+      const commit = Object.defineProperty(enter(), "timeStamp", { value: end.timeStamp + 1 });
+      input.dispatchEvent(commit);
+      expect(commit.defaultPrevented).toBe(false);
+      expect(counter()).toBe("1/3");
+      input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+      await userEvent.keyboard("{Enter}");
+      expect(counter()).toBe("2/3");
+    },
+  );
+
   it("keeps the named file view keyboard accessible through editing and saving", async () => {
     const save = vi.fn().mockResolvedValue({ ok: true, hash: "hash-2" });
     const panel = await mountFile(editableFile("before", { save }));
