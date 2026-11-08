@@ -4,7 +4,8 @@ export function createUpdateDiagnosticLines(maxPendingChars: number) {
   let droppingLine = false;
   return {
     /** True when this chunk starts discarding an oversized unfinished line. */
-    push(text: string, onLine: (line: string) => void): boolean {
+    push(chunk: string, onLine: (line: string) => void): boolean {
+      let text = chunk;
       if (droppingLine) {
         const newline = text.indexOf("\n");
         if (newline < 0) {
