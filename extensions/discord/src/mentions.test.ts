@@ -41,6 +41,11 @@ describe("rewriteDiscordKnownMentions", () => {
       userId: "111111111",
       handles: ["vladislava"],
     });
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "444444444",
+      handles: ["vladislava"],
+    });
     const rewritten = rewriteDiscordKnownMentions("ping @Vladislava and @BuildBot#1234", {
       accountId: "default",
       mentionAliases: {

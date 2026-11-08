@@ -424,11 +424,16 @@ describe("sendMessageDiscord", () => {
     }
   });
 
-  it("uses configured defaultAccount for cached mention rewriting when accountId is omitted", async () => {
+  it("preserves ambiguous and unknown mentions for the configured default account", async () => {
     rememberDiscordDirectoryUser({
       accountId: "work",
       userId: "222333444555666777",
-      handles: ["Alice"],
+      handles: ["Alice#1234", "Reviewer"],
+    });
+    rememberDiscordDirectoryUser({
+      accountId: "work",
+      userId: "333444555666777888",
+      handles: ["Reviewer"],
     });
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
@@ -436,7 +441,7 @@ describe("sendMessageDiscord", () => {
       id: "msg1",
       channel_id: "789",
     });
-    await sendMessageDiscord("channel:789", "ping @Alice", {
+    await sendMessageDiscord("channel:789", "ping @Alice @Reviewer @Alice#9999 @Unknown", {
       rest,
       token: "t",
       cfg: {
@@ -455,7 +460,9 @@ describe("sendMessageDiscord", () => {
       } as never,
     });
     expectRestRoute(postMock, 0, Routes.channelMessages("789"));
-    expect(requireRestBody(postMock).content).toBe("ping <@222333444555666777>");
+    expect(requireRestBody(postMock).content).toBe(
+      "ping <@222333444555666777> @Reviewer @Alice#9999 @Unknown",
+    );
     expect(requireRestBody(postMock).flags).toBe(MessageFlags.SuppressEmbeds);
   });
 
