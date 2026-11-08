@@ -136,12 +136,12 @@ export default {
     nowUses: "{agent} now uses {store}.",
     differentStore: "a different store",
     grantsOne:
-      "{count} group conversation has owner-granted access; other group conversations see only their own conversation’s knowledge.",
+      "{count} group chat has owner-granted access; other group chats see only their own conversation’s knowledge.",
     grants:
-      "{count} group conversations have owner-granted access; other group conversations see only their own conversation’s knowledge.",
-    noGrants: "Group conversations see only their own conversation’s knowledge.",
+      "{count} group chats have owner-granted access; other group chats see only their own conversation’s knowledge.",
+    noGrants: "Group chats see only their own conversation’s knowledge.",
     groupAccessNote:
-      "Group conversations keep their own conversation’s knowledge, except those granted access under Conversation access: they read, or read and save, whichever store this agent uses.",
+      "Group chats keep their own conversation’s knowledge, except those granted access under Conversation access: they read, or read and save, whichever store this agent uses.",
   },
   maintenance: {
     notScheduledReason: "Not scheduled: {reason}",

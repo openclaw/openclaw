@@ -33,8 +33,8 @@ which can be started again.
   subjects that deserve one, supersedes status snapshots by their outcome, and
   records outcomes in page State. It runs on its
   own schedule: weekly on Sundays at 3:45 AM in your time zone by default, or
-  nightly at 3:45 AM, after maintenance links what it can. Each run is an agent
-  turn over every unlinked claim, so nightly uses more tokens. Maintenance
+  nightly at 3:45 AM, after maintenance links what it can. Each run is one agent
+  reply over every unlinked claim, so nightly uses more tokens. Maintenance
   itself never starts it.
 - **Learn from conversations** saves the decisions, preferences, commitments,
   and lessons in your conversations. Ongoing runs check for newly finished
@@ -94,7 +94,7 @@ text shown.
 2. It sends that conversation the prompt: what the scribe does, its settings as
    plain bullets, and numbered steps. No vault content is included.
 3. An ongoing scribe creates one automation for itself and reports `on`. The
-   Scribes tab then runs that automation once as its first run; the setup turn
+   Scribes tab then runs that automation once as its first run; the setup reply
    never runs it. If the page is closed when setup finishes, the first run starts
    the next time the Scribes tab loads.
    A once scribe does its work and reports back. Nothing is scheduled.
@@ -151,19 +151,19 @@ the run message, and its schedule is the scribe's schedule.
 
 ## States
 
-| State             | Meaning                                                                                                                                        |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Available         | No scribe conversation, a conversation that never received its prompt, or an ongoing scribe that was turned off.                               |
-| Starting          | The conversation received its prompt but has not reported its status yet.                                                                      |
-| On                | Its automation is enabled and the last run did not fail.                                                                                       |
-| Paused            | Its automation is disabled.                                                                                                                    |
-| Failing           | The last run failed, the scheduler disabled it after repeated failures, a turn reported a failure, or the start turn stopped without a status. |
-| Done              | A once scribe finished.                                                                                                                        |
-| Session not found | The automation exists but its conversation was archived or deleted. Repair restores an archived one or starts a new one.                       |
+| State             | Meaning                                                                                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Available         | No scribe conversation, a conversation that never received its prompt, or an ongoing scribe that was turned off.                                 |
+| Starting          | The conversation received its prompt but has not reported its status yet.                                                                        |
+| On                | Its automation is enabled and the last run did not fail.                                                                                         |
+| Paused            | Its automation is disabled.                                                                                                                      |
+| Failing           | The last run failed, the scheduler disabled it after repeated failures, a reply reported a failure, or the first reply stopped without a status. |
+| Done              | A once scribe finished.                                                                                                                          |
+| Session not found | The automation exists but its conversation was archived or deleted. Repair restores an archived one or starts a new one.                         |
 
 The Scribes tab derives an ongoing scribe's state from its automation: whether
 it exists and targets the scribe's conversation, whether it is enabled, and its
-last run. Each scribe turn also ends its reply with a plain status line, such as
+last run. Each scribe reply also ends with a plain status line, such as
 `Scribe status: done — read 3 files, saved 12 items`. The states are `on`,
 `done`, and `failed`. The tab uses that line where the automation cannot tell:
 whether a once scribe is Done or Failing, and whether setup succeeded before the
