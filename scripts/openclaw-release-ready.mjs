@@ -317,13 +317,14 @@ async function dispatch(workflow, inputs, tooling, revalidateAuthority) {
   }
   // Dispatch is a mutation: never retry an uncertain response. A new request
   // could create a second publisher even when the first response was lost.
-  await revalidateAuthority?.();
   verifyReleaseToolingIdentity({
     repository: REPOSITORY,
     workflowRef: tooling.ref,
     workflowFullRef: tooling.fullRef,
     workflowSha: tooling.sha,
   });
+  // Finish remote reads before checking the operator permission that authorizes POST.
+  await revalidateAuthority?.();
   const result = api(`actions/workflows/${workflow}/dispatches`, args);
   requireValue(
     Number.isSafeInteger(result.workflow_run_id) && result.workflow_run_id > 0,
