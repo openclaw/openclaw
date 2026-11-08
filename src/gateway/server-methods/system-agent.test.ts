@@ -16,6 +16,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import * as hostedSetup from "../../system-agent/hosted-setup.runtime.js";
 import { SystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
+import { detectSetupInference } from "../../system-agent/setup-inference-detect.js";
 import type { ActivateSetupInferenceParams } from "../../system-agent/setup-inference.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import * as setupAdmission from "./setup-admission.js";
@@ -335,9 +336,6 @@ describe("openclaw.chat", () => {
           .spyOn(backends, "detectInferenceBackends")
           .mockResolvedValue([]);
         vi.spyOn(providerChoices, "resolveManifestProviderAuthChoices").mockReturnValue([]);
-        const { detectSetupInference } = await vi.importActual<
-          typeof import("../../system-agent/setup-inference-detect.js")
-        >("../../system-agent/setup-inference-detect.js");
         setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockImplementation(
           async (params) => detectSetupInference(params?.agentId),
         );
