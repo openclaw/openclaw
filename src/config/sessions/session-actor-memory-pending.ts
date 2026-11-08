@@ -137,7 +137,8 @@ export function createSessionActorMemoryPending(
           throw new Error("Submitted input exceeds the Gateway payload limit");
         }
         snapshot.pending = structuredClone(row);
-      } else if (!input.pendingOnly) {
+      }
+      if ((!row && !input.pendingOnly) || input.includeCommitted) {
         snapshot.committed = committed(input, true)?.message;
       }
       return snapshot;

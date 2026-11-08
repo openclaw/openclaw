@@ -57,7 +57,8 @@ export function readPendingInputSourceInDatabase(
         throw new Error("Submitted input exceeds the Gateway payload limit");
       }
       snapshot.pending = executeSqliteQueryTakeFirstSync(database.db, pendingQuery.selectAll());
-    } else if (!input.pendingOnly) {
+    }
+    if ((!pending && !input.pendingOnly) || input.includeCommitted) {
       if (sessionTranscriptIndexNeedsReconcile(database.db, input.sessionId)) {
         throw new SessionTranscriptProjectionUnavailableError(input.sessionId);
       }

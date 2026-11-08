@@ -167,7 +167,11 @@ async function deliverAgentHarnessCompletionBound(
       },
     ];
     const prompt = formatAgentInternalEventsForPrompt(internalEvents);
+    let readmissions = 0;
     const deliver = async (): Promise<AgentHarnessCompletionDelivery> => {
+      const announceId = readmissions
+        ? `${params.announceId}:readmit:${readmissions}`
+        : params.announceId;
       if (!requesterSessionId || !isRequesterCurrent(true)) {
         return {
           delivered: false,
@@ -181,7 +185,7 @@ async function deliverAgentHarnessCompletionBound(
           agentId: requester.agentId,
           storePath: requester.storePath,
           sessionKey: requester.canonicalKey,
-          sourceRunId: buildAnnounceIdempotencyKey(params.announceId),
+          sourceRunId: buildAnnounceIdempotencyKey(announceId),
           taskRunId: childSessionKey,
         });
         if (!isRequesterCurrent()) {
@@ -194,6 +198,14 @@ async function deliverAgentHarnessCompletionBound(
         }
         if (custody === "delivered") {
           return { delivered: true, path: "direct" };
+        }
+        if (custody === "interrupted") {
+          // Deterministic successors survive monitor retries and Gateway dedupe.
+          // The original input stays inert; cancellation and committed inputs block.
+          if (readmissions < 3) {
+            readmissions += 1;
+            return deliver();
+          }
         }
         if (custody !== "unowned") {
           return {
@@ -213,7 +225,7 @@ async function deliverAgentHarnessCompletionBound(
         {
           scope,
           sourceSessionKey: childSessionKey,
-          sourceRunId: buildAnnounceIdempotencyKey(params.announceId),
+          sourceRunId: buildAnnounceIdempotencyKey(announceId),
           requesterSessionId,
           requesterLifecycleRevision,
           isSourceCurrent: isSourceSessionEffectsAllowed,
@@ -235,7 +247,7 @@ async function deliverAgentHarnessCompletionBound(
             requesterIsSubagent,
             expectsCompletionMessage: true,
             bestEffortDeliver: true,
-            directIdempotencyKey: buildAnnounceIdempotencyKey(params.announceId),
+            directIdempotencyKey: buildAnnounceIdempotencyKey(announceId),
             signal,
           }),
       );
