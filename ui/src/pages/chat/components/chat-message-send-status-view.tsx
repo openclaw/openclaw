@@ -125,7 +125,6 @@ export function ChatSteerNow(props: { input?: PendingSteer; onSend?: (runId: str
             </button>
           ) : (
             <span
-              class="chat-steer-now__waiting"
               role="status"
               title={describePendingSteerWait(steerNow())}
               aria-label={describePendingSteerWait(steerNow())}

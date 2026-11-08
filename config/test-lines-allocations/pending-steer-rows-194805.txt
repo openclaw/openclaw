@@ -1,0 +1,4 @@
+# Control UI pending steers: one Send now/Steering… row across steers waiting
+# together, row assignment, delivered-footer spacing and quiet Send now refusal,
+# covered in chat-message component tests and the chat-flow messaging browser test.
+159
