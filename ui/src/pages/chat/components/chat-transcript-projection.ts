@@ -50,12 +50,10 @@ import {
 import { projectTranscriptRecovery } from "./chat-transcript-recovery.ts";
 import {
   GuardedTranscriptItem,
-  createTranscriptRenderDependencies,
   guardChatRenderItems,
-  trackTranscriptRenderDependencies,
   projectTranscriptActions,
+  trackTranscriptRenderDependencies,
   transcriptContextDependencies,
-  type TranscriptDependencyItem,
 } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
@@ -440,10 +438,7 @@ export function projectChatTranscript(
     presented,
     bubbleActivityGroupKey,
   ]);
-  const liveStatusSignature = (item: TranscriptDependencyItem): string => {
-    if (item.kind === "reading-indicator") {
-      return workingUsageKey;
-    }
+  const liveStatusSignature = (item: SystemEventRenderItem): string => {
     if (item.kind === "stream-run") {
       return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
     }
@@ -498,7 +493,7 @@ export function projectChatTranscript(
     threadContextWindow,
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
-  const renderDependencies = createTranscriptRenderDependencies(
+  const renderItem = guardChatRenderItems(
     state.transcriptRenderDependencies,
     (item) => {
       const groups = chatItemGroups(item);
@@ -512,12 +507,7 @@ export function projectChatTranscript(
         groups.some((group) => group.messages.some(({ message }) => readAsyncQuestions(message)));
       return [
         liveStatusSignature(item),
-        item.kind === "stream" || item.key === liveItem?.key ? resolveLiveStream : undefined,
-        ...(workPreviews.get(item.key) ?? []).flatMap((preview) => [
-          preview.preview,
-          preview.revision,
-          preview.latest,
-        ]),
+        item.key === liveItem?.key ? resolveLiveStream : undefined,
         ...transcriptContextDependencies(item, loadedReplySources, props),
         ...groups.flatMap((group) =>
           group.messages.flatMap(({ message }) => {
@@ -539,78 +529,77 @@ export function projectChatTranscript(
         readsRoster ? subagents.rowsKey : undefined,
       ];
     },
-  );
-  const renderItem = guardChatRenderItems(renderDependencies, (item) => {
-    if (item.kind === "system-event-group") {
-      return { kind: "system-events", item };
-    }
-    if (item.kind === "group") {
-      return { kind: "group", group: item, options: renderGroupOptions(item) };
-    }
-    if (item.kind === "stream-run" || item.kind === "question") {
-      return item.kind === "question"
-        ? { kind: "stream", parts: [item], options: { questionPrompts } }
-        : { kind: "stream", parts: item.parts, options: streamGroupOptions };
-    }
-    if (item.kind === "work-group") {
-      const workExpanded = expandedToolCards.get(item.key) ?? false;
-      return {
-        kind: "work",
-        item,
-        options: {
-          expanded: workExpanded,
-          mediaReadAllowed: props.mediaReadAllowed,
-          bubbleMode: props.chatBubbleMode === true && !searchFiltering,
-          browserTabPreviews: workPreviews.get(item.key),
-          onToggle: () => toggleToolCardExpanded(item.key, workExpanded),
-        },
-      };
-    }
-    if (item.kind === "activity-run") {
-      const firstGroup = item.groups[0];
-      if (!firstGroup) {
-        return undefined;
+    (item) => {
+      if (item.kind === "system-event-group") {
+        return { kind: "system-events", item };
       }
-      return item.groups.length === 1
-        ? { kind: "group", group: firstGroup, options: renderGroupOptions(firstGroup) }
-        : {
-            kind: "activity",
-            groups: item.groups,
-            options: renderGroupOptions(firstGroup),
-            presentation: "standalone",
-          };
-    }
-    if (item.kind === "agent-run-frame") {
-      return {
-        kind: "frame",
-        frame: item,
-        options: {
-          basePath: props.basePath,
-          sessionPublicOrigin: props.sessionPublicOrigin,
-          streamOptions: streamGroupOptions,
-          workPreviews,
-          renderGroupOptions,
-          partDependencies: renderDependencies,
-          isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
-          onToggleWork: toggleToolCardExpanded,
-          turnRecap: recapForGroup(item.fragment?.source.key ?? item.key),
-        },
-      };
-    }
-    if (item.kind === "divider") {
-      return { kind: "divider", item };
-    }
-    if (item.kind === "notice") {
-      return {
-        kind: "notice",
-        item,
-        modelCatalog: props.modelCatalog,
-        onPermissionRetry: actions.onPermissionRetry,
-        recovery: props,
-      };
-    }
-    return undefined;
-  });
+      if (item.kind === "group") {
+        return { kind: "group", group: item, options: renderGroupOptions(item) };
+      }
+      if (item.kind === "stream-run" || item.kind === "question") {
+        return item.kind === "question"
+          ? { kind: "stream", parts: [item], options: { questionPrompts } }
+          : { kind: "stream", parts: item.parts, options: streamGroupOptions };
+      }
+      if (item.kind === "work-group") {
+        const workExpanded = expandedToolCards.get(item.key) ?? false;
+        return {
+          kind: "work",
+          item,
+          options: {
+            expanded: workExpanded,
+            mediaReadAllowed: props.mediaReadAllowed,
+            bubbleMode: props.chatBubbleMode === true && !searchFiltering,
+            browserTabPreviews: workPreviews.get(item.key),
+            onToggle: () => toggleToolCardExpanded(item.key, workExpanded),
+          },
+        };
+      }
+      if (item.kind === "activity-run") {
+        const firstGroup = item.groups[0];
+        if (!firstGroup) {
+          return undefined;
+        }
+        return item.groups.length === 1
+          ? { kind: "group", group: firstGroup, options: renderGroupOptions(firstGroup) }
+          : {
+              kind: "activity",
+              groups: item.groups,
+              options: renderGroupOptions(firstGroup),
+              presentation: "standalone",
+            };
+      }
+      if (item.kind === "agent-run-frame") {
+        return {
+          kind: "frame",
+          frame: item,
+          options: {
+            basePath: props.basePath,
+            sessionPublicOrigin: props.sessionPublicOrigin,
+            streamOptions: streamGroupOptions,
+            workPreviews,
+            renderGroupOptions,
+            isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
+            onToggleWork: toggleToolCardExpanded,
+            turnRecap: recapForGroup(item.fragment?.source.key ?? item.key),
+          },
+        };
+      }
+      if (item.kind === "divider") {
+        return { kind: "divider", item };
+      }
+      if (item.kind === "notice") {
+        return {
+          kind: "notice",
+          item,
+          modelCatalog: props.modelCatalog,
+          onPermissionRetry: actions.onPermissionRetry,
+          recovery: props,
+        };
+      }
+      return undefined;
+    },
+  );
   transcript.entryAnimations.project(chatItems);
   transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
   const contentRows: PlacedContentRow[] = [];

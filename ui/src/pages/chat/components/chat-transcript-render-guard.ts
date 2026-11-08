@@ -1,6 +1,4 @@
 import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-avatar.ts";
-import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
@@ -9,9 +7,6 @@ import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 
 type ChatRenderItem = SystemEventRenderItem;
-export type TranscriptDependencyItem =
-  | ChatRenderItem
-  | Extract<ChatItem, { kind: "stream" | "reading-indicator" | "question" }>;
 
 /** The keyed virtual row owns the dependency memo and its rendered content. */
 export class GuardedTranscriptItem {
@@ -21,70 +16,19 @@ export class GuardedTranscriptItem {
   ) {}
 }
 
-function groupDependencies(group: MessageGroup): readonly unknown[] {
-  return [
-    group.key,
-    group.role,
-    group.senderLabel,
-    group.senderSession,
-    group.sender,
-    group.sourceClients,
-    group.replyToSender,
-    group.replyPreviousMessageId,
-    group.replyShared,
-    group.replyToMessage?.key,
-    group.replyToMessage?.message,
-    group.replyTurnSource?.key,
-    group.replyTurnSource?.message,
-    group.replyCurrentSource?.key,
-    group.replyCurrentSource?.message,
-    group.visibleContent,
-    group.timestamp,
-    group.isStreaming,
-    group.runId,
-    ...group.messages.flatMap((source) => [
-      source.key,
-      source.message,
-      source.hasVisibleContent,
-      source.replyTarget,
-      // Cards expose mutable completion/error facts even when their message is retained.
-      ...extractToolCardsCached(source.message).flatMap((card) => Object.values(card)),
-    ]),
-  ];
-}
-
-function itemDependencies(item: TranscriptDependencyItem): readonly unknown[] {
-  if (item.kind === "group") {
-    return groupDependencies(item);
-  }
+function itemDependencies(item: ChatRenderItem): readonly unknown[] {
   if (item.kind === "system-event-group") {
     return [item.key, ...item.events];
   }
   if (item.kind === "stream-run") {
-    return [
-      item.key,
-      item.runId,
-      item.boundaryId,
-      item.replyToSender,
-      item.replyToMessage?.key,
-      item.replyToMessage?.message,
-      item.replyPreviousMessageId,
-      ...item.parts,
-    ];
+    return [item.key, ...item.parts];
   }
   if (item.kind === "work-group") {
     const anchors = Array.from(item.previewAfterGroup ?? []).flat();
-    return [
-      item.key,
-      item.durationMs,
-      item.replyRunId,
-      item.ownerless,
-      ...item.groups.flatMap(groupDependencies),
-      ...anchors,
-    ];
+    return [item.key, item.durationMs, ...item.groups, ...anchors];
   }
   if (item.kind === "activity-run") {
-    return [item.key, ...item.groups.flatMap(groupDependencies)];
+    return [item.key, ...item.groups];
   }
   if (item.kind === "agent-run-frame") {
     const outcome = item.outcome;
@@ -99,14 +43,13 @@ function itemDependencies(item: TranscriptDependencyItem): readonly unknown[] {
       item.fragment?.representative,
       item.fragment?.source.parts,
       ...item.parts.flatMap(itemDependencies),
-      ...(item.detachedGroups ?? []).flatMap(groupDependencies),
     ];
   }
   return [item];
 }
 
 export function transcriptContextDependencies(
-  item: TranscriptDependencyItem,
+  item: ChatRenderItem,
   loadedSources: ReadonlyMap<string, LoadedReplySource>,
   props: Pick<
     ChatThreadProps,
@@ -226,31 +169,25 @@ export function trackTranscriptRenderDependencies(
   }
 }
 
-/** One dependency contract for virtual rows and retained parts within a frame. */
-export function createTranscriptRenderDependencies(
-  renderDependencies: readonly unknown[],
-  presentationDependencies: (item: TranscriptDependencyItem) => readonly unknown[],
-) {
-  return (item: TranscriptDependencyItem): readonly unknown[] => [
-    ...itemDependencies(item),
-    renderDependencies,
-    ...presentationDependencies(item),
-  ];
-}
-
 export function guardChatRenderItems(
-  dependencies: ReturnType<typeof createTranscriptRenderDependencies>,
+  renderDependencies: readonly unknown[],
+  // Reply sources and live status can change without replacing the row itself.
+  presentationDependencies: (item: ChatRenderItem) => readonly unknown[],
   nativeFor: (item: ChatRenderItem) => NativeTranscriptView | undefined,
 ) {
-  return (item: ChatRenderItem) => new GuardedTranscriptItem(dependencies(item), nativeFor(item));
+  return (item: ChatRenderItem) =>
+    new GuardedTranscriptItem(
+      [...itemDependencies(item), renderDependencies, ...presentationDependencies(item)],
+      nativeFor(item),
+    );
 }
 
-/** Retained rows and frame parts dispatch through the current pane action owner. */
+/** Retained rows dispatch through the current pane action owner. */
 export function projectTranscriptActions(state: ChatThreadState, props: ChatThreadProps) {
   const context = state.transcriptRenderContext;
   context.actions = props;
   const displayFacts = props.displayFacts;
-  // Retained parts keep these dispatchers; each call uses the current pane owner.
+  // Retained rows keep these dispatchers; each call uses the current pane owner.
   const actions: NonNullable<typeof context.actions> = {
     onOpenSidebar: props.onOpenSidebar
       ? (content) => context.actions?.onOpenSidebar?.(content)

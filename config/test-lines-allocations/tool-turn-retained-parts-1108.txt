@@ -1,2 +1,0 @@
-# Regression: Unchanged retained parts skip preparation while focus, live callbacks, and scoped display facts stay current.
-268

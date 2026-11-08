@@ -248,7 +248,6 @@ it.each([false, true])(
         options={{
           streamOptions: { bubbleMode },
           workPreviews: new Map(),
-          partDependencies: (part) => [part],
           renderGroupOptions: () => ({
             bubbleMode,
             showReasoning: false,

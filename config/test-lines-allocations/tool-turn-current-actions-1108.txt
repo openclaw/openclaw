@@ -1,0 +1,2 @@
+# Regression: Retained unframed tool narration dispatches current file actions and retires removed actions.
+62

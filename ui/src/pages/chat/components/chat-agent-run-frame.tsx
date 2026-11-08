@@ -40,7 +40,6 @@ import {
   type StreamGroupPart,
 } from "./chat-message-stream-view.tsx";
 import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.ts";
-import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import type { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 import "../../../styles/chat/source-previews.css";
@@ -55,7 +54,6 @@ type AgentRunFrameOptions = {
   streamOptions: StreamGroupOptions;
   workPreviews: ReturnType<typeof projectTranscriptWorkPreviews>;
   renderGroupOptions: (group: MessageGroupData) => NativeMessageGroupOptions;
-  partDependencies: (part: BodyPart) => readonly unknown[];
   isWorkExpanded: (key: string) => boolean;
   onToggleWork: (key: string, expanded: boolean) => void;
   turnRecap?: TurnRecap;
@@ -66,7 +64,6 @@ type BodyPart =
   | StreamGroupPart;
 type PartInput = { part: BodyPart; options: AgentRunFrameOptions };
 type PartRange = {
-  dependencies: readonly unknown[];
   start: Comment;
   end: Comment;
   write: (input: PartInput) => void;
@@ -137,13 +134,9 @@ function RetainedFrameBody(props: FrameBodyProps): JSX.Element {
     }
     const ordered = parts.map((value) => {
       const key = `${value.kind}:${value.key}`;
-      const dependencies = options.partDependencies(value);
       const existing = ranges.get(key);
       if (existing) {
-        if (!transcriptArraysEqual(existing.dependencies, dependencies)) {
-          existing.dependencies = dependencies;
-          existing.write({ part: value, options });
-        }
+        existing.write({ part: value, options });
         return existing;
       }
       const start = document.createComment("frame-part");
@@ -162,7 +155,7 @@ function RetainedFrameBody(props: FrameBodyProps): JSX.Element {
             },
           );
           insert(parent, render(readInput), end);
-          return { dependencies, start, end, write, dispose };
+          return { start, end, write, dispose };
         }),
       );
       ranges.set(key, range);
@@ -278,6 +271,7 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     frameReplyLine,
     bodyParts,
     firstBubbleKey,
+    workPreviews: opts.workPreviews,
     sourcePreviews,
   };
 }
@@ -293,7 +287,6 @@ export function AgentRunFrame(props: FrameProps) {
 
 function RunFrame(props: FrameProps) {
   const state = createMemo(() => prepareFrame(props.frame, props.options));
-  const firstBubbleKey = createMemo(() => state().firstBubbleKey);
   const timedWork = createMemo(() => {
     const recap = props.options.turnRecap;
     if (!recap) {
@@ -325,7 +318,7 @@ function RunFrame(props: FrameProps) {
         const options = () => input().options;
         const groupOptions = (group: MessageGroupData) => ({
           ...options().renderGroupOptions(group),
-          firstBubbleKey: firstBubbleKey(),
+          firstBubbleKey: state().firstBubbleKey,
         });
         const streamPart = () => {
           const value = part();
@@ -355,7 +348,7 @@ function RunFrame(props: FrameProps) {
                   part={stream()}
                   options={{
                     ...options().streamOptions,
-                    firstBubbleKey: firstBubbleKey(),
+                    firstBubbleKey: state().firstBubbleKey,
                   }}
                   presentation="standalone"
                 />
@@ -373,7 +366,7 @@ function RunFrame(props: FrameProps) {
                       onToggle: () =>
                         options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
                       presentation: "continuation",
-                      browserTabPreviews: options().workPreviews.get(work().key),
+                      browserTabPreviews: state().workPreviews.get(work().key),
                     }}
                   />
                   <Show when={!props.frame.fragment && options().isWorkExpanded(work().key)}>
@@ -407,7 +400,7 @@ function RunFrame(props: FrameProps) {
                 <>
                   <MessageGroupContent group={group()} options={groupOptions(group())} />
                   <BrowserTabPreviews
-                    previews={options().workPreviews.get(group().key)}
+                    previews={state().workPreviews.get(group().key)}
                     mediaReadAllowed={options().streamOptions.mediaReadAllowed}
                   />
                 </>
