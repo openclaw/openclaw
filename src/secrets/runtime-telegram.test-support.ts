@@ -1,13 +1,8 @@
 /** Test bootstrap shim for Telegram runtime-secret surface coverage. */
 import { vi } from "vitest";
-import { loadChannelSecretContractApi } from "./channel-contract-api.js";
+import { collectRuntimeConfigAssignments as telegramAssignments } from "../../extensions/telegram/secret-contract-api.js";
 
-/** Test-only bootstrap registry mock for Telegram secret surface tests. */
-const telegramSecrets = loadChannelSecretContractApi({ channelId: "telegram", config: {} });
-if (!telegramSecrets?.collectRuntimeConfigAssignments) {
-  throw new Error("Missing Telegram secret contract api");
-}
-const telegramAssignments = telegramSecrets.collectRuntimeConfigAssignments;
+// This fixture always needs Telegram, even when a Gateway test disables discovery.
 
 // Use the real bundled Telegram secret contract while avoiding plugin bootstrap.
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({

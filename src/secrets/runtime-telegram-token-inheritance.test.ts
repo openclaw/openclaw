@@ -1,11 +1,17 @@
 /** Tests Telegram token inheritance in secrets runtime collection. */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import "./runtime-telegram.test-support.ts";
 import {
   asConfig,
   loadAuthStoreWithProfiles,
   setupSecretsRuntimeSnapshotTestHooks,
 } from "./runtime.test-support.ts";
+
+// Collection must use the real Telegram contract without ambient plugin discovery.
+vi.hoisted(() => {
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+});
+vi.unstubAllEnvs();
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
