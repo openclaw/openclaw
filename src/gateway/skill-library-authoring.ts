@@ -4,7 +4,7 @@ import {
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   readSkillLibraryPromptListing,
   type SkillLibraryPromptListing,
@@ -40,9 +40,6 @@ import {
 const active = new Map<string, Set<{ profileId: string; revoke: () => void }>>();
 const SKILL_LIBRARY_TURN_REFUSAL =
   "Personal skill library authoring runs only when the person sends the request in this conversation. This turn has no human requester, so the call was not run.";
-// Same-process settle reads this even when the loaded entry is stale. Absence means
-// "not seen yet"; an explicit undefined means a human turn cleared the listing.
-const promptListings = new Map<string, SkillLibraryPromptListing | undefined>();
 
 function listingsMatch(
   left: SkillLibraryPromptListing | undefined,
@@ -55,8 +52,27 @@ function listingsMatch(
   );
 }
 
-function rememberPromptListing(sessionKey: string, listing: SkillLibraryPromptListing | undefined) {
-  promptListings.set(sessionKey, listing);
+function readCommittedPromptListing(params: {
+  sessionKey: string;
+  storedListing?: unknown;
+  sessionEntry?: { skillLibraryPromptListing?: SkillLibraryPromptListing };
+  listingStore?: { agentId?: string; storePath?: string };
+}): SkillLibraryPromptListing | undefined {
+  const passed = readSkillLibraryPromptListing(
+    params.storedListing ?? params.sessionEntry?.skillLibraryPromptListing,
+  );
+  const store = params.listingStore;
+  if (!store || (!store.agentId && !store.storePath)) {
+    return passed;
+  }
+  const owned = loadSessionEntry({
+    sessionKey: params.sessionKey,
+    ...(store.agentId ? { agentId: store.agentId } : {}),
+    ...(store.storePath ? { storePath: store.storePath } : {}),
+  });
+  // An existing row is the published listing, including when this caller holds
+  // an older snapshot. A missing row has nothing published yet.
+  return owned ? readSkillLibraryPromptListing(owned.skillLibraryPromptListing) : passed;
 }
 
 async function commitSkillLibraryPromptListing(
@@ -191,12 +207,8 @@ export async function resolveGatewaySkillLibraryPromptGrant(params: {
   sessionEntry?: { skillLibraryPromptListing?: SkillLibraryPromptListing };
   listingStore?: { agentId?: string; storePath?: string };
 }): Promise<SkillLibraryAuthoringCapability | undefined> {
-  const storedListing = params.storedListing ?? params.sessionEntry?.skillLibraryPromptListing;
-  if (!promptListings.has(params.sessionKey)) {
-    rememberPromptListing(params.sessionKey, readSkillLibraryPromptListing(storedListing));
-  }
-  const previous = promptListings.get(params.sessionKey);
-  let next = previous;
+  const storedListing = readCommittedPromptListing(params);
+  let next = storedListing;
   let live: SkillLibraryAuthoringCapability | undefined;
   if (params.isHumanTurn) {
     live = await prepareGatewaySkillAuthoring(
@@ -211,13 +223,10 @@ export async function resolveGatewaySkillLibraryPromptGrant(params: {
       next = undefined;
     }
   }
-  if (!listingsMatch(previous, next)) {
-    rememberPromptListing(params.sessionKey, next);
-  }
   // The caller's entry is an immutable snapshot. Persistence returns the owner's
   // committed row, and this turn reads the listing from that result.
   let listingForTurn = next;
-  if (params.listingStore && !listingsMatch(readSkillLibraryPromptListing(storedListing), next)) {
+  if (params.listingStore && !listingsMatch(storedListing, next)) {
     const saved = await commitSkillLibraryPromptListing(
       params.sessionKey,
       params.listingStore,
@@ -225,9 +234,6 @@ export async function resolveGatewaySkillLibraryPromptGrant(params: {
     );
     if (saved) {
       listingForTurn = readSkillLibraryPromptListing(saved.skillLibraryPromptListing);
-      if (!listingsMatch(next, listingForTurn)) {
-        rememberPromptListing(params.sessionKey, listingForTurn);
-      }
     }
   }
   if (live) {

@@ -456,11 +456,18 @@ it("keeps the skill_library prompt across settle and refuses that turn at execut
   const { alice, request } = await setup();
   const owner = request(alice.id);
   const settleSessionKey = "agent:main:skill-library-settle";
+  const storePath = path.join(temps.make("skill-library-settle-"), "sessions.sqlite");
+  const listingStore = { agentId: "main", storePath };
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: settleSessionKey, storePath },
+    { sessionId: "skill-library-settle", updatedAt: 1 },
+  );
   const grant = async (isHumanTurn: boolean) =>
     (await resolveGatewaySkillLibraryPromptGrant({
       owner,
       sessionKey: settleSessionKey,
       isHumanTurn,
+      listingStore,
     }))!;
   const human = await grant(true);
   const settle = await grant(false);
@@ -520,6 +527,8 @@ it("keeps the skill_library prompt across settle and refuses that turn at execut
     },
     sessionKey: settleSessionKey,
     isHumanTurn: true,
+    sessionEntry: Object.freeze({ skillLibraryPromptListing: undefined }),
+    listingStore,
   });
   expect(toolFor(synthetic!).description).toBe(humanTool.description);
   expect(synthetic?.turnRefusal).toContain("no human requester");
@@ -586,4 +595,22 @@ it("reloads a recorded skill_library listing for a settle after restart", async 
     multipleProfiles: borrowedGrant?.multipleProfiles,
     defaultTarget: borrowedGrant?.defaultTarget,
   });
+  const otherPath = path.join(temps.make("skill-library-other-store-"), "sessions.sqlite");
+  const otherKey = listingSessionKey;
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: otherKey, storePath: otherPath },
+    { sessionId: "skill-library-other-store", updatedAt: 1 },
+  );
+  expect(
+    await resolveGatewaySkillLibraryPromptGrant({
+      owner,
+      sessionKey: otherKey,
+      isHumanTurn: false,
+      listingStore: { agentId: "main", storePath: otherPath },
+    }),
+  ).toBeUndefined();
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: otherKey, storePath: otherPath })
+      ?.skillLibraryPromptListing,
+  ).toBeUndefined();
 });
