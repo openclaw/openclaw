@@ -447,15 +447,26 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
         currentRows.some((row) => isSameSubagentRunOwner(row, observed)),
       );
     };
-    const isSourceSessionEffectsAllowed = () =>
+    let dispatchPrepared = false;
+    let dispatchAccepted = false;
+    // Once the requester session accepts the turn, that turn owns this delivery until it
+    // ends. Only Stop or abort, Gateway close, or requester session replacement or
+    // deletion revokes it; the requester run, follow-up custody and batch membership
+    // decide admission only.
+    const isAdmittedTurnCurrent = () =>
       !params.signal?.aborted &&
       params.isSourceCurrent() &&
       sourceReceiptAdmission.isStoreCurrent() &&
+      sourceReceiptAdmission.isRequesterCurrent() &&
+      !isGatewayClosed();
+    const isAdmissionCurrent = () =>
+      isAdmittedTurnCurrent() &&
       preparedFindings.isCurrent() &&
-      !isGatewayClosed() &&
       areCompletionRowsCurrent() &&
       isRequesterCurrent() &&
       !isBatchDeliveryClosed();
+    const isSourceSessionEffectsAllowed = () =>
+      dispatchAccepted ? isAdmittedTurnCurrent() : isAdmissionCurrent();
     const continuationCaller = captureRequesterContinuationCaller({
       requesterSessionKey,
       requesterSessionId: requesterIdentity.sessionId,
@@ -533,11 +544,18 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       ) {
         return true;
       }
-      if (!isBatchDeliveryClosed() && isRequesterCurrent()) {
+      const requesterSessionCurrent = sourceReceiptAdmission.isRequesterCurrent();
+      const deliveryClosed = isBatchDeliveryClosed();
+      if (!deliveryClosed && (dispatchAccepted ? requesterSessionCurrent : isRequesterCurrent())) {
         return false;
       }
-      // Requester turnover closes this attempt, not the child's pending question.
-      if (!pauseNotice || isBatchDeliveryClosed() || !sourceReceiptAdmission.isRequesterCurrent()) {
+      if (!dispatchAccepted && requesterSessionCurrent && !deliveryClosed) {
+        // Requester turnover before admission hands the batch to the requester's next
+        // turn: keep the unspent obligation instead of consuming it.
+        await params.transitionBatch(settledBatch, state, refreshBatch);
+        return true;
+      }
+      if (!pauseNotice || deliveryClosed || !requesterSessionCurrent) {
         await completeBatch(settledBatch, state);
       }
       return true;
@@ -558,8 +576,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
         requesterTurnRunId: directIdempotencyKey,
       });
     }
-    let dispatchPrepared = false;
-    let dispatchAccepted = false;
     const attemptCount =
       state.status === "dispatching" ? state.attemptCount : Math.max(1, state.attemptCount + 1);
     let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;
