@@ -1,0 +1,2 @@
+# Native PowerShell completion regressions for a cursor inside the current token.
+8

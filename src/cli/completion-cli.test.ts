@@ -322,11 +322,19 @@ ${cases
     expect(result.status).toBe(0);
   });
 
-  itWithPowerShell("ignores PowerShell arguments after the cursor", async () => {
-    const prefix = "openclaw completion --shell f";
-    expect(
-      await powershell.complete(documentedProgram(), `${prefix} --yes`, prefix.length),
-    ).toEqual(["fish"]);
+  itWithPowerShell.each([
+    ["openclaw completion --shell f", " --yes", ["fish"]],
+    ["openclaw completion --shell f", "xsh", ["fish"]],
+    ["openclaw completion --shell 'f", "xsh'", ["fish"]],
+    ['openclaw completion --shell="f', 'xsh"', ["--shell=fish"]],
+    ["openclaw completion --sh", "zzz", ["--shell"]],
+    ["openclaw completion -ysf", "zzz", ["-ysfish"]],
+    ["openclaw comp", "zzz", ["completion"]],
+    ["openclaw completion --shell '", "fish'", ["zsh", "bash", "powershell", "fish"]],
+  ])("completes only the PowerShell prefix %s", async (prefix, suffix, expected) => {
+    expect(await powershell.complete(documentedProgram(), prefix + suffix, prefix.length)).toEqual(
+      expected,
+    );
   });
 
   itWithPowerShell("matches literal PowerShell choice prefixes", async () => {
