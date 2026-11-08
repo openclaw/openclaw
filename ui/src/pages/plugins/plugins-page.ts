@@ -1,6 +1,10 @@
 import { createEffect, createSignal, onSettled } from "solid-js";
 import type { PluginsUninstallResult } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
-import { pathForRoute } from "../../app-route-paths.ts";
+import {
+  pathForRoute,
+  pluginCatalogIdFromPath,
+  pluginSettingsIdFromPath,
+} from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -30,7 +34,7 @@ import {
   pluginMutationBlockedReason,
   type PluginMutationAction,
 } from "./plugins-page-model.ts";
-import { pluginIdForRoute, type PluginsRouteData } from "./route-data.ts";
+import type { PluginsRouteData } from "./route-data.ts";
 import type { PluginSettingsEditorProps } from "./settings-editor.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { createPluginPreview } from "./skill-preview.tsx";
@@ -502,8 +506,12 @@ export function createPluginsPage(options: {
 
   const loading = () => gateway.connected && (!routeDataConsumed || catalogTask.pending);
 
-  const activeRoutePluginId = () =>
-    pluginIdForRoute(surface, routeData?.location.pathname ?? "", context.basePath);
+  const activeRoutePluginId = () => {
+    const pathname = routeData?.location.pathname ?? "";
+    return surface === "settings"
+      ? pluginSettingsIdFromPath(pathname, context.basePath)
+      : pluginCatalogIdFromPath(pathname, context.basePath);
+  };
 
   function uninstallingSelection(): boolean {
     return Boolean(
