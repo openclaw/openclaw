@@ -155,9 +155,6 @@ export async function connectRfbServer(params: {
       kind: "rfb";
       securityTypes: number[];
       stream: Duplex;
-      protocolMinor: number;
-      versionReply: Buffer;
-      inspectedPrefixLength: number;
     }
   | Exclude<RfbProbeResult, { kind: "rfb" }>
 > {
@@ -229,9 +226,6 @@ export async function connectRfbServer(params: {
       kind: "rfb",
       securityTypes,
       stream,
-      protocolMinor: version.minor,
-      versionReply: version.reply,
-      inspectedPrefixLength: inspectedPrefix.length,
     };
   } catch (error) {
     params.signal?.throwIfAborted();

@@ -101,7 +101,7 @@ describe("configured VncAuth probe", () => {
   it("finishes the handshake before closing and rejects a wrong password", async () => {
     const password = "secret12";
     const challenge = Buffer.alloc(16, 4);
-    // Independent of buildVncAuthResponse. Password secret12, challenge 16 bytes of 0x04.
+    // Password secret12, challenge 16 bytes of 0x04.
     const expectedResponse = Buffer.from([
       68, 0, 237, 84, 60, 173, 8, 143, 68, 0, 237, 84, 60, 173, 8, 143,
     ]);

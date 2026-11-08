@@ -1,7 +1,6 @@
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
-import { buildVncAuthResponse } from "./rfb-vnc-auth.js";
 
 export const RFB_VERSION_BYTES = 12;
 export const RFB_37_MINOR = 7;
@@ -316,6 +315,28 @@ async function negotiateArdAuth(params: {
     Buffer.concat([encryptedCredentials, leftPadBigInt(clientPublic, keyLength)]),
     params.signal,
   );
+}
+
+function reverseByteBits(value: number): number {
+  let input = value;
+  let output = 0;
+  for (let index = 0; index < 8; index += 1) {
+    output = (output << 1) | (input & 1);
+    input >>= 1;
+  }
+  return output;
+}
+
+function buildVncAuthResponse(password: string, challenge: Buffer): Buffer {
+  const key = Buffer.alloc(8);
+  Buffer.from(password, "utf8").copy(key, 0, 0, 8);
+  for (let index = 0; index < key.length; index += 1) {
+    key[index] = reverseByteBits(key[index] ?? 0);
+  }
+  // EDE with K1=K2 matches DES-ECB on OpenSSL builds that omit des-ecb.
+  const cipher = createCipheriv("des-ede", Buffer.concat([key, key]), null);
+  cipher.setAutoPadding(false);
+  return Buffer.concat([cipher.update(challenge), cipher.final()]);
 }
 
 async function negotiateVncAuth(params: {
