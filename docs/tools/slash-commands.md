@@ -406,14 +406,16 @@ list of requirements reaches the agent complete.
     | `/plugins list\|inspect\|show\|get\|install\|enable\|disable` | `commands.plugins: true` | Inspect or mutate plugin state. Owner-only for writes. Alias: `/plugin` |
     | `/debug show\|set\|unset\|reset` | `commands.debug: true` | Runtime-only config overrides. Owner-only |
     | `/restart` | `commands.restart: true` (default) | Restart OpenClaw |
-    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw using its configured update channel; works with default tool profiles and sends a completion or failure notice in the same chat |
+    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw using its configured update channel; works with default tool profiles. Sends a completion or failure notice in the same chat only when that chat is an owner destination; otherwise the notice is skipped and the outcome stays in the update run record and Control UI |
     | `/send on\|off\|inherit` | owner | Set send policy |
 
     Natural-language update requests use the `gateway` tool's `update.run`
     action. `/update` provides the same update operation without requiring a
     functioning model or access to that tool. Both use the Gateway update
     handler, also used by the Control UI. Chat access alone does not grant
-    permission to update. See
+    permission to update. Update notices only go to owner destinations listed in
+    `commands.ownerAllowFrom` or a linked administrator's direct conversation;
+    group and channel chats do not inherit a person's owner authority. See
     [Updating from chat](/install/updating#from-chat).
 
   </Accordion>
