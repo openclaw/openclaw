@@ -111,7 +111,10 @@ export function insertYamlOcPath(
 
 function stringifyDoc(doc: Document.Parsed, raw: string): string {
   const bom = raw.startsWith("\uFEFF") ? "\uFEFF" : "";
-  return bom + doc.toString().replace(/\n/g, sourceLineEnding(raw));
+  const lineEnding = sourceLineEnding(raw);
+  const text = doc.toString().replace(/\n/g, lineEnding);
+  // The YAML serializer terminates the document even when the source did not end a line.
+  return bom + (raw.endsWith("\n") ? text : text.slice(0, -lineEnding.length));
 }
 
 function formatInsertionMarker(

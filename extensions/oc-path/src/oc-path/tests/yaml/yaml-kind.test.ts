@@ -41,6 +41,11 @@ describe("YAML", () => {
     const raw = "untouched: 9007199254740993\nselected: 1.0000000000000001\n";
     expect(set(raw, "selected", "1").raw).toBe("untouched: 9007199254740993\nselected: 1\n");
   });
+
+  it("keeps a source without a final newline unterminated", () => {
+    expect(set("name: old", "name", "new").raw).toBe("name: new");
+  });
+
   it.each([
     [LOBSTER, "missing", "unresolved"],
     [MALFORMED, "key", "parse-error"],
