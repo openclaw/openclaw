@@ -9,6 +9,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveConfiguredAgentId,
   resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
 import { captureRuntimeConfigAsyncReader, readBestEffortConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
@@ -65,6 +66,7 @@ export async function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOpt
   const agentId = explicitAgentId
     ? resolveConfiguredAgentId(config, explicitAgentId)
     : (inferredAgentId ??
+      tryResolveLegacyCompatibilityAgentId(config) ??
       resolveDefaultAgentId(config, { surface: "the skills command", hint: "Pass --agent <id>." }));
   return {
     config,

@@ -76,6 +76,7 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveConfiguredAgentId: mocks.explicitAgent,
   resolveDefaultAgentId: mocks.defaultAgent,
   resolveAgentWorkspaceDir: mocks.workspace,
+  tryResolveLegacyCompatibilityAgentId: () => undefined,
 }));
 // mock-isolation: Command fixtures own registry results and never download or install real skills.
 vi.mock("../skills/lifecycle/clawhub.js", () => ({
