@@ -336,7 +336,6 @@ it.each(
     ok: false,
     error: { type: "cli_error", message },
   });
-  // Both filters are expected CLI errors now: stderr names the problem instead of the generic line.
   expect(result.stderr).toContain(message);
   expect(result.stderr).not.toContain("[openclaw] The CLI command failed.");
 });

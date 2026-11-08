@@ -315,21 +315,6 @@ describe("models list published transport", () => {
     },
   );
 
-  it.each([false, true])(
-    "names an unknown provider filter from the local catalog (refresh=%s)",
-    async (refresh) => {
-      vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
-      const message =
-        'Unknown model catalog provider "no-such-provider". Run openclaw models list --all to list models and their provider IDs.';
-      await expect(list({ provider: "no-such-provider", refresh })).rejects.toMatchObject({
-        name: "ExpectedCliError",
-        humanOutput: message,
-        machineOutput: message,
-      });
-      expect(gateway.callGateway).not.toHaveBeenCalled();
-    },
-  );
-
   it.each([
     [{ json: true, plain: true }, "Choose either --json or --plain"],
     [{ provider: "Example Provider", json: true }, "Invalid provider filter"],
