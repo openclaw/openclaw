@@ -158,35 +158,13 @@ describe("google thinking policy", () => {
   });
 
   it.each([
-    ["off", "LOW"],
-    ["minimal", "LOW"],
-    ["low", "LOW"],
-    ["medium", "MEDIUM"],
-    ["adaptive", undefined],
-    ["high", "HIGH"],
-    ["xhigh", "HIGH"],
-  ] as const)("maps Gemini 3.1 Pro thinking level %s to %s", (thinkingLevel, expected) => {
-    expect(
-      resolveGoogleGemini3ThinkingLevel({
-        modelId: "gemini-3.1-pro-preview",
-        thinkingLevel,
-      }),
-    ).toBe(expected);
-  });
-
-  it.each([
-    [2048, "LOW"],
-    [2049, "HIGH"],
-  ] as const)("maps Gemini 3 Pro budget %s to %s", (thinkingBudget, expected) => {
-    expect(
-      resolveGoogleGemini3ThinkingLevel({
-        modelId: "gemini-pro-latest",
-        thinkingBudget,
-      }),
-    ).toBe(expected);
-  });
-
-  it.each([
+    ["gemini-3.1-pro-preview", "off", "LOW"],
+    ["gemini-3.1-pro-preview", "minimal", "LOW"],
+    ["gemini-3.1-pro-preview", "low", "LOW"],
+    ["gemini-3.1-pro-preview", "medium", "MEDIUM"],
+    ["gemini-3.1-pro-preview", "adaptive", undefined],
+    ["gemini-3.1-pro-preview", "high", "HIGH"],
+    ["gemini-3.1-pro-preview", "xhigh", "HIGH"],
     ["gemini-flash-latest", "off", "MINIMAL"],
     ["gemini-flash-latest", "minimal", "MINIMAL"],
     ["gemini-flash-latest", "low", "LOW"],
@@ -213,6 +191,8 @@ describe("google thinking policy", () => {
   });
 
   it.each([
+    ["gemini-pro-latest", 2048, "LOW"],
+    ["gemini-pro-latest", 2049, "HIGH"],
     ["gemini-3.1-flash-lite", -1, undefined],
     ["gemini-3.1-flash-lite", 0, "MINIMAL"],
     ["gemini-3.1-flash-lite", 2048, "LOW"],
