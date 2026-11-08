@@ -352,6 +352,8 @@ Copy controls. Reading a bundle requires `operator.read`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
+filter remains available while the installed inventory loads; inventory status
+and installation wait for the inventory and destination checks to finish. The
 **Skill workshop** tab shows [learned skills](/tools/skill-workshop) with their
 use counts and recent changes with **Undo**. **Learn from past conversations** opens
 a normal session with the selected agent's configured model and permitted tools.

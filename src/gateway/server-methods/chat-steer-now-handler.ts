@@ -16,7 +16,7 @@ import { assertValidParams } from "./validation.js";
 const METHOD = "chat.steerNow";
 
 export const chatSteerNowHandlers: GatewayRequestHandlers = {
-  [METHOD]: ({ params, respond, context, signal, sessionAccessAuthority }) => {
+  [METHOD]: async ({ params, respond, context, signal, sessionAccessAuthority }) => {
     if (!assertValidParams(params, validateChatSteerNowParams, METHOD, respond)) {
       return;
     }
@@ -44,8 +44,11 @@ export const chatSteerNowHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      signal?.throwIfAborted();
-      sessionAccessAuthority.assertCurrent();
+      const assertCurrent = () => {
+        signal?.throwIfAborted();
+        sessionAccessAuthority.assertCurrent();
+      };
+      assertCurrent();
       const source = getRpcSourceForGateway(params.runId, context.resolveGatewayContext);
       let result: ChatSteerNowResult = { status: "settled", tools: [] };
       if (source) {
@@ -54,7 +57,7 @@ export const chatSteerNowHandlers: GatewayRequestHandlers = {
           identity.agentId === target.agentId &&
           identity.sessionKey === target.sessionKey &&
           identity.sessionId === target.sessionId
-            ? sendSessionControllerSteerNow(source.input)
+            ? await sendSessionControllerSteerNow(source.input, assertCurrent)
             : { status: "unavailable", tools: [] };
       }
       respond(true, result);

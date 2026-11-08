@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createControlUiChatHistoryMessage as historyMessage } from "../test-helpers/control-ui-chat-history-fixtures.ts";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -8,7 +9,6 @@ import {
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
-import { createControlUiChatHistoryMessage as historyMessage } from "../test-helpers/control-ui-session-fixtures.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import { openPicker, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { selectFileAction } from "./chat-file-actions.test-support.ts";
