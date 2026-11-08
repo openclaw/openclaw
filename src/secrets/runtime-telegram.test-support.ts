@@ -9,8 +9,9 @@ const moduleId = resolveRelativeBundledPluginPublicModuleId({
   pluginId: "telegram",
   artifactBasename: "secret-contract-api.js",
 });
-const telegramSecrets: NonNullable<ReturnType<typeof loadChannelSecretContractApi>> =
-  await import(moduleId);
+const telegramSecrets: NonNullable<ReturnType<typeof loadChannelSecretContractApi>> = await import(
+  moduleId
+);
 if (!telegramSecrets.collectRuntimeConfigAssignments) {
   throw new Error("Missing Telegram secret contract api");
 }
