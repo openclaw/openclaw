@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
@@ -20,7 +20,12 @@ function toolRunner(root: string, command: CommandFixture) {
   return async (bin: string, args: string[]) => {
     const result = await command.run(bin, args, {
       cwd: root,
-      env: { HOME: root, TMPDIR: root, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+      env: {
+        HOME: root,
+        TMPDIR: root,
+        PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+        DEVELOPER_DIR: process.env.DEVELOPER_DIR,
+      },
     });
     if (result.status !== 0 || result.error) {
       throw new Error(`${bin}: ${result.stderr}`, { cause: result.error });
@@ -65,6 +70,7 @@ int main(int argc, char **argv) {
 
 it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
   ["cached", ""],
+  ["cached-metadata-corruption", ""],
   ["download", ""],
   ["archive-checksum", "sha256 mismatch"],
   ["executable-checksum", "executable checksum mismatch"],
@@ -138,6 +144,10 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
       };
       const releaseBytes = Buffer.from(JSON.stringify(release));
       await write("downloads/manifest.json", releaseBytes);
+      if (scenario === "cached-metadata-corruption") {
+        await write(`.cache/openclaw-bun/${tag}/manifest.json`, "invalid cached metadata");
+        await write(`.cache/openclaw-bun/${tag}/SHA256SUMS`, "invalid cached checksums");
+      }
       await write(
         "downloads/SHA256SUMS",
         [
@@ -172,6 +182,7 @@ cp "$fixture_downloads/$(basename "$2")" "$2"
             fixture_downloads: file("downloads"),
             fixture_curl_log: curlLog,
             HOME: root,
+            DEVELOPER_DIR: process.env.DEVELOPER_DIR,
           },
         },
       );
@@ -194,5 +205,28 @@ cp "$fixture_downloads/$(basename "$2")" "$2"
       expect(await run(bun, ["--revision"])).toBe(revision);
       expect(await run(bun, ["-p", "Bun.revision"])).toBe(commit);
       expect(JSON.parse(await readFile(file("runtime/bun-manifest.json"), "utf8")).tag).toBe(tag);
+      if (scenario === "cached") {
+        const sharedCache = command.createTempDir("openclaw-bun-shared-cache-");
+        await cp(file(".cache/openclaw-bun"), sharedCache, { recursive: true });
+        await write(`.ci-harness/${stageScript}`, await readFile(stageScript));
+        await write(".ci-harness/scripts/lib/openclaw-bun.json", JSON.stringify(pin));
+        const repeated = await command.run(
+          "/bin/bash",
+          [file(`.ci-harness/${stageScript}`), file("runtime"), process.platform, ...arches],
+          {
+            env: {
+              PATH: `${file("tools")}:${nodeDirectory}:/usr/bin:/bin`,
+              TMPDIR: root,
+              fixture_downloads: file("downloads"),
+              fixture_curl_log: curlLog,
+              HOME: root,
+              DEVELOPER_DIR: process.env.DEVELOPER_DIR,
+              OPENCLAW_BUN_CACHE_ROOT: sharedCache,
+            },
+          },
+        );
+        expect(repeated.status, repeated.stderr).toBe(0);
+        expect(await readFile(curlLog, "utf8")).toBe(downloadsMade);
+      }
     }),
 );
