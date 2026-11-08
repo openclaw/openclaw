@@ -77,7 +77,9 @@ To create the workspace and config folders without running the full onboarding w
 openclaw setup --baseline
 ```
 
-(Bare `openclaw setup` is an alias for `openclaw onboard` and runs the full interactive wizard.)
+Bare `openclaw setup` opens an interactive OpenClaw chat on a configured system
+and starts guided onboarding on a fresh one. Use `openclaw setup --wizard` to
+run onboarding explicitly. See [Setup CLI](/cli/setup) for the full routing order.
 
 Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)
 Memory workflow: [Memory](/concepts/memory)
