@@ -1,0 +1,2 @@
+54
+# Registered computer command recovery and close after failed resource initialization.
