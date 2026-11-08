@@ -1,5 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
 import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
+import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
@@ -97,6 +98,13 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
           ]}
         >
           {statusLabel(props.row, props.workingLabel)}
+        </span>
+        <span class="chat-subagent-activity__elapsed-compact" aria-hidden="true">
+          <Show when={props.row.status !== "queued" && props.row.session?.startedAt}>
+            {(startedAt) => (
+              <ElapsedTime startMs={startedAt()} endMs={props.row.session?.endedAt ?? null} />
+            )}
+          </Show>
         </span>
         <Show when={props.mobile}>
           <Icon name="chevronRight" class="chat-details-subagents__chevron" />
