@@ -17,9 +17,11 @@ Create `/scale/tmp` with mode 1777, export `TMPDIR=/scale/tmp`, and create writa
 The fixture materializes a 35.04 GiB SQLite database with compressible zero blobs,
 6,000 current sessions, and 62,000 workspace files totaling 1.1 GB. It creates one
 synthetic database seed under `/scale`; each subsequent sample reflinks that seed
-into its own protected inode and creates its own workspace. Nothing is copied
-from production. Fixture preparation, request formation, and cleanup are outside
-the timed owner command.
+into its own protected inode and creates its own workspace. The native
+`session-preservation-witness` owner captures all 6,000 original tuples before any
+rotation; the synthetic journal binds that complete witness's descriptor without
+changing its creation time. Nothing is copied from production. Fixture preparation,
+witness capture, request formation, and cleanup are outside the timed owner command.
 
 From `/proof`, run serially with five interleaved samples for each scenario:
 
