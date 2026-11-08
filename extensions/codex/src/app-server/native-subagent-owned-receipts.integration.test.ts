@@ -29,6 +29,8 @@ async function fixture(
     sourceCurrent?: () => void;
     remote?: boolean;
     yielded?: boolean;
+    parentStatus?: "completed" | "failed" | "interrupted";
+    bindAfterCompletion?: boolean;
   } = {},
 ) {
   const f = await ownedReceiptFixture(options.records);
@@ -62,7 +64,9 @@ async function fixture(
     client.close();
     vi.restoreAllMocks();
   });
-  parent.bindTurn("parent-turn");
+  if (!options.bindAfterCompletion) {
+    parent.bindTurn("parent-turn");
+  }
   await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
   await client.notify(
     childTurnCompletedNotification({
@@ -85,9 +89,12 @@ async function fixture(
     childTurnCompletedNotification({
       threadId: "parent-thread",
       turnId: "parent-turn",
-      status: "completed",
+      status: options.parentStatus ?? "completed",
     }),
   );
+  if (options.bindAfterCompletion) {
+    parent.bindTurn("parent-turn");
+  }
   return { ...f, client, runtime, monitor, parent, attempts, source };
 }
 
@@ -97,6 +104,28 @@ it("does not redeliver consumed native input when cold resume omitted raw receip
   await f.attempts.settle();
   expect(f.runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
   expect(f.source.release).toHaveBeenCalledOnce();
+});
+
+it.each([
+  { parentStatus: "failed", bindAfterCompletion: false },
+  { parentStatus: "interrupted", bindAfterCompletion: false },
+  { parentStatus: "failed", bindAfterCompletion: true },
+  { parentStatus: "interrupted", bindAfterCompletion: true },
+] as const)(
+  "retains fallback when parent $parentStatus, bind after completion: $bindAfterCompletion",
+  async ({ parentStatus, bindAfterCompletion }) => {
+    const f = await fixture({ parentStatus, bindAfterCompletion });
+    await f.parent.unregister();
+    await f.attempts.settle();
+    expect(f.runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce();
+  },
+);
+
+it("observes a successful parent completion that arrived before binding", async () => {
+  const f = await fixture({ bindAfterCompletion: true });
+  await f.parent.unregister();
+  await f.attempts.settle();
+  expect(f.runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
 });
 
 it.each([

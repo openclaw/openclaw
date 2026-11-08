@@ -118,14 +118,17 @@ export function observeNativeParentTurn(
   if (notification.method === "turn/started") {
     state.turnIds.add(turnId);
   } else if (notification.method === "turn/completed") {
+    const succeeded =
+      isJsonObject(params?.turn) && readString(params.turn, "status") === "completed";
     for (const owner of state.owners.values()) {
       if (owner.turnId === turnId) {
         owner.modelExecutionSettled = true;
+        owner.modelExecutionSucceeded = succeeded ? true : undefined;
         owner.nativeReviewRequirement = undefined;
       }
     }
     if ([...state.owners.values()].some((owner) => !owner.turnId)) {
-      (state.completedModelTurnsBeforeBinding ??= new Set()).add(turnId);
+      (state.completedModelTurnsBeforeBinding ??= new Map()).set(turnId, succeeded);
     }
   }
 }
@@ -327,6 +330,9 @@ export async function registerNativeSubagentParent(
           modelExecutionSettled: registeredState.completedModelTurnsBeforeBinding?.has(turnId)
             ? true
             : undefined,
+          modelExecutionSucceeded: registeredState.completedModelTurnsBeforeBinding?.get(turnId)
+            ? true
+            : undefined,
           nativeReviewRequirement: undefined,
         };
         owner = current;
@@ -334,6 +340,11 @@ export async function registerNativeSubagentParent(
       }
       if (!current.turnId && registeredState.completedModelTurnsBeforeBinding?.has(turnId)) {
         current.modelExecutionSettled = true;
+        current.modelExecutionSucceeded = registeredState.completedModelTurnsBeforeBinding.get(
+          turnId,
+        )
+          ? true
+          : undefined;
       }
       current.turnId = turnId;
       if (![...registeredState.owners.values()].some((candidate) => !candidate.turnId)) {

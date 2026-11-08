@@ -19,7 +19,7 @@ export function observeNativeReceiptsBeforeRetirement(params: {
     !turnId ||
     !history ||
     !assertLifecycleCurrent ||
-    !owner.modelExecutionSettled ||
+    !owner.modelExecutionSucceeded ||
     owner.modelExecutionCancelled ||
     owner.isTurnYielded?.()
   ) {
@@ -43,6 +43,7 @@ export function observeNativeReceiptsBeforeRetirement(params: {
           !params.isCurrent() ||
           state.owners.get(ownerKey) !== owner ||
           owner.turnId !== turnId ||
+          !owner.modelExecutionSucceeded ||
           owner.modelExecutionCancelled ||
           owner.isTurnYielded?.() ||
           (owner.completionCustody && !owner.completionCustody.isCurrent())

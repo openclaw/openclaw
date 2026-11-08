@@ -121,6 +121,7 @@ export type ParentOwner = {
   interruptModelExecution?: (threadId: string, turnId: string) => void;
   modelExecutionCancelled?: true;
   modelExecutionSettled?: true;
+  modelExecutionSucceeded?: true;
   isTurnYielded?: () => boolean;
   nativeReviewRequirement?: { required: boolean };
   claimDirectChild?: (threadId: string) => (() => void) | undefined;
@@ -185,7 +186,7 @@ export type ParentState = {
   owners: Map<symbol, ParentOwner>;
   modelSourceReferences?: number;
   modelSourceWaiters?: Set<() => void>;
-  completedModelTurnsBeforeBinding?: Set<string>;
+  completedModelTurnsBeforeBinding?: Map<string, boolean>;
   // turn/started can precede bindTurn; retain receipt ownership until the
   // foreground run has finalized its reply and releases this registration.
   turnIds: Set<string>;
