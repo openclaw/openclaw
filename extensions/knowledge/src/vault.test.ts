@@ -69,6 +69,7 @@ it.each(["München", "Mu\u0308nchen"])("lists canonical %s titles", async (title
   expect(aliases).toContain("sample_project_garden");
   expect((await vault.list({ kind: "claim" })).total).toBe(1);
   expect((await vault.list({ query: "not here" })).total).toBe(0);
+  expect(Check(contract.operations.records.input, { offset: 501 })).toBe(true);
   expect(Check(contract.operations.records.input, { limit: 101 })).toBe(false);
   expect(Check(contract.operations.records.input, { root: "/etc" })).toBe(false);
 });
