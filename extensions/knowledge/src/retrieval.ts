@@ -262,7 +262,7 @@ export function keywordExpression(input: SearchInput): string {
   const nfc = tokens.map((t) => t.normalize("NFC")),
     nfd = tokens.map((t) => t.normalize("NFD"));
   const spellings = [...new Set([tokens, nfc, nfd].map(build))];
-  return spellings.length === 1 ? spellings[0] : `(${spellings.join(") OR (")})`;
+  return spellings.length === 1 ? spellings[0]! : `(${spellings.join(") OR (")})`;
 }
 
 const FTS_COLUMNS = "id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2'";
