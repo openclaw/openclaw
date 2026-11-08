@@ -285,6 +285,7 @@ export function findCutPoint(
     }
     cutIndex = fittingCut;
   }
+  const messageCutIndex = cutIndex;
   while (cutIndex > startIndex) {
     const prevEntry = entries[cutIndex - 1];
     if (!prevEntry) {
@@ -300,11 +301,13 @@ export function findCutPoint(
     cutIndex--;
   }
   const cutEntry = entries[cutIndex];
-  if (!cutEntry) {
+  const messageCutEntry = entries[messageCutIndex];
+  if (!cutEntry || !messageCutEntry) {
     throw new Error("compaction cut point does not reference a session entry");
   }
-  const startsTurn = isTurnStartEntry(cutEntry);
-  const turnStartIndex = startsTurn ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
+  // Metadata retained before the cut does not define the message boundary.
+  const startsTurn = isTurnStartEntry(messageCutEntry);
+  const turnStartIndex = startsTurn ? -1 : findTurnStartIndex(entries, messageCutIndex, startIndex);
 
   return {
     firstKeptEntryIndex: cutIndex,

@@ -20,6 +20,18 @@ const assistantText = (content: string, timestamp: number) =>
 
 const toolResultText = (content: string, timestamp: number) =>
   toolResult(content, { toolName: "bash", timestamp });
+
+function bootstrapMarker(index: number): SessionTreeEntry {
+  return {
+    type: "custom",
+    id: `entry-${index}`,
+    parentId: index === 0 ? null : `entry-${index - 1}`,
+    timestamp: new Date(index + 1).toISOString(),
+    customType: "openclaw:bootstrap-context:full",
+    data: { timestamp: index },
+  } as SessionTreeEntry;
+}
+
 const callingAssistant = (name: string, id: string): AgentMessage => ({
   ...assistantText("", 2),
   content: [{ ...toolCall(name, {}, id), async: true }],
@@ -175,6 +187,71 @@ describe("findCutPoint", () => {
     const result = findCutPoint(entries, 0, entries.length, KEEP_RECENT_TOKENS);
 
     expect(result.firstKeptEntryIndex).toBe(3);
+  });
+
+  it("classifies the retained user message after metadata as a complete turn", () => {
+    const big = (label: string) => `${label} ${"checklist line. ".repeat(250)}`;
+    const entries = [
+      messageEntry(userText(big("turn 1"), 1), 0),
+      messageEntry(assistantText("reply 1", 2), 1),
+      bootstrapMarker(2),
+      messageEntry(userText(big("turn 2"), 3), 3),
+      messageEntry(assistantText("reply 2", 4), 4),
+      bootstrapMarker(5),
+    ];
+
+    expect(findCutPoint(entries, 0, entries.length, 500)).toEqual({
+      firstKeptEntryIndex: 2,
+      turnStartIndex: -1,
+      isSplitTurn: false,
+    });
+  });
+
+  it("keeps a metadata-backed assistant cut classified as a split turn", () => {
+    const entries = [
+      messageEntry(userText("turn 1", 1), 0),
+      messageEntry(assistantText("reply 1", 2), 1),
+      messageEntry(userText("turn 2", 3), 2),
+      bootstrapMarker(3),
+      messageEntry(assistantText("partial reply ".repeat(300), 4), 4),
+    ];
+
+    expect(findCutPoint(entries, 0, entries.length, 500)).toEqual({
+      firstKeptEntryIndex: 3,
+      turnStartIndex: 2,
+      isSplitTurn: true,
+    });
+  });
+
+  it("preserves a request boundary after retained metadata", () => {
+    const pending = messageEntry(userText("pending request", 4), 3);
+    const entries = [
+      messageEntry(userText("turn 1", 1), 0),
+      messageEntry(assistantText("reply 1", 2), 1),
+      bootstrapMarker(2),
+      pending,
+    ];
+
+    expect(
+      findCutPoint(entries, 0, entries.length, 1, {
+        requestBoundary: { entryId: pending.id, preserve: true },
+      }),
+    ).toEqual({ firstKeptEntryIndex: 2, turnStartIndex: -1, isSplitTurn: false });
+  });
+
+  it("keeps a metadata-backed tool exchange atomic", () => {
+    const [start, ...messages] = asynchronousMessages();
+    if (!start) {
+      throw new Error("The fixture is missing its starting user message");
+    }
+    const entries = [messageEntry(start, 0), bootstrapMarker(1)];
+    entries.push(...messages.map((message, index) => messageEntry(message, index + 2)));
+
+    expect(findCutPoint(entries, 0, entries.length, 100)).toEqual({
+      firstKeptEntryIndex: 1,
+      turnStartIndex: 0,
+      isSplitTurn: true,
+    });
   });
 
   it.each([
