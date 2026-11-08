@@ -189,10 +189,11 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  // Diagnostic, not a regression/fix: preserve the observed dropped-click outcome.
+  // Desired-behavior regression: keep editing available during recovery, then
+  // admit an ordinary Send without waiting for the first history snapshot.
   // A fresh browser has no accepted history; hold real replies independently of
   // the real post-hello recovery digest, without replacing either result.
-  it("diagnoses ordinary Send dropped while recovery and initial history are pending", async (context) => {
+  it("allows editing during recovery and sends before initial history completes", async (context) => {
     await suite.runScenario(context, {
       retainedState: () => instance.stateDir,
       run: async () => {
@@ -214,6 +215,8 @@ suite.define(() => {
         url.search = "";
         let stage = "install independent recovery and history holds";
         let sendRequests = 0;
+        let sendRequest: Frame | undefined;
+        let sendResponse: Frame | undefined;
         let connectRequests = 0;
         let historyResponses = 0;
         let successfulHistoryResponses = 0;
@@ -309,13 +312,19 @@ suite.define(() => {
                       sessionKey: frame.params?.sessionKey,
                     });
                     if (frame.method === "connect") connectRequests += 1;
-                    if (frame.method === "chat.send") sendRequests += 1;
+                    if (frame.method === "chat.send") {
+                      sendRequests += 1;
+                      sendRequest = frame;
+                    }
                   }
                   server.send(message);
                 });
                 server.onMessage((message) => {
                   const frame: Frame = JSON.parse(message.toString());
                   const request = frame.id ? pending.get(frame.id) : undefined;
+                  if (frame.type === "res" && request?.method === "chat.send") {
+                    sendResponse = frame;
+                  }
                   const history =
                     frame.type === "res" &&
                     ["chat.startup", "chat.history"].includes(request?.method ?? "") &&
@@ -351,6 +360,9 @@ suite.define(() => {
                     recoveryPending: state.client?.recoveryScopeReady === false,
                     historyLoading: state.chatLoading,
                     draftLength: state.chatMessage.length,
+                    runId: state.chatRunId,
+                    sending: state.chatSending,
+                    hasError: Boolean(state.chatError || state.lastError || state.chatRunError),
                     // chatQueue is the real outbox owner's current-scope projection,
                     // not a test-owned array or a count inferred from the DOM.
                     outboxCount: state.chatQueue.length,
@@ -367,13 +379,15 @@ suite.define(() => {
                   };
                 });
               let restoreHandler = false;
-              const release = async () => {
-                holdHistory = false;
+              const releaseRecovery = async () => {
                 await page.evaluate(() => {
                   (
                     window as Window & { releaseSendDiagnostic?: () => void }
                   ).releaseSendDiagnostic?.();
                 });
+              };
+              const releaseHistory = () => {
+                holdHistory = false;
                 for (const deliver of heldHistory.splice(0)) deliver();
               };
               try {
@@ -396,8 +410,8 @@ suite.define(() => {
                 const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
                 const draft = "Finish this fixture turn.";
                 await composer.fill(draft);
-                const send = page.getByRole("button", { name: "Send message", exact: true });
-                await expect.poll(() => send.isEnabled()).toBe(true);
+                // The disabled control names its hold reason, not "Send message".
+                const send = pane.locator("button.chat-send-btn--send");
                 await pane.evaluate((element) => {
                   const host = element as HTMLElement & {
                     state: ChatPageHost;
@@ -434,64 +448,166 @@ suite.define(() => {
                   };
                 });
                 restoreHandler = true;
-                stage = "click enabled Send and observe dropped admission";
-                await send.click();
-                await expect
-                  .poll(browserState)
-                  .toMatchObject({ handlerEntries: 1, handlerSettled: 1, activeSubmitGuards: 0 });
-                const afterClick = await browserState();
-                Object.assign(proof, {
-                  connectedAtClick: afterClick.connected,
-                  recoveryReadyAtClick: afterClick.recoveryReady,
-                  // Fresh pane + no delivered startup/history + its loading flag:
-                  // evidence for initial unavailability, not a replaced predicate.
-                  initialHistoryUnavailableAtClick:
-                    afterClick.historyLoading && deliveredHistoryResponses === 0,
-                  sendEnabledAtClick: true,
-                  draftLengthAfterClick: afterClick.draftLength,
-                  handlerEntries: afterClick.handlerEntries,
-                  handlerSettled: afterClick.handlerSettled,
-                  outboxCountAfterClick: afterClick.outboxCount,
-                  sendRequestsAfterClick: sendRequests,
-                  heldRecoveryDigests: afterClick.heldDigests,
-                });
-                // This deliberately asserts the broken outcome, not the desired fix.
-                expect(afterClick).toMatchObject({
-                  recoveryReady: false,
-                  historyLoading: true,
-                  draftLength: draft.length,
-                  outboxCount: 0,
-                });
-                expect(deliveredHistoryResponses).toBe(0);
-                expect(sendRequests).toBe(0);
+                stage = "keep draft editing available but disable Send during recovery";
+                await expect.poll(() => composer.isEditable()).toBe(true);
                 expect(await composer.inputValue()).toBe(draft);
-                stage = "release real recovery and history; observe no automatic send";
-                await release();
-                await expect.poll(browserState).toMatchObject({
-                  phase: "connected",
-                  recoveryReady: true,
-                  historyLoading: false,
-                  handlerEntries: 1,
-                  handlerSettled: 1,
-                  activeSubmitGuards: 0,
-                  draftLength: draft.length,
-                  outboxCount: 0,
-                });
-                // Named completion boundaries, not a speculative sleep: recovery
-                // notification, authoritative history, and the pane's render settle.
                 await pane.evaluate(async (element) => {
                   await (element as HTMLElement & { updateComplete: Promise<boolean> })
                     .updateComplete;
                 });
-                expect(await composer.inputValue()).toBe(draft);
+                const beforeRecovery = await browserState();
+                // Record the actual control state before the assertion so a red
+                // run retains evidence instead of a hard-coded desired value.
+                const sendEnabledWhileRecovering = await send.isEnabled();
+                Object.assign(proof, {
+                  connectedWhileRecovering: beforeRecovery.connected,
+                  recoveryReadyBeforeRelease: beforeRecovery.recoveryReady,
+                  initialHistoryUnavailableBeforeRelease:
+                    beforeRecovery.historyLoading && deliveredHistoryResponses === 0,
+                  sendEnabledWhileRecovering,
+                  draftLengthBeforeRelease: beforeRecovery.draftLength,
+                  handlerEntriesBeforeRelease: beforeRecovery.handlerEntries,
+                  outboxCountBeforeRelease: beforeRecovery.outboxCount,
+                  sendRequestsBeforeRelease: sendRequests,
+                  heldRecoveryDigests: beforeRecovery.heldDigests,
+                });
+                // Crop to the synthetic composer and Send control; never capture
+                // browser chrome, connection details, or the invitation surface.
+                await pane.locator(".agent-chat__input--chat").screenshot({
+                  path: path.join(artifactDir, "recovery-send.png"),
+                  animations: "disabled",
+                });
+                expect(sendEnabledWhileRecovering).toBe(false);
+                expect(beforeRecovery).toMatchObject({
+                  recoveryReady: false,
+                  historyLoading: true,
+                  draftLength: draft.length,
+                  handlerEntries: 0,
+                  outboxCount: 0,
+                });
                 expect(sendRequests).toBe(0);
+                expect(deliveredHistoryResponses).toBe(0);
+
+                stage = "release only recovery with genuine initial history still withheld";
+                await releaseRecovery();
+                await expect.poll(browserState).toMatchObject({
+                  phase: "connected",
+                  recoveryReady: true,
+                  historyLoading: true,
+                  draftLength: draft.length,
+                  handlerEntries: 0,
+                  outboxCount: 0,
+                });
+                await expect.poll(() => send.isEnabled()).toBe(true);
+                expect(await composer.inputValue()).toBe(draft);
+                expect(deliveredHistoryResponses).toBe(0);
+                expect(sendRequests).toBe(0);
+                proof.sendEnabledAfterRecovery = await send.isEnabled();
+                proof.historyPendingAfterRecovery = (await browserState()).historyLoading;
+
+                stage = "send the original draft through the real control before history completes";
+                await send.click();
+                await expect
+                  .poll(() => sendResponse)
+                  .toMatchObject({
+                    ok: true,
+                    payload: { runId: expect.any(String), status: "started" },
+                  });
+                expect(sendRequests).toBe(1);
+                expect(sendRequest?.params).toMatchObject({
+                  sessionKey: diagnosticSession,
+                  message: draft,
+                  idempotencyKey: expect.any(String),
+                });
+                const runId = sendRequest?.params?.idempotencyKey;
+                expect(sendResponse?.payload?.runId).toBe(runId);
+                await expect.poll(() => provider.requests()).toBe(1);
+                const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+                await stop.waitFor({ state: "visible" });
+                await expect.poll(browserState).toMatchObject({
+                  recoveryReady: true,
+                  historyLoading: true,
+                  runId,
+                  sending: false,
+                  handlerEntries: 1,
+                  handlerSettled: 1,
+                  activeSubmitGuards: 0,
+                  draftLength: 0,
+                  hasError: false,
+                });
+                expect(deliveredHistoryResponses).toBe(0);
+                Object.assign(proof, {
+                  originalDraftSent: sendRequest?.params?.message === draft,
+                  sendAccepted:
+                    sendResponse?.ok === true && sendResponse.payload?.status === "started",
+                  acceptedRunMatchesRequest: sendResponse?.payload?.runId === runId,
+                  providerRequestsWhileHistoryPending: provider.requests(),
+                  stopVisibleWhileHistoryPending: await stop.isVisible(),
+                  historyPendingAfterSend: (await browserState()).historyLoading,
+                  deliveredHistoryResponsesAtSend: deliveredHistoryResponses,
+                });
+
+                stage = "release history and provider; settle the accepted run";
+                releaseHistory();
+                provider.release();
+                await page.locator(".chat-bubble").getByText(replyText, { exact: true }).waitFor();
+                await expect.poll(browserState).toMatchObject({
+                  recoveryReady: true,
+                  historyLoading: false,
+                  runId: null,
+                  sending: false,
+                  handlerEntries: 1,
+                  handlerSettled: 1,
+                  activeSubmitGuards: 0,
+                  draftLength: 0,
+                  outboxCount: 0,
+                  hasError: false,
+                });
+                await stop.waitFor({ state: "detached" });
+                await expect
+                  .poll(async () => {
+                    const result = await instance.cli([
+                      "gateway",
+                      "call",
+                      "sessions.list",
+                      "--json",
+                      "--params",
+                      JSON.stringify({ agentId: "main", limit: 50 }),
+                    ]);
+                    expect(result.code, result.stderr).toBe(0);
+                    const rows: SessionsListResult = JSON.parse(result.stdout);
+                    return rows.sessions.find((row) => row.key === diagnosticSession);
+                  })
+                  .toMatchObject({ hasActiveRun: false, status: "done", lastRunId: runId });
                 expect(connectRequests).toBe(1);
+                expect(sendRequests).toBe(1);
+                expect(provider.requests()).toBe(1);
                 expect(deliveredHistoryResponses).toBeGreaterThan(0);
                 expect(proof.browserFailed).not.toBe(true);
-                proof.noAutomaticSendAtRecoveryCompletion = true;
-                stage = "controlled dropped Send reproduced";
+                proof.visibleReplyAndRunSettled = true;
+                stage = "draft preserved through recovery; Send completed before initial history";
               } finally {
-                await release();
+                try {
+                  const finalState = await browserState();
+                  Object.assign(proof, {
+                    handlerEntries: finalState.handlerEntries,
+                    handlerSettled: finalState.handlerSettled,
+                    finalDraftLength: finalState.draftLength,
+                    finalOutboxCount: finalState.outboxCount,
+                    finalOwnsRun: finalState.runId !== null,
+                    finalHistoryLoading: finalState.historyLoading,
+                    finalRecoveryReady: finalState.recoveryReady,
+                    finalHasError: finalState.hasError,
+                  });
+                } catch {
+                  proof.finalBrowserStateUnavailable = true;
+                }
+                try {
+                  await releaseRecovery();
+                } finally {
+                  releaseHistory();
+                  provider.release();
+                }
                 if (restoreHandler)
                   await pane.evaluate((element) => {
                     (

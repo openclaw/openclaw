@@ -1,6 +1,6 @@
 # Diagnostic-only branch. Never merge this workflow into the release branch.
 name: Release 37 UI diagnostic (non-qualifying)
-run-name: Release 37 controlled-Send diagnostic ${{ inputs.dispatch_id }}
+run-name: Release 37 controlled-Send regression ${{ inputs.dispatch_id }}
 on:
   workflow_dispatch:
     inputs:
@@ -53,20 +53,21 @@ jobs:
           OPENCLAW_BUILD_PRIVATE_QA: "1"
           OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1"
         run: pnpm build
-      - name: Diagnose controlled ordinary Send boundary
+      - name: Prove desired controlled Send behavior (red before fix, green after)
         env:
           OPENCLAW_CAPTURE_UI_PROOF: "0"
           OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/release37-ui-diagnostic
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/release37-ui-timeouts
         run: |
-          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e-prebuilt.config.ts --configLoader runner --reporter verbose --reporter github-actions --reporter default --reporter ./scripts/lib/vitest-resource-reporter.mts ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts --testNamePattern 'diagnoses ordinary Send dropped while recovery and initial history are pending'
-      - name: Retain only sanitized diagnostic counters
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e-prebuilt.config.ts --configLoader runner --reporter verbose --reporter github-actions --reporter default --reporter ./scripts/lib/vitest-resource-reporter.mts ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts --testNamePattern 'allows editing during recovery and sends before initial history completes'
+      - name: Retain only sanitized diagnostic counters and composer proof
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release37-ui-diagnostic-${{ github.run_id }}
           path: |
             .artifacts/release37-ui-diagnostic/stop-finished-run-*/proof.json
+            .artifacts/release37-ui-diagnostic/stop-finished-run-*/recovery-send.png
             .artifacts/release37-ui-timeouts/failure-*/failure.public.json
           if-no-files-found: warn
           retention-days: 7
