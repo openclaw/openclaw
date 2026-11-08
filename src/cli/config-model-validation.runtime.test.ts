@@ -355,6 +355,72 @@ describe("config model validation with provider runtime", () => {
     });
   });
 
+  it.each([
+    { modelId: "native-only", runtime: "pin-native", errors: [] },
+    {
+      modelId: "native-unlisted",
+      runtime: "pin-native",
+      errors: ["Unknown model: pin-alpha/native-unlisted"],
+    },
+    {
+      modelId: "native-only",
+      runtime: "openclaw",
+      errors: ["Unknown model: pin-alpha/native-only"],
+    },
+  ])(
+    "accepts $modelId on $runtime only when that runtime lists it",
+    async ({ modelId, runtime, errors }) => {
+      await withProviderFixtures(async ({ config, state }) => {
+        const id = "pin-native";
+        const plugin = writePlugin({
+          id,
+          dir: state.path("plugins", id),
+          body: `module.exports = {
+  id: ${JSON.stringify(id)},
+  register(api) {
+    api.registerAgentHarness({
+      id: ${JSON.stringify(id)},
+      label: ${JSON.stringify(id)},
+      authBootstrap: "harness",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => ({ ok: false, error: "unused" }),
+      loadModelCatalog: async () => [
+        { id: "native-only", name: "Native only", provider: "pin-alpha", nativeRuntime: ${JSON.stringify(id)} },
+      ],
+    });
+  },
+};`,
+        });
+        writeFixtureJsonSync(path.join(plugin.dir, "openclaw.plugin.json"), {
+          id,
+          configSchema: { type: "object", additionalProperties: false, properties: {} },
+          activation: { onAgentHarnesses: [id] },
+        });
+        config.plugins!.allow!.push(id);
+        config.plugins!.load!.paths!.push(plugin.file);
+        config.plugins!.entries![id] = { enabled: true };
+        const ref = `pin-alpha/${modelId}`;
+        config.agents!.defaults!.model = { primary: ref };
+        // Another binding loads the harness catalog even when this ref selects another runtime.
+        config.agents!.defaults!.models = {
+          "pin-alpha/harness-anchor": { agentRuntime: { id } },
+          [ref]: { agentRuntime: { id: runtime } },
+        };
+
+        const result = await checkTouchedTextModelRefs({
+          config,
+          touchedPaths: [["agents", "defaults", "model", "primary"]],
+        });
+
+        expect(result).toEqual({
+          refsChecked: 1,
+          refsTotal: 1,
+          errors: errors.map((error) => expect.stringContaining(error)),
+        });
+      });
+    },
+  );
+
   it.each(["disabled", "denied", "not allowed"] as const)(
     "rejects a %s provider even when an ambient registry has its hook",
     async (policy) => {
