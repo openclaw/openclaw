@@ -9,6 +9,8 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
+import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
+import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { createMessageReceiptFromOutboundResults } from "../channels/message/receipt.js";
@@ -16,6 +18,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   registerAgentRunDelegatedAuthorityClosedHandler,
   validateAgentRunDelegatedAuthority,
@@ -38,6 +41,46 @@ import { getTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plu
 export type Response = Awaited<ReturnType<typeof dispatchGatewayMethodInProcessRaw>>;
 export const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
+
+export async function finishAuthorityProofReply(
+  command: AgentCommandGatewayIngressOpts,
+  text: string,
+) {
+  const { terminalReply } = prepareAgentRunTerminalReply({ rawText: text });
+  const loaded = await loadSessionEntryAsync(command.sessionKey!, { agentId: "main" });
+  await sessionAccessor.persistSessionTranscriptTurn(
+    {
+      agentId: "main",
+      sessionKey: command.sessionKey!,
+      sessionId: loaded.entry!.sessionId,
+      storePath: loaded.storePath,
+    },
+    {
+      cwd: "/tmp",
+      runId: command.runId,
+      expectedSessionId: loaded.entry!.sessionId,
+      touchSessionEntry: false,
+      updateMode: "none",
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            phase: "final_answer",
+            stopReason: "stop",
+            content: [{ type: "text", text }],
+          },
+          now: Date.now(),
+        },
+      ],
+    },
+  );
+  emitAgentEvent({
+    runId: command.runId!,
+    stream: "lifecycle",
+    data: { phase: "end", startedAt: 1, endedAt: Date.now(), terminalReply },
+  });
+  return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1, terminalReply } };
+}
 
 export async function readEffectFile(file: string): Promise<Buffer | undefined> {
   try {

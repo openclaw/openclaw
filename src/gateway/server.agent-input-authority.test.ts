@@ -1,25 +1,29 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { normalizeAcceptedSessionSpawnResult } from "../agents/accepted-session-spawn.js";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
-import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import { captureAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
+import { createRequesterYieldCallback } from "../agents/openclaw-tools.requester-yield.js";
+import { settleRequesterAfterSessionSpawns } from "../agents/subagents/registry/subagent-registry.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import * as followupCustody from "../agents/tools/sessions-send-followup-custody.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
+import { createSessionsSpawnTool } from "../agents/tools/sessions-spawn-tool.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
@@ -30,16 +34,18 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
 import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import * as gatewayDispatch from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
 import { runIndependentCreationInputCase } from "./server.agent-input-authority.create.test-helper.js";
 import {
+  configureProofModelProvider,
+  finishAuthorityProofReply,
   holdExecution,
   installAuthorityProofGateway,
 } from "./server.agent-runtime-authority-proof.test-support.js";
@@ -255,40 +261,7 @@ describe("spawn input ownership transfer", () => {
         }
         const text =
           opts.sessionKey === childKey ? "delayed child result" : "received child result";
-        const { terminalReply } = prepareAgentRunTerminalReply({ rawText: text });
-        const loaded = await loadSessionEntryAsync(opts.sessionKey!, { agentId: "main" });
-        await sessionAccessor.persistSessionTranscriptTurn(
-          {
-            agentId: "main",
-            sessionKey: opts.sessionKey!,
-            sessionId: loaded.entry!.sessionId,
-            storePath: loaded.storePath,
-          },
-          {
-            cwd: "/tmp",
-            runId: opts.runId,
-            expectedSessionId: loaded.entry!.sessionId,
-            touchSessionEntry: false,
-            updateMode: "none",
-            messages: [
-              {
-                message: {
-                  role: "assistant",
-                  phase: "final_answer",
-                  stopReason: "stop",
-                  content: [{ type: "text", text }],
-                },
-                now: Date.now(),
-              },
-            ],
-          },
-        );
-        emitAgentEvent({
-          runId: opts.runId!,
-          stream: "lifecycle",
-          data: { phase: "end", startedAt: 1, endedAt: Date.now(), terminalReply },
-        });
-        return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1, terminalReply } };
+        return finishAuthorityProofReply(opts, text);
       });
       const unblock = () => {
         releaseDispatch.resolve();
@@ -341,6 +314,302 @@ describe("spawn input ownership transfer", () => {
         replyObserver.mockRestore();
         executionSpy.mockRestore();
         signal.removeEventListener("abort", unblock);
+      }
+    },
+  );
+
+  it.for(
+    (["return", "successor"] as const).flatMap((boundary) =>
+      (["live", "operator-revoked", "requester-replaced", "target-replaced"] as const).map(
+        (change) => ({ boundary, change }),
+      ),
+    ),
+  )(
+    "revalidates retained peer $boundary-$change authority before input staging",
+    async ({ boundary, change }, { signal }) => {
+      await configureProofModelProvider();
+      await prepareGatewayReplyRuntimeForTest();
+      const context = getContext();
+      const cfg = context.getRuntimeConfig();
+      const runId = randomUUID();
+      const parentKey = `agent:main:dashboard:peer-return-parent-${runId}`;
+      const targetKey = `agent:main:dashboard:peer-return-target-${runId}`;
+      const client = createOperatorClient({
+        profileName: `peer-return-${runId}`,
+        scopes: ["operator.admin"],
+      });
+      for (const sessionKey of [parentKey, targetKey]) {
+        await sessionAccessor.upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          { sessionId: sessionKey, updatedAt: Date.now() },
+        );
+      }
+      const parentScope = await inputScope(parentKey, parentKey);
+      const targetScope = await inputScope(targetKey, targetKey);
+      const before = sessionAccessor.loadTranscriptEventsSync(parentScope);
+      const operator = expectDefined(
+        await captureGatewayOperatorRunAuthority({ client, context }),
+        "Expected original peer operator authority",
+      );
+      const admission = prepareAdmission(cfg, `requester-${runId}`, "agent", operator.authority);
+      const admitted = await admission.admit("embedded");
+      const participants = createReplyTurnParticipants({ operatorAuthority: operator.authority });
+      const reached = createDeferred();
+      const resume = createDeferred();
+      const finished = createDeferred();
+      const yielded = createDeferred();
+      void yielded.promise.catch(() => {});
+      const releaseChild = createDeferred();
+      let replyWork: Promise<unknown> | undefined;
+      let retained: Awaited<ReturnType<typeof followupCustody.prepareSessionsSendFollowup>>;
+      const prepareCustody = followupCustody.prepareSessionsSendFollowup;
+      const custody = vi
+        .spyOn(followupCustody, "prepareSessionsSendFollowup")
+        .mockImplementation(async (params) => {
+          const request = await prepareCustody(params);
+          if (params.runId === runId) {
+            retained = request;
+          }
+          return request;
+        });
+      const requests = vi.spyOn(context, "trackExecution");
+      const settleRequests = () =>
+        Promise.allSettled(
+          requests.mock.results.flatMap((result) =>
+            result.type === "return" ? [result.value] : [],
+          ),
+        );
+      const release = () => {
+        resume.resolve();
+        releaseChild.resolve();
+      };
+      signal.addEventListener("abort", release, { once: true });
+      const executions: string[] = [];
+      let targetStages = 0;
+      let heldStages = 0;
+      const stageInput = pendingInputs.stageSessionPendingInput;
+      const stage = vi
+        .spyOn(pendingInputs, "stageSessionPendingInput")
+        .mockImplementation(async (...args) => {
+          if (args[0].sessionKey === targetKey) {
+            targetStages += 1;
+          }
+          if (
+            boundary === "return"
+              ? args[0].sessionKey === parentKey
+              : args[0].sessionKey === targetKey && targetStages > 1
+          ) {
+            heldStages += 1;
+            reached.resolve();
+            await resume.promise;
+          }
+          return stageInput(...args);
+        });
+      const continueWork = gatewayWork.runWithGatewayDetachedWorkContinuation;
+      const observer = vi
+        .spyOn(gatewayWork, "runWithGatewayDetachedWorkContinuation")
+        .mockImplementation((work, holder) => {
+          const pending = continueWork(work, holder);
+          if (holder === "session:a2a-send") {
+            replyWork = pending;
+            void pending.then(
+              () => finished.resolve(),
+              () => finished.resolve(),
+            );
+          }
+          return pending;
+        });
+      // The model-driver fixture invokes real tools, custody, yield settlement, dispatch and writes.
+      agentCommandMock.mockImplementation(async (input) => {
+        try {
+          const command = input as AgentCommandGatewayIngressOpts;
+          executions.push(command.sessionKey!);
+          await command.userTurnTranscriptRecorder?.persistApproved();
+          if (command.runId === runId) {
+            const targetAdmission = prepareAgentRunAdmission({
+              cfg,
+              operationalRunInstance: expectDefined(command.operationalRunInstance, "target run"),
+              operatorAuthority: command.operatorAuthority,
+              facts: {
+                runId,
+                agentId: "main",
+                ingress: { kind: "gateway-client", boundary: "agent", state: "present" },
+              },
+            });
+            try {
+              const targetRun = await targetAdmission.admit("embedded");
+              await command.onAdmittedRunContext?.(targetRun);
+              await command.onExecutionStarted?.();
+              const spawned = await withGatewayToolCallerIdentity(
+                caller(targetRun, targetKey),
+                () =>
+                  createSessionsSpawnTool({
+                    agentSessionKey: targetKey,
+                    requesterTurnRunId: runId,
+                    requesterRunId: runId,
+                    config: cfg,
+                  }).execute("nested-peer-work", {
+                    task: "Controlled nested work",
+                    completionTarget: "parent",
+                  }),
+              );
+              expect(spawned.details, JSON.stringify(spawned.details)).toMatchObject({
+                status: "accepted",
+              });
+              const accepted = expectDefined(
+                normalizeAcceptedSessionSpawnResult(spawned),
+                "accepted nested work",
+              );
+              expect(
+                await createRequesterYieldCallback({
+                  requesterSessionKey: targetKey,
+                  requesterAgentId: "main",
+                  requesterTurnRunId: runId,
+                })?.(),
+              ).toBe(true);
+              expect(
+                await settleRequesterAfterSessionSpawns({
+                  requesterSessionKey: targetKey,
+                  requesterAgentId: "main",
+                  requesterTurnRunId: runId,
+                  requesterYielded: true,
+                  acceptedSessionSpawns: [accepted],
+                }),
+              ).toBe(true);
+              yielded.resolve();
+              return {
+                payloads: [],
+                meta: { durationMs: 1, yielded: true, terminalReply: { disposition: "empty" } },
+              };
+            } finally {
+              targetAdmission.close();
+            }
+          }
+          if (command.sessionKey !== targetKey && command.sessionKey !== parentKey) {
+            await releaseChild.promise;
+          }
+          const text =
+            command.sessionKey === targetKey ? "PEER_RETURN_ONCE" : "Peer result received";
+          return await finishAuthorityProofReply(command, text);
+        } catch (error) {
+          yielded.reject(error);
+          throw error;
+        }
+      });
+      try {
+        const sending = send(
+          () => ({ ...caller(admitted, parentKey), personalToolParticipants: participants }),
+          {
+            agentSessionKey: parentKey,
+            agentChannel: "webchat",
+            config: cfg,
+            idempotencyKey: runId,
+          },
+          [
+            "peer-return",
+            { sessionKey: targetKey, message: "Return one peer result", timeoutSeconds: 0 },
+          ],
+          client,
+        );
+        const result = await sending;
+        expect(result.details).toMatchObject({
+          status: "accepted",
+          delivery: { status: "pending" },
+        });
+        await withinTest(
+          awaitGateBeforeSettlement(
+            yielded.promise,
+            finished.promise,
+            "Peer return completed before committing the nested yield",
+          ),
+          signal,
+        );
+        releaseChild.resolve();
+        await withinTest(
+          awaitGateBeforeSettlement(
+            reached.promise,
+            finished.promise,
+            "Peer return ended before real requester staging",
+          ),
+          signal,
+        );
+        const initialExecutions = [
+          targetKey,
+          expect.stringContaining(":subagent:"),
+          ...(boundary === "return" ? [targetKey] : []),
+        ];
+        expect(executions).toEqual(initialExecutions);
+        expect(heldStages).toBe(1);
+        expect((await listSessionPendingInputs(parentScope)).total).toBe(0);
+        const targetBefore = sessionAccessor.loadTranscriptEventsSync(targetScope);
+        if (change === "operator-revoked") {
+          setUserProfileRole(client.authenticatedUserProfile!.profileId, "revoked");
+          expect(() => operator.authority.assertCurrent()).toThrow();
+        } else if (change !== "live") {
+          // Isolate incarnation fencing without terminating the original caller's manual admission.
+          const sessionKey = change === "requester-replaced" ? parentKey : targetKey;
+          await sessionAccessor.replaceSessionEntry(
+            { agentId: "main", sessionKey },
+            { sessionId: `replacement-${runId}`, updatedAt: Date.now() },
+          );
+        }
+        release();
+        if (change === "live") {
+          await withinTest(finished.promise, signal);
+        } else {
+          await withinTest(settleRequests(), signal);
+        }
+        expect(heldStages).toBe(1);
+        expect(executions).toEqual(
+          change === "live"
+            ? [...initialExecutions, ...(boundary === "successor" ? [targetKey] : []), parentKey]
+            : initialExecutions,
+        );
+        const currentParent = await loadSessionEntryAsync(parentKey, { agentId: "main" });
+        const currentScope = { ...parentScope, sessionId: currentParent.entry!.sessionId };
+        expect((await listSessionPendingInputs(currentScope)).total).toBe(0);
+        const currentTarget = await loadSessionEntryAsync(targetKey, { agentId: "main" });
+        expect(
+          (
+            await listSessionPendingInputs(
+              await inputScope(targetKey, currentTarget.entry!.sessionId),
+            )
+          ).total,
+        ).toBe(0);
+        expect((await listSessionPendingInputs(parentScope)).total).toBe(0);
+        expect((await listSessionPendingInputs(targetScope)).total).toBe(0);
+        const transcript = sessionAccessor.loadTranscriptEventsSync(currentScope);
+        if (change === "live") {
+          expect(
+            transcript.filter(
+              (event) =>
+                isRecord(event) &&
+                isRecord(event.message) &&
+                event.message.role === "user" &&
+                JSON.stringify(event.message.content).includes("PEER_RETURN_ONCE"),
+            ),
+          ).toHaveLength(1);
+        } else {
+          expect(transcript).toEqual(before);
+          expect(sessionAccessor.loadTranscriptEventsSync(parentScope)).toEqual(before);
+          expect(sessionAccessor.loadTranscriptEventsSync(targetScope)).toEqual(targetBefore);
+        }
+      } finally {
+        release();
+        retained?.completion?.close();
+        if (!retained?.completion) {
+          retained?.custody.release();
+        }
+        await settleRequests();
+        await replyWork?.catch(() => {});
+        custody.mockRestore();
+        requests.mockRestore();
+        stage.mockRestore();
+        observer.mockRestore();
+        participants.close();
+        admission.close();
+        operator.release();
+        signal.removeEventListener("abort", release);
       }
     },
   );
