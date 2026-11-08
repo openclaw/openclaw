@@ -153,13 +153,13 @@ it.each([
       }
       if (recovery === "port") {
         expect(expectedPort).not.toBe(oldPort);
-        const replacement = await reserveTestPortListener({
-          offsets: [0],
-          port: expectedPort,
-          createListener: createServer,
-        });
-        await replacement.releaseListener();
-        await replacement.claim.release();
+        // Re-binding the released ephemeral port races the OS client-port allocator:
+        // the release-check helper owns the reservation and closes it in its finally,
+        // so a later bind can legitimately hit EADDRINUSE. Prove the retry from the
+        // helper's own log line instead of claiming a port we no longer own.
+        expect(readFileSync(join(rootDir, "status.log"), "utf8")).toContain(
+          `Gateway refused port ${oldPort}; retrying once on port ${expectedPort}.`,
+        );
       }
       expect(occupied.listener.listening).toBe(true);
     } finally {
