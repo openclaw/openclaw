@@ -23,6 +23,43 @@ afterEach(() => {
 });
 
 describe("channel ingress drain", () => {
+  it("dead-letters an aged eighth poison attempt before draining its FIFO follower", async () => {
+    await withTempState(async (stateDir) => {
+      const now = 2 * 24 * 60 * 60 * 1000;
+      const queue = createTestIngressQueue(stateDir, { now: () => now });
+      await queue.enqueue("poison", { text: "bad" }, { laneKey: "shared", receivedAt: 1 });
+      await queue.enqueue("follower", { text: "good" }, { laneKey: "shared", receivedAt: 2 });
+      for (let attempt = 0; attempt < 7; attempt += 1) {
+        const claim = expectDefined(await queue.claim("poison"), "expected poison claim");
+        await queue.release(claim, { lastError: "poison", releasedAt: 1 });
+      }
+      const dispatched: string[] = [];
+      const drain = createChannelIngressDrain({
+        queue,
+        now: () => now,
+        dispatchClaimedEvent: async (event) => {
+          dispatched.push(event.id);
+          if (event.id === "poison") {
+            throw new Error("poison");
+          }
+        },
+      });
+      try {
+        expect(await drain.drainOnce()).toEqual({ started: 1 });
+        await drain.waitForIdle();
+        expect(await queue.listFailed?.()).toMatchObject([
+          { id: "poison", reason: "retry-limit-exceeded" },
+        ]);
+        expect(await drain.drainOnce()).toEqual({ started: 1 });
+        await drain.waitForIdle();
+        expect(dispatched).toEqual(["poison", "follower"]);
+        expect(await queue.listPending()).toEqual([]);
+      } finally {
+        drain.dispose();
+      }
+    });
+  });
+
   it("crash-window: lost claim is recovered and dispatched exactly once", async () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir, { now: () => 1_000 });

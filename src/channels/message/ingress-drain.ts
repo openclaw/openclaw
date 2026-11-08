@@ -42,8 +42,7 @@ import type {
   ChannelIngressQueueRecord,
 } from "./ingress-queue.types.js";
 import {
-  resolveIngressFailureDisposition,
-  resolveIngressRetryDelayMs,
+  createIngressRetryPolicy,
   type IngressNonRetryableFailure,
   type IngressRetryPolicyConfig,
 } from "./ingress-retry-policy.js";
@@ -236,12 +235,14 @@ export function createChannelIngressDrain<
 
   const isStopped = () => disposed || options.abortSignal?.aborted === true;
 
+  const retry = createIngressRetryPolicy(queue);
   const { completeClaimWithRetry, releaseClaim, failClaim } = createIngressWriter(options, {
     queue,
     now,
     formatError,
     log,
     isStopped,
+    onTerminal: retry.clear,
   });
 
   const applyFailureDisposition = async (
@@ -254,7 +255,7 @@ export function createChannelIngressDrain<
       await releaseClaim(claim, { recordAttempt: false });
       return;
     }
-    const disposition = resolveIngressFailureDisposition({
+    const disposition = retry.failure({
       err,
       event: claim,
       formatError,
@@ -265,7 +266,7 @@ export function createChannelIngressDrain<
     const committed =
       disposition.kind === "fail"
         ? await failClaim(claim, disposition.reason, disposition.message)
-        : await releaseClaim(claim, { lastError: disposition.message });
+        : await releaseClaim(claim, { ...disposition, lastError: disposition.message });
     const displayId = claim.id.replace(/^0+(?=\d)/, "") || claim.id;
     if (!committed) {
       log(`spooled update ${displayId} settlement skipped: claim no longer owns the event`);
@@ -346,9 +347,7 @@ export function createChannelIngressDrain<
       readLaneBacklog: async () => {
         const { pending, claims } = await readUnsettled();
         const waiting = [
-          ...pending.filter(
-            (row) => resolveIngressRetryDelayMs(row, options.retryPolicy, now()) <= 0,
-          ),
+          ...pending.filter((row) => retry.delay(row, options.retryPolicy, now()) <= 0),
           ...claims.filter((claim) => {
             const active = activeByClaim.get(activeClaimKey(claim));
             return (
@@ -490,6 +489,7 @@ export function createChannelIngressDrain<
               options.dispatchClaimedEvent(claim, lifecycle),
             ));
         if (result?.kind === "transferred") {
+          retry.clear(claim.id);
           // The downstream owner atomically tombstoned this exact claim. Do not
           // complete it again or turn a shutdown race into a replayable failure.
           clearStallTimer(state);
@@ -630,7 +630,7 @@ export function createChannelIngressDrain<
     // Delayed tails leave this snapshot so a sibling cannot make them start early.
     for (const [index, event] of pending.entries()) {
       const laneKey = laneKeyFor(event);
-      if (resolveIngressRetryDelayMs(event, options.retryPolicy, now()) > 0) {
+      if (retry.delay(event, options.retryPolicy, now()) > 0) {
         retryDelayed[index] = 1;
         if (!pendingLaneKeys.has(laneKey)) {
           retryDelayedLaneKeys.add(laneKey);

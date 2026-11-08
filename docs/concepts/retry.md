@@ -59,6 +59,20 @@ ChatGPT SSE errors preserve HTTP status and `Retry-After` together, so a transie
 
 For SDK calls that retain internal retries, Stainless-based SDKs such as Anthropic and OpenAI can receive `retry-after-ms` or `retry-after` on retryable responses (`408`, `409`, `429`, and `5xx`). When that wait is longer than 60 seconds, OpenClaw injects `x-should-retry: false` so the SDK returns control promptly. Override this SDK-only cap with `OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS=<seconds>`. Set it to `0`, `false`, `off`, `none`, or `disabled` to let those SDK calls honor long `Retry-After` sleeps internally.
 
+### Inbound runtime publication
+
+If a configured reply runtime fails to publish, the next inbound request can
+rebuild it. Concurrent requests share the same recovery attempt. A failed
+recovery waits five seconds before another interactive attempt; scheduled demand
+gets one attempt per failure.
+
+The inbound queue counts actual recovery failures separately from other dispatch
+attempts. Waiting for recovery backoff does not consume an attempt. After two
+failed recoveries for an event, the queue records a visible
+`runtime-recovery-failed` failure instead of retrying indefinitely. These bounded
+recovery counters belong to the live queue and reset when the Gateway restarts;
+persisted events and error text retain their existing format.
+
 ### Managed Git operations
 
 The shared Git runner retries transient `fetch` and `ls-remote` failures once,
