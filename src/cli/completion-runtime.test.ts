@@ -86,6 +86,49 @@ function expectAvailableShellToSucceed(
 }
 
 describe("completion-runtime", () => {
+  it.each(["bash", "zsh", "fish", "powershell"] as const)(
+    "preserves malformed %s profile bytes and offers manual recovery",
+    async (shell) => {
+      await withBashCompletionHome(async () => {
+        await writeCompletionCache(shell, "# completion\n");
+        const profilePath = resolveCompletionProfilePath(shell);
+        await fs.mkdir(path.dirname(profilePath), { recursive: true });
+        const dynamicLine =
+          shell === "fish"
+            ? "openclaw completion --shell fish | source"
+            : shell === "powershell"
+              ? "openclaw completion --shell powershell | Out-String | Invoke-Expression"
+              : `source <(openclaw completion --shell ${shell})`;
+        const original = Buffer.concat([
+          Buffer.from(`# user comment\n${dynamicLine}\n# `),
+          Buffer.from([0xff]),
+        ]);
+        await fs.writeFile(profilePath, original);
+        await expect(isCompletionInstalled(shell)).resolves.toBe(true);
+        await expect(usesSlowDynamicCompletion(shell)).resolves.toBe(true);
+        await expect(installCompletion(shell, true)).rejects.toThrow(
+          /left untouched.*load the prepared cache.*backing up/,
+        );
+        await expect(fs.readFile(profilePath)).resolves.toEqual(original);
+      });
+    },
+  );
+
+  it.each(["", "\uFEFF"])("preserves valid Unicode and BOM=%j when rewriting", async (bom) => {
+    await withBashCompletionHome(async () => {
+      await writeCompletionCache("zsh", "# completion\n");
+      const profilePath = resolveCompletionProfilePath("zsh");
+      const original = `${bom}# café 合法 � 😀\n`;
+      await fs.writeFile(profilePath, original);
+      await installCompletion("zsh", true);
+      const installed = await fs.readFile(profilePath, "utf8");
+      expect(installed.startsWith(original)).toBe(true);
+      await expect(isCompletionInstalled("zsh")).resolves.toBe(true);
+      await installCompletion("zsh", true);
+      await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(installed);
+    });
+  });
+
   it.skipIf(process.platform === "win32")("rejects a special-device profile target", async () => {
     await withBashCompletionHome(async ({ homeDir }) => {
       await fs.symlink("/dev/null", path.join(homeDir, ".zshrc"));

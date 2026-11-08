@@ -10,6 +10,7 @@ import {
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import * as authStoreRuntime from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { SecretsApplyPlan } from "./plan.js";
 
 export const OPENAI_API_KEY_ENV_REF = {
   source: "env",
@@ -157,4 +158,22 @@ export function mutateAuthStoreBeforeNextPublication(
     };
     return committed;
   });
+}
+
+export function createPlan(params: {
+  targets: SecretsApplyPlan["targets"];
+  options?: SecretsApplyPlan["options"];
+  providerUpserts?: SecretsApplyPlan["providerUpserts"];
+  providerDeletes?: SecretsApplyPlan["providerDeletes"];
+}): SecretsApplyPlan {
+  return {
+    version: 1,
+    protocolVersion: 1,
+    generatedAt: new Date().toISOString(),
+    generatedBy: "manual",
+    targets: params.targets,
+    ...(params.options ? { options: params.options } : {}),
+    ...(params.providerUpserts ? { providerUpserts: params.providerUpserts } : {}),
+    ...(params.providerDeletes ? { providerDeletes: params.providerDeletes } : {}),
+  };
 }

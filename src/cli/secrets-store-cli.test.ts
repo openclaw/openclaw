@@ -2,6 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -221,6 +222,68 @@ describe("secrets store CLI", () => {
     expect(mocks.runtimeErrors.join("\n")).toContain("interactive no-echo prompt");
     expect(mocks.write).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["set", "file", false],
+    ["set", "stdin", false],
+    ["import", "file", false],
+    ["import", "stdin", false],
+    ["set", "file", true],
+    ["set", "stdin", true],
+    ["import", "file", true],
+    ["import", "stdin", true],
+  ] as const)(
+    "validates UTF-8 before %s mutation from %s (malformed=%s)",
+    async (operation, source, malformed) => {
+      const value = "café 合法 � 😀";
+      const text = operation === "import" ? `\uFEFFSERVICE_MODE=${value}\n` : `\uFEFF${value}`;
+      const bytes = malformed
+        ? Buffer.concat([Buffer.from(text), Buffer.from([0xff])])
+        : Buffer.from(text);
+      const file = path.join(tempDirs.make("store-utf8-"), "input");
+      await fs.writeFile(file, bytes);
+      const stdin = Object.getOwnPropertyDescriptor(process, "stdin");
+      if (source === "stdin") {
+        Object.defineProperty(process, "stdin", {
+          configurable: true,
+          value: Readable.from([bytes]),
+        });
+      }
+      try {
+        const input = source === "file" ? file : "-";
+        const args =
+          operation === "set"
+            ? ["set", "SERVICE_MODE", "--kind", "env", "--value-file", input]
+            : ["import", "--from", input, "--yes"];
+        const run = createProgram().parseAsync(["secrets", "store", ...args], { from: "user" });
+        if (malformed) {
+          await expect(run).rejects.toThrow("__exit__:2");
+          expect(mocks.runtimeErrors.join("\n")).toContain("valid UTF-8");
+          expect(mocks.write).not.toHaveBeenCalled();
+          expect(mocks.writeBatch).not.toHaveBeenCalled();
+          expect(mocks.purge).not.toHaveBeenCalled();
+        } else {
+          await run;
+          if (operation === "set") {
+            expect(mocks.write).toHaveBeenCalledWith(
+              expect.objectContaining({ name: "SERVICE_MODE", value: `\uFEFF${value}` }),
+            );
+          } else {
+            expect(mocks.writeBatch).toHaveBeenCalledWith(
+              expect.objectContaining({
+                entries: [expect.objectContaining({ name: "SERVICE_MODE", value })],
+              }),
+            );
+          }
+        }
+        await expect(fs.readFile(file)).resolves.toEqual(bytes);
+      } finally {
+        if (stdin) {
+          Object.defineProperty(process, "stdin", stdin);
+        }
+      }
+    },
+  );
 
   it("reports an oversized --value-file as validation (exit 2), matching the stdin path", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "secret-store-cli-oversize-"));

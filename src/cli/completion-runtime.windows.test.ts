@@ -23,6 +23,24 @@ function runPowerShell(command: string, env: NodeJS.ProcessEnv) {
 }
 
 describe.skipIf(process.platform !== "win32")("PowerShell profile encoding", () => {
+  it("preserves malformed UTF-8 BOM profile bytes", async () => {
+    const homeDir = tempDirs.make("openclaw-powershell-malformed-");
+    await withEnvAsync(
+      { HOME: homeDir, USERPROFILE: homeDir, OPENCLAW_STATE_DIR: path.join(homeDir, "state") },
+      async () => {
+        const profilePath = resolveCompletionProfilePath("powershell");
+        const cachePath = resolveCompletionCachePath("powershell", "openclaw");
+        const original = Buffer.concat([Buffer.from("\uFEFF# profile\r\n"), Buffer.from([0xff])]);
+        await fs.mkdir(path.dirname(profilePath), { recursive: true });
+        await fs.mkdir(path.dirname(cachePath), { recursive: true });
+        await fs.writeFile(profilePath, original);
+        await fs.writeFile(cachePath, "# completion\r\n");
+        await expect(installCompletion("powershell", true)).rejects.toThrow("valid UTF-8");
+        await expect(fs.readFile(profilePath)).resolves.toEqual(original);
+      },
+    );
+  });
+
   it.each([
     { name: "UTF16LE", outFileEncoding: "Unicode", decoder: "utf-16le", bom: "fffe" },
     { name: "UTF16BE", outFileEncoding: "BigEndianUnicode", decoder: "utf-16be", bom: "feff" },

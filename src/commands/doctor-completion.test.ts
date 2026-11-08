@@ -252,6 +252,29 @@ describe("doctorShellCompletion", () => {
     expect(noteSpy).toHaveBeenCalledWith(expect.stringContaining(failedPath), "Shell completion");
   });
 
+  it("continues Doctor with manual recovery while preserving malformed profile bytes", async () => {
+    const profilePath = await setupDoctorCompletionTest(true);
+    await fs.appendFile(profilePath, Buffer.from([0xff]));
+    const original = await fs.readFile(profilePath);
+    const actual = await vi.importActual<typeof import("../cli/completion-runtime.js")>(
+      "../cli/completion-runtime.js",
+    );
+    installCompletionMock.mockImplementation(actual.installCompletion);
+    const noteSpy = vi.spyOn(noteModule, "note");
+    await expect(doctorShellCompletion(mockPrompter())).resolves.toBeUndefined();
+    await expect(fs.readFile(profilePath)).resolves.toEqual(original);
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining("left untouched"),
+      "Shell completion",
+    );
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        formatCompletionReloadCommand("bash", resolveCompletionCachePath("bash", "openclaw")),
+      ),
+      "Shell completion",
+    );
+  });
+
   it("re-throws non-permission errors from installCompletion", async () => {
     const profilePath = await setupDoctorCompletionTest(true);
     installCompletionMock.mockRejectedValue(wrappedFsError("ENOSPC", profilePath));

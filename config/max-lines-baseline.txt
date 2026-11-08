@@ -486,8 +486,6 @@ src/plugins/setup-registry.ts
 src/plugins/tools.optional.test.ts
 src/plugins/uninstall.test.ts
 src/plugins/update.test.ts
-src/secrets/apply.test.ts
-src/secrets/apply.ts
 src/secrets/configure.ts
 src/secrets/runtime-state.test.ts
 src/secrets/runtime-state.ts

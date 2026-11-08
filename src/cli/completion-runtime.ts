@@ -14,6 +14,7 @@ import {
 } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isErrno } from "../infra/errors.js";
+import { decodeUtf8Input, Utf8InputError } from "../infra/utf8-input.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import { pathExists } from "../utils.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
@@ -25,7 +26,36 @@ export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLU
 
 type CompletionProfileEncoding = "utf8" | "utf8bom" | "utf16le" | "utf16be";
 
-async function readCompletionProfile(profilePath: string, shell: CompletionShell) {
+class CompletionProfileEncodingError extends Utf8InputError {
+  constructor(
+    readonly profilePath: string,
+    message: string,
+    cause: unknown,
+  ) {
+    super(message, { cause });
+    this.name = "CompletionProfileEncodingError";
+  }
+}
+
+function formatInvalidUtf8InstallMessage(params: {
+  profilePath: string;
+  shell: CompletionShell;
+  cachePath: string;
+}): string {
+  const reload = formatCompletionReloadCommand(params.shell, params.cachePath);
+  return [
+    `Shell profile must be valid UTF-8: ${sanitizeTerminalText(params.profilePath)}.`,
+    "The file was left untouched.",
+    `For this session, load the prepared cache with: ${sanitizeTerminalText(reload)}.`,
+    "Persistent installation requires backing up the profile and correcting its encoding first.",
+  ].join(" ");
+}
+
+async function readCompletionProfile(
+  profilePath: string,
+  shell: CompletionShell,
+  mode: "inspect" | "mutate" = "mutate",
+) {
   const { buffer } = await readRegularFile({ filePath: await fs.realpath(profilePath) });
   let encoding: CompletionProfileEncoding = "utf8";
   if (shell === "powershell" && process.platform === "win32") {
@@ -36,12 +66,14 @@ async function readCompletionProfile(profilePath: string, shell: CompletionShell
       encoding = "utf8bom";
     }
   }
-  // Removing an owned first line must not remove the profile's encoding declaration.
-  return {
-    content:
-      encoding === "utf8" ? buffer.toString("utf8") : decodeWindowsTextFileBuffer({ buffer }),
-    encoding,
-  };
+  // UTF-16 remains a supported PowerShell file encoding; UTF-8 rewrites are strict.
+  const utf8 = encoding === "utf8" || encoding === "utf8bom";
+  const content = utf8
+    ? mode === "mutate"
+      ? decodeUtf8Input(buffer, `Shell profile ${profilePath}`)
+      : buffer.toString("utf8")
+    : decodeWindowsTextFileBuffer({ buffer });
+  return { content: encoding === "utf8bom" ? content.slice(1) : content, encoding };
 }
 
 function encodeCompletionProfile(content: string, encoding: CompletionProfileEncoding): Buffer {
@@ -489,7 +521,7 @@ export async function isCompletionInstalled(
   }
   const cachePath = resolveCompletionCachePath(shell, binName);
   const homeDir = process.env.HOME || os.homedir();
-  const { content } = await readCompletionProfile(profilePath, shell);
+  const { content } = await readCompletionProfile(profilePath, shell, "inspect");
   const lines = content.split("\n");
   // A marker does not install completion; retain missing-cache source lines for doctor repair.
   // Managed portable hooks for the same cache script count as installed but are never rewritten.
@@ -515,7 +547,7 @@ export async function usesSlowDynamicCompletion(
   }
 
   const cachePath = resolveCompletionCachePath(shell, binName);
-  const { content } = await readCompletionProfile(profilePath, shell);
+  const { content } = await readCompletionProfile(profilePath, shell, "inspect");
   return content
     .split("\n")
     .some((line) => isSlowDynamicCompletionLine(line, binName) && !line.includes(cachePath));
@@ -528,6 +560,28 @@ export function findCompletionProfileWriteError(err: unknown): NodeJS.ErrnoExcep
     return err;
   }
   return err instanceof Error ? findCompletionProfileWriteError(err.cause) : undefined;
+}
+
+export type OptionalCompletionInstallFailure =
+  | { kind: "write"; error: NodeJS.ErrnoException }
+  | { kind: "encoding"; profilePath: string };
+
+/** Optional setup/Doctor paths may skip install on write or encoding failures. */
+export function findOptionalCompletionInstallFailure(
+  err: unknown,
+): OptionalCompletionInstallFailure | undefined {
+  const writeError = findCompletionProfileWriteError(err);
+  if (writeError) {
+    return { kind: "write", error: writeError };
+  }
+  let current = err;
+  while (current instanceof Error) {
+    if (current instanceof CompletionProfileEncodingError) {
+      return { kind: "encoding", profilePath: current.profilePath };
+    }
+    current = current.cause;
+  }
+  return undefined;
 }
 
 export async function installCompletion(shell: string, yes: boolean, binName = "openclaw") {
@@ -552,6 +606,13 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     try {
       ({ content, encoding } = await readCompletionProfile(profilePath, shell));
     } catch (error) {
+      if (error instanceof Utf8InputError) {
+        throw new CompletionProfileEncodingError(
+          profilePath,
+          formatInvalidUtf8InstallMessage({ profilePath, shell, cachePath }),
+          error,
+        );
+      }
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
@@ -595,6 +656,9 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       );
     }
   } catch (err) {
+    if (err instanceof CompletionProfileEncodingError) {
+      throw err;
+    }
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to install completion: ${message}`, { cause: err });
   }

@@ -212,6 +212,33 @@ describe("setupWizardShellCompletion", () => {
     },
   );
 
+  it("continues setup with manual recovery while preserving malformed profile bytes", async () => {
+    const homeDir = tempDirs.make("wizard-malformed-profile-");
+    await withEnvAsync(
+      { HOME: homeDir, OPENCLAW_STATE_DIR: path.join(homeDir, "state"), SHELL: "/bin/bash" },
+      async () => {
+        const profilePath = resolveCompletionProfilePath("bash");
+        const cachePath = resolveCompletionCachePath("bash", "openclaw");
+        const original = Buffer.from(
+          "# caf\xe9\nsource <(openclaw completion --shell bash)\n",
+          "latin1",
+        );
+        await fs.writeFile(profilePath, original);
+        await fs.mkdir(path.dirname(cachePath), { recursive: true });
+        await fs.writeFile(cachePath, "# completion\n");
+        const prompter = createPrompter();
+        await expect(
+          setupWizardShellCompletion({ flow: "quickstart", prompter }),
+        ).resolves.toBeUndefined();
+        await expect(fs.readFile(profilePath)).resolves.toEqual(original);
+        const notes = prompter.note.mock.calls.flat().join("\n");
+        expect(notes).toContain("left untouched");
+        expect(notes).toContain(formatCompletionReloadCommand("bash", cachePath));
+        expect(notes).not.toContain("Shell completion installed.");
+      },
+    );
+  });
+
   it("shows a concrete PowerShell profile reload command after setup", async () => {
     await withEnvAsync({ HOME: "/Users/ada" }, async () => {
       const prompter = createPrompter();
