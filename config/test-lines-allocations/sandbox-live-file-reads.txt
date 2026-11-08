@@ -1,2 +1,2 @@
-# Live managed workspace read counts, containment races, revocation, and editor CAS.
-243
+# Live read, containment, revocation, save/reload, and host-policy regressions; retired read-checkpoint proof removed.
+212

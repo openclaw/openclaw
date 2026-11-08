@@ -19,10 +19,6 @@
  * Count lease acquisitions and manifest scans first; timing and main-thread
  * allocation include real storage dispatch. Every burst must have identical
  * results; a later guest write must be present after the next request.
- * --mode path exercises the file-reader checkpoint entry point. Add --absent
- * for a registered worktree without a projection; compare 1,024 serial polls
- * with --requests 1024 --burst 1, using --instrument allocation separately.
- * Lease broker counts also report a simulated idle minute at 16 serial polls.
  * The synthetic checkout uses a relative Git pointer and fixed file mtimes so
  * independently rooted fixtures return identical Files metadata.
  * --mode maintenance measures idle artifact sweeps through the real allocation
@@ -302,7 +298,6 @@ assert(
   values.output &&
     [
       "owner",
-      "path",
       "gateway",
       "file-read",
       "maintenance",
@@ -796,13 +791,11 @@ if (gatewayMode) {
   fs.utimesSync(path.join(canonical, ".git"), 1_767_225_600, 1_767_225_600);
 }
 const checkpoint = () =>
-  values.mode === "path"
-    ? projection.checkpointLocalWorkspacePath({ cwd: canonical })
-    : values.revision
-      ? projection.withLocalWorkspaceProjection(owner, (operations) =>
-          operations.synchronize("canonical"),
-        )
-      : projection.checkpointLocalWorkspace(owner);
+  values.revision
+    ? projection.withLocalWorkspaceProjection(owner, (operations) =>
+        operations.synchronize("canonical"),
+      )
+    : projection.checkpointLocalWorkspace(owner);
 const { collectRetiredWorktreeArtifacts } =
   await import("../../src/agents/worktrees/gc-artifacts.js");
 const { WorktreeGcProgress } = await import("../../src/agents/worktrees/gc-progress.js");

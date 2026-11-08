@@ -270,8 +270,11 @@ checkpoint to release the workspace before proceeding; background commands do no
 hold that preparation lease for their entire lifetime. Files and assistant-media
 reads select the current backing without acquiring checkpoint custody or pausing
 runtimes. Each read retains its session and workspace authority checks; sandbox
-aliases also verify the existing runtime mount. File saves checkpoint guest changes
-before comparing the editor hash and updating the canonical file. Capture,
+aliases also verify the existing runtime mount. For local sandbox sessions, a retained
+private checkout remains the preview's live view; direct host edits enter that view during the next workspace
+preparation. File saves checkpoint guest changes, compare the editor hash, update
+the canonical file, and import the saved change into the private checkout under the
+same custody before resuming its runtimes. Capture,
 publication, and lifecycle operations retain their reconciliation lease and pause
 requirements.
 Captured workspace authority is checked again after
