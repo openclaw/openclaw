@@ -43,7 +43,8 @@ source-build step; release-workflow budgets and package-integrity checks are unc
 
 Precise PR plans can run the complete source-boundary gate first in an existing
 short, serial 8-class tooling job. Both configs retain separate test processes;
-a 90-second boundary reservation must fit the existing 150-second test budget.
+the boundary reservation is 60 seconds for `bun-all` and 90 seconds for other
+runtime policies, within the existing 150-second test budget.
 Other runners, preparation modes, parallel jobs, and full validation keep their
 standalone boundary ownership.
 
@@ -186,6 +187,14 @@ The exact Doctor plugin-index and SQLite sessions/transcripts built-CLI proofs
 use the runtime-only compiled-worker registry. The local TUI file does the same
 when its existing built-CLI mode is enabled; source TUI and broad, mixed, or
 custom selections retain the full registry.
+
+Packed Node groups also share the runtime-only registry when every group has
+one known configuration and only explicitly qualified files. This includes
+the Gateway client callsite guard, Codex abort settlement, and native search
+authority proofs. Parent and child resolve the same include-file selection;
+broad or mixed selections, extra Vitest arguments, and groups requiring a build
+retain the full registry. Test inventory, process isolation, and artifact
+verification are unchanged.
 
 When the artifact producer selects both channels and core support checks with
 matching compiler heap options, they share one full compiled-worker generation.

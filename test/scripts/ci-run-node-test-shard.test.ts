@@ -30,6 +30,7 @@ import nativeBunQualification from "../../scripts/lib/ci-test-native-bun-qualifi
 import { resolveCiTestRuntimeSelections } from "../../scripts/lib/ci-test-runtime.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
+import { shouldUseRuntimeOnlyVitestWorkers } from "../../scripts/lib/vitest-runtime-selection.mts";
 import * as workerOwner from "../../scripts/lib/vitest-worker-run.mts";
 import { createVitestRunSpecs } from "../../scripts/test-projects.test-support.mts";
 import * as groupOwner from "../../scripts/vitest-process-group.mts";
@@ -37,6 +38,7 @@ import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
+const gatewayDatabaseConfig = "test/vitest/vitest.gateway-database-workers.config.ts";
 
 const nativeQualificationFixtures = vi.hoisted(() => ({
   first: "src/utils/string-readers.test.ts",
@@ -176,6 +178,79 @@ afterEach(() => {
 });
 
 describe("scripts/ci-run-node-test-shard.mts", () => {
+  it.each([
+    {
+      configs: [gatewayDatabaseConfig],
+      files: [
+        "test/plugins/chat-abort-codex.gateway.test.ts",
+        "test/plugins/codex-native-search.gateway.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.gateway-client.config.ts"],
+      files: ["src/gateway/client-callsites.guard.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.auto-reply.config.ts"],
+      files: ["src/auto-reply/reply/dispatch-from-config.delivery.test.ts"],
+      preset: "runtime",
+    },
+    { configs: [gatewayDatabaseConfig], files: [], preset: "full" },
+    { configs: [gatewayDatabaseConfig], files: null, preset: "full" },
+    { configs: [gatewayDatabaseConfig], files: undefined, preset: "full" },
+    {
+      configs: ["custom.config.ts"],
+      files: ["test/plugins/chat-abort-codex.gateway.test.ts"],
+      preset: "full",
+    },
+    {
+      configs: [gatewayDatabaseConfig],
+      files: ["test/plugins/chat-abort-codex.gateway.test.ts", "unknown.test.ts"],
+      preset: "full",
+    },
+  ])(
+    "shares compatible $preset workers for $configs / $files",
+    async ({ configs, files, preset }) => {
+      machine(8, 31);
+      const createWorker = vi.spyOn(workerOwner, "createVitestWorkerRun");
+      const inheritedInclude = path.join(makeScratchDir(), "include.json");
+      writeFileSync(
+        inheritedInclude,
+        JSON.stringify(["test/plugins/chat-abort-codex.gateway.test.ts"]),
+      );
+      const code = await runPlans(groupPlans([{ configs, includePatterns: files }]), {
+        env: {
+          OPENCLAW_VITEST_INCLUDE_FILE: inheritedInclude,
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
+        },
+        runChild: async (args, env) => {
+          if (preset === "runtime") {
+            expect(readList(env.OPENCLAW_VITEST_INCLUDE_FILE!)).toEqual(files);
+            const specs = createVitestRunSpecs(args, { baseEnv: env });
+            expect(specs).toHaveLength(1);
+            for (const spec of specs) {
+              expect(
+                shouldUseRuntimeOnlyVitestWorkers(
+                  spec.config,
+                  args,
+                  spec.env,
+                  undefined,
+                  spec.includePatterns ?? undefined,
+                ),
+              ).toBe(true);
+            }
+          }
+          return 0;
+        },
+      });
+      expect(code).toBe(0);
+      expect(createWorker).toHaveBeenCalledTimes(1);
+      expect(createWorker.mock.results[0]!.value.descriptor.preset).toBe(preset);
+    },
+  );
+
   it.each([
     { extra: [], args: [], jobArgs: undefined, preset: "runtime" },
     { extra: [nodeTarget], args: [], jobArgs: undefined, preset: "full" },
