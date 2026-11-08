@@ -253,6 +253,25 @@ describe("Muse native MSP harness", () => {
     },
   );
 
+  it("persists MSP's cutOff partial as an incomplete reply", async () => {
+    const { run } = setup();
+    const before = writes.append.mock.calls.length;
+    const result = await run({ prompt: "cutoff" });
+    expectFailure(result, "provider stream died mid-reply");
+    const persisted = writes.append.mock.calls
+      .slice(before)
+      .flatMap(
+        ([call]) =>
+          call.messages as Array<{
+            message: { role: string; stopReason?: string; content?: unknown };
+          }>,
+      );
+    const partial = persisted.findLast((entry) =>
+      JSON.stringify(entry.message.content ?? "").includes("Partial answer"),
+    );
+    expect(partial?.message.stopReason).toBe("length");
+  });
+
   it("refuses host ask-always floors even when config grants full exec", async () => {
     const { run } = setup();
     approvals.load.mockResolvedValue({ version: 1, defaults: { ask: "always" } });

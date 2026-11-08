@@ -76,10 +76,20 @@ function answer() {
     ["credential", `credential:${process.env.META_API_KEY ?? "cli-login"}`],
     ["effort", `effort:${active.reasoningEffort}`],
   ]);
-  const text = responses.get(active.prompt) ?? `${active.resumed ? "resumed" : "started"}: hello`;
+  const text =
+    active.prompt === "cutoff"
+      ? "Partial answer: the first two steps are"
+      : (responses.get(active.prompt) ?? `${active.resumed ? "resumed" : "started"}: hello`);
   const messageId = item("agentMessage", "inProgress", { text: "" });
   event("item/delta", { itemId: messageId, delta: text.slice(0, 8) });
   event("item/delta", { itemId: messageId, delta: text.slice(8) });
+  if (active.prompt === "cutoff") {
+    // MSP: the provider stream died mid-reply, so the committed partial carries the cutOff mark
+    // and the turn fails with that text committed.
+    item("agentMessage", "completed", { text, cutOff: true });
+    fail("internal", "provider stream died mid-reply");
+    return;
+  }
   item("agentMessage", "completed", { text });
   if (active.prompt !== "settle") {
     complete("completed");
