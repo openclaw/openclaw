@@ -92,7 +92,24 @@ type ResolveMcpOAuthAccessTokenParams = {
   signal?: AbortSignal;
 };
 
-/** Returns a current MCP-native OAuth token under one cross-process flow lease. */
+function isStoredMcpOAuthAccessTokenUsable(
+  store: McpOAuthStore,
+  params: ResolveMcpOAuthAccessTokenParams,
+): boolean {
+  const tokens = store.tokens;
+  if (!tokens?.access_token || params.rejectedAccessToken === tokens.access_token) {
+    return false;
+  }
+  const tokenIsFresh =
+    store.tokenExpiresAt !== undefined && store.tokenExpiresAt > Date.now() + TOKEN_EXPIRY_SKEW_MS;
+  return (
+    tokenIsFresh ||
+    (store.tokenExpiresAt === undefined &&
+      (params.acceptUnknownExpiry === true || !tokens.refresh_token))
+  );
+}
+
+/** Returns a current MCP-native OAuth token; refreshes run under one cross-process flow lease. */
 export function resolveMcpOAuthAccessToken(
   params: ResolveMcpOAuthAccessTokenParams & { allowMissingToken: true },
 ): Promise<string | undefined>;
@@ -103,6 +120,18 @@ export async function resolveMcpOAuthAccessToken(
   params: ResolveMcpOAuthAccessTokenParams,
 ): Promise<string | undefined> {
   const storeKey = params.identity.storeKey;
+  params.signal?.throwIfAborted();
+  // Reusable credentials need no flow lease; mutations still re-read under the lease.
+  if (params.authorizationChallenge !== true) {
+    const store = await readMcpOAuthStoreReadOnly(storeKey);
+    params.signal?.throwIfAborted();
+    if (
+      store.pendingAuthorizationChallenge?.requiresAuthorization !== true &&
+      isStoredMcpOAuthAccessTokenUsable(store, params)
+    ) {
+      return store.tokens?.access_token;
+    }
+  }
   return await withMcpOAuthLease(
     storeKey,
     async (lease, context) => {
@@ -147,15 +176,7 @@ export async function resolveMcpOAuthAccessToken(
         );
       }
 
-      const tokenIsFresh =
-        store.tokenExpiresAt !== undefined &&
-        store.tokenExpiresAt > Date.now() + TOKEN_EXPIRY_SKEW_MS;
-      if (
-        !rejectedCurrentToken &&
-        (tokenIsFresh ||
-          (store.tokenExpiresAt === undefined &&
-            (params.acceptUnknownExpiry === true || !tokens.refresh_token)))
-      ) {
+      if (isStoredMcpOAuthAccessTokenUsable(store, params)) {
         return tokens.access_token;
       }
       if (!tokens.refresh_token) {
