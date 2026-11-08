@@ -15,6 +15,7 @@ export type PrewarmedSnapshot = {
   cancelled: boolean;
   promise: Promise<unknown>;
   ready?: Promise<void>;
+  detailsReady?: Promise<void>;
   prepared?: {
     promise: PreparedSnapshotRead;
     snapshot?: Awaited<PreparedSnapshotRead>;
@@ -75,7 +76,10 @@ export function prewarmChatSnapshot(cacheKey: string): Promise<void> {
         const docking = asOptionalRecord(details?.docking);
         // Only the viewport identity is known before the pane supplies its other layout facts.
         if (docking?.wide === true && matchesDockingViewport(docking.layout)) {
-          void loadChatDetailsDesktopComposition().catch(() => undefined);
+          entry.detailsReady = loadChatDetailsDesktopComposition().then(
+            () => undefined,
+            () => undefined,
+          );
         }
         return record;
       })

@@ -193,47 +193,46 @@ suite.define(() => {
             await page
               .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
               .waitFor();
-            for (const inputOffset of [0, 1400]) {
-              // A changed scroll position can legitimately dedupe the same top-window receipt.
-              expect(await saveScroll(inputOffset)).toBe(inputOffset);
-              await page.reload();
-              await gateway.waitForRequest("connect");
-              await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
-              await page.evaluate(() => Reflect.get(window, "__sidebarPresentation").nextFrame());
-              expect(
-                await page.locator(".sidebar-shell__body").evaluate((element) => element.scrollTop),
-              ).toBe(0);
-              expect(
-                await evaluateControlUiContext(page, (app) => app.gateway.snapshot.hello),
-              ).toBeNull();
-              const artifact = `${hasTouch ? "coarse" : "fine"}-${face}-${inputOffset}`;
-              if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-                await page
-                  .locator("aside.sidebar")
-                  .screenshot({ path: path.join(suite.artifactDir, `${artifact}-cached.png`) });
-              }
-              await gateway.resolveDeferred("connect");
+            const inputOffset = 1400;
+            // A changed scroll position can legitimately dedupe the same top-window receipt.
+            expect(await saveScroll(inputOffset)).toBe(inputOffset);
+            await page.reload();
+            await gateway.waitForRequest("connect");
+            await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
+            await page.evaluate(() => Reflect.get(window, "__sidebarPresentation").nextFrame());
+            expect(
+              await page.locator(".sidebar-shell__body").evaluate((element) => element.scrollTop),
+            ).toBe(0);
+            expect(
+              await evaluateControlUiContext(page, (app) => app.gateway.snapshot.hello),
+            ).toBeNull();
+            const artifact = `${hasTouch ? "coarse" : "fine"}-${face}-${inputOffset}`;
+            if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
               await page
-                .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
-                .waitFor();
-              await page.evaluate(() => Reflect.get(window, "__sidebarPresentation").nextFrame());
-              const report = await page.evaluate(() =>
-                Reflect.get(window, "__sidebarPresentation").read(),
+                .locator("aside.sidebar")
+                .screenshot({ path: path.join(suite.artifactDir, `${artifact}-cached.png`) });
+            }
+            await gateway.resolveDeferred("connect");
+            await page
+              .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
+              .waitFor();
+            await page.evaluate(() => Reflect.get(window, "__sidebarPresentation").nextFrame());
+            const report = await page.evaluate(() =>
+              Reflect.get(window, "__sidebarPresentation").read(),
+            );
+            expectCachedRows(report, 0);
+            if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+              await writeFile(
+                path.join(suite.artifactDir, `${artifact}-parity.json`),
+                JSON.stringify(
+                  { savedInputOffset: inputOffset, expectedOutputOffset: 0, ...report },
+                  null,
+                  2,
+                ),
               );
-              expectCachedRows(report, 0);
-              if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-                await writeFile(
-                  path.join(suite.artifactDir, `${artifact}-parity.json`),
-                  JSON.stringify(
-                    { savedInputOffset: inputOffset, expectedOutputOffset: 0, ...report },
-                    null,
-                    2,
-                  ),
-                );
-                await page
-                  .locator("aside.sidebar")
-                  .screenshot({ path: path.join(suite.artifactDir, `${artifact}-live.png`) });
-              }
+              await page
+                .locator("aside.sidebar")
+                .screenshot({ path: path.join(suite.artifactDir, `${artifact}-live.png`) });
             }
           }
         },

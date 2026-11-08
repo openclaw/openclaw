@@ -137,7 +137,9 @@ describe("transcript projection", () => {
     vi.useRealTimers();
   });
 
-  it("updates live text without projecting rows, but projects visibility and completion", async () => {
+  it("parks hidden live text without projecting rows and catches up on return", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    onTestFinished(() => visibility.mockRestore());
     const paneId = "stream-leaf-projection";
     const transcript = createTestTranscript(paneId);
     const projectRows = vi.spyOn(transcriptIndex, "projectTranscriptIndex");
@@ -182,6 +184,20 @@ describe("transcript projection", () => {
       expect(currentBubble()!).toBe(bubble);
       expect(bubble.textContent).toContain(text);
     }
+
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    flush();
+    for (const text of ["Hidden reply", "Hidden reply is complete."]) {
+      changeText(text);
+      expect(bubble.textContent).toContain("Reply grows again.");
+      expect(bubble.textContent).not.toContain("Hidden reply");
+    }
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    flush();
+    expect(currentBubble()).toBe(bubble);
+    expect(bubble.textContent).toContain("Hidden reply is complete.");
 
     // A sibling projection update replaces the live resolver's reactive owner.
     updateContext(true);

@@ -16,32 +16,34 @@ const discrawlScript = path.join(scripts, "discrawl-normalize.mjs");
 const run = (script: string, args: string[], options = {}) =>
   execFileSync(process.execPath, [script, ...args], { cwd: root, encoding: "utf8", ...options });
 const jsonl = (rows: unknown[]) => rows.map((row) => JSON.stringify(row)).join("\n") + "\n";
-// Expand {name: value} into CLI flags, in insertion order.
 const flags = (options: Record<string, string>) =>
   Object.entries(options).flatMap(([name, value]) => ["--" + name, value]);
 
-// Snapshot one Discord channel's rows covering [start, end), observed at `observed`.
 async function snapshot(
   dir: string,
   name: string,
   rows: unknown[],
   [start, end, observed]: string[],
   completeness = "complete",
+  options = {},
 ) {
   const input = path.join(dir, name + ".jsonl");
   const output = path.join(dir, name + ".manifest.jsonl.gz");
   const summary = path.join(dir, name + ".summary.json");
   await writeFile(input, jsonl(rows));
   const coverage = { "coverage-start": start!, "coverage-end": end!, "observed-at": observed! };
-  run(manifestScript, [
-    "snapshot",
-    ...flags({ provider: "discord", "source-key": "discord:guild:channel", ...coverage }),
-    ...flags({ completeness, input, output, summary }),
-  ]);
+  run(
+    manifestScript,
+    [
+      "snapshot",
+      ...flags({ provider: "discord", "source-key": "discord:guild:channel", ...coverage }),
+      ...flags({ completeness, input, output, summary }),
+    ],
+    options,
+  );
   return { output, summary };
 }
 
-// Plan a current snapshot against prior snapshots and return the parsed plan.
 async function plan(dir: string, current: string, ...previous: string[]) {
   const output = path.join(dir, "plan.json");
   const priors = previous.flatMap((prior) => ["--previous", prior]);
@@ -51,11 +53,12 @@ async function plan(dir: string, current: string, ...previous: string[]) {
 
 it("source manifests are deterministic, content-private, and produce overlap-aware plans", async () => {
   const dir = tempDirs.make("knowledge-source-ingest-");
+  const payload = { a: 1, ä: [{ "2": "two", "10": "ten", a: 1 }, true, null], z: 3 };
   const old = await snapshot(
     dir,
     "old",
     [
-      { id: "a", occurred_at: "2026-09-25T01:00:00-07:00", payload: { text: "same" } },
+      { id: "a", occurred_at: "2026-09-25T01:00:00-07:00", payload },
       { id: "b", occurred_at: "2026-09-26T01:00:00-07:00", payload: { text: "old" } },
       { id: "c", occurred_at: "2026-09-27T01:00:00-07:00", payload: { text: "deleted" } },
       { id: "x", occurred_at: "2026-09-22T01:00:00-07:00", payload: { text: "outside" } },
@@ -64,7 +67,7 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
     ["2026-09-21T00:00:00-07:00", "2026-09-28T00:00:00-07:00", "2026-09-28T00:05:00-07:00"],
   );
   const rows = [
-    { id: "a", occurred_at: "2026-09-25T08:00:00Z", payload: { text: "same" } },
+    { id: "a", occurred_at: "2026-09-25T08:00:00Z", payload },
     { id: "b", occurred_at: "2026-09-26T08:00:00Z", payload: { text: "new" } },
     { id: "d", occurred_at: "2026-09-29T08:00:00Z", payload: { text: "added" } },
   ];
@@ -86,38 +89,34 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
   expect(result.coverage.uncovered).toStrictEqual([
     { start: "2026-09-28T07:00:00.000Z", end: "2026-10-01T07:00:00.000Z" },
   ]);
-  expect(gunzipSync(await readFile(current.output)).toString()).not.toMatch(/same|new|added/);
-  const summary = JSON.parse(await readFile(current.summary, "utf8"));
-  expect(summary.manifest_sha256).toMatch(/^[a-f0-9]{64}$/);
+  const content = gunzipSync(await readFile(current.output)).toString();
+  expect(content).not.toMatch(/same|new|added/);
+  const hash = JSON.parse(content.trim().split("\n")[1]!).sha256;
+  expect(hash).toBe("ed2694e52b2fe820bd83b6f77118d0be33a57d9087ca71284b5705006b3d519a");
   const repeated = await snapshot(dir, "current-repeat", rows.toReversed(), window);
   expect(await readFile(repeated.output)).toStrictEqual(await readFile(current.output));
+  const newest = await plan(dir, current.output, old.output, current.output);
+  expect(newest.items.changed).toEqual([]);
+  expect(newest.items.unchanged).toEqual(["a", "b", "d"]);
+  const partial = await snapshot(dir, "partial", [], window, "partial");
+  const missing = await plan(dir, partial.output, current.output);
+  expect(missing.items.deleted).toEqual([]);
+  expect(missing.items.unresolved_missing).toEqual(["a", "b", "d"]);
   await expect(snapshot(dir, "duplicate", [rows[0], rows[0]], window)).rejects.toThrow(
     /Duplicate item id/,
   );
-  const scratch = tempDirs.make("knowledge-source-missing-");
+  const scratch = tempDirs.make("knowledge-source-scratch-");
+  const env = { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch };
+  const options = { timeout: 10_000, env };
   expect(() =>
-    run(manifestScript, ["plan", "--current", path.join(scratch, "missing.gz")], {
-      timeout: 10_000,
-      env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
-    }),
+    run(manifestScript, ["plan", "--current", path.join(scratch, "missing.gz")], options),
   ).toThrow(/ENOENT/);
   expect(await readdir(scratch)).toEqual([]);
-});
-
-it("newest prior observation wins independent of argument order and partial snapshots do not prove deletion", async () => {
-  const dir = tempDirs.make("knowledge-source-ingest-");
-  const at = (n: number) => [
-    "2026-09-25T00:00:00Z",
-    "2026-09-27T00:00:00Z",
-    `2026-09-27T0${n}:00:00Z`,
-  ];
-  const row = (n: number) => [{ id: "a", occurred_at: "2026-09-26T00:00:00Z", payload: { n } }];
-  const older = await snapshot(dir, "older", row(1), at(1));
-  const newer = await snapshot(dir, "newer", row(2), at(2));
-  const current = await snapshot(dir, "partial", [], at(3), "partial");
-  const result = await plan(dir, current.output, newer.output, older.output);
-  expect(result.items.deleted).toStrictEqual([]);
-  expect(result.items.unresolved_missing).toStrictEqual(["a"]);
+  await mkdir(path.join(dir, "unwritable.manifest.jsonl.gz"));
+  await expect(snapshot(dir, "unwritable", rows, window, "complete", options)).rejects.toThrow(
+    /EISDIR/,
+  );
+  expect(await readdir(scratch)).toEqual([]);
 });
 
 const DISCRAWL_SCHEMA =

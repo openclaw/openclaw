@@ -21,9 +21,16 @@ def _extract_frontmatter(content: str) -> Optional[str]:
     if not lines or lines[0].strip() != "---":
         return None
     for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
+        if lines[i].rstrip() == "---":
             return "\n".join(lines[1:i])
     return None
+
+
+def _strip_scalar_comment(value: str) -> str:
+    if value.startswith("#"):
+        return ""
+    # Only a leading quote delimits a quoted scalar; apostrophes in plain text do not.
+    return re.sub(r"""^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^'"].*?)[ \t]+#.*$""", r"\1", value)
 
 
 def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]:
@@ -44,6 +51,12 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
             if current_key is None:
                 return None
             current_value = parsed[current_key]
+            if not block_scalar:
+                if not current_value:
+                    stripped = _strip_scalar_comment(stripped)
+                elif not current_value.startswith(("'", '"')):
+                    # Quotes on a plain scalar's continuation are literal text.
+                    stripped = re.sub(r"[ \t]+#.*$", "", stripped)
             parsed[current_key] = f"{current_value}\n{stripped}" if current_value else stripped
             continue
 
@@ -51,11 +64,11 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
             return None
         key, value = stripped.split(":", 1)
         key = key.strip()
-        value = value.strip()
+        value = _strip_scalar_comment(value.strip())
         if not key:
             return None
         # Block headers describe the scalar; only its indented body is content.
-        block_scalar = bool(re.fullmatch(r"[>|](?:[1-9][+-]?|[+-][1-9]?)?(?:\s+#.*)?", value))
+        block_scalar = bool(re.fullmatch(r"[>|](?:[1-9][+-]?|[+-][1-9]?)?", value))
         if block_scalar:
             value = ""
         elif (value.startswith('"') and value.endswith('"')) or (

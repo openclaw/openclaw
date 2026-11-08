@@ -112,6 +112,9 @@ suite.define(() => {
         await page.goto(await open("settings/model-providers"));
         await waitForControlUiGatewayReady(page);
         await page.locator('[data-model-readiness="model-required"]').waitFor();
+        expect(await page.locator(".page-subtitle").first().textContent()).toContain(
+          "Global model defaults and provider access for your agents.",
+        );
 
         let clicks = 0;
         const started = Date.now();
