@@ -8,6 +8,13 @@ private struct BridgeError: Error, CustomStringConvertible {
     }
 }
 
+private func encodedJSON(_ value: Any) throws -> String {
+    let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .fragmentsAllowed])
+    guard let text = String(data: data, encoding: .utf8) else { throw BridgeError("Invalid UTF-8 JSON") }
+    return text
+}
+
+#if !OPENCLAW_INFO_ONLY
 private struct ToolBoundary: Error {}
 
 private struct PendingCall: Sendable {
@@ -50,12 +57,6 @@ private func object(_ value: Any?, _ label: String) throws -> [String: Any] {
 private func string(_ value: Any?, _ label: String) throws -> String {
     guard let value = value as? String else { throw BridgeError("Expected string: \(label)") }
     return value
-}
-
-private func encodedJSON(_ value: Any) throws -> String {
-    let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .fragmentsAllowed])
-    guard let text = String(data: data, encoding: .utf8) else { throw BridgeError("Invalid UTF-8 JSON") }
-    return text
 }
 
 private func integer(_ value: Any?, _ label: String) throws -> Int? {
@@ -319,6 +320,7 @@ private func run(_ request: [String: Any], model: SystemLanguageModel) async thr
         return ["text": "", "toolCalls": output, "inputTokens": inputTokens, "outputTokens": outputTokens]
     }
 }
+#endif
 
 @main
 private struct AppleFoundationModels {
@@ -353,6 +355,9 @@ private struct AppleFoundationModels {
                     ]
                 }
             } else {
+                #if OPENCLAW_INFO_ONLY
+                throw BridgeError("The discovery helper supports only info")
+                #else
                 let limit = 2 * 1024 * 1024
                 var data = Data()
                 while let chunk = try FileHandle.standardInput.read(upToCount: min(65536, limit + 1 - data.count)),
@@ -362,6 +367,7 @@ private struct AppleFoundationModels {
                     guard data.count <= limit else { throw BridgeError("Request exceeds 2 MiB") }
                 }
                 result = try await run(object(JSONSerialization.jsonObject(with: data), "request"), model: model)
+                #endif
             }
             try FileHandle.standardOutput.write(Data((encodedJSON(result) + "\n").utf8))
         } catch {

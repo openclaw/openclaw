@@ -24,10 +24,13 @@ const onboardingWelcomeMocks = vi.hoisted(() => ({
 vi.mock("../../system-agent/setup-inference.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../system-agent/setup-inference.js")>()),
   activateSetupInference: setupInferenceMocks.activateSetupInference,
-  detectSetupInference: (agentId?: string) =>
-    setupInferenceDetectionMocks.detectSetupInferenceIsolated({ agentId }),
   resolvePersistentApplyInference: setupInferenceMocks.resolvePersistentApplyInference,
   verifySetupInference: setupInferenceMocks.verifySetupInference,
+}));
+vi.mock("../../system-agent/setup-inference-detect.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../system-agent/setup-inference-detect.js")>()),
+  detectSetupInference: (agentId?: string) =>
+    setupInferenceDetectionMocks.detectSetupInferenceIsolated({ agentId }),
 }));
 vi.mock("../../system-agent/inference-fallback.js", () => ({
   verifySystemAgentInferenceWithFallback: inferenceFallbackMocks.verify,

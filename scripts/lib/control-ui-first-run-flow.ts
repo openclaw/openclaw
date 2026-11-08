@@ -431,28 +431,33 @@ export async function runControlUiFirstRunFlow(
     );
 
     const assistantGroup = ".chat-pane-cache__pane--active .chat-group.assistant";
-    const previousReplies = await page.locator(assistantGroup).evaluateAll((groups) =>
-      groups.map((group) => {
-        const key = group.getAttribute("data-chat-row-key");
-        if (!key) {
-          throw new Error("Assistant reply must have a transcript row key");
-        }
-        return key;
-      }),
-    );
-    const nextReply = `${assistantGroup}${previousReplies.map((key) => `:not([data-chat-row-key=${JSON.stringify(key)}])`).join("")} .chat-text p`;
-    await page.locator(composer).fill("Say hello again in one short sentence.");
-    await wait(`${send}:not([disabled])`);
-    await measure(
-      "second-message-reply",
-      async () => {
-        await page.locator(send).click();
-        await wait(nextReply);
-        assert.equal(await page.locator(nextReply).textContent(), "Synthetic first-run reply.");
-        await wait(`${composer}:not([disabled])`);
-      },
-      `body:has(${nextReply}) ${composer}:not([disabled])`,
-    );
+    for (const [name, message] of [
+      ["second-message-reply", "Say hello again in one short sentence."],
+      ["later-message-reply", "Say hello a third time in one short sentence."],
+    ] as const) {
+      const previousReplies = await page.locator(assistantGroup).evaluateAll((groups) =>
+        groups.map((group) => {
+          const key = group.getAttribute("data-chat-row-key");
+          if (!key) {
+            throw new Error("Assistant reply must have a transcript row key");
+          }
+          return key;
+        }),
+      );
+      const nextReply = `${assistantGroup}${previousReplies.map((key) => `:not([data-chat-row-key=${JSON.stringify(key)}])`).join("")} .chat-text p`;
+      await page.locator(composer).fill(message);
+      await wait(`${send}:not([disabled])`);
+      await measure(
+        name,
+        async () => {
+          await page.locator(send).click();
+          await wait(nextReply);
+          assert.equal(await page.locator(nextReply).textContent(), "Synthetic first-run reply.");
+          await wait(`${composer}:not([disabled])`);
+        },
+        `body:has(${nextReply}) ${composer}:not([disabled])`,
+      );
+    }
 
     return {
       onboarding,

@@ -150,7 +150,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     "openclaw.setup.detect",
     validateSystemAgentSetupDetectParams,
     async ({ params, respond }) => {
-      const { detectSetupInference } = await import("../../system-agent/setup-inference.js");
+      const { detectSetupInference } = await import("../../system-agent/setup-inference-detect.js");
       respond(true, await detectSetupInference(params.agentId), undefined);
     },
   ),
