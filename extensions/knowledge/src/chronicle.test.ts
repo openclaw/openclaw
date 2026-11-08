@@ -2,13 +2,11 @@ import { randomUUID, createHash } from "node:crypto";
 import { mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { OpenClawPluginToolFactory } from "openclaw/plugin-sdk/plugin-entry";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { stringify } from "yaml";
 import type { SinceInput, TimelineInput } from "./chronicle-contract.js";
 import { contract } from "./contract.js";
-import plugin from "./index.js";
 import { createKnowledgeService } from "./service.js";
 import { returnedRecords } from "./session-activity.js";
 import { dateInterval, timeBounds } from "./temporal-query.js";
@@ -20,7 +18,6 @@ import {
   afterTest,
   useTestTempDirs,
   defaultOrder,
-  sessionActions,
 } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
@@ -96,40 +93,18 @@ async function fixture() {
 const ids = (r: any) => r.items.map((x: any) => x.record.id);
 const event = (occurred_at: any, more = {}) => ({ kind: "claim", occurred_at, ...more });
 
-it("exposes record-type guidance on every registered temporal kind parameter", async () => {
-  const f = await fixture();
-  const factories = new Map<string, OpenClawPluginToolFactory>();
-  plugin.register({
-    ...f.api,
-    session: {
-      ...f.api.session,
-      controls: { ...f.api.session?.controls, ...sessionActions().session.controls },
-    },
-    registerTool(factory, options) {
-      if (typeof factory === "function" && options?.name) {
-        factories.set(options.name, factory);
-      }
-    },
-  });
-  for (const name of ["timeline", "chronicle_day", "chronicle_since"]) {
-    const tool = factories.get("knowledge_" + name)?.(f.owner.tool);
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("Missing registered temporal tool: " + name);
-    }
-    expect.soft(tool.parameters, name).toMatchObject({
-      properties: {
-        kind: { description: expect.stringMatching(/\S/) },
-      },
-    });
-  }
-});
-
-it("date validation, inclusive UTC days and date-only precision", () => {
+it("temporal input guidance, UTC bounds and date-only precision", () => {
   expect(() => dateInterval("2025-02-29")).toThrow(/real/);
   expect(() => dateInterval("2026-10-04T12:00:00")).toThrow(/timezone/);
   expect(() => timeBounds({ since: "2026-10-05", until: "2026-10-04" })).toThrow(/since/);
   expect(dateInterval("2026-10-04").end).toBe(Date.parse("2026-10-04T23:59:59.999Z"));
   expect(dateInterval("2026-10-04T12:00:00-07:00").start).toBe(Date.parse("2026-10-04T19:00:00Z"));
+  for (const name of ["timeline", "chronicle_day", "chronicle_since"] as const) {
+    expect(contract.operations[name].input).toHaveProperty(
+      "properties.kind.description",
+      expect.stringMatching(/record\.type/),
+    );
+  }
 });
 
 it("late imports distinguish occurrence, recording, update and due dates before search/list pagination", async () => {
@@ -186,19 +161,13 @@ it("day/week queries honor IANA zones and retain literal date-only dates", async
   await f.put("event_instant", event("2026-10-04T01:30:00Z"));
   await f.put("event_calendar", event("2026-10-04"));
   await f.put("event_monday", event("2026-09-28"));
-  const west = await f.service.chronicle_day(
-    { date: "2026-10-03", timezone: "America/Los_Angeles" },
-    f.owner,
-  );
-  expect(ids(west)).toStrictEqual(["event_instant"]);
-  expect(
-    ids(
-      await f.service.chronicle_day(
-        { date: "2026-10-04", timezone: "America/Los_Angeles" },
-        f.owner,
-      ),
-    ),
-  ).toStrictEqual(["event_calendar"]);
+  for (const [date, expected] of [
+    ["2026-10-03", ["event_instant"]],
+    ["2026-10-04", ["event_calendar"]],
+  ] as const) {
+    const day = await f.service.chronicle_day({ date, timezone: "America/Los_Angeles" }, f.owner);
+    expect(ids(day)).toStrictEqual(expected);
+  }
   const week = await f.service.chronicle_day({ date: "2026-10-04", week: true }, f.owner);
   expect(week.total).toBe(3);
   expect(Check(contract.operations.chronicle_day.output, week)).toBeTruthy();
