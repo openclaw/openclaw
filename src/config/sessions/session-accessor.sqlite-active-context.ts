@@ -577,15 +577,18 @@ function readActiveContext(
         event: JSON.parse(row.navigation_json) as unknown,
       }),
     );
-    const selectedSizes = new Map(selectedRows.map((row) => [row.event_seq, row.serialized_bytes]));
+    const selectedBySeq = new Map(selectedRows.map((row) => [row.event_seq, row]));
     if (timing) {
       timing.hydrationDependencyRows = dependencyCandidates.length;
     }
-    if (boundary) {
-      selectedSizes.set(boundary.seq, boundary.serialized_bytes);
-    }
     const fitted = fitBackgroundResultDependencies(
-      contextSequences.map((seq) => ({ seq, serialized_bytes: selectedSizes.get(seq)! })),
+      contextSequences.map((seq) => ({
+        seq,
+        serialized_bytes:
+          seq === boundary?.seq
+            ? boundary.serialized_bytes
+            : selectedBySeq.get(seq)!.serialized_bytes,
+      })),
       dependencyCandidates,
       headerBytes,
       limits?.maxBytes,
@@ -598,6 +601,9 @@ function readActiveContext(
     }
     const payloadSequences = header ? [header.seq, ...contextSequences] : contextSequences;
     const payloads = new Map<number, TranscriptEvent>();
+    let firstSelected: (typeof selectedRows)[number] | undefined;
+    let anchorEntry: Record<string, unknown> | undefined;
+    let injectedEntry: Record<string, unknown> | undefined;
     if (payloadSequences.length > 0) {
       for (const row of iterateSqliteQuerySync(
         projection.database.db,
@@ -607,6 +613,21 @@ function readActiveContext(
       )) {
         const event: TranscriptEvent = JSON.parse(readTranscriptPayload(row));
         const entry = asOptionalRecord(event);
+        const selected = selectedBySeq.get(row.seq);
+        // Preserve only the two full anchors needed by cache-TTL projection; all
+        // other payloads can be released as this cursor advances. Selection is
+        // newest-first, independently of the payload cursor order.
+        if (
+          selected &&
+          typeof entry?.id === "string" &&
+          (!firstSelected || selected.active_position < firstSelected.active_position)
+        ) {
+          firstSelected = selected;
+          anchorEntry = entry;
+        }
+        if (row.seq === injectedBoundarySeq) {
+          injectedEntry = entry;
+        }
         // Keep only facts used by ancestry and retention. In particular, do not retain
         // message content or compaction summaries beside the acknowledged byte stream.
         payloads.set(
@@ -649,26 +670,7 @@ function readActiveContext(
         events.push(event);
       }
     }
-    const firstSelected = selectedRows.findLast(
-      (row) => typeof asOptionalRecord(payloads.get(row.event_seq))?.id === "string",
-    );
-    const readAnchor = (seq: number | undefined) => {
-      if (seq === undefined) {
-        return undefined;
-      }
-      if (materializeEvents) {
-        return asOptionalRecord(payloads.get(seq));
-      }
-      // Cache-TTL checkpoint and indexed-entry validation need the original anchor,
-      // not the reduced navigation facts; at most two anchors are retained.
-      const row = executeSqliteQueryTakeFirstSync(
-        projection.database.db,
-        transcript.select(["event_json", "event_zstd", "event_utf8_bytes"]).where("seq", "=", seq),
-      );
-      return row ? asOptionalRecord(JSON.parse(readTranscriptPayload(row))) : undefined;
-    };
-    const anchorEntry = readAnchor(firstSelected?.event_seq);
-    const injectedEntry = readAnchor(injectedBoundarySeq);
+
     const anchors = [
       ...(boundary && isIndexedSessionEntry(injectedEntry) && injectedEntry.type === "compaction"
         ? [{ activePosition: boundary.active_position, id: injectedEntry.id, entry: injectedEntry }]

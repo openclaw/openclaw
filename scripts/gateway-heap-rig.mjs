@@ -746,7 +746,14 @@ try {
   if (failure) {
     throw failure;
   }
-  if (largeSessionEvents && completedLargeSessionTurns !== turnCount) {
+  if (largeSessionEvents && completedLargeSessionTurns === 0) {
+    throw new Error("Large-session run completed no turns");
+  }
+  if (
+    largeSessionEvents &&
+    Number.isFinite(turnCount) &&
+    completedLargeSessionTurns !== turnCount
+  ) {
     throw new Error(`Large-session run completed ${completedLargeSessionTurns}/${turnCount} turns`);
   }
   await census("capture", "complete");
