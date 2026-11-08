@@ -73,6 +73,40 @@ describe("google-interactions provider", () => {
     messages: [{ role: "user", content: "Hello", timestamp: 0 }],
   };
 
+  it.each([0.4, 0, undefined])(
+    "forwards topP=%s in serialized direct and simple Interactions requests",
+    async (topP) => {
+      const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+        sseResponse(completedSse()),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const options = { apiKey: "test-key", temperature: 0.25, maxTokens: 64, stop: ["END"], topP };
+      await streamGoogleInteractions(makeInteractionsModel(), basicContext, options).result();
+      await streamSimpleGoogleInteractions(makeInteractionsModel(), basicContext, options).result();
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      for (const [index, call] of fetchMock.mock.calls.entries()) {
+        const body = call[1]?.body;
+        if (typeof body !== "string") {
+          throw new Error("Expected serialized Interactions request body");
+        }
+        expect(JSON.parse(body)).toEqual({
+          model: "gemini-3-flash-preview",
+          input: [{ type: "user_input", content: [{ type: "text", text: "Hello" }] }],
+          generation_config: {
+            temperature: 0.25,
+            max_output_tokens: 64,
+            stop_sequences: ["END"],
+            ...(topP === undefined ? {} : { top_p: topP }),
+            ...(index === 1 ? { thinking_summaries: "none" } : {}),
+          },
+          store: false,
+          stream: true,
+        });
+      }
+    },
+  );
+
   it("exposes cumulative tool input before the provider completes the call", async ({
     onTestFinished,
   }) => {

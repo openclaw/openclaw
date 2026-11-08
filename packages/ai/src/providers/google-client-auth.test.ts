@@ -28,7 +28,7 @@ vi.mock("@google/genai", () => ({
 }));
 
 import { streamGoogleVertex, streamSimpleGoogleVertex } from "./google-vertex.js";
-import { streamGoogle } from "./google.js";
+import { streamGoogle, streamSimpleGoogle } from "./google.js";
 
 const context = {
   messages: [{ role: "user", content: "hello", timestamp: 0 }],
@@ -69,6 +69,32 @@ describe("Google SDK construction auth", () => {
     vi.unstubAllEnvs();
     configureAiTransportHost({});
   });
+
+  it.each([0.4, 0, undefined])(
+    "forwards topP=%s at the Google and Vertex SDK request boundary",
+    async (topP) => {
+      const options = { apiKey: "test-key", temperature: 0.25, maxTokens: 64, stop: ["END"], topP };
+      await streamGoogle(googleModel(), context, options).result();
+      await streamSimpleGoogle(googleModel(), context, options).result();
+      await streamGoogleVertex(vertexModel(), context, options).result();
+      await streamSimpleGoogleVertex(vertexModel(), context, options).result();
+
+      expect(googleMockState.requests).toHaveLength(4);
+      for (const [index, request] of googleMockState.requests.entries()) {
+        expect(request).toEqual({
+          model: "gemini-3-flash-preview",
+          contents: [{ role: "user", parts: [{ text: "hello" }] }],
+          config: {
+            temperature: 0.25,
+            maxOutputTokens: 64,
+            stopSequences: ["END"],
+            ...(topP === undefined ? {} : { topP }),
+            ...(index % 2 === 1 ? { thinkingConfig: { thinkingLevel: "MINIMAL" } } : {}),
+          },
+        });
+      }
+    },
+  );
 
   it("identifies OpenCode conversations without cache retention", async () => {
     await streamGoogle({ ...googleModel(), baseUrl: "https://opencode.ai/zen/v1" }, context, {

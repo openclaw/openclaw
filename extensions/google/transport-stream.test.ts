@@ -475,6 +475,49 @@ describe("google transport stream", () => {
     vi.resetModules();
   });
 
+  it.each([0.4, 0, undefined])(
+    "forwards topP=%s in serialized Google and Vertex plugin requests",
+    async (topP) => {
+      for (const vertex of [false, true]) {
+        mockGoogleTextResponse();
+        const streamFn = vertex
+          ? createGoogleVertexTransportStreamFn()
+          : createGoogleGenerativeAiTransportStreamFn();
+        const options = {
+          apiKey: "test-key",
+          project: "test-project",
+          location: "us-central1",
+          temperature: 0.25,
+          maxTokens: 64,
+          stop: ["END"],
+          topP,
+        };
+        const stream = await streamFn(
+          vertex
+            ? buildGoogleVertexModel({ reasoning: false })
+            : buildGeminiModel({ reasoning: false }),
+          { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+          options,
+        );
+        expect((await stream.result()).stopReason).toBe("stop");
+        const init = requireRequestInit(
+          requireMockCall(guardedFetchMock, vertex ? 1 : 0, "guarded fetch"),
+          "guarded fetch",
+        );
+        expect(parseRequestJsonBody(init)).toEqual({
+          contents: [{ role: "user", parts: [{ text: "hello" }] }],
+          generationConfig: {
+            temperature: 0.25,
+            maxOutputTokens: 64,
+            stopSequences: ["END"],
+            ...(topP === undefined ? {} : { topP }),
+          },
+        });
+      }
+      expect(guardedFetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("reports every parsed Google SSE chunk as request activity", async () => {
     const chunks = [
       { usageMetadata: { totalTokenCount: 1 } },

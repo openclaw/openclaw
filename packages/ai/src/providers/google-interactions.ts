@@ -1,3 +1,4 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import type { SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -42,8 +43,10 @@ export const streamSimpleGoogleInteractions: StreamFunction<
   }
 
   const base = buildBaseOptions(model, options, apiKey);
+  const topP = asRecord(options).topP;
   return streamGoogleInteractions(model, context, {
     ...base,
+    ...(typeof topP === "number" ? { topP } : {}),
     thinking: buildGoogleInteractionsSimpleThinking(model, options),
   } satisfies GoogleProviderOptions);
 };
