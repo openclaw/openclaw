@@ -191,21 +191,3 @@ export function respellUnderRootSync(root: string, candidate: string): string | 
   const relative = path.relative(canonicalRoot, canonicalCandidate);
   return relative ? path.join(path.resolve(root), relative) : path.resolve(root);
 }
-
-/** True when the candidate canonically lies inside any root (routing, not authorization). */
-export async function isCanonicallyInsideAny(
-  roots: readonly string[],
-  candidate: string,
-): Promise<boolean> {
-  if (roots.length === 0) {
-    return false;
-  }
-  const [canonicalCandidate, canonicalRoots] = await Promise.all([
-    realpathViaExistingPrefix(candidate),
-    Promise.all(roots.map(canonicalizeContainmentRoot)),
-  ]);
-  return (
-    canonicalCandidate !== undefined &&
-    canonicalRoots.some((root) => isPathInside(root, canonicalCandidate))
-  );
-}

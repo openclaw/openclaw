@@ -548,7 +548,9 @@ function resolveContainedPath(baseDir: string, target: string, label: string): s
   if (!canonical || !isPathInside(canonicalizeContainmentRootSync(base), canonical)) {
     throw new Error(`${label} module path must be within ${base}: ${target}`);
   }
-  return resolved;
+  // Load the location that was checked: an alias spelling could be retargeted outside before
+  // the first matching hook imports it.
+  return canonical;
 }
 
 function resolveOptionalContainedPath(

@@ -232,12 +232,24 @@ describe("hooks mapping", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")("accepts an aliased absolute in-root module", () => {
+  it.runIf(process.platform !== "win32")("accepts an aliased absolute in-root module", async () => {
     const { transformsRoot } = makeTransforms("openclaw-config-alias-module-");
     fs.writeFileSync(path.join(transformsRoot, "transform.mjs"), "export default () => null;");
     const alias = `${tempDirs.make("openclaw-alias-parent-")}/transforms`;
     fs.symlinkSync(transformsRoot, alias, "dir");
-    expect(() => resolveTransform(path.join(alias, "transform.mjs"))).not.toThrow();
+    const mappings = resolveTransform(path.join(alias, "transform.mjs"), undefined, "skip");
+    // Retargeting the alias after resolution must not redirect the import outside the root.
+    const outsideDir = tempDirs.make("openclaw-retarget-outside-");
+    fs.writeFileSync(
+      path.join(outsideDir, "transform.mjs"),
+      'export default () => { throw new Error("outside"); };',
+    );
+    fs.rmSync(alias);
+    fs.symlinkSync(outsideDir, alias, "dir");
+    await expect(applySingleHookMapping(mappings, mappingContext("skip"))).resolves.toEqual({
+      ok: true,
+      action: null,
+    });
   });
 
   it.runIf(process.platform !== "win32")(
