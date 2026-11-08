@@ -445,12 +445,12 @@ extension OpenClawSnapshotUITests {
 
         // Status-bar navigation is reader intent, not a keyboard-avoidance animation.
         // The system status bar is visible but is not in this app's accessibility tree.
-        // Match BootstrapSetupFailureUITests: tap above the observed navigation bar.
+        // Target the visible clock, not the empty margin left of the status items.
         let navigationBar = app.navigationBars.firstMatch
         let statusBarHeight = navigationBar.frame.minY - app.frame.minY
         XCTAssertGreaterThan(statusBarHeight, 0)
         app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: 20, dy: statusBarHeight / 2)).tap()
+            .withOffset(CGVector(dx: app.frame.width * 0.18, dy: statusBarHeight * 0.4)).tap()
         let readerAtTop = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
                 jumpToLatest.exists && !finalReply.frame.intersects(transcript.frame)
