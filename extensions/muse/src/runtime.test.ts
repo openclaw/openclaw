@@ -89,4 +89,21 @@ describe("Muse process pool", () => {
       await pool.dispose();
     }
   });
+  it("tells Muse it cannot answer user-input questions", async () => {
+    // OpenClaw never presents or answers userInput/request; MSP treats an absent flag as capable.
+    const log = join(workspace, "initialize-requests.jsonl");
+    vi.stubEnv("MUSE_REQUEST_LOG", log);
+    const pool = new MusePool(fixture);
+    try {
+      (await pool.acquire(workspace, undefined, false)).release();
+      const initialize = (await readFile(log, "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .find((entry) => entry.method === "initialize");
+      expect(initialize.params.capabilities).toEqual({ userInputDialogs: false });
+    } finally {
+      await pool.dispose();
+    }
+  });
 });
