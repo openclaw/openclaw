@@ -1,4 +1,5 @@
 import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
+import { iconData } from "../../components/icon-data.ts";
 import type { IconName } from "../../components/solid/icon.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
@@ -144,7 +145,11 @@ export function sidebarPanelDefinitions(
     ...[...pluginPanels].map(([slot, entry]): SidebarPanelDefinition => ({
       slot,
       label: entry?.value.label ?? slot.slice("plugin:".length),
-      icon: "plug",
+      // SAFETY: the own-key check admits only names from the fixed icon registry.
+      icon:
+        entry?.value.icon && Object.hasOwn(iconData, entry.value.icon)
+          ? (entry.value.icon as IconName)
+          : "plug",
       iconSvg: entry?.panelIcon,
       available: entry !== undefined,
       content: null,
