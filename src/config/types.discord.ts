@@ -38,8 +38,12 @@ export type DiscordGuildChannelConfig = Omit<CommonChannelGroupConfig, "allowFro
   roles?: string[];
   /** If false, omit thread starter context for this channel (default: true). */
   includeThreadStarter?: boolean;
-  /** If true, automatically create a thread for each new message in this channel. */
-  autoThread?: boolean;
+  /**
+   * Automatically create a thread for each new message in this channel.
+   * `true` creates it when the message is admitted; `"on-first-message"` keeps the same
+   * per-message session but creates the thread only when the first reply or progress message is sent.
+   */
+  autoThread?: boolean | "on-first-message";
   /** Archive duration (minutes) for auto-created threads. Valid values: 60, 1440, 4320, 10080. */
   autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
   /** Naming strategy for auto-created threads. "message" uses message text; "generated" renames with an LLM title. */

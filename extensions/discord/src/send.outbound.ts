@@ -11,6 +11,7 @@ import { createChannelMessage, createThread } from "./internal/api.messages.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { prepareDiscordOutboundText } from "./outbound-text.js";
+import { resolvePendingDiscordAutoThreadChannel } from "./pending-auto-thread.js";
 import {
   createReusableDiscordReplyReference,
   type DiscordReplyReference,
@@ -117,7 +118,9 @@ export async function sendMessageDiscord(
       { cfg, accountId: accountInfo.accountId },
       { defaultKind: "channel" },
     );
-    const { channelId } = await resolveChannelId(rest, recipient, request);
+    const { channelId: resolvedChannelId } = await resolveChannelId(rest, recipient, request);
+    // autoThread "on-first-message": opens the thread now, with this send as its first message.
+    const channelId = await resolvePendingDiscordAutoThreadChannel(resolvedChannelId);
 
     // Forum/Media channels reject POST /messages; auto-create a thread post instead.
     const channel = await resolveDiscordChannel(rest, channelId);
@@ -336,7 +339,9 @@ async function sendDiscordStructuredMessage(
       { cfg, accountId: account.accountId },
       { defaultKind: "channel" },
     );
-    const { channelId } = await resolveChannelId(rest, recipient, request);
+    const { channelId: resolvedChannelId } = await resolveChannelId(rest, recipient, request);
+    // autoThread "on-first-message": opens the thread now, with this send as its first message.
+    const channelId = await resolvePendingDiscordAutoThreadChannel(resolvedChannelId);
     const content = opts.content?.trim()
       ? rewriteDiscordKnownMentions(opts.content, {
           accountId: account.accountId,

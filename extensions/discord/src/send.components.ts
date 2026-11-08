@@ -18,6 +18,7 @@ import {
   type MessagePayloadObject,
 } from "./internal/payload.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
+import { resolvePendingDiscordAutoThreadChannel } from "./pending-auto-thread.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import {
@@ -136,7 +137,8 @@ async function writeDiscordComponentMessage(
     { cfg, accountId: accountInfo.accountId },
     { defaultKind: "channel" },
   );
-  const { channelId } = await resolveChannelId(rest, recipient, request);
+  const { channelId: resolvedChannelId } = await resolveChannelId(rest, recipient, request);
+  const channelId = await resolvePendingDiscordAutoThreadChannel(resolvedChannelId);
   if (creating) {
     const channel = await resolveDiscordChannel(rest, channelId);
     if (channel && DISCORD_FORUM_LIKE_TYPES.has(channel.type)) {

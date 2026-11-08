@@ -36,6 +36,7 @@ import { DiscordError, RateLimitError } from "./internal/discord.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { readDiscordMessage, readRetryAfter } from "./internal/rest-errors.js";
 import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
+import { resolvePendingDiscordAutoThreadChannel } from "./pending-auto-thread.js";
 import { classifyDiscordDeliveryFailure, recordDiscordMessageCreateAmbiguity } from "./retry.js";
 import { createDiscordMessageNonce } from "./send.message-request.js";
 import type { sendMessageDiscord } from "./send.outbound.js";
@@ -315,7 +316,9 @@ export async function sendVoiceMessageDiscord(
             { cfg, accountId: accountInfo.accountId },
             { defaultKind: "channel" },
           );
-          const resolvedChannelId = (await resolveChannelId(rest, recipient, request)).channelId;
+          const resolvedChannelId = await resolvePendingDiscordAutoThreadChannel(
+            (await resolveChannelId(rest, recipient, request)).channelId,
+          );
           channelId = resolvedChannelId;
 
           ogg = await ensureOggOpus(localInputPath);

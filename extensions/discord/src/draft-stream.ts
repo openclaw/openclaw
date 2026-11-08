@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { deleteChannelMessage, editChannelMessage } from "./internal/api.messages.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import type { RequestClient } from "./internal/rest.js";
+import { resolvePendingDiscordAutoThreadChannel } from "./pending-auto-thread.js";
 import { createDiscordRetryRunner } from "./retry.js";
 import { resolveDiscordMessageFlags } from "./send.shared.js";
 
@@ -86,7 +87,12 @@ export function createDiscordDraftStream(params: {
       const messageReference = replyToMessageId
         ? { message_id: replyToMessageId, fail_if_not_exists: false }
         : undefined;
-      const sent = (await rest.post(Routes.channelMessages(targetChannelId), {
+      // autoThread "on-first-message": the first draft send is what opens the thread.
+      const sendChannelId = await resolvePendingDiscordAutoThreadChannel(targetChannelId);
+      if (sendChannelId !== channelId) {
+        channelId = sendChannelId;
+      }
+      const sent = (await rest.post(Routes.channelMessages(sendChannelId), {
         body: {
           ...body,
           ...(messageReference ? { message_reference: messageReference } : {}),
@@ -98,7 +104,7 @@ export function createDiscordDraftStream(params: {
         return false;
       }
       // Draft rotation during an in-flight preview is best effort; final delivery is separate.
-      streamMessage = { channelId: targetChannelId, messageId: sent.id };
+      streamMessage = { channelId: sendChannelId, messageId: sent.id };
       lastSentText = trimmed;
       return true;
     } catch (err) {

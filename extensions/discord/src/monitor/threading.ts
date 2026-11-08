@@ -1,6 +1,8 @@
 export {
   maybeCreateDiscordAutoThread,
+  planDeferredDiscordAutoThread,
   resolveDiscordAutoThreadContext,
+  resolveDiscordAutoThreadMode,
   resolveDiscordAutoThreadReplyPlan,
 } from "./threading.auto-thread.js";
 export {
@@ -14,6 +16,7 @@ export {
 export type {
   DiscordAutoThreadContext,
   DiscordAutoThreadReplyPlan,
+  DiscordPendingAutoThread,
   DiscordThreadChannel,
   DiscordThreadStarter,
 } from "./threading.types.js";
