@@ -391,7 +391,7 @@ export function collectClawHubVersionGateErrors(params: {
   return errors;
 }
 
-async function readClawHubPublication(
+export async function readClawHubPublication(
   packageName: string,
   version: string,
   options: ClawHubRetryOptions & { registryBaseUrl?: string } = {},

@@ -277,6 +277,68 @@ rerun only failed verification jobs when the publisher succeeded; otherwise
 inspect its children and follow the recovery route above. Never repeat an
 uncertain dispatch or rerun all publication jobs to fix a download failure.
 
+### ClawHub finalization status
+
+Use the public publication-state observer before diagnosing or recovering
+ClawHub. It performs no credential lookup and makes no publication request:
+
+```bash
+pnpm release:clawhub-status -- --version <published-version>
+```
+
+Run it from the exact `v<published-version>` tag with a clean
+`extensions/` tree; the command refuses when `HEAD` does not equal that tag
+or a selected package manifest has another version. This binds the default
+ClawHub-publishable roster to the release rather
+than a later same-version checkout. Use `--plugins <comma-separated-names>` for
+a retained selected-scope roster. The report includes published and absent
+totals, one pending total split
+across `staging`, `checks`, and `finalization`, and failed package names.
+Record the timestamp of the last observed package or stage movement and pass it
+back with `--last-progress-at <ISO-8601>`. The command then applies its explicit
+default threshold of 60 minutes without public-state movement; override it with
+`--stall-threshold-minutes <minutes>`. A threshold crossing is a diagnosis
+signal, not proof that publication failed and not recovery authority.
+
+The public stages have these operational meanings:
+
+- `pending/staging`: ClawHub has reserved the version but has not exposed an
+  attempt ID. Do not classify it as absent.
+- `pending/checks`: immutable staged bytes are undergoing server-owned checks.
+- `pending/finalization`: checks passed and the scheduled ClawHub worker still
+  owns public activation.
+- `published`: the version is publicly final.
+- `failed`: the attempt is terminal. Its public `recoverable` flag is advisory;
+  the recovery owner revalidates it.
+- `absent`: only this authoritative state permits a new publication candidate.
+
+The normal child accepts an active or successful exact publish parent and seals
+transactions to that parent and attempt. Once sealed, later parent work does not
+revoke the ClawHub transactions. If the parent fails after staging, preserve the
+original parent, child run, child attempt, and public attempt IDs. A resume parent
+does not adopt that original child into its dispatch record or postpublish
+verification automatically. A successful resume has been observed to unblock
+server-side finalization, but verify the original versions separately with this
+status command and the original child evidence. Never treat resume success as
+proof that ClawHub is public, and never replace pending attempts with new bytes.
+
+Observed release timings are context, not SLOs or guarantees. In
+2026.10.10-beta.5, six recovered versions remained pending for about 40 minutes
+and finalized without recovery. In 2026.11.5-beta.1, one version remained in
+`finalization` for about 45 minutes after the parent was terminal. In
+2026.10.10-beta.3, the full 97-package queue took 3 hours 44 minutes after the
+successful publisher, with throughput near two packages per 15 minutes during
+part of the run. Use actual public movement and the explicit stall threshold;
+do not infer failure from elapsed time alone.
+
+Wait while any version is `pending`, including after the stall threshold:
+continue public observation, inspect the exact parent/observer evidence, and
+escalate a sustained no-progress condition to the ClawHub owner. Never probe,
+unlock, or validate ClawHub credentials for a pending public state. Recover only
+a `failed` attempt, only under explicit recovery authority with the approved
+human publisher-token workflow described below. Never dispatch recovery for
+`pending`, `published`, or merely slow versions.
+
 ClawHub publication and recovery run independently from the existing dispatch
 point. A ClawHub failure must not fail or stall core publication, GitHub
 finalization, main closeout, or the retrospective PR; a core-parent failure
