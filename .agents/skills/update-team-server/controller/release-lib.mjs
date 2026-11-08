@@ -2287,27 +2287,43 @@ function assertDatabaseWritersStopped(targets, procRoot) {
 }
 
 function migrationNativeConfigAudit(root, record, previous, config, runtimeUid, startup) {
-  const entry = lstatSync(config.path);
-  return migrationDatabaseRead(record.protectedPaths[1].path, join(root, "releases", record.candidate.sha), database => {
+  const entry = lstatSync(config.path), release = join(root, "releases", record.candidate.sha);
+  return migrationDatabaseRead(record.protectedPaths[1].path, release, database => {
     const rows = database.prepare("SELECT event_key,payload_json FROM diagnostic_events WHERE scope='config-audit' ORDER BY sequence DESC LIMIT 50000").all();
-    for (const row of rows) {
-      const value = JSON.parse(row.payload_json);
-      if (value.event !== "config.write" || value.source !== "config-io" || value.result !== "rename" ||
-          value.configPath !== config.path || value.existsBefore !== true ||
-          value.previousHash !== previous.sha256 || value.nextHash !== config.sha256 ||
-          value.previousBytes !== previous.size || value.nextBytes !== config.size) continue;
-      if (!Number.isFinite(Date.parse(value.ts)) || !row.event_key.startsWith(`${value.ts}:config.write:`) ||
-          !Number.isSafeInteger(value.pid) || value.pid < 1) continue;
-      if (startup && (value.pid !== startup.pid || Date.parse(value.ts) < startup.startedAt ||
-          Date.parse(value.ts) > startup.startedAt + 600_000 || Date.parse(value.ts) > Date.now())) continue;
-      if ([["previous", previous], ["next", config]].some(([prefix, descriptor]) =>
-        value[`${prefix}Dev`] !== String(descriptor.device) || value[`${prefix}Ino`] !== String(descriptor.inode) ||
-        value[`${prefix}Mode`] !== 0o600 || value[`${prefix}Nlink`] !== 1 ||
-        value[`${prefix}Uid`] !== runtimeUid || value[`${prefix}Gid`] !== entry.gid)) continue;
-      // Retain only the exact audit binding, never the native writer's argv or config values.
-      return { key: row.event_key, sha256: createHash("sha256").update(row.payload_json).digest("hex") };
+    const chain = [], fail = () => reject("reviewed config lacks a native runtime-owner atomic replacement audit");
+    const createdAt = Date.parse(record.createdAt);
+    let timestamp = createdAt, cursor = { Dev: String(previous.device), Ino: String(previous.inode) }, last;
+    if (!Number.isFinite(createdAt)) fail();
+    // Sequence is the native writer's order. Sorting timestamps would hide reordered links.
+    for (const row of rows.reverse()) {
+      const value = JSON.parse(row.payload_json), time = Date.parse(value.ts);
+      if (value.configPath !== config.path || (!chain.length && time < createdAt)) continue;
+      if (value.event === "config.observe" && value.source === "config-io" &&
+          value.phase === "read" && value.restoredFromBackup === false) continue;
+      if (chain.length >= (startup ? 1 : 64) || !Number.isFinite(time) || time < timestamp || time > Date.now() ||
+          value.event !== "config.write" || value.source !== "config-io" || value.result !== "rename" ||
+          value.existsBefore !== true || !row.event_key.startsWith(`${value.ts}:config.write:`) ||
+          !Number.isSafeInteger(value.pid) || value.pid < 1 || value.cwd !== release ||
+          !Array.isArray(value.argv) || ![join(root, "current/dist/index.js"), join(release, "dist/index.js")].includes(value.argv[1]) ||
+          !isDeepStrictEqual(value.argv.slice(2), ["gateway", "--port", process.env.OPENCLAW_TEAM_GATEWAY_PORT ?? "18789"]) ||
+          (startup && (value.pid !== startup.pid || time < startup.startedAt || time > startup.startedAt + 600_000)) ||
+          Object.entries(cursor).some(([key, expected]) => value["previous" + key] !== expected) ||
+          value.nextDev !== cursor.Dev || value.nextIno === cursor.Ino) fail();
+      for (const prefix of ["previous", "next"]) {
+        if (!/^[a-f\d]{64}$/.test(value[prefix + "Hash"]) || !/^[1-9]\d*$/.test(value[prefix + "Ino"]) ||
+            !Number.isSafeInteger(value[prefix + "Bytes"]) || value[prefix + "Bytes"] < 0 ||
+            value[prefix + "Mode"] !== 0o600 || value[prefix + "Nlink"] !== 1 ||
+            value[prefix + "Uid"] !== runtimeUid || value[prefix + "Gid"] !== entry.gid) fail();
+      }
+      cursor = { Dev: value.nextDev, Ino: value.nextIno, Hash: value.nextHash, Bytes: value.nextBytes };
+      timestamp = time; last = value;
+      // Bind every link without retaining the native writer's argv or config values.
+      chain.push({ key: row.event_key, sha256: createHash("sha256").update(row.payload_json).digest("hex") });
     }
-    reject("reviewed config lacks a native runtime-owner atomic replacement audit");
+    if (!last || cursor.Dev !== String(config.device) || cursor.Ino !== String(config.inode) ||
+        cursor.Hash !== config.sha256 || cursor.Bytes !== config.size ||
+        last.previousHash !== previous.sha256 || last.previousBytes !== previous.size) fail();
+    return chain.length === 1 ? chain[0] : { chain };
   });
 }
 

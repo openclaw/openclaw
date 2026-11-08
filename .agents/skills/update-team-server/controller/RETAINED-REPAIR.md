@@ -56,21 +56,35 @@ writer automatically records a `config.write` event with `source: "config-io"`
 and `result: "rename"` in the shared state database's `diagnostic_events` table,
 under `scope = 'config-audit'`. No special RPC label or operator-created artifact
 is required. The controller reads the newest 50,000 rows in that scope and
-binds the matching row's key and payload hash.
+binds each accepted row's key and payload hash.
 
-The row must describe one direct replacement from the original journal inode:
-its previous hash and byte count match the separate current `<config>.bak`,
-and its previous device/inode match the journal. Its next hash, bytes,
-device/inode match the reviewed config. Both sides have mode `0600`, one link,
-the runtime UID, and the current config GID. The row also requires the exact
-config path, `existsBefore: true`, a finite timestamp, positive PID, and an
-`event_key` beginning with `<timestamp>:config.write:`. Both config files must
-remain safe regular files on the original filesystem.
+Reconciliation requires a contiguous chain of at most 64 replacements, in native
+sequence order, from the original journal's device/inode to the reviewed config.
+Each link's previous hash, byte count, device and inode must equal the preceding
+link's next values. Timestamps must be monotonic, at or after journal creation,
+and not in the future. Gaps, forks, reordered links, foreign sources and
+non-rename writes refuse reconciliation. Native read-only `config.observe` rows
+are skipped; observations reporting backup restoration are not. Identical-byte replacements still
+require inode continuity. The final next hash, byte count and device/inode must
+match the reviewed config; the final previous hash and byte count must match the
+separate current `<config>.bak`. Earlier backups need not remain.
+
+Both sides of every link have mode `0600`, one link, the runtime UID, and the
+current config GID. Each row requires the exact config path, `existsBefore: true`,
+a positive PID, and an `event_key` beginning with `<timestamp>:config.write:`.
+The native writer's recorded cwd must be the journal's candidate release and its
+argv must be the controller's Gateway launch command, using either that release's
+entry point or the managed `current` entry point. Historical Gateway PIDs may
+differ after restarts; their persisted native process metadata supplies provenance,
+while the existing separate live-generation check still binds current authority.
+Both config files remain safe regular files on the original filesystem. Ordinary
+startup-only additive migration acceptance remains limited to one replacement by
+its exact newly started process within its existing ten-minute window.
 
 Audit persistence is best-effort: a successful native RPC alone does not prove
-this row exists. If reconciliation reports a missing native atomic-replacement
-audit, inspect the existing row and backup against those bindings. A later
-replacement, rotated backup, or failed audit write can explain the refusal.
+the complete chain exists. If reconciliation reports a missing native atomic-replacement
+audit, inspect the existing rows and backup against those bindings. A later
+foreign replacement, mismatched backup, or failed audit write can explain the refusal.
 Do not manufacture/import a row, repeat `agents.delete`, or edit the journal
 to satisfy it. Missing or mismatched evidence remains a recovery blocker for
 the operator to diagnose; the config digest does not bypass this guard.
