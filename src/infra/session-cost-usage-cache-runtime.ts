@@ -5,6 +5,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { monotonicNow } from "../shared/monotonic-time.js";
+import { createPermitPool } from "../shared/permit-pool.js";
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -80,6 +81,8 @@ type UsageCostRefreshRequest = Pick<UsageCostRefreshState, "agentId" | "config" 
 
 // Only active queues retain their scope; one owner cannot adopt another owner's work.
 const usageCostRefreshes = new Map<AbortSignal | undefined, Map<string, UsageCostRefreshState>>();
+// Bound independent per-agent queues before they reach the shared worker lanes.
+const usageCostRefreshPermits = createPermitPool(2);
 
 function isUsageCostRefreshQueued(databasePath: string): boolean {
   return usageCostRefreshes.get(getAsyncWorkSignal())?.has(databasePath) === true;
@@ -603,6 +606,34 @@ async function runQueuedUsageCostRefresh(
       if (monotonicNow() < retryAt || usageCostRefreshDelay(state, monotonicNow()) > 0) {
         continue;
       }
+      let releasePermit: (() => void) | null = null;
+      if (state.readingSessionFiles.size === 0) {
+        const permitWait = new AbortController();
+        const abortForScope = () => permitWait.abort(signal?.reason);
+        const resumeForRead = () => {
+          if (state.readingSessionFiles.size > 0) {
+            permitWait.abort();
+          }
+        };
+        signal?.addEventListener("abort", abortForScope, { once: true });
+        state.resume = resumeForRead;
+        try {
+          releasePermit = await usageCostRefreshPermits.acquire({ signal: permitWait.signal });
+        } finally {
+          signal?.removeEventListener("abort", abortForScope);
+          if (state.resume === resumeForRead) {
+            state.resume = undefined;
+          }
+        }
+      }
+      if (signal?.aborted) {
+        releasePermit?.();
+        return;
+      }
+      // A report waiting on this refresh may pass the fleet-wide queue once.
+      if (!releasePermit && state.readingSessionFiles.size === 0) {
+        continue;
+      }
       let partialBatch = false;
       try {
         // Publications queued before deletion leave discovery before acquiring storage.
@@ -722,6 +753,8 @@ async function runQueuedUsageCostRefresh(
         for (const file of state.readingSessionFiles.keys()) {
           state.pendingSessionFiles.set(file, null);
         }
+      } finally {
+        releasePermit?.();
       }
     } while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0);
   } finally {

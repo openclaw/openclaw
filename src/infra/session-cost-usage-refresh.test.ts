@@ -226,6 +226,134 @@ const test = it.extend<{ usage: ReturnType<typeof makeRefreshFixture> }>({
   usage: async ({ task: _task }, use) => withRefreshFixture(use),
 });
 
+test("bounds cross-agent refreshes and yields partial batches to queued agents", async ({
+  usage: { files, event, newScope, refresh, request },
+}) => {
+  const root = path.resolve(path.dirname(files[0]!), "../../..");
+  const agentIds = ["refresh-fair-a", "refresh-fair-b", "refresh-fair-c"];
+  const owners = agentIds.map(() => newScope());
+  const started: Array<{ label: string; release: ReturnType<typeof event> }> = [];
+  let active = 0;
+  let maxActive = 0;
+  refresh.mockImplementation((params) => {
+    const release = event();
+    const label = `${params.agentId}:${params.sessionFiles ? "partial" : "full"}`;
+    started.push({ label, release });
+    active++;
+    maxActive = Math.max(maxActive, active);
+    return release.promise.then(() => {
+      active--;
+      if (params.agentId === agentIds[0] && !params.sessionFiles) {
+        params.onRemaining?.([{ sessionFile: files[0]!, rollupId: files[0]! }]);
+      }
+      return "refreshed" as const;
+    });
+  });
+
+  agentIds.forEach((agentId, index) => {
+    request(
+      {
+        agentId,
+        databasePath: path.join(root, "agents", agentId, "openclaw-agent.sqlite"),
+        storePath: path.join(root, "agents", agentId, "sessions", "sessions.json"),
+      },
+      owners[index]!,
+    );
+  });
+
+  await vi.waitFor(() => expect(started).toHaveLength(2), { timeout: 1_000, interval: 1 });
+  expect(started.map(({ label }) => label)).toEqual([
+    "refresh-fair-a:full",
+    "refresh-fair-b:full",
+  ]);
+  expect(maxActive).toBe(2);
+
+  started[0]!.release.resolve();
+  await vi.waitFor(() => expect(started).toHaveLength(3), { timeout: 1_000, interval: 1 });
+  expect(started[2]?.label).toBe("refresh-fair-c:full");
+
+  started[1]!.release.resolve();
+  await vi.waitFor(() => expect(started).toHaveLength(4), { timeout: 1_000, interval: 1 });
+  expect(started[3]?.label).toBe("refresh-fair-a:partial");
+
+  started[2]!.release.resolve();
+  started[3]!.release.resolve();
+  await AsyncWorkScope.runWhenAllIdle(() => owners, () => undefined);
+  owners.forEach((owner) => owner.beginClose());
+  await Promise.all(owners.map((owner) => owner.drain()));
+  expect(maxActive).toBe(2);
+  expect(started.map(({ label }) => label)).toEqual([
+    "refresh-fair-a:full",
+    "refresh-fair-b:full",
+    "refresh-fair-c:full",
+    "refresh-fair-a:partial",
+  ]);
+});
+
+test("lets a report waiting on refresh bypass the fleet permit queue", async ({
+  usage: { files, event, newScope, refresh, request },
+}) => {
+  const root = path.resolve(path.dirname(files[0]!), "../../..");
+  const agentIds = ["refresh-read-a", "refresh-read-b", "refresh-read-c"];
+  const owners = agentIds.map(() => newScope());
+  const started: Array<{ label: string; release: ReturnType<typeof event> }> = [];
+  let active = 0;
+  let maxActive = 0;
+  refresh.mockImplementation((params) => {
+    const release = event();
+    const label = `${params.agentId}:${params.sessionFiles ? "partial" : "full"}`;
+    started.push({ label, release });
+    active++;
+    maxActive = Math.max(maxActive, active);
+    return release.promise.then(() => {
+      active--;
+      return "refreshed" as const;
+    });
+  });
+
+  const sessionsDir = path.join(root, "agents", agentIds[2]!, "sessions");
+  const priorityFile = path.join(sessionsDir, "priority.jsonl");
+  await fs.mkdir(sessionsDir, { recursive: true });
+  await fs.writeFile(priorityFile, usageLine("priority"));
+  agentIds.slice(0, 2).forEach((agentId, index) => {
+    request(
+      { storePath: path.join(root, "agents", agentId, "sessions", "sessions.json"), agentId },
+      owners[index]!,
+    );
+  });
+  await vi.waitFor(() => expect(started).toHaveLength(2), { timeout: 1_000, interval: 1 });
+
+  request(
+    {
+      storePath: path.join(root, "agents", agentIds[2]!, "sessions", "sessions.json"),
+      agentId: agentIds[2]!,
+    },
+    owners[2]!,
+  );
+  const reading = loadSessions({
+    config,
+    agentId: agentIds[2]!,
+    sessions: [{ sessionFile: priorityFile }],
+    startMs: 0,
+    endMs: Date.now(),
+    requestRefresh: false,
+  });
+  await vi.waitFor(() => expect(started).toHaveLength(3), { timeout: 1_000, interval: 1 });
+  expect(started[2]?.label).toBe("refresh-read-c:partial");
+  expect(maxActive).toBe(3);
+  started[2]!.release.resolve();
+  await reading;
+
+  started[0]!.release.resolve();
+  await vi.waitFor(() => expect(started).toHaveLength(4), { timeout: 1_000, interval: 1 });
+  expect(started[3]?.label).toBe("refresh-read-c:full");
+  started[1]!.release.resolve();
+  started[3]!.release.resolve();
+  await AsyncWorkScope.runWhenAllIdle(() => owners, () => undefined);
+  owners.forEach((owner) => owner.beginClose());
+  await Promise.all(owners.map((owner) => owner.drain()));
+});
+
 it("returns marked stale session costs when another direct refresh stays busy", async () => {
   const actual = await vi.importActual<typeof import("./session-cost-usage-aggregation.js")>(
     "./session-cost-usage-aggregation.js",
