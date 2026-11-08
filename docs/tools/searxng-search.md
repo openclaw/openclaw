@@ -31,8 +31,31 @@ Advantages:
   </Step>
   <Step title="Run a SearXNG instance">
     ```bash
-    docker run -d -p 8888:8080 searxng/searxng
+    mkdir -p ./searxng
+    docker run -d --name searxng -p 127.0.0.1:8888:8080 \
+      -v "$PWD/searxng:/etc/searxng" searxng/searxng
     ```
+
+    The container creates `./searxng/settings.yml` on first start. Add or update
+    its `search.formats` list to enable JSON alongside HTML, keeping the other settings:
+
+    ```yaml
+    search:
+      formats:
+        - html
+        - json
+    ```
+
+    Restart the container and verify the JSON endpoint before configuring OpenClaw:
+
+    ```bash
+    docker restart searxng
+    curl --fail 'http://localhost:8888/search?q=OpenClaw&format=json'
+    ```
+
+    SearXNG's default configuration enables only HTML. Requests with `format=json`
+    return HTTP 403 until JSON is enabled; see the
+    [SearXNG search API](https://docs.searxng.org/dev/search_api.html).
 
     Or use any existing SearXNG deployment you have access to. See the
     [SearXNG documentation](https://docs.searxng.org/) for production setup.
@@ -124,7 +147,7 @@ and `language` as per-call overrides.
 - **JSON API** -- uses SearXNG's native `format=json` endpoint, not HTML scraping
 - **Image result URLs** -- image-category results include `img_src` when SearXNG
   returns a direct image URL
-- **No API key** -- works with any SearXNG instance out of the box
+- **No API key** -- works with SearXNG instances that enable the JSON format
 - **Base URL validation** -- `baseUrl` must be a valid `http://` or `https://`
   URL
 - **Network guard** -- `http://` base URLs must target a trusted private or
