@@ -12,7 +12,9 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { AgentDatabaseSchemaAdmissionChangedError } from "../state/agent-database-admission-error.js";
 import {
   readAgentDatabaseAdmissionRefusal,
+  readAgentDatabaseReadAdmissionRefusal,
   recordAgentDatabaseAdmissions,
+  retainAgentDatabaseStartupWorker,
 } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -124,6 +126,7 @@ function createFleet(
   agentIds = ["large", "small"],
   migrateAgent?: Parameters<StartupAdmission["activate"]>[0]["migrateAgent"],
   acpOnlyAgentIds: readonly string[] = [],
+  openAgent?: Parameters<StartupAdmission["activate"]>[0]["openAgent"],
 ) {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("startup-preparation-") };
@@ -230,10 +233,12 @@ function createFleet(
           activate({
             ...activation,
             migrateAgent: migrateAgent ?? activation.migrateAgent,
-            openAgent: async ({ assertCurrent }) => {
-              assertCurrent();
-              mocks.opened();
-            },
+            openAgent:
+              openAgent ??
+              (async ({ assertCurrent }) => {
+                assertCurrent();
+                mocks.opened();
+              }),
           }),
         );
         const context = createContext([], () => cfg);
@@ -276,6 +281,123 @@ function expectAdmission(fleet: ReturnType<typeof createFleet>, agentId: string,
     expect(refusal).toBeUndefined();
   }
 }
+
+it.for(["borrow", "worker", "rejecting worker", "failed publication"] as const)(
+  "isolates a %s cleanup from sibling publication and shutdown",
+  async (cleanup, { signal }) => {
+    const closing = createDeferredCore();
+    const closed = createDeferredCore();
+    const release = createDeferredCore();
+    const close = async () => {
+      closing.resolve();
+      try {
+        await release.promise;
+        if (cleanup === "rejecting worker") {
+          throw new Error("synthetic native close failure");
+        }
+      } finally {
+        closed.resolve();
+      }
+    };
+    const fleet = createFleet(["large", "small"], undefined, [], async (input) => {
+      if (input.agentId !== "large") {
+        return undefined;
+      }
+      if (cleanup === "borrow") {
+        return { [Symbol.asyncDispose]: close };
+      }
+      expect(retainAgentDatabaseStartupWorker(input.agentId, input, close)).toBe(true);
+      return undefined;
+    });
+    const publicationFails = cleanup === "failed publication";
+    if (publicationFails) {
+      mocks.refreshModels.mockRejectedValueOnce(new Error("synthetic model publication failure"));
+    }
+    try {
+      await fleet.run(async (admission) => {
+        try {
+          const firstPreparation = Promise.allSettled([
+            admission.waitForAgentPreparation("large", fleet)!,
+          ]);
+          fleet.inspect(0);
+          await withinTest(closing.promise, signal);
+          fleet.inspect(1);
+          // Drain the sibling's ready, migration, publication, and disposal continuations.
+          await vi.advanceTimersByTimeAsync(0);
+          expectAdmission(fleet, "small");
+          if (publicationFails) {
+            expect(readAgentDatabaseReadAdmissionRefusal("large", fleet)?.code).toBe(
+              "agent-database-inspection-failed",
+            );
+          } else {
+            expect(readAgentDatabaseReadAdmissionRefusal("large", fleet)).toBeUndefined();
+            expectAdmission(fleet, "large", "agent-database-inspection-pending");
+          }
+          if (cleanup === "rejecting worker") {
+            release.resolve();
+            await withinTest(firstPreparation, signal);
+            expectAdmission(fleet, "large", "agent-database-inspection-failed");
+            expect(readAgentDatabaseReadAdmissionRefusal("large", fleet)?.code).toBe(
+              "agent-database-inspection-failed",
+            );
+            expectAdmission(fleet, "small");
+          } else {
+            if (!publicationFails) {
+              fleet.changeAgentDatabase("large", "agent removal");
+              expect(readAgentDatabaseReadAdmissionRefusal("large", fleet)?.code).toBe(
+                "agent-database-inspection-pending",
+              );
+            }
+            // The close never settles during shutdown; its owner still holds the promise.
+            await withinTest(admission.stop(), signal);
+            expect(await withinTest(firstPreparation, signal)).toEqual([
+              expect.objectContaining({ status: "rejected" }),
+            ]);
+          }
+        } finally {
+          release.resolve();
+        }
+      });
+    } finally {
+      release.resolve();
+      await withinTest(closed.promise, signal);
+    }
+  },
+);
+
+it("cancels a queued publisher without letting it overtake during shutdown", async ({ signal }) => {
+  const closed: string[] = [];
+  const fleet = createFleet(["large", "small"], undefined, [], async ({ agentId }) => ({
+    async [Symbol.asyncDispose]() {
+      closed.push(agentId);
+    },
+  }));
+  const modelsEntered = createDeferredCore();
+  const releaseModels = fleet.hold();
+  mocks.refreshModels.mockImplementationOnce(async () => {
+    modelsEntered.resolve();
+    await releaseModels.promise;
+  });
+  await fleet.run(async (admission) => {
+    fleet.inspect(0);
+    await withinTest(modelsEntered.promise, signal);
+    fleet.inspect(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.migrate).toHaveBeenCalledTimes(2);
+    const stopping = admission.stop();
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(closed).toEqual(["small"]);
+      expect(mocks.refreshSecrets).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseModels.resolve();
+      await withinTest(stopping, signal);
+    }
+    expectAdmission(fleet, "large", "agent-database-inspection-pending");
+    expectAdmission(fleet, "small", "agent-database-inspection-pending");
+    expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());
+  });
+});
 
 it("admits configured ACP-only stores without native runtime publication", async ({ signal }) => {
   const fleet = createFleet(["codex"], undefined, ["codex"]);

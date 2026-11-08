@@ -452,75 +452,83 @@ class AgentDatabaseStartupAdmission {
               this.verifying,
             );
           }
+          const preparationOptions = { env, assertCurrent, signal: this.signal };
           await withSqliteReadOnlyWorkerScope(
             async () => {
               await assertNotDeleted();
-              await preparePendingAgentDatabase(refusal, { env, assertCurrent }, async () => {
+              await preparePendingAgentDatabase(refusal, preparationOptions, async () => {
                 await using prepared = new AsyncDisposableStack();
-                const input = {
-                  agentId,
-                  paths,
-                  env,
-                  signal: this.signal,
-                  assertCurrent,
-                  phase,
-                };
+                const input = { agentId, paths, env, signal: this.signal, assertCurrent, phase };
                 const publish = async () => {
                   phase("publication-wait");
                   const previous = this.publication;
                   this.publication = publicationComplete.promise;
-                  await previous;
-                  assertCurrent();
-                  this.publishingAgentId = agentId;
-                  for (let attempt = 1; ; attempt++) {
-                    try {
-                      await activation.publishAgent(input);
-                      break;
-                    } catch (error) {
-                      const superseded =
-                        error instanceof AgentDatabaseStartupSupersededError ||
-                        error instanceof AgentDatabaseSchemaAdmissionChangedError;
-                      if (
-                        (!superseded && !capacityRetry.shouldRetry(error)) ||
-                        attempt >= capacityRetry.attempts
-                      ) {
-                        // Runtime churn needs its own restart guidance, not database repair.
-                        throw superseded ? new AgentDatabaseStartupPublicationError(error) : error;
+                  try {
+                    await racePromiseWithAbortSignal(previous, this.signal);
+                    assertCurrent();
+                    this.publishingAgentId = agentId;
+                    for (let attempt = 1; ; attempt++) {
+                      try {
+                        await activation.publishAgent(input);
+                        break;
+                      } catch (error) {
+                        const superseded =
+                          error instanceof AgentDatabaseStartupSupersededError ||
+                          error instanceof AgentDatabaseSchemaAdmissionChangedError;
+                        if (
+                          (!superseded && !capacityRetry.shouldRetry(error)) ||
+                          attempt >= capacityRetry.attempts
+                        ) {
+                          // Runtime churn needs its own restart guidance, not database repair.
+                          throw superseded
+                            ? new AgentDatabaseStartupPublicationError(error)
+                            : error;
+                        }
+                        log.warn("agent database startup publication interrupted; retrying", {
+                          agentId,
+                          attempt,
+                        });
+                        // A reload may still be replacing the plugins this publication borrows.
+                        await capacityRetry.sleep(capacityRetry.minDelayMs * 2 ** (attempt - 1));
+                        await assertNotDeleted();
                       }
-                      log.warn("agent database startup publication interrupted; retrying", {
-                        agentId,
-                        attempt,
-                      });
-                      // A reload may still be replacing the plugins this publication borrows.
-                      await capacityRetry.sleep(capacityRetry.minDelayMs * 2 ** (attempt - 1));
-                      await assertNotDeleted();
                     }
+                    phase("publication");
+                    await assertNotDeleted();
+                    if (activation.captureReadAdmission) {
+                      // Publish only prepared inputs. Sibling auth/model refreshes must see
+                      // this agent before physical cleanup, which can stall independently.
+                      revokeReadAdmission = publishPendingAgentDatabaseReadAdmission(refusal, {
+                        env,
+                        paths: canReadBeforeOpen
+                          ? results.flatMap((result) =>
+                              result.status === "fulfilled"
+                                ? (result.value.readReadyAgentPaths ?? [])
+                                : [],
+                            )
+                          : paths,
+                        assertCurrent: activation.captureReadAdmission({
+                          ...input,
+                          assertCurrent: assertLifetimeCurrent,
+                        }),
+                      });
+                      releasePublication();
+                      recovery.readReady = undefined;
+                      readReady.resolve();
+                    }
+                  } catch (error) {
+                    // Refuse failed publication before cleanup can block its handoff.
+                    if (!this.stopped) {
+                      failPendingAgentDatabase(refusal, error, { env });
+                    }
+                    releasePublication();
+                    throw error;
                   }
-                  phase("publication");
-                  await assertNotDeleted();
                 };
                 if (canReadBeforeOpen && activation.captureReadAdmission) {
                   // Exact existing schemas can serve committed snapshots while full integrity
                   // gates writes. Native readers retain schema, file, and quarantine checks.
-                  const assertReadCurrent = activation.captureReadAdmission({
-                    ...input,
-                    assertCurrent: assertLifetimeCurrent,
-                  });
-                  assertReadCurrent();
                   await preparePendingAgentDatabaseRead(refusal, { env, assertCurrent }, publish);
-                  assertReadCurrent();
-                  assertCurrent();
-                  revokeReadAdmission = publishPendingAgentDatabaseReadAdmission(refusal, {
-                    env,
-                    paths: results.flatMap((result) =>
-                      result.status === "fulfilled" ? (result.value.readReadyAgentPaths ?? []) : [],
-                    ),
-                    assertCurrent: assertReadCurrent,
-                  });
-                  // Sibling secrets/model publications must see this prepared agent as readable.
-                  releasePublication();
-                  recovery.readReady = undefined;
-                  readReady.resolve();
                   log.info("agent database reads ready while writable inspection continues", {
                     agentId,
                     ...recoveryTiming(recovery),
@@ -560,7 +568,13 @@ class AgentDatabaseStartupAdmission {
                     phase("open");
                     const opened = await activation.openAgent(input);
                     if (opened) {
-                      prepared.use(opened);
+                      // Release keeps custody of unfinished native cleanup after shutdown.
+                      prepared.defer(() =>
+                        racePromiseWithAbortSignal(
+                          Promise.resolve(opened[Symbol.asyncDispose]()),
+                          this.signal,
+                        ),
+                      );
                     }
                   } finally {
                     release?.();
@@ -615,7 +629,7 @@ class AgentDatabaseStartupAdmission {
             integrity?.revoke();
           }
           revokeReadAdmission?.();
-          // Writable admission becomes public only after its borrowed workers and handles close.
+          // Failed publication releases only after its per-agent refusal is recorded.
           releasePublication();
           readReady.resolve();
           completion.resolve();

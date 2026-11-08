@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { setImmediate as nextTurn } from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
@@ -726,6 +725,7 @@ it.for(["carlos", "hal"] as const)(
     const firstPublished = createDeferredCore();
     const firstReleasing = createDeferredCore();
     const secondMigrated = createDeferredCore();
+    const secondPublished = createDeferredCore();
     const releaseFirst = createDeferredCore();
     let firstVisibleToSibling: boolean | undefined;
     const started = await withAgentDatabaseStartupAdmission(async (admission) => {
@@ -770,6 +770,8 @@ it.for(["carlos", "hal"] as const)(
             await activation.publishAgent(input);
             if (input.agentId === firstAgent) {
               firstPublished.resolve();
+            } else {
+              secondPublished.resolve();
             }
           },
         }),
@@ -781,8 +783,8 @@ it.for(["carlos", "hal"] as const)(
     });
     try {
       await withinTest(Promise.all([firstReleasing.promise, secondMigrated.promise]), signal);
-      // Let the sibling reach its publication wait while the first handoff is still held.
-      await nextTurn();
+      await withinTest(secondPublished.promise, signal);
+      expectPreparedModel(firstAgent);
       releaseFirst.resolve();
       await withinTest(preparation!, signal);
       expect(firstVisibleToSibling).toBe(true);
