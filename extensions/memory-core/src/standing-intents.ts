@@ -32,14 +32,52 @@ const maintenance = resolveGlobalSingleton<{
   schedule: MaintenanceSchedule | undefined;
   owners: Map<MaintenanceSchedule, () => void>;
   lifecycleFacts: Map<string, { empty: boolean }>;
+  // Deadlines learned from completed operations survive a service reload, so reloading for one
+  // agent does not sweep every other agent database again.
+  knownDueAt: Map<string, number>;
+  sweeps: { active: number; waiting: Array<() => void> };
   operationQueues: Map<string, StoreWriterQueue>;
 }>(Symbol.for("openclaw.memoryCore.standingIntents"), () => ({
   schedule: undefined,
   owners: new Map<MaintenanceSchedule, () => void>(),
   lifecycleFacts: new Map<string, { empty: boolean }>(),
+  knownDueAt: new Map<string, number>(),
+  sweeps: { active: 0, waiting: [] },
   operationQueues: new Map<string, StoreWriterQueue>(),
 }));
-const { lifecycleFacts, operationQueues } = maintenance;
+const { lifecycleFacts, knownDueAt, sweeps, operationQueues } = maintenance;
+// Startup and unknown deadlines make every agent due at once; bound how many sweeps open a store.
+const MAX_CONCURRENT_SWEEPS = 2;
+
+function recordDueAt(path: string, nextDueAt: number | null): void {
+  if (nextDueAt === null) {
+    knownDueAt.delete(path);
+  } else {
+    knownDueAt.set(path, nextDueAt);
+  }
+  maintenance.schedule?.(path, nextDueAt);
+}
+
+async function withSweepSlot<T>(run: () => Promise<T>): Promise<T> {
+  if (sweeps.active >= MAX_CONCURRENT_SWEEPS) {
+    // A released slot is handed to the next waiter without being freed in between.
+    await new Promise<void>((resolve) => {
+      sweeps.waiting.push(resolve);
+    });
+  } else {
+    sweeps.active += 1;
+  }
+  try {
+    return await run();
+  } finally {
+    const next = sweeps.waiting.shift();
+    if (next) {
+      next();
+    } else {
+      sweeps.active -= 1;
+    }
+  }
+}
 
 export {
   DEFAULT_INTENT_COOLDOWN_SECONDS,
@@ -87,7 +125,7 @@ async function executeStandingIntent(
         if (facts) {
           facts.empty = true;
         }
-        maintenance.schedule?.(options.path, Infinity);
+        recordDueAt(options.path, Infinity);
         return undefined;
       }
       // Keep committed absence in owner order with creates and lifecycle transitions.
@@ -108,7 +146,7 @@ async function executeStandingIntent(
         if (facts) {
           facts.empty = result.nextDueAt === Infinity;
         }
-        maintenance.schedule?.(options.path, result.nextDueAt);
+        recordDueAt(options.path, result.nextDueAt);
         return result.value;
       } finally {
         await worker.close();
@@ -126,7 +164,9 @@ export function startStandingIntentMaintenance(params: {
   const targets = new Map(
     params.agentIds.map((agentId) => {
       const options = captureMemoryAgentDatabaseOptions(agentId);
-      return [options.path, { agentId, options, facts: { empty: false } }] as const;
+      // A known empty deadline keeps the match fast path without an extra sweep.
+      const facts = { empty: knownDueAt.get(options.path) === Infinity };
+      return [options.path, { agentId, options, facts }] as const;
     }),
   );
   const jobs = new Map<string, ReturnType<PluginServiceSchedulerV1["schedule"]>>();
@@ -147,10 +187,12 @@ export function startStandingIntentMaintenance(params: {
         atMs: nextDueAt ?? scheduler.now(),
         async run() {
           try {
-            await executeStandingIntent(
-              { agentId: target.agentId, assertCurrent: () => scheduler.signal.throwIfAborted() },
-              { type: "sweep", input: { nowMs: scheduler.now() } },
-              target.options,
+            await withSweepSlot(() =>
+              executeStandingIntent(
+                { agentId: target.agentId, assertCurrent: () => scheduler.signal.throwIfAborted() },
+                { type: "sweep", input: { nowMs: scheduler.now() } },
+                target.options,
+              ),
             );
           } catch (error) {
             if (!scheduler.signal.aborted) {
@@ -162,16 +204,18 @@ export function startStandingIntentMaintenance(params: {
       }),
     );
   };
+  // Known deadlines are already overdue-safe: a past deadline runs immediately. Only databases
+  // without one (first start, added agents, failed sweeps) need a recovery sweep now.
+  const scheduleKnown = (path: string) => schedule(path, knownDueAt.get(path) ?? null);
   maintenance.owners.set(schedule, () => {
     for (const path of targets.keys()) {
-      schedule(path, null);
+      scheduleKnown(path);
     }
   });
   maintenance.schedule = schedule;
-  // Restart must process overdue expiry/cooldown before trusting a retained deadline.
   for (const [path, { facts }] of targets) {
     lifecycleFacts.set(path, facts);
-    schedule(path, null);
+    scheduleKnown(path);
   }
   return () => {
     maintenance.owners.delete(schedule);
