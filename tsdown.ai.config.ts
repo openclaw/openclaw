@@ -45,6 +45,8 @@ const config = {
   platform: "node",
   target: "node22",
   deps: {
+    // Preserve OpenAI's self-module namespace aliases in its published declarations.
+    dts: { neverBundle: [/^openai(?:\/|$)/u] },
     // Avoid loading individual SDK files while preserving the other external identities.
     alwaysBundle: [/^openai(?:\/|$)/u, /^ws(?:\/|$)/u],
     neverBundle(id) {

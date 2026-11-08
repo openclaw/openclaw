@@ -21,6 +21,8 @@ The Node package bundles the reachable OpenAI and `ws` runtime code to reduce
 startup module-file loading. Their licenses ship in `dist/openai.LICENSE` and
 `dist/ws.LICENSE`. Other provider SDKs and TypeBox retain their existing external
 dependency identities.
+OpenAI types resolve through the declared `openai` dependency, preserving its
+namespace aliases without flattening them into the bundled declarations.
 
 Provider ids, credentials, model catalogs, retries, and failover remain
 application concerns. OpenClaw supplies those policies around this package.
