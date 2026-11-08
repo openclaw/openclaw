@@ -618,7 +618,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
     } else if (
       relayOnly &&
       (configuredTransport === null ||
-        supportedTransports?.some((candidate) => candidate === configuredTransport) !== true)
+        !supportedTransports?.some((candidate) => candidate === configuredTransport))
     ) {
       // Providers with no client-owned transport need an explicit supported route.
       resultingTransport = supportedTransports?.[0] ?? null;
