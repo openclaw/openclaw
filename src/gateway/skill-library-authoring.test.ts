@@ -554,7 +554,7 @@ it("reloads a recorded skill_library listing for a settle after restart", async 
     createSkillLibraryTool(live!).description,
   );
   expect(restarted?.turnRefusal).toContain("no human requester");
-  const frozen = Object.freeze({ sessionId: "frozen-listing" });
+  const frozen = Object.freeze({ skillLibraryPromptListing: undefined });
   const frozenGrant = await resolveGatewaySkillLibraryPromptGrant({
     owner,
     sessionKey: "agent:main:skill-library-frozen",
@@ -564,5 +564,5 @@ it("reloads a recorded skill_library listing for a settle after restart", async 
   expect(createSkillLibraryTool(frozenGrant!).description).toBe(
     createSkillLibraryTool(live!).description,
   );
-  expect(frozen).not.toHaveProperty("skillLibraryPromptListing");
+  expect(frozen.skillLibraryPromptListing).toBeUndefined();
 });
