@@ -12,6 +12,59 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("keeps a restored search open while clearing and replacing its query", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const nightly = cronJob("nightly", "Nightly digest");
+      const morning = cronJob("morning", "Morning digest");
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "cron.list": cronListResponseFixture([
+            { match: { query: "Nightly" }, response: cronList([nightly], "nightly-search") },
+            { match: { query: "Morning" }, response: cronList([morning], "morning-search") },
+            { response: cronList([nightly, morning], "all-search") },
+          ]),
+          "cron.status": { enabled: true, jobs: 2, nextWakeAtMs: null },
+          "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "cron");
+      const toggle = page.locator(".cron-search-toggle");
+      const search = page.getByRole("searchbox", { name: "Search automations" });
+      await toggle.click();
+      await search.fill("Nightly");
+      await gateway.waitForRequest("cron.list", { match: { query: "Nightly" } });
+      await page.locator('[data-test-id="cron-row-nightly"] .cron-table__name').click();
+      await page.getByRole("button", { name: "All automations", exact: true }).click();
+      expect(await search.inputValue()).toBe("Nightly");
+      await search.focus();
+      await search.press("End");
+      await search.press("ArrowLeft");
+      await search.press("ArrowLeft");
+      await search.pressSequentially(" on");
+      await gateway.waitForRequest("cron.list", { match: { query: "Night only" } });
+      expect(await search.inputValue()).toBe("Night only");
+      expect(
+        await search.evaluate((input: HTMLInputElement) => [
+          input.selectionStart,
+          input.selectionEnd,
+        ]),
+      ).toEqual([8, 8]);
+      const beforeClear = (await gateway.getRequests("cron.list")).length;
+      await page.keyboard.press("ControlOrMeta+A");
+      await page.keyboard.press("Backspace");
+      await gateway.waitForRequest("cron.list", { after: beforeClear });
+      expect(await search.count()).toBe(1);
+      expect(await search.evaluate((element) => element === document.activeElement)).toBe(true);
+      await search.pressSequentially("Morning");
+      await gateway.waitForRequest("cron.list", { match: { query: "Morning" } });
+      await page.locator('[data-test-id="cron-row-morning"]').waitFor();
+      expect(await search.inputValue()).toBe("Morning");
+      await search.press("Escape");
+      await search.waitFor({ state: "hidden" });
+      expect(await toggle.evaluate((element) => element === document.activeElement)).toBe(true);
+    });
+  });
+
   it("keeps query loading local before replacing an expanded inventory", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page, context }) => {
       const jobs = Array.from({ length: 100 }, (_, index) =>

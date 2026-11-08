@@ -266,7 +266,10 @@ function Toolbar(
                   query={props.jobsQuery}
                   focus={searchExpanded()}
                   controlRef={() => props.focus?.ref("search")}
-                  onQueryChange={(query) => props.onJobsFiltersChange({ cronJobsQuery: query })}
+                  onQueryChange={(query) => {
+                    setSearchExpanded(true);
+                    props.onJobsFiltersChange({ cronJobsQuery: query });
+                  }}
                   onClose={closeSearch}
                 />
               ) : undefined}
