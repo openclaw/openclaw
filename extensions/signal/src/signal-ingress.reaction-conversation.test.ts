@@ -164,6 +164,7 @@ it("records Signal transport receipts, dedupes reopened/concurrent sends and con
 
 it("dispatches authorized add/remove with original context once across concurrent replay and restart", async () => {
   const stateDir = dirs.make("openclaw-signal-reaction-conversation-");
+  const oversizedGroupId = "x".repeat(257);
   const queue = createChannelIngressQueueForTests<Parameters<Queue["enqueue"]>[1]>({
     channelId: "signal",
     accountId: "default",
@@ -178,7 +179,7 @@ it("dispatches authorized add/remove with original context once across concurren
         dmPolicy: "open" as const,
         allowFrom: ["*"],
         groupPolicy: "allowlist" as const,
-        groupAllowFrom: ["g1"],
+        groupAllowFrom: ["g1", oversizedGroupId],
         contextVisibility: "all" as const,
       },
     },
@@ -191,7 +192,7 @@ it("dispatches authorized add/remove with original context once across concurren
     cfg,
     account: "+15550009999",
     groupPolicy: "allowlist",
-    groupAllowFrom: ["g1"],
+    groupAllowFrom: ["g1", oversizedGroupId],
     reactionMode: "all",
     deliverReplies: sends,
   });
@@ -273,6 +274,43 @@ it("dispatches authorized add/remove with original context once across concurren
     expect(resolveReply.mock.calls[0]![0].Reaction.occurrenceId).not.toBe(
       resolveReply.mock.calls[1]![0].Reaction.occurrenceId,
     );
+    // The top-level reaction envelope must preserve group routing as well.
+    await monitor.receive(
+      createSignalReceiveEvent({
+        timestamp: 1700000000250,
+        reactionMessage: {
+          emoji: "+1",
+          targetAuthor: "+15550001111",
+          targetSentTimestamp: 1700000000000,
+          groupInfo: { groupId: "g1", groupName: "Test Group" },
+        },
+      }),
+    );
+    await monitor.waitForIdle();
+    expect(resolveReply).toHaveBeenCalledTimes(3);
+    expect(resolveReply.mock.calls[2]![0]).toMatchObject({
+      SessionKey: "agent:coordinator:signal:group:g1",
+      CommandAuthorized: false,
+      Reaction: { action: "added", target: { authorId: "+15550001111" } },
+    });
+    for (const [index, extra] of [
+      { targetSentTimestamp: Number.MAX_SAFE_INTEGER + 1 },
+      { targetAuthor: "x".repeat(101) },
+      { emoji: "x".repeat(101) },
+      { groupInfo: { groupId: oversizedGroupId } },
+    ].entries()) {
+      await monitor.receive(
+        createSignalReceiveEvent({
+          timestamp: 1700000000260 + index,
+          reactionMessage: {
+            emoji: "👍",
+            targetAuthor: "+15550002222",
+            targetSentTimestamp: 1700000000000,
+            ...extra,
+          },
+        }),
+      );
+    }
     await monitor.receive(event(false, 1700000000300, "blocked-group"));
     await monitor.receive(
       createSignalReceiveEvent({
@@ -293,7 +331,7 @@ it("dispatches authorized add/remove with original context once across concurren
       }),
     );
     await monitor.waitForIdle();
-    expect(resolveReply).toHaveBeenCalledTimes(2);
+    expect(resolveReply).toHaveBeenCalledTimes(3);
     expect(sends).not.toHaveBeenCalled();
   } finally {
     await monitor.stop();
@@ -303,7 +341,7 @@ it("dispatches authorized add/remove with original context once across concurren
     await replacement.receive(add);
     await replacement.receive(remove);
     await replacement.waitForIdle();
-    expect(resolveReply).toHaveBeenCalledTimes(2);
+    expect(resolveReply).toHaveBeenCalledTimes(3);
     expect(await queue.listPending()).toEqual([]);
     expect(await queue.listClaims()).toEqual([]);
   } finally {
