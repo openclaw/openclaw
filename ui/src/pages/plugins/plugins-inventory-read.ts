@@ -53,13 +53,20 @@ export function takePluginsInventoryRead(data: PluginsRouteData, gateway: Gatewa
 export function createPluginsInventoryRequest(
   gateway: GatewayPageBinding,
   notify: () => void,
-  handlers: { onComplete: (value: PluginListResult) => void; onError: (error: unknown) => void },
+  handlers: {
+    onComplete: (value: PluginListResult, refreshInspection: boolean) => void;
+    onError: (error: unknown) => void;
+  },
 ) {
   return createPageRequest(notify, {
-    task: (
+    task: async (
       [client, inventory]: readonly [GatewayBrowserClient, PluginsInventoryRead?],
       { signal },
-    ) => readPluginsInventory(client, inventory, gateway, signal),
-    ...handlers,
+    ) => ({
+      value: await readPluginsInventory(client, inventory, gateway, signal),
+      refreshInspection: !inventory,
+    }),
+    onComplete: ({ value, refreshInspection }) => handlers.onComplete(value, refreshInspection),
+    onError: handlers.onError,
   });
 }

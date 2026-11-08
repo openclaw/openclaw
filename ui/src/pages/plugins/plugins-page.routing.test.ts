@@ -347,7 +347,7 @@ it("keeps the autosaved inspection when an older optional catalog completes", as
     configState,
     () => client,
   );
-  const { page } = await mountRoute(harness, result, "/settings/plugins", runtimeConfig);
+  const { page, context } = await mountRoute(harness, result, "/settings/plugins", runtimeConfig);
   await waitForSolid(() => expect(page.textContent).toContain("Workboard"));
   page.routeData = createPluginsRouteData(
     harness.gateway,
@@ -377,10 +377,9 @@ it("keeps the autosaved inspection when an older optional catalog completes", as
   configState.configAutoSaveStatus = "saved";
   runtimeConfig.notify();
   await waitForSolid(() => expect(catalogs).toBe(2));
-  page.routeData = createPluginsRouteData(
-    harness.gateway,
-    result,
-    createPluginsRouteLocation("/settings/plugins/workboard"),
+  page.routeData = await pages[1].loader(
+    context,
+    createRouteLoaderOptions(createPluginsRouteLocation("/settings/plugins/workboard")),
   );
   await page.updateComplete;
   const rows = () =>

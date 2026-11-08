@@ -237,9 +237,10 @@ export function createPluginsPage(options: {
     onConsentDismiss: promptLaunch.reset,
   });
   const catalogTask = createPluginsInventoryRequest(gateway, publish, {
-    onComplete: (result) => {
+    onComplete: (result, refreshInspection) => {
       replaceResult(result);
-      if (surface === "settings") {
+      // Same-plugin tab navigation adopts inventory without replacing its current inspection.
+      if (surface === "settings" && (refreshInspection || !details.inspection.receipt())) {
         void showDetails(activeRoutePluginId());
       }
     },

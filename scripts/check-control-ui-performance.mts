@@ -58,11 +58,10 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Coordinator-accepted #195045: early inventory frees catalog details from a slow read.
-  // Measured main 1,296,593 B + 501 B normalized; served gzip decreases 578 B.
-  chatBootJsGzipBytes: 1_297_094,
-  // Same trade: main 803,310 B + 599 B; served gzip decreases 264 B. No headroom.
-  // The previous cap was already 60 B below main; this cap equals the measured head.
-  newBootJsGzipBytes: 803_909,
+  // Measured main 1,296,600 B + 499 B normalized; served gzip decreases 371 B.
+  chatBootJsGzipBytes: 1_297_099,
+  // Same trade: main 803,319 B + 598 B; served gzip decreases 279 B. No headroom.
+  newBootJsGzipBytes: 803_917,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -71,7 +70,7 @@ const controlUiPerformanceBudgets = {
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
-  // Same #195045 trade: main 564,384 B + 608 B; served gzip decreases 223 B.
+  // Same #195045 trade: main 564,384 B + 608 B; served gzip decreases 337 B.
   largestJsGzipBytes: 564_992,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
