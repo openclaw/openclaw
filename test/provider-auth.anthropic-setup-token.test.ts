@@ -1,16 +1,19 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { buildAnthropicProvider } from "../../extensions/anthropic/api.js";
-import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
-import * as storeRuntime from "../agents/auth-profiles/store-runtime.js";
-import * as storeUpdate from "../agents/auth-profiles/store-update.js";
-import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
-import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createRuntimeEnv, createTestWizardPrompter } from "../plugin-sdk/plugin-test-runtime.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { runProviderPluginAuthMethod } from "./provider-auth-choice.js";
+import { buildAnthropicProvider } from "../extensions/anthropic/api.js";
+import { resolveAuthProfileDatabasePath } from "../src/agents/auth-profiles/sqlite.js";
+import * as storeRuntime from "../src/agents/auth-profiles/store-runtime.js";
+import * as storeUpdate from "../src/agents/auth-profiles/store-update.js";
+import type { AuthProfileCredential } from "../src/agents/auth-profiles/types.js";
+import { persistAuthProfileBatch } from "../src/agents/auth-profiles/upsert-with-lock.js";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import {
+  createRuntimeEnv,
+  createTestWizardPrompter,
+} from "../src/plugin-sdk/plugin-test-runtime.js";
+import { runProviderPluginAuthMethod } from "../src/plugins/provider-auth-choice.js";
+import { createDeferredCore } from "../src/shared/deferred.js";
+import { runOpenClawAgentWriteAdmission } from "../src/state/openclaw-agent-write-admission.js";
+import { createOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 
 const token = "sk-ant-oat01-" + "synthetic".repeat(12);
 const method = buildAnthropicProvider().auth.find((entry) => entry.id === "setup-token");

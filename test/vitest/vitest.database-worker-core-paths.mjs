@@ -191,6 +191,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/wizard/setup.inference-verification.test.ts",
   "src/wizard/setup.finalize.trusted-proxy.test.ts",
   "test/openai-model-discovery-auth-order.test.ts",
+  "test/provider-auth.anthropic-setup-token.test.ts",
   "src/channels/inbound-event/envelope.worker.test.ts",
   "src/model-catalog/remote-refresh.test.ts",
   "src/model-catalog/remote-store.test.ts",
