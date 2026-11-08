@@ -39,25 +39,19 @@ it("finalizes fixture calls and releases their timers, database workers, and dir
   const scheduling = vi
     .spyOn(globalThis, "setTimeout")
     .mockImplementation((callback, delay, ...args) => {
-      const timer = schedule(
-        function (this: unknown, ...callbackArgs: unknown[]) {
-          pending.delete(timer);
-          Reflect.apply(callback, this, callbackArgs);
-        },
-        delay,
-        ...args,
-      );
+      const timer = schedule(function (this: unknown) {
+        pending.delete(timer);
+        Reflect.apply(callback, this, args);
+      }, delay);
       const owner = ownership.getStore();
       if (owner) {
         // Database idle timers inherit caller context but are not call timers.
+        pending.set(timer, delay === timerMs[owner] ? owner : "database-timer");
         if (delay === timerMs[owner]) {
           allocated[owner]++;
-          pending.set(timer, owner);
           if (owner === "transcript") {
             transcriptAllocated.resolve();
           }
-        } else {
-          pending.set(timer, "database-timer");
         }
       }
       return timer;
