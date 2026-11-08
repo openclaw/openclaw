@@ -175,6 +175,7 @@ async function transcriptFixture(
             options: {
               streamOptions: {},
               workPreviews: new Map(),
+              partDependencies: (part) => [part],
               renderGroupOptions: () => ({ showReasoning: false }),
               isWorkExpanded: () => false,
               onToggleWork: () => {},
@@ -434,6 +435,7 @@ it.each(["group", "frame"] as const)(
                 options: {
                   streamOptions: {},
                   workPreviews: new Map(),
+                  partDependencies: (part) => [part],
                   renderGroupOptions: () => ({ showReasoning: false }),
                   isWorkExpanded: () => false,
                   onToggleWork: () => {},
@@ -1025,6 +1027,7 @@ it.each(["group", "frame"] as const)(
                 options: {
                   streamOptions: {},
                   workPreviews: new Map(),
+                  partDependencies: (part) => [part],
                   renderGroupOptions: () => ({ showReasoning: false }),
                   isWorkExpanded: () => false,
                   onToggleWork: () => {},

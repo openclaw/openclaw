@@ -1,3 +1,6 @@
+import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-avatar.ts";
+import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
@@ -6,6 +9,9 @@ import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 
 type ChatRenderItem = SystemEventRenderItem;
+export type TranscriptDependencyItem =
+  | ChatRenderItem
+  | Extract<ChatItem, { kind: "stream" | "reading-indicator" | "question" }>;
 
 /** The keyed virtual row owns the dependency memo and its rendered content. */
 export class GuardedTranscriptItem {
@@ -15,19 +21,70 @@ export class GuardedTranscriptItem {
   ) {}
 }
 
-function itemDependencies(item: ChatRenderItem): readonly unknown[] {
+function groupDependencies(group: MessageGroup): readonly unknown[] {
+  return [
+    group.key,
+    group.role,
+    group.senderLabel,
+    group.senderSession,
+    group.sender,
+    group.sourceClients,
+    group.replyToSender,
+    group.replyPreviousMessageId,
+    group.replyShared,
+    group.replyToMessage?.key,
+    group.replyToMessage?.message,
+    group.replyTurnSource?.key,
+    group.replyTurnSource?.message,
+    group.replyCurrentSource?.key,
+    group.replyCurrentSource?.message,
+    group.visibleContent,
+    group.timestamp,
+    group.isStreaming,
+    group.runId,
+    ...group.messages.flatMap((source) => [
+      source.key,
+      source.message,
+      source.hasVisibleContent,
+      source.replyTarget,
+      // Cards expose mutable completion/error facts even when their message is retained.
+      ...extractToolCardsCached(source.message).flatMap((card) => Object.values(card)),
+    ]),
+  ];
+}
+
+function itemDependencies(item: TranscriptDependencyItem): readonly unknown[] {
+  if (item.kind === "group") {
+    return groupDependencies(item);
+  }
   if (item.kind === "system-event-group") {
     return [item.key, ...item.events];
   }
   if (item.kind === "stream-run") {
-    return [item.key, ...item.parts];
+    return [
+      item.key,
+      item.runId,
+      item.boundaryId,
+      item.replyToSender,
+      item.replyToMessage?.key,
+      item.replyToMessage?.message,
+      item.replyPreviousMessageId,
+      ...item.parts,
+    ];
   }
   if (item.kind === "work-group") {
     const anchors = Array.from(item.previewAfterGroup ?? []).flat();
-    return [item.key, item.durationMs, ...item.groups, ...anchors];
+    return [
+      item.key,
+      item.durationMs,
+      item.replyRunId,
+      item.ownerless,
+      ...item.groups.flatMap(groupDependencies),
+      ...anchors,
+    ];
   }
   if (item.kind === "activity-run") {
-    return [item.key, ...item.groups];
+    return [item.key, ...item.groups.flatMap(groupDependencies)];
   }
   if (item.kind === "agent-run-frame") {
     const outcome = item.outcome;
@@ -42,13 +99,14 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
       item.fragment?.representative,
       item.fragment?.source.parts,
       ...item.parts.flatMap(itemDependencies),
+      ...(item.detachedGroups ?? []).flatMap(groupDependencies),
     ];
   }
   return [item];
 }
 
 export function transcriptContextDependencies(
-  item: ChatRenderItem,
+  item: TranscriptDependencyItem,
   loadedSources: ReadonlyMap<string, LoadedReplySource>,
   props: Pick<
     ChatThreadProps,
@@ -80,23 +138,189 @@ export function transcriptContextDependencies(
 
 export function trackTranscriptRenderDependencies(
   state: ChatThreadState,
-  dependencies: unknown[],
+  props: ChatThreadProps,
+  derived: unknown[],
 ): void {
+  const dependencies: unknown[] = [
+    ...derived,
+    props.branding?.mascot,
+    props.branding?.brandIcon,
+    props.branding?.workingIndicator,
+    props.branding?.avatarHat,
+    props.branding?.artwork,
+    props.branding?.workingPhrases,
+    props.latestBrowserTabs,
+    props.widgetLayout,
+    Boolean(props.displayFacts),
+    props.personActivity?.basePath,
+    Boolean(props.personActivity),
+    Boolean(props.onOpenSidebar),
+    Boolean(props.onOpenWorkspaceFile),
+    Boolean(props.onFindWorkspaceFile),
+    Boolean(props.onPermissionRetry),
+    props.resolveArtifactDownload,
+    props.onRequestOpenImage,
+    Boolean(props.onOpenImage),
+    Boolean(props.onAssistantAttachmentLoaded),
+    Boolean(props.onOpenSessionLink),
+    Boolean(props.onOpenSubagent),
+    Boolean(props.onOpenSubagents),
+    Boolean(props.onRewindMessage),
+    Boolean(props.onFocusComposer),
+    props.sessionKey,
+    props.boardProvider,
+    props.boardProvider?.canPinWidgets,
+    props.boardProvider?.canPinMcpApps,
+    props.fullMessageAgentId,
+    Boolean(props.loadFullAssistantMessage),
+    props.showToolCalls,
+    props.chatBubbleMode,
+    Boolean(props.runActive),
+    Boolean(props.runWorking),
+    Boolean(props.runFinalizing),
+    props.startupLabel,
+    props.retryAt,
+    Boolean(props.waitingApproval),
+    props.questionPrompts,
+    props.asyncQuestions?.historyKey,
+    Boolean(props.autoExpandToolCalls),
+    props.assistantName,
+    props.currentAgentId,
+    props.agents,
+    props.senderAgentAvatars,
+    props.mainKey,
+    props.userId,
+    props.userName,
+    props.userAvatar,
+    ...channelSenderAvatarMemoKey(props.channelAvatar),
+    props.resourceBasePath,
+    props.basePath,
+    props.sessionPublicOrigin,
+    props.assistantAttachmentAuthToken,
+    props.mediaOwner,
+    props.mediaReadAllowed,
+    props.connectionEpoch,
+    props.canvasPluginSurfaceUrl,
+    props.embedSandboxMode ?? "scripts",
+    props.allowExternalEmbedUrls ?? false,
+    props.fetchLinkFavicon,
+    props.pluginToolIcons,
+    Boolean(props.onSetReply),
+    props.messageReactions,
+    props.onReact,
+    Boolean(props.asyncQuestions?.submit),
+    Boolean(props.onRetryQueuedMessage),
+    Boolean(props.onSteerNow),
+    props.connected,
+    props.onDiscardQueuedMessage,
+    props.queuedMessageAction?.id,
+    props.queuedMessageAction?.label,
+    props.queuedMessageAction?.onAction,
+    props.queuedMessageAction?.onDiscard,
+    props.replyMessageAccess?.revision ?? 0,
+    props.replyMessageAccess?.navigationId ?? "",
+  ];
   const previous = state.transcriptRenderDependencies;
   if (!transcriptArraysEqual(dependencies, previous)) {
     state.transcriptRenderDependencies = dependencies;
   }
 }
 
-export function guardChatRenderItems(
+/** One dependency contract for virtual rows and retained parts within a frame. */
+export function createTranscriptRenderDependencies(
   renderDependencies: readonly unknown[],
-  // Reply sources and live status can change without replacing the row itself.
-  presentationDependencies: (item: ChatRenderItem) => readonly unknown[],
+  presentationDependencies: (item: TranscriptDependencyItem) => readonly unknown[],
+) {
+  return (item: TranscriptDependencyItem): readonly unknown[] => [
+    ...itemDependencies(item),
+    renderDependencies,
+    ...presentationDependencies(item),
+  ];
+}
+
+export function guardChatRenderItems(
+  dependencies: ReturnType<typeof createTranscriptRenderDependencies>,
   nativeFor: (item: ChatRenderItem) => NativeTranscriptView | undefined,
 ) {
-  return (item: ChatRenderItem) =>
-    new GuardedTranscriptItem(
-      [...itemDependencies(item), renderDependencies, ...presentationDependencies(item)],
-      nativeFor(item),
-    );
+  return (item: ChatRenderItem) => new GuardedTranscriptItem(dependencies(item), nativeFor(item));
+}
+
+/** Retained rows and frame parts dispatch through the current pane action owner. */
+export function projectTranscriptActions(state: ChatThreadState, props: ChatThreadProps) {
+  const context = state.transcriptRenderContext;
+  context.actions = props;
+  const displayFacts = props.displayFacts;
+  // Retained parts keep these dispatchers; each call uses the current pane owner.
+  const actions: NonNullable<typeof context.actions> = {
+    onOpenSidebar: props.onOpenSidebar
+      ? (content) => context.actions?.onOpenSidebar?.(content)
+      : undefined,
+    onOpenWorkspaceFile: props.onOpenWorkspaceFile
+      ? (target) => context.actions?.onOpenWorkspaceFile?.(target)
+      : undefined,
+    onFindWorkspaceFile: props.onFindWorkspaceFile
+      ? (target) => context.actions?.onFindWorkspaceFile?.(target)
+      : undefined,
+    onPermissionRetry: props.onPermissionRetry
+      ? (message) => context.actions?.onPermissionRetry?.(message)
+      : undefined,
+    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded
+      ? () => context.actions?.onAssistantAttachmentLoaded?.()
+      : undefined,
+    onOpenSessionLink: props.onOpenSessionLink
+      ? (target) => context.actions?.onOpenSessionLink?.(target)
+      : undefined,
+    onOpenSubagent: props.onOpenSubagent
+      ? (key) => context.actions?.onOpenSubagent?.(key)
+      : undefined,
+    onOpenSubagents: props.onOpenSubagents
+      ? (focus) => context.actions?.onOpenSubagents?.(focus)
+      : undefined,
+    onRetryQueuedMessage: props.onRetryQueuedMessage
+      ? (id) => context.actions?.onRetryQueuedMessage?.(id)
+      : undefined,
+    onSteerNow: props.onSteerNow ? (runId) => context.actions?.onSteerNow?.(runId) : undefined,
+    onFocusComposer: props.onFocusComposer ? () => context.actions?.onFocusComposer?.() : undefined,
+    onOpenImage: props.onOpenImage
+      ? (item, requestVersion) => context.actions?.onOpenImage?.(item, requestVersion)
+      : undefined,
+    onRewindMessage: props.onRewindMessage
+      ? (entryId) => context.actions?.onRewindMessage?.(entryId) ?? false
+      : undefined,
+    loadFullAssistantMessage: props.loadFullAssistantMessage
+      ? async (request) => context.actions?.loadFullAssistantMessage?.(request)
+      : undefined,
+    personActivity: props.personActivity
+      ? {
+          basePath: props.personActivity.basePath,
+          navigate: (personId, label) => context.actions?.personActivity?.navigate(personId, label),
+        }
+      : undefined,
+    displayFacts: displayFacts
+      ? {
+          forRow: (id) => {
+            const original = displayFacts.forRow(id);
+            return original
+              ? {
+                  read: () => {
+                    const current = context.actions?.displayFacts?.forRow(id)?.read();
+                    return current && current.scope === original.read()?.scope
+                      ? current
+                      : undefined;
+                  },
+                  write: (update) => {
+                    const current = context.actions?.displayFacts?.forRow(id);
+                    const scope = original.read()?.scope;
+                    // An old row must not write into a different session's display cache.
+                    if (scope && current?.read()?.scope === scope) {
+                      current.write(update);
+                    }
+                  },
+                }
+              : undefined;
+          },
+        }
+      : undefined,
+  };
+  return actions;
 }
