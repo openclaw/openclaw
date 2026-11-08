@@ -85,7 +85,7 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
       notify();
     }
     try {
-      const [status, timeline] = await Promise.all([
+      const [statusResult, timelineResult] = await Promise.allSettled([
         current.request<LogbookStatusPayload>("logbook.status", {}),
         current
           .request<LogbookTimelinePayload>("logbook.timeline", { day: requestedDay })
@@ -106,6 +106,14 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
       if (client !== current || generation !== loadGeneration || state.day !== requestedDay) {
         return;
       }
+      if (statusResult.status === "rejected") {
+        throw statusResult.reason;
+      }
+      if (timelineResult.status === "rejected") {
+        throw timelineResult.reason;
+      }
+      const status = statusResult.value;
+      const timeline = timelineResult.value;
       state.status = status;
       // Follow the capture host's day until the user explicitly selects one.
       if (!dayPinned && status.today !== state.day) {

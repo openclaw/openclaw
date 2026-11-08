@@ -31,59 +31,44 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(process.env.OPENCLAW_PAGE_PERF === "1" ? [0, 1, 2, 3, 4] : [0])(
-  "first content for a pinned day does not wait for capture status %#",
-  async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-01-02T12:00:00Z"));
-    let historical = false,
-      statusReads = 0,
-      statusReady = false;
-    let release: (() => void) | undefined;
-    const pending = new Promise<ReturnType<typeof logbookStatus>>((resolve) => {
-      release = () => {
-        statusReady = true;
-        resolve(logbookStatus("2026-01-02", { timeZone: "America/Los_Angeles" }));
-      };
-    });
-    const request = vi.fn(async (method: string) => {
-      if (method === "logbook.status") {
-        return statusReads++ === 0
-          ? logbookStatus("2026-01-02", { timeZone: "America/Los_Angeles" })
-          : pending;
-      }
-      if (method === "logbook.timeline") {
-        return logbookTimeline(historical ? "2026-01-01" : "2026-01-02", [
-          { title: historical ? "Historical card" : "Current card" },
-        ]);
-      }
-      throw new Error("Unexpected method: " + method);
-    });
-    const mounted = mountLogbook(request);
-    await waitForSolid(() => expect(mounted.container.textContent).toContain("Current card"));
-    historical = true;
-    const timer = setTimeout(() => release!(), 250);
-    const start = performance.now();
-    mounted.getByRole("button", { name: "Previous day" }).click();
-    await waitForSolid(() => expect(mounted.container.textContent).toContain("Historical card"));
-    console.log(
-      "PAGE_FIRST_CONTENT",
-      JSON.stringify({
-        page: "logbook",
-        elapsedMs: performance.now() - start,
-        delayedMetadataMs: 250,
-      }),
-    );
-    try {
-      expect.soft(statusReady).toBe(false);
-    } finally {
-      await pending;
-      clearTimeout(timer);
-      mounted.unmount();
+it("shows a pinned day before capture status while retaining the capture timezone", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-01-02T12:00:00Z"));
+  const status = logbookStatus("2026-01-02", { timeZone: "America/Los_Angeles" });
+  const pending = createDeferred<typeof status>();
+  let statusReads = 0;
+  const request = vi.fn(async (method: string, params: unknown) => {
+    if (method === "logbook.status") {
+      return statusReads++ === 0 ? status : pending.promise;
     }
-    expect(request.mock.calls.filter(([method]) => method === "logbook.status")).toHaveLength(2);
-  },
-);
+    if (method === "logbook.timeline") {
+      const day = (params as { day: string }).day;
+      return logbookTimeline(day, [
+        {
+          title: day === "2026-01-01" ? "Historical card" : "Current card",
+          startMs: Date.UTC(2026, 0, 2, 0, 30),
+          endMs: Date.UTC(2026, 0, 2, 1, 30),
+        },
+      ]);
+    }
+    throw new Error("Unexpected method: " + method);
+  });
+  const mounted = mountLogbook(request);
+  await waitForSolid(() => expect(mounted.container.textContent).toContain("Current card"));
+  mounted.getByRole("button", { name: "Previous day" }).click();
+  try {
+    await waitForSolid(() => expect(mounted.container.textContent).toContain("Historical card"));
+    expect(mounted.container.querySelector(".logbook-card__time")?.textContent).toContain(
+      "04:30 PM",
+    );
+  } finally {
+    pending.resolve({ ...status, nodeName: "Settled capture host" });
+  }
+  await waitForSolid(() => expect(mounted.container.textContent).toContain("Settled capture host"));
+  for (const method of ["logbook.status", "logbook.timeline"]) {
+    expect(request.mock.calls.filter(([called]) => called === method)).toHaveLength(2);
+  }
+});
 
 it("renders timeline clocks in the capture host timezone and preserves detail text", async () => {
   vi.spyOn(i18n, "getLocale").mockReturnValue("en");
@@ -272,6 +257,39 @@ describe("Logbook request ownership", () => {
       expect(state.timeline?.cards[0]?.title).toBe("Resumed poll");
     },
   );
+
+  it("keeps a failed status load admitted until its timeline settles", async () => {
+    const pending = createDeferred<ReturnType<typeof logbookTimeline>>();
+    let historical = false;
+    const request = vi.fn(async (method: string) => {
+      if (!historical) {
+        return dayResponse(method, "2026-07-04", "Current card");
+      }
+      if (method === "logbook.status") {
+        throw new Error("Capture status unavailable");
+      }
+      return pending.promise;
+    });
+    const model = createModel(request);
+    await model.load();
+    historical = true;
+    let settled = false;
+    const load = model.load({ day: "2026-07-03" }).then(() => {
+      settled = true;
+    });
+    await advance();
+    try {
+      expect(settled).toBe(false);
+      expect(model.state.loading).toBe(true);
+    } finally {
+      pending.resolve(logbookTimeline("2026-07-03", [{ title: "Historical card" }]));
+      await load;
+    }
+    expect(model.state.timeline?.cards[0]?.title).toBe("Historical card");
+    expect(model.state.error).toBe("Capture status unavailable");
+    expect(model.state.loading).toBe(false);
+    expect(request).toHaveBeenCalledTimes(4);
+  });
 
   it("discards a capture result after its polling owner retires", async () => {
     const pending = createDeferred<unknown>();

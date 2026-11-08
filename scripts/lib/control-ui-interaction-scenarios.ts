@@ -40,6 +40,7 @@ import {
   prepareChat,
   scrollTranscriptToTop,
 } from "./control-ui-interaction-navigation.ts";
+import { logbookReadinessScenarios } from "./control-ui-logbook-readiness-scenarios.ts";
 import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
 import {
@@ -1875,6 +1876,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
   ...dataBoardScenarios,
   ...dataCatalogScenarios,
   ...dataLogScenarios,
+  ...logbookReadinessScenarios,
   ...dataUsageDetailScenarios,
   ...dataUsageScenarios,
   ...(
