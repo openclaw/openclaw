@@ -22,9 +22,34 @@ TAG="$(node -p 'require(process.argv[1]).tag' "$PIN")"
 CACHE_DIR="${OPENCLAW_BUN_CACHE_ROOT:-$ROOT_DIR/.cache/openclaw-bun}/$TAG"
 mkdir -p "$CACHE_DIR"
 download() {
+  # After one browser-download failure, reuse the API route for this release.
+  if [[ ! -f "$WORK/release.json" ]] &&
+     curl --fail --location --proto '=https' --proto-redir '=https' --no-progress-meter --show-error \
+       --connect-timeout 15 --max-time 300 \
+       --output "$WORK/$1" "https://github.com/openclaw/bun/releases/download/$TAG/$1"; then
+    return
+  fi
+  if [[ ! -f "$WORK/release.json" ]]; then
+    echo "WARN: Bun release download failed; trying the GitHub asset API" >&2
+    curl --fail --location --proto '=https' --proto-redir '=https' --no-progress-meter --show-error \
+      --connect-timeout 15 --max-time 30 --retry 2 --retry-max-time 60 \
+      --output "$WORK/release.json" "https://api.github.com/repos/openclaw/bun/releases/tags/$TAG"
+  fi
+  local asset_id
+  asset_id="$(node - "$WORK/release.json" "$TAG" "$1" <<'JS'
+const assert = require('node:assert/strict');
+const release = require(process.argv[2]);
+assert.equal(release.tag_name, process.argv[3], 'Bun release tag mismatch');
+const assets = release.assets.filter(asset => asset.name === process.argv[4]);
+assert.equal(assets.length, 1, 'Missing or duplicate Bun release asset');
+assert(Number.isSafeInteger(assets[0].id) && assets[0].id > 0, 'Invalid Bun release asset ID');
+console.log(assets[0].id);
+JS
+)"
   curl --fail --location --proto '=https' --proto-redir '=https' --no-progress-meter --show-error \
     --connect-timeout 15 --max-time 300 --retry 7 --retry-max-time 300 \
-    --output "$WORK/$1" "https://github.com/openclaw/bun/releases/download/$TAG/$1"
+    --header 'Accept: application/octet-stream' \
+    --output "$WORK/$1" "https://api.github.com/repos/openclaw/bun/releases/assets/$asset_id"
 }
 # The release metadata and independent source pin must agree before any payload runs.
 validate_release_metadata() {
