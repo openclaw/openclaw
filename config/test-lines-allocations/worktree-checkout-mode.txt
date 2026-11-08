@@ -1,1 +1,1 @@
-17 # Interleaved checkout modes and independent warm-slot consumption.
+17
