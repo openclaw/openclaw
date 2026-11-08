@@ -1,2 +1,0 @@
-17
-# Muse initialize declares userInputDialogs=false (handshake capability regression).

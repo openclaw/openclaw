@@ -50,11 +50,13 @@ describe("Muse process pool", () => {
         const same = await pool.acquire(workspace, apiKey, false);
         same.release();
         expect(same.runtime).toBe(managed.runtime);
-        const spawns = (await readFile(log, "utf8"))
+        const requests = (await readFile(log, "utf8"))
           .trim()
           .split("\n")
-          .map((line) => JSON.parse(line))
-          .filter((request) => request.event === "spawn");
+          .map((l) => JSON.parse(l));
+        const initialize = requests.find((request) => request.method === "initialize");
+        expect(initialize.params.capabilities).toEqual({ userInputDialogs: false });
+        const spawns = requests.filter((request) => request.event === "spawn");
         expect(spawns).toHaveLength(3);
         expect(spawns[0].credentialBackend).toBeUndefined();
         expect(spawns[2]).toMatchObject({
@@ -63,7 +65,6 @@ describe("Muse process pool", () => {
         });
       } finally {
         await pool.dispose();
-        vi.unstubAllEnvs();
       }
     },
   );
@@ -86,23 +87,6 @@ describe("Muse process pool", () => {
       await other.runtime.host.exited;
     } finally {
       vi.useRealTimers();
-      await pool.dispose();
-    }
-  });
-  it("tells Muse it cannot answer user-input questions", async () => {
-    // OpenClaw never presents or answers userInput/request; MSP treats an absent flag as capable.
-    const log = join(workspace, "initialize-requests.jsonl");
-    vi.stubEnv("MUSE_REQUEST_LOG", log);
-    const pool = new MusePool(fixture);
-    try {
-      (await pool.acquire(workspace, undefined, false)).release();
-      const initialize = (await readFile(log, "utf8"))
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => JSON.parse(line))
-        .find((entry) => entry.method === "initialize");
-      expect(initialize.params.capabilities).toEqual({ userInputDialogs: false });
-    } finally {
       await pool.dispose();
     }
   });
