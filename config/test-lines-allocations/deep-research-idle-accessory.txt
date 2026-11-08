@@ -1,0 +1,2 @@
+# Keep the deep-research session-header accessory out of idle conversations.
+48

@@ -74,7 +74,7 @@ export default defineControlUiPlugin({
     };
   },
 });
-function ResearchAccessory(props: {
+export function ResearchAccessory(props: {
   client: ReturnType<typeof createResearchClient>;
   open: () => void;
 }) {
@@ -84,23 +84,23 @@ function ResearchAccessory(props: {
     void props.client.refresh();
     return stop;
   });
+  // Idle sessions keep the header action as the single entry point: research status chrome
+  // only appears once a job exists (or the client is offline and worth reporting).
   return (
-    <button
-      class="deep-research-accessory"
-      type="button"
-      onClick={() => props.open()}
-      aria-label="Open deep research progress"
-    >
-      {snapshot().offline
-        ? "Research · offline"
-        : snapshot().job
-          ? `Research · ${snapshot().job!.phase}`
-          : "Deep research"}
-      <Show when={snapshot().job?.counts}>
-        {(counts) => (
-          <span>{` · ${counts().sources} ${counts().sources === 1 ? "source" : "sources"}`}</span>
-        )}
-      </Show>
-    </button>
+    <Show when={snapshot().offline || snapshot().job}>
+      <button
+        class="deep-research-accessory"
+        type="button"
+        onClick={() => props.open()}
+        aria-label="Open deep research progress"
+      >
+        {snapshot().offline ? "Research · offline" : `Research · ${snapshot().job!.phase}`}
+        <Show when={snapshot().job?.counts}>
+          {(counts) => (
+            <span>{` · ${counts().sources} ${counts().sources === 1 ? "source" : "sources"}`}</span>
+          )}
+        </Show>
+      </button>
+    </Show>
   );
 }
