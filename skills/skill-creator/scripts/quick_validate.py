@@ -106,14 +106,38 @@ _CORE_FLOAT = re.compile(
 )
 
 
-def _core_scalar_key(node):
-    """Resolve a plain scalar key the way the runtime's YAML core schema does.
+def _explicit_core_key(tag, value):
+    """Resolve a key whose source carries an explicit YAML tag."""
 
-    The loader treats `yes`/`on` as strings but `true` as a boolean, and a
-    quoted `"true"` stays a string, so duplicate identity is the typed value.
+    if tag == "tag:yaml.org,2002:null":
+        return ("null", None)
+    if tag == "tag:yaml.org,2002:bool":
+        return ("bool", value.strip().lower() in {"true", "yes", "on", "y"})
+    if tag == "tag:yaml.org,2002:int":
+        try:
+            return ("int", int(value.replace("_", ""), 0))
+        except ValueError:
+            return ("str", value)
+    if tag == "tag:yaml.org,2002:float":
+        try:
+            return ("float", float(value.replace("_", "")))
+        except ValueError:
+            return ("str", value)
+    return ("str", value)
+
+
+def _core_scalar_key(node, source):
+    """Resolve a scalar key the way the runtime's YAML core schema does.
+
+    The loader treats `yes`/`on` as strings but `true` as a boolean, a quoted
+    `"true"` stays a string, and an explicit tag wins over the plain spelling,
+    so duplicate identity is the typed value.
     """
 
     value = node.value
+    authored = source[node.start_mark.index : node.end_mark.index].lstrip()
+    if authored.startswith("!"):
+        return _explicit_core_key(node.tag, value)
     if node.style is None:
         if _CORE_NULL.fullmatch(value):
             return ("null", None)
@@ -150,7 +174,7 @@ def _load_frontmatter(frontmatter_text: str):
                 # them distinct. Compare typed core values, not constructed keys.
                 if not isinstance(key_node, yaml.ScalarNode):
                     continue
-                key = _core_scalar_key(key_node)
+                key = _core_scalar_key(key_node, frontmatter_text)
                 if key in keys:
                     raise yaml.constructor.ConstructorError(
                         "while constructing a mapping",

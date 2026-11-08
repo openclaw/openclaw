@@ -224,8 +224,12 @@ metadata: |
 
     def test_duplicate_key_check_keeps_typed_core_values_distinct(self):
         # A plain `true` is a boolean and a quoted `"true"` is a string under
-        # the core schema; the runtime keeps both keys.
-        for metadata in ('{true: enabled, "true": active}', '{1: a, "1": b}'):
+        # the core schema; an explicit `!!str` tag also wins over the spelling.
+        for metadata in (
+            '{true: enabled, "true": active}',
+            '{1: a, "1": b}',
+            '{!!str true: enabled, TRUE: active}',
+        ):
             with self.subTest(metadata=metadata):
                 content = (
                     "---\n"
