@@ -150,8 +150,11 @@ async function executeStandingIntent(
         return result.value;
       } catch (error) {
         // A failed or uncertain write may have committed; forget the learned deadline and let the
-        // current owner sweep (a failing sweep's own retry replaces this immediate job).
-        recordDueAt(options.path, null);
+        // current owner sweep. Only the first failure reschedules, so repeated failures keep the
+        // sweep retry backoff instead of sweeping at request rate.
+        if (knownDueAt.has(options.path)) {
+          recordDueAt(options.path, null);
+        }
         throw error;
       } finally {
         await worker.close();
