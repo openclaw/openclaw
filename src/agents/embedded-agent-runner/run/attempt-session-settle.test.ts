@@ -5,6 +5,7 @@ import { createAssistantMessageEventStream } from "../../../llm/utils/event-stre
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { readGlobalSingleton } from "../../../shared/global-singleton.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
+import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -253,5 +254,54 @@ it.each([false, true])(
     await settled;
     expect(finished).toHaveBeenCalledOnce();
     expect(tracker.buildAbortSettlePromise()).toBeNull();
+  },
+);
+
+it.each([1, 16])(
+  "bounds %s restart settlements once before closing transcript writers",
+  async (count) => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    controller.abort(createAgentRunRestartAbortError());
+    const settle = deferred();
+    const disposed = vi.fn();
+    const scope = createAgentCleanupScope();
+    const cleanup = scope.run(() =>
+      Promise.all(
+        Array.from({ length: count }, () =>
+          cleanupEmbeddedAttemptSessionPhase({
+            attempt: {
+              runId: "restart-bound",
+              sessionId: "restart-bound",
+              abortSignal: controller.signal,
+            },
+            trajectoryRecorder: null,
+            trajectoryEndRecorded: false,
+            buildAbortSettlePromise: () => settle.promise,
+            state: {
+              terminal: { kind: "aborted", source: "external" },
+              beforeAgentRunBlockedBy: undefined,
+            },
+            transcriptLifecycle: {
+              beginCleanup: async () => {},
+              dispose: async () => {
+                disposed();
+              },
+            },
+          }),
+        ),
+      ),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(249);
+      expect(disposed).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(disposed).toHaveBeenCalledTimes(count);
+      expect(scope.outcome).toBe("uncertain");
+    } finally {
+      settle.resolve();
+      await cleanup;
+      vi.useRealTimers();
+    }
   },
 );

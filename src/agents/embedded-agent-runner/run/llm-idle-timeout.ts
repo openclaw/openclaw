@@ -29,6 +29,7 @@ import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import { abortable, createAbortableError } from "./abortable.js";
+import { EMBEDDED_ABORT_SETTLE_TIMEOUT_MS } from "./attempt-subscription-cleanup.js";
 
 const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
 const SELF_HOSTED_LLM_IDLE_TIMEOUT_MS = 300_000;
@@ -400,12 +401,25 @@ export function streamWithIdleTimeout(
         let watchdogLastProgressAt = Date.now();
         let rejectIdleTimeout: ((error: Error) => void) | undefined;
         const pendingAborts = new Set<(error: Error) => void>();
+        let restartAbortTimer: NodeJS.Timeout | undefined;
+        let restartAbortExpired = false;
         const abortIteration = () => {
-          // Restart already retains the producer; consume its terminal partial reply.
-          if (sourceSignal && !isAgentRunRestartAbortReason(sourceSignal.reason)) {
-            for (const reject of pendingAborts) {
-              reject(createAbortableError(sourceSignal));
+          if (!sourceSignal) {
+            return;
+          }
+          // Allow the terminal partial reply, but never refresh this grace on chunks
+          // or heartbeats: a provider ignoring cancellation must not keep next() alive.
+          if (isAgentRunRestartAbortReason(sourceSignal.reason) && !restartAbortExpired) {
+            if (!settled) {
+              restartAbortTimer ??= setTimeout(() => {
+                restartAbortExpired = true;
+                abortIteration();
+              }, EMBEDDED_ABORT_SETTLE_TIMEOUT_MS).unref();
             }
+            return;
+          }
+          for (const reject of pendingAborts) {
+            reject(createAbortableError(sourceSignal));
           }
         };
         sourceSignal?.addEventListener("abort", abortIteration, { once: true });
@@ -496,6 +510,8 @@ export function streamWithIdleTimeout(
             return;
           }
           settled = true;
+          // A completed native producer may still have a queued terminal reply.
+          clearTimeout(restartAbortTimer);
           rejectIdleTimeout = undefined;
           clearTimers();
           unsubscribeLlmActivity();
@@ -510,6 +526,7 @@ export function streamWithIdleTimeout(
         let iteratorFinished = false;
         const releaseAbortListener = () => {
           if (iteratorFinished && pendingAborts.size === 0) {
+            clearTimeout(restartAbortTimer);
             sourceSignal?.removeEventListener("abort", abortIteration);
           }
         };

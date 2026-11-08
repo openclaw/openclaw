@@ -1,2 +1,2 @@
-# Preserve the provider's terminal transcript write while restart cleanup joins it.
-45
+# Preserve terminal transcripts and bound restart cancellation without dropping retained work.
+157
