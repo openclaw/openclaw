@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For } from "solid-js";
+import { createMemo } from "solid-js";
 import panelStyles from "../../styles/panel-loading-skeleton.css?inline";
 
 export type PanelLoadingSkeletonVariant =
@@ -22,12 +22,6 @@ type SkeletonNode = readonly [
   style?: Readonly<JSX.CSSProperties>,
 ];
 
-const lineClasses: Readonly<Record<LineWidth, string>> = {
-  short: "skeleton line short",
-  medium: "skeleton line medium",
-  long: "skeleton line long",
-};
-
 function shape(
   className: string,
   children?: readonly SkeletonNode[],
@@ -37,21 +31,20 @@ function shape(
 }
 
 function line(width: LineWidth = "long"): SkeletonNode {
-  return shape(lineClasses[width]);
+  return shape(`skeleton line ${width}`);
 }
 
 function lines(...widths: LineWidth[]): readonly SkeletonNode[] {
   return widths.map(line);
 }
 
-function rows(): readonly SkeletonNode[] {
-  return Array.from({ length: 5 }, (_, index) =>
-    shape("row", [
-      shape("skeleton icon"),
-      shape("copy", [line(index % 2 === 0 ? "long" : "medium"), shape("skeleton meta")]),
-    ]),
-  );
-}
+const fileRows: readonly SkeletonNode[] = Array.from({ length: 5 }, (_, index) =>
+  shape("row", [
+    shape("skeleton icon"),
+    shape("copy", [line(index % 2 === 0 ? "long" : "medium"), shape("skeleton meta")]),
+  ]),
+);
+const codeLines = lines("long", "long", "medium", "long", "short");
 
 function widget(columns: number, rowSpan: number, widths: readonly LineWidth[]): SkeletonNode {
   return shape(
@@ -96,15 +89,12 @@ const layouts: Readonly<
   discussion: [
     shape("discussion-frame", [shape("conversation", lines("medium", "long", "long", "short"))]),
   ],
-  "file-list": [shape("rows", rows())],
-  document: [
-    shape("skeleton file-heading medium"),
-    shape("code", lines("long", "long", "medium", "long", "short")),
-  ],
+  "file-list": [shape("rows", fileRows)],
+  document: [shape("skeleton file-heading medium"), shape("code", codeLines)],
   review: [
     shape("summary", [shape("skeleton pill"), shape("skeleton pill")]),
     shape("skeleton file-heading"),
-    shape("code", lines("long", "long", "medium", "long", "short")),
+    shape("code", codeLines),
   ],
   terminal: [
     shape("toolbar", [shape("skeleton pill"), shape("skeleton pill")]),
@@ -112,20 +102,16 @@ const layouts: Readonly<
   ],
   files: [
     shape("toolbar", [shape("skeleton address"), shape("skeleton button")]),
-    shape("rows", rows()),
+    shape("rows", fileRows),
   ],
 };
 
-function SkeletonNodes(props: { nodes: readonly SkeletonNode[] }) {
-  return (
-    <For each={props.nodes}>
-      {(node) => (
-        <div class={node[0]} style={node[2]}>
-          {node[1] && <SkeletonNodes nodes={node[1]} />}
-        </div>
-      )}
-    </For>
-  );
+function skeletonNodes(nodes: readonly SkeletonNode[]): JSX.Element {
+  return nodes.map(([className, children, style]) => (
+    <div class={className} style={style}>
+      {children && skeletonNodes(children)}
+    </div>
+  ));
 }
 
 export function PanelLoadingSkeleton(props: {
@@ -145,7 +131,7 @@ export function PanelLoadingSkeleton(props: {
         </div>
       );
     }
-    return <SkeletonNodes nodes={layouts[current] ?? layouts.files} />;
+    return skeletonNodes(layouts[current] ?? layouts.files);
   };
 
   return (
