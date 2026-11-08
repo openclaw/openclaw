@@ -44,7 +44,10 @@ export default defineControlUiPlugin({
       }
       for (const [index, board] of boards.entries()) {
         const name = workboardBoardName(board);
-        const label = (nameCounts.get(name) ?? 0) > 1 ? `${name} (${board.kind ?? "cards"})` : name;
+        const kind = t(
+          board.kind === "sessions" ? "workboard.sessionsBoard.kind" : "workboard.cardsBoard",
+        );
+        const label = (nameCounts.get(name) ?? 0) > 1 ? `${name} (${kind})` : name;
         const order = 20 + index;
         const signature = JSON.stringify([label, board.icon, board.color, order]);
         const entry = navigation.get(board.id);
@@ -137,12 +140,13 @@ export default defineControlUiPlugin({
       ...(["mini", "card", "board"] as const).map((id) =>
         host.ui.registerWidget({
           id,
-          label:
+          label: t(
             id === "mini"
-              ? "Workboard summary"
+              ? "workboard.widget.summaryLabel"
               : id === "card"
-                ? "Workboard card"
-                : "Workboard board",
+                ? "workboard.widget.cardLabel"
+                : "workboard.widget.boardLabel",
+          ),
           mount: createWorkboardWidget(host, id),
         }),
       ),

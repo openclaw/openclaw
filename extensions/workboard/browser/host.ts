@@ -1,11 +1,11 @@
-import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
+import { translateControlUiMessage, type ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createSignal } from "solid-js";
-import { loadMessages } from "./i18n/locales.ts";
+import { loadMessages, messages } from "./i18n/locales.ts";
 
 const [localeRevision, setLocaleRevision] = createSignal(0);
 
 let activeHost: ControlUiHost | undefined;
-let redact: (text: string) => string = () => "Workboard is not active.";
+let redact: (text: string) => string = () => inactiveMessage();
 
 export function bindWorkboardHost(host: ControlUiHost, onLocaleReady?: () => void): () => void {
   activeHost = host;
@@ -45,9 +45,14 @@ export function workboardRedact(text: string): string {
 
 export function workboardHost(): ControlUiHost {
   if (!activeHost || activeHost.signal.aborted) {
-    throw new Error("Workboard is no longer active. Reload the plugin to continue.");
+    throw new Error(inactiveMessage());
   }
   return activeHost;
+}
+
+// i18n/index.ts imports this module; translate directly to avoid an import cycle.
+function inactiveMessage(): string {
+  return translateControlUiMessage(messages, workboardLocale(), "workboard.inactive");
 }
 
 export function workboardLocale(): string {

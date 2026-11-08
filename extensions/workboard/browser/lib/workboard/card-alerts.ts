@@ -1,3 +1,4 @@
+import { t } from "../../i18n/index.ts";
 import type { CardSessionState } from "./session-state.ts";
 import type { WorkboardCard, WorkboardDependencyState, WorkboardLifecycle } from "./types.ts";
 
@@ -125,7 +126,7 @@ export function getCardAlerts(
       kind: "stale",
       repeatsSessionState: "stale",
       severity: "warning",
-      title: stale?.reason ?? "Linked session has not reported recent activity.",
+      title: stale?.reason ?? t("workboard.staleSessionReason"),
       timestamp: stale?.detectedAt ?? lastActivity ?? card.updatedAt,
       ageMs: getCardStaleAgeMs(card, lifecycle, now),
     });
