@@ -949,9 +949,7 @@ try {
             readiness.startedAt,
             readiness.readyAt ?? undefined,
           );
-          const records = await page.evaluate(
-            () => Reflect.get(window, "openclawRpcPayloads") ?? [],
-          );
+          const records = await page.evaluate(() => window.openclawRpcPayloads?.splice(0) ?? []);
           const resources = await page.evaluate(
             (start) =>
               performance
@@ -1006,11 +1004,6 @@ try {
           console.log(
             `${engine} ${name}: ${readiness.readyAt === null ? "unavailable" : (readiness.readyAt - readiness.startedAt).toFixed(1)} ms${error ? ` ERROR ${error}` : ""}`,
           );
-          await page.evaluate(() => {
-            if (window.openclawRpcPayloads) {
-              window.openclawRpcPayloads.length = 0;
-            }
-          });
           if (error) {
             throw new Error(error);
           }

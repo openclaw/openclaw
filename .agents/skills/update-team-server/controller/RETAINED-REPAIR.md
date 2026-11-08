@@ -19,17 +19,26 @@ same-schema target containing the product fix:
 Read the incident bindings together before preparation; do not reuse values
 from an earlier process or journal:
 
-| Argument                 | Source                                                                                                                                                                     |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OPERATION`              | A new UUIDv4, retained for preparation, activation, and resume.                                                                                                            |
-| `TARGET`                 | Full commit SHA on the verified official main mirror, containing the product fix. Preparation freezes official origin evidence and requires a distinct same-schema target. |
-| `CURRENT`                | Full candidate SHA in the retained journal, matching the selected `current` release and live Gateway working directory.                                                    |
-| `PID`                    | `MainPID` of the canonical system Gateway service.                                                                                                                         |
-| `START`                  | Field 22 of `/proc/$PID/stat` (start ticks), parsed after the final closing parenthesis of the process name.                                                               |
-| `JOURNAL_SHA256`         | SHA-256 of the reviewed original canonical `journal/activation.json`.                                                                                                      |
-| `CONFIG_SHA256`          | SHA-256 of the reviewed config at the journal's first protected path. Omit only when reconciliation is unnecessary.                                                        |
-| `BUILD_RECEIPT_SHA256`   | `completed.sha256` in successful preparation's JSON output. Activation inherits its exact config approval without another config argument.                                 |
-| `CURRENT_JOURNAL_SHA256` | On resume, a fresh SHA-256 of the current canonical journal, after reviewing its interrupted phase. This is not the original incident hash.                                |
+| Argument                 | Source                                                                                                                                                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPERATION`              | A new UUIDv4, retained for preparation, activation, and resume.                                                                                                                                                     |
+| `TARGET`                 | `main` lets the controller fetch and freeze official main before recording its exact target. An explicit full SHA must equal freshly frozen main on first preparation. The target must be distinct and same-schema. |
+| `CURRENT`                | Full candidate SHA in the retained journal, matching the selected `current` release and live Gateway working directory.                                                                                             |
+| `PID`                    | `MainPID` of the canonical system Gateway service.                                                                                                                                                                  |
+| `START`                  | Field 22 of `/proc/$PID/stat` (start ticks), parsed after the final closing parenthesis of the process name.                                                                                                        |
+| `JOURNAL_SHA256`         | SHA-256 of the reviewed original canonical `journal/activation.json`.                                                                                                                                               |
+| `CONFIG_SHA256`          | SHA-256 of the reviewed config at the journal's first protected path. Omit only when reconciliation is unnecessary.                                                                                                 |
+| `BUILD_RECEIPT_SHA256`   | `completed.sha256` in successful preparation's JSON output. Activation inherits its exact config approval without another config argument.                                                                          |
+| `CURRENT_JOURNAL_SHA256` | On resume, a fresh SHA-256 of the current canonical journal, after reviewing its interrupted phase. This is not the original incident hash.                                                                         |
+
+Use `main` for a fresh latest-main repair instead of sampling a SHA before the
+fetch. The owner records the resolved SHA in `build-intent.json`; the `PREPARED`
+output reports that exact SHA. Repeat the same operation and selector after an
+interruption: an existing intent keeps its target, and a captured `origin.json`
+continues to prove that target even after main advances. If interruption or an
+old explicit SHA leaves an intent without an origin capture and main has moved,
+retire that pre-build attempt below and start a fresh operation. Do not edit its
+target or substitute newer evidence into the same operation.
 
 Use the deployment owner's existing private environment and operator profile.
 Preparation requires disabled, inactive deployment timers and the original live
@@ -48,6 +57,43 @@ acceptance. Neither a config digest nor a successful build waives those gates.
 The original journal bytes remain archived unchanged as the existing typed
 repair transaction takes over the canonical journal slot. Changed config or
 incident evidence refuses continuation.
+
+### Transcript continuity after serving traffic
+
+Retained preparation accepts historical session windows after repeated resets or
+rotations when the original physical database, window owner, and exact rewrite
+generation remain. The current session entry need not still directly reference
+every historical window. An exact immutable archive with a verified encoded hash
+also preserves its saved generation.
+
+A completed native `agent_deletion_journal` row can explain intentional loss for
+its exact agent and database path. The deletion must have started no earlier than
+the original activation journal, have a retiring or legacy-null phase and a
+completed purge, and retain its operation identity. An existing database must
+still have the witnessed physical identity; an absent file also requires
+`delete_files = 1`. Pending deletion, missing or unrelated records, replaced
+databases, and an unexplained disappearance remain refusals. Preparation and
+later repair checks consume the same native evidence; they never manufacture it.
+
+Rewrite generations are random tokens, not ordered counters. For fix-forward
+from the still-selected failed candidate, preparation also accepts its
+post-incident rewrites: the database device/inode, session ID and window key
+must match the original witness, both session nodes must still select that
+window, and the watermark's integer `updated_at` must be strictly after the
+journal's `createdAt` and no later than observation. Existing preparation checks
+bind both the selected release pointer and live process cwd to that candidate.
+This is explained evolution by the serving candidate, not recovery of the old
+bytes; the invariant is no unexplained transcript loss relative to what the
+candidate itself produced. A timestamp alone is insufficient.
+
+The sealed build witness binds the accepted generation. Later activation checks
+may recognize that same generation after selecting the repair target, but cannot
+accept another rewrite against the captured build, preparation or stopped floors.
+Original historical windows absent from the build witness retain their exact
+generation/archive requirement. Predecessor selection and rollback do not receive
+this exception; neither does a native restore or changed database identity.
+Do not edit watermarks, deletion records, or the original witness to satisfy this
+guard. The operator must diagnose missing evidence before proceeding.
 
 ### Native config audit evidence
 
@@ -153,6 +199,44 @@ An absent slot after the rename is safe for ordinary admission because the whole
 evidence bundle and intent precede it. Successful retirement permits a separately
 approved ordinary deploy; it does not authorize that deploy or enable a timer.
 Never use ordinary `--recover`, unlink the journal, or retire `REPAIR_FAILED`.
+
+## Retire an uncaptured build intent
+
+A `BUILD_PREPARED` intent binds its operation to an exact target even if the
+subsequent official-main observation refuses. Retrying that operation cannot
+select another target. Fresh UUIDs have independent build intents; there is no
+global build-intent slot. Retire abandoned evidence through its owner before
+replacing the controller, rather than deleting or editing journal files.
+
+Run the reviewed replacement packet's `release-lib.mjs` with the existing
+exclusive canonical FD9 lock, using `retained-controller-adoption inspect-build`
+then `retire-build`. Both take `ROOT @stdin` and the same JSON object:
+
+```json
+{
+  "adoption": {
+    "version": 1,
+    "operation": "NEW_ADOPTION_UUID",
+    "source": {},
+    "oldClosure": [],
+    "replacement": []
+  },
+  "buildIntent": {}
+}
+```
+
+`adoption` is the ordinary exact four-file adoption request below; `buildIntent`
+is the reviewed path/device/inode/SHA-256 descriptor of the abandoned operation's
+`repair-<UUID>.build-intent.json`. The installed incumbent validates its captured
+snapshot. Only its intent, original and witness files may exist: an origin
+observation, later build/preparation artifact, native guard or lifecycle effect
+refuses this action. The source journal and live incumbent remain bound unchanged.
+
+The owner durably records its move intent, archives the three exact inodes under
+`journal/retired-build-<UUID>/`, then emits `BUILD_RETIRED` and writes
+`retirement.json`. Replay the identical request after interruption. The retired
+UUID cannot be reused; ordinary adoption and a fresh repair operation follow.
+This action does not fetch, build, restart, change config or modify databases.
 
 ## Whole-closure adoption boundary
 

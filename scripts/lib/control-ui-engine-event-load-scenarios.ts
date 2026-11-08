@@ -11,6 +11,8 @@ import {
   type EngineScenario,
 } from "./control-ui-engine-boot-scenarios.ts";
 import { startEngineMeasurement } from "./control-ui-engine-metrics.ts";
+import type { EventLoadRow } from "./control-ui-event-load-producer.ts";
+import { createEventLoadWire } from "./control-ui-event-load-wire.ts";
 import { frames, navigation } from "./control-ui-interaction-navigation.ts";
 
 const foreground = "agent:main:interaction-a";
@@ -126,36 +128,22 @@ const eventLoadReferenceFields =
     " ",
   );
 
-/** Serialized after the existing mock: its subscription owner still decides delivery. */
+/** Observe native wire delivery; the external producer owns rows, history and subscriptions. */
 function installEventLoadProbe() {
-  const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
   let active = false;
   let started = 0;
   let loadDeadline = 0;
   let delivered = 0;
   let bytes = 0;
   let backgroundEvents = 0;
+  let backgroundReceipts = 0;
   let foregroundEvents = 0;
   let backgroundBytes = 0;
   let mutations = 0;
   let addedRows = 0;
-  let tools = 0;
-  let completedTools = 0;
-  let producerElapsedMs = 0;
-  let lateBackgroundEmissions = 0;
-  let backgroundReceipts = 0;
-  let targetBackgroundReceipts = 0;
-  let maxBackgroundSchedulerLagMs = 0;
-  let liveProvenAt = 0;
   let typingStartedAt = 0;
   let admitTypingTools = () => {};
   let admitScrollTools = () => {};
-  let foregroundCompletedAt = 0;
-  let settle: (() => void) | undefined;
-  let timer: ReturnType<typeof setInterval> | undefined;
-  let sequence = 0;
-  let latestText = "";
-  let displayedCheckpoint = 0;
   let phaseStart = 0;
   let phaseInput = 0;
   let phaseCommit = 0;
@@ -180,22 +168,23 @@ function installEventLoadProbe() {
   });
   channel.port1.start();
   const OriginalWebSocket = window.WebSocket;
+  let wire: WebSocket;
   let socketGeneration = 0;
+  let lastSequence = 0;
+  let currentSocket: WebSocket | undefined;
   let connectedGeneration = 0;
-  let socketRequestStart = 0;
-  const subscriptions = new Map<string, string>();
-  const subscriptionModes = new Map<string, string | undefined>();
   const socketCloses: Array<{ code: number; reason: string }> = [];
   window.WebSocket = new Proxy(OriginalWebSocket, {
     construct(target, args) {
-      socketRequestStart = gateway.requests.length;
       const socket: WebSocket = Reflect.construct(target, args);
+      currentSocket = socket;
       const generation = ++socketGeneration;
       socket.addEventListener("close", (event) => {
         if (connectedGeneration === generation) {
           connectedGeneration = 0;
-          subscriptions.clear();
-          subscriptionModes.clear();
+          if (wire !== undefined) {
+            wire.send(JSON.stringify({ eventLoadCommand: "disconnect" }));
+          }
         }
         if (socketCloses.length < 8) {
           socketCloses.push({ code: event.code, reason: event.reason });
@@ -206,9 +195,19 @@ function installEventLoadProbe() {
           const frame = JSON.parse(event.data) as { type?: string; payload?: { type?: string } };
           if (frame.type === "res" && frame.payload?.type === "hello-ok") {
             connectedGeneration = generation;
+            queueMicrotask(() =>
+              (window as MockGatewayWindow).openclawControlUiE2eGateway!.suspendLatest(),
+            );
+            if (wire !== undefined) {
+              wire.send(JSON.stringify({ eventLoadCommand: "connect" }));
+            }
           }
         }
         if (!active) {
+          const frame = JSON.parse(event.data) as { type?: string; seq?: number };
+          if (frame.type === "event" && frame.seq !== undefined) {
+            lastSequence = frame.seq;
+          }
           return;
         }
         const name = /"event":"([^"]+)"/u.exec(event.data)?.[1];
@@ -227,6 +226,12 @@ function installEventLoadProbe() {
         ) {
           backgroundEvents++;
           backgroundBytes += event.data.length;
+          if (
+            name === "session.message" ||
+            (name === "sessions.changed" && event.data.includes('"phase":"message"'))
+          ) {
+            backgroundReceipts++;
+          }
         }
         byEvent[name] = (byEvent[name] ?? 0) + 1;
         pending.push(performance.now());
@@ -293,33 +298,42 @@ function installEventLoadProbe() {
       max: sorted.at(-1) ?? 0,
     };
   };
-  let observedKeys: string[] = [];
-  const histories = new Map<string, unknown[]>();
-  const history = (key: string) => {
-    const row = gateway.getSessionRow(key);
-    const runId = Array.isArray(row?.activeRunIds) ? row.activeRunIds[0] : undefined;
-    return {
-      sessionId: row?.sessionId,
-      sessionInfo: row,
-      messages: histories.get(key) ?? [],
-      thinkingLevel: null,
-      // Match the existing mock's authoritative in-flight snapshot on history reads.
-      inFlightRun:
-        row?.hasActiveRun && typeof runId === "string"
-          ? { runId, text: "", startedAt: 1_800_000_400_000 }
-          : null,
-    };
+  let progress = {
+    tools: 0,
+    completedTools: 0,
+    backgroundReceipts: 0,
+    targetBackgroundReceipts: 0,
+    latestText: "",
+    displayedCheckpoint: 0,
   };
+  let settled: (() => void) | undefined;
   Reflect.set(window, "__eventLoad", {
-    start(options: {
-      count: number;
-      duration: number;
-      toolCount: number;
-      foreground: string;
-      background: string;
-      receiptDefaults: Record<string, unknown>;
-      referenceFields: string[];
-    }) {
+    async connect(url: string) {
+      wire = new OriginalWebSocket(url);
+      wire.addEventListener("message", (event: MessageEvent<string>) => {
+        if (event.data.startsWith('{"eventLoadProgress":')) {
+          const frame = JSON.parse(event.data);
+          progress = frame.eventLoadProgress;
+          if (frame.eventLoadSettled) {
+            settled?.();
+          }
+        } else if (currentSocket) {
+          // Native delivery already owns this task. The production client and receipt
+          // probes use EventTarget listeners; avoid the mock probe's timer queue.
+          EventTarget.prototype.dispatchEvent.call(
+            currentSocket,
+            new MessageEvent("message", { data: event.data }),
+          );
+        }
+      });
+      await new Promise<void>((resolve, reject) => {
+        wire.addEventListener("open", () => resolve(), { once: true });
+        wire.addEventListener("error", () => reject(new Error("Event-load wire failed")), {
+          once: true,
+        });
+      });
+    },
+    start(options: { duration: number }) {
       active = true;
       started = performance.now();
       loadDeadline = started + options.duration;
@@ -329,487 +343,11 @@ function installEventLoadProbe() {
         attributes: true,
         subtree: true,
       });
-      const keys = Array.from({ length: options.count }, (_, index) =>
-        index === 0 ? options.background : `agent:main:interaction-${index + 1}`,
-      );
-      observedKeys = [...new Set([options.foreground, options.background, ...keys])];
-      let foregroundMessageSeq = 400;
-      const initialMessages: Record<string, unknown>[] = Array.from(
-        { length: 400 },
-        (_, index) => ({
-          role: index % 2 === 0 ? "user" : "assistant",
-          content: `Transcript 0 message ${index}.\n${"Synthetic transcript detail.\n".repeat(4)}`,
-          timestamp: 1_800_000_000_000 + index * 1_000,
-          __openclaw: { id: `interaction-0-${index}`, seq: index + 1 },
-        }),
-      );
-      histories.set(options.foreground, initialMessages);
-      histories.set(options.background, [
-        {
-          role: "assistant",
-          content: "Event load checkpoint 0.",
-          timestamp: 1_800_000_000_000,
-          __openclaw: { id: "event-load-background-initial", seq: 1 },
-        },
-      ]);
-      const messageSequences = new Map<string, number>([[options.background, 1]]);
-      subscriptions.clear();
-      subscriptionModes.clear();
-      const recordSubscription = (method: string, params: unknown) => {
-        if (
-          method !== "sessions.messages.subscribe" &&
-          method !== "sessions.messages.unsubscribe"
-        ) {
-          return;
-        }
-        const input = params as { key: string; subscriptionId?: string; mode?: string };
-        const id = input.subscriptionId ?? input.key;
-        if (method === "sessions.messages.subscribe") {
-          subscriptions.set(id, input.key);
-          subscriptionModes.set(id, input.mode);
-        } else {
-          subscriptions.delete(id);
-          subscriptionModes.delete(id);
-        }
-      };
-      // Closed transports retire their leases without unsubscribe requests.
-      for (const request of gateway.requests.slice(socketRequestStart)) {
-        recordSubscription(request.method, request.params);
-      }
-      // A later subscription gets current authoritative history, not replayed offscreen deltas.
-      for (const method of ["chat.history", "chat.startup"]) {
-        gateway.setRequestHandler(method, ({ params, respond }) => {
-          const key = (params as { sessionKey?: string }).sessionKey ?? options.foreground;
-          respond(history(key));
-        });
-      }
-      gateway.setRequestHandler("sessions.messages.subscribe", ({ params, respond }) => {
-        const input = params as { key: string; initialHistory?: unknown };
-        recordSubscription("sessions.messages.subscribe", params);
-        respond({
-          key: input.key,
-          ...(input.initialHistory
-            ? { initialHistory: { ok: true, payload: history(input.key) } }
-            : {}),
-        });
-      });
-      gateway.setRequestHandler("sessions.messages.unsubscribe", ({ params, respond }) => {
-        recordSubscription("sessions.messages.unsubscribe", params);
-        respond({ ok: true });
-      });
-      const toolSnapshot = (key: string) => {
-        const row = gateway.getSessionRow(key);
-        const full: Record<string, unknown> = { ...options.receiptDefaults, ...row };
-        const fields = Object.fromEntries(
-          options.referenceFields
-            .filter((field) => full[field] !== undefined)
-            .map((field) => [field, full[field]]),
-        );
-        // Unlike roster deltas, the observed OpenClaw agent tool path carries a
-        // plain full row plus its duplicated event receipts (server-chat.ts).
-        return { ...options.receiptDefaults, ...fields, session: full };
-      };
-      // Each connection starts without row baselines, then advances the negotiated delta wire.
-      const wireRows = new Map<string, { version: number; row: Record<string, unknown> }>();
-      let wireGeneration = connectedGeneration;
-      const emitSnapshot = (
-        event: string,
-        envelope: Record<string, unknown>,
-        row: Record<string, unknown>,
-      ) => {
-        if (!connectedGeneration) {
-          return;
-        }
-        if (wireGeneration !== connectedGeneration) {
-          wireRows.clear();
-          wireGeneration = connectedGeneration;
-        }
-        const key = row.key as string;
-        const previous = wireRows.get(key);
-        const version = (previous?.version ?? 0) + 1;
-        const changed: Record<string, unknown> = {};
-        if (previous && previous.row !== row) {
-          for (const field of [
-            "updatedAt",
-            "snapshotAt",
-            "unread",
-            "lastMessageAt",
-            "lastMessagePreview",
-            "lastAssistantMessage",
-            "agentStatus",
-          ]) {
-            if (row[field] !== previous.row[field]) {
-              changed[field] = row[field];
-            }
-          }
-          if (row.hasActiveRun !== previous.row.hasActiveRun) {
-            changed.hasActiveRun = row.hasActiveRun;
-            changed.activeRunIds = row.activeRunIds;
-            changed.status = row.status;
-          }
-        }
-        const session = previous
-          ? { key, agentId: row.agentId, version, base: previous.version, set: changed, remove: [] }
-          : { key, agentId: row.agentId, version, full: row };
-        wireRows.set(key, { version, row });
-        // The wire contract indexes sorted defined fields of the reconstructed full
-        // row, not patch keys. Captured field names survive our fixture identities.
-        const fields = Object.keys(row)
-          .filter((field) => row[field] !== undefined)
-          .toSorted();
-        const references = options.referenceFields
-          .map((field) => fields.indexOf(field))
-          .filter((index) => index >= 0);
-        gateway.emit(event, {
-          ...options.receiptDefaults,
-          ...envelope,
-          agentStatus: row.agentStatus ?? null,
-          lastAssistantMessage: row.lastAssistantMessage ?? null,
-          session,
-          sessionFieldRefs: references,
-        });
-      };
-      const emitRow = (key: string, terminal: boolean, publishStatus: boolean, tick = 0) => {
-        const previous = gateway.getSessionRow(key);
-        const ts = 1_800_001_000_000 + ++sequence;
-        const text = `Event load checkpoint ${sequence} for ${key}.`;
-        const displayed = terminal || tick % 2 === 1;
-        const row = {
-          ...previous,
-          updatedAt: ts,
-          snapshotAt: ts,
-          hasActiveRun: !terminal,
-          activeRunIds: terminal ? [] : [`event-load-${key}`],
-          status: terminal ? "done" : "running",
-          unread: true,
-          lastMessagePreview: text,
-          ...(displayed ? { lastAssistantMessage: { text, timestamp: ts } } : {}),
-          ...(publishStatus ? { agentStatus: { note: text, expiresAt: ts + 60_000 } } : {}),
-        };
-        gateway.setSessionRow(row);
-        const envelope = {
-          sessionKey: key,
-          agentId: "main",
-          ...(terminal ? { runId: `event-load-${key}` } : {}),
-          ts,
-          ancestorSessions: [],
-        };
-        if (terminal || publishStatus) {
-          emitSnapshot(
-            "sessions.changed",
-            {
-              ...envelope,
-              reason: terminal ? "lifecycle" : "patch",
-              ...(terminal ? { phase: "end" } : {}),
-            },
-            row,
-          );
-        }
-        {
-          const messageSeq = (messageSequences.get(key) ?? 0) + 1;
-          messageSequences.set(key, messageSeq);
-          const id = `event-load-message-${key}-${messageSeq}`;
-          const toolCallId = `background-tool-${Math.ceil(tick / 2)}`;
-          const message = {
-            role: displayed ? "assistant" : "toolResult",
-            ...(displayed && !terminal ? { stopReason: "toolUse" } : {}),
-            ...(!displayed ? { toolName: "exec", toolCallId } : {}),
-            content:
-              displayed && !terminal
-                ? [
-                    { type: "text", text },
-                    {
-                      type: "toolCall",
-                      id: toolCallId,
-                      name: "exec",
-                      arguments: { command: "verify-background" },
-                    },
-                  ]
-                : [{ type: "text", text }],
-            timestamp: ts,
-            __openclaw: { id, seq: messageSeq, runId: `event-load-${key}` },
-          };
-          const messages = histories.get(key) ?? [];
-          messages.push(message);
-          histories.set(key, messages);
-          emitSnapshot(
-            displayed ? "session.message" : "sessions.changed",
-            {
-              ...envelope,
-              messageId: id,
-              messageSeq,
-              ...(!displayed ? { phase: "message" } : {}),
-              ...(displayed && [...subscriptions.values()].includes(key) ? { message } : {}),
-            },
-            row,
-          );
-          if (key === options.background) {
-            latestText = text;
-          }
-          if (key === options.background && displayed) {
-            displayedCheckpoint = sequence;
-          }
-          const subscribers = [...subscriptions].filter(([, candidate]) => candidate === key);
-          if (subscribers.length && !terminal) {
-            const full = subscribers.some(
-              ([subscriptionId]) => subscriptionModes.get(subscriptionId) !== "narration",
-            );
-            const start = tick % 2 === 1;
-            gateway.emit("agent", {
-              ...toolSnapshot(key),
-              sessionKey: key,
-              agentId: "main",
-              runId: `event-load-${key}`,
-              seq: ++sequence,
-              ts,
-              stream: "tool",
-              data: {
-                phase: start ? "start" : "result",
-                name: "exec",
-                toolCallId,
-                ...(full
-                  ? start
-                    ? { args: { command: "verify-background" } }
-                    : { result: { text } }
-                  : {}),
-              },
-            });
-            if (publishStatus) {
-              gateway.emit("session.narration", {
-                sessionKey: key,
-                agentId: "main",
-                runId: `event-load-${key}`,
-                text,
-              });
-            }
-          }
-        }
-      };
-      const backgroundSchedules = keys.map((key, index) => ({
-        key,
-        tick: 0,
-        next: started + (index * 500) / keys.length,
-      }));
-      const ticksPerSession = Math.floor(options.duration / 500);
-      targetBackgroundReceipts = keys.length * ticksPerSession;
-      const emitTool = (tool: number, data: Record<string, unknown>) =>
-        gateway.emit("agent", {
-          ...toolSnapshot(options.foreground),
-          sessionKey: options.foreground,
-          runId: "event-load-foreground",
-          stream: "tool",
-          seq: ++sequence,
-          ts: 1_800_001_000_000 + sequence,
-          data: { name: "exec", toolCallId: `event-load-tool-${tool}`, ...data },
-        });
-      const commitForegroundToolMessage = (tool: number, result: boolean) => {
-        const toolCallId = `event-load-tool-${tool}`;
-        const id = `event-load-${result ? "result" : "call"}-${tool}`;
-        const ts = 1_800_001_000_000 + ++sequence;
-        const text = `Tool ${tool} ${result ? "complete" : "started"}.`;
-        const messageSeq = ++foregroundMessageSeq;
-        const message = {
-          role: result ? "toolResult" : "assistant",
-          ...(!result ? { stopReason: "toolUse" } : {}),
-          ...(result ? { toolName: "exec", toolCallId } : {}),
-          content: result
-            ? [{ type: "text", text }]
-            : [
-                { type: "text", text },
-                {
-                  type: "toolCall",
-                  id: toolCallId,
-                  name: "exec",
-                  arguments: { command: `verify-event-load-${tool}` },
-                },
-              ],
-          timestamp: ts,
-          __openclaw: { id, seq: messageSeq, runId: "event-load-foreground" },
-        };
-        initialMessages.push(message);
-        const row = {
-          ...gateway.getSessionRow(options.foreground),
-          updatedAt: ts,
-          snapshotAt: ts,
-          lastMessagePreview: text,
-          ...(result ? { agentStatus: { note: text, expiresAt: ts + 60_000 } } : {}),
-        };
-        gateway.setSessionRow(row);
-        const envelope = {
-          sessionKey: options.foreground,
-          agentId: "main",
-          ancestorSessions: [],
-          ts,
-        };
-        // Hidden toolResult bodies advance the durable cursor through the same
-        // phase:message receipt used by server-session-events.ts.
-        emitSnapshot(
-          result ? "sessions.changed" : "session.message",
-          {
-            ...envelope,
-            messageId: id,
-            messageSeq,
-            ...(result ? { phase: "message" } : { message }),
-          },
-          row,
-        );
-      };
-      settle = () => {
-        for (const key of keys) {
-          emitRow(key, true, true);
-        }
-        if (!options.toolCount) {
-          return;
-        }
-        const text = "Event load foreground completed.";
-        const timestamp = 1_800_002_000_000;
-        const messageId = "event-load-final";
-        const messageSeq = ++foregroundMessageSeq;
-        const message = {
-          role: "assistant",
-          content: text,
-          timestamp,
-          stopReason: "stop",
-          __openclaw: {
-            id: messageId,
-            seq: messageSeq,
-            runId: "event-load-foreground",
-          },
-        };
-        histories.get(options.foreground)!.push(message);
-        gateway.setSessionRow({
-          ...gateway.getSessionRow(options.foreground),
-          status: "done",
-          hasActiveRun: false,
-          activeRunIds: [],
-          updatedAt: timestamp,
-          snapshotAt: timestamp,
-          lastMessageAt: timestamp,
-          lastMessagePreview: text,
-        });
-        const envelope = {
-          sessionKey: options.foreground,
-          agentId: "main",
-          runId: "event-load-foreground",
-          ts: timestamp,
-          ancestorSessions: [],
-        };
-        emitSnapshot(
-          "session.message",
-          {
-            ...envelope,
-            messageId,
-            messageSeq,
-            message,
-          },
-          gateway.getSessionRow(options.foreground),
-        );
-        gateway.emit("chat", {
-          sessionKey: options.foreground,
-          runId: "event-load-foreground",
-          seq: ++sequence,
-          state: "final",
-          stopReason: "stop",
-          message: { role: "assistant", content: [{ type: "text", text }], timestamp },
-        });
-        emitSnapshot(
-          "sessions.changed",
-          { ...envelope, phase: "end", reason: "lifecycle" },
-          gateway.getSessionRow(options.foreground),
-        );
-      };
-      // Delivery may be late, but a socket backlog preserves the producer's
-      // original ordering and lifetimes instead of restarting overdue tools.
-      const toolEvents: Array<{ tool: number; stage: number; at: number }> = [];
-      let toolEventIndex = 0;
-      const toolInterval =
-        Math.min(options.duration / 2, 6_000) / Math.max(1, options.toolCount - 1);
-      const firstWaveTools = Math.ceil(options.toolCount / 2);
-      let firstWaveLastStart = 0;
-      const scheduleTool = (tool: number, at: number, stages = 4) => {
-        for (let stage = 0; stage < stages; stage++) {
-          toolEvents.push({ tool, stage, at: at + stage * 40 });
-        }
-      };
-      const sortToolEvents = () => {
-        toolEvents.splice(0, toolEventIndex);
-        toolEventIndex = 0;
-        toolEvents.sort((left, right) => left.at - right.at);
-      };
-      if (options.toolCount) {
-        // Hold the first tool's proven live output until native typing begins.
-        scheduleTool(1, performance.now(), 3);
-      }
-      admitTypingTools = () => {
-        if (!options.toolCount) {
-          return;
-        }
-        const at = performance.now();
-        toolEvents.push({ tool: 1, stage: 3, at });
-        for (let tool = 2; tool <= firstWaveTools; tool++) {
-          scheduleTool(tool, at + (tool - 2) * toolInterval);
-        }
-        firstWaveLastStart = at + Math.max(0, firstWaveTools - 2) * toolInterval;
-        sortToolEvents();
-      };
-      admitScrollTools = () => {
-        // A sole first-wave tool was already running before typing began.
-        const at = Math.max(
-          performance.now(),
-          firstWaveTools === 1 ? 0 : firstWaveLastStart + toolInterval,
-        );
-        for (let tool = firstWaveTools + 1; tool <= options.toolCount; tool++) {
-          scheduleTool(tool, at + (tool - firstWaveTools - 1) * toolInterval);
-        }
-        sortToolEvents();
-      };
-      timer = setInterval(() => {
-        const producerStarted = performance.now();
-        const now = performance.now();
-        // Independent sessions have deterministic phases and a finite socket-like
-        // backlog. Drain at most one due receipt/session/tick; never drop final work.
-        for (const schedule of backgroundSchedules) {
-          if (schedule.tick >= ticksPerSession || now < schedule.next) {
-            continue;
-          }
-          const late = performance.now() - schedule.next;
-          if (late > 25) {
-            lateBackgroundEmissions++;
-          }
-          maxBackgroundSchedulerLagMs = Math.max(maxBackgroundSchedulerLagMs, late);
-          schedule.tick++;
-          backgroundReceipts++;
-          emitRow(schedule.key, false, schedule.tick % 4 === 0, schedule.tick);
-          schedule.next += 500;
-        }
-        while (toolEventIndex < toolEvents.length && toolEvents[toolEventIndex]!.at <= now) {
-          const { tool, stage } = toolEvents[toolEventIndex++]!;
-          if (stage === 0) {
-            tools++;
-            emitTool(tool, { phase: "start", args: { command: `verify-event-load-${tool}` } });
-            commitForegroundToolMessage(tool, false);
-          } else if (stage < 3) {
-            emitTool(tool, {
-              phase: "update",
-              partialResult: `Tool ${tool}: live output ${stage}\n`,
-            });
-          } else {
-            emitTool(tool, {
-              phase: "result",
-              result: { text: `Tool ${tool} complete.` },
-            });
-            completedTools++;
-            commitForegroundToolMessage(tool, true);
-          }
-        }
-        if (options.toolCount && completedTools === options.toolCount && !foregroundCompletedAt) {
-          foregroundCompletedAt = performance.now();
-        }
-        // Includes synchronous mock delivery and app handlers, so it is not subtractable CPU.
-        producerElapsedMs += performance.now() - producerStarted;
-      }, 20);
+      admitTypingTools = () => wire.send(JSON.stringify({ eventLoadCommand: "typing" }));
+      admitScrollTools = () => wire.send(JSON.stringify({ eventLoadCommand: "scroll" }));
     },
     phase(kind: string, target: string) {
+      performance.mark(`engine:event-load:${kind}:start`);
       phaseStart = performance.now();
       phaseInput = 0;
       phaseCommit = 0;
@@ -817,8 +355,8 @@ function installEventLoadProbe() {
       phaseTarget = target;
       phaseBackgroundEvents = backgroundEvents;
       phaseBackgroundReceipts = backgroundReceipts;
-      phaseTools = tools;
-      phaseCompletedTools = completedTools;
+      phaseTools = progress.tools;
+      phaseCompletedTools = progress.completedTools;
       cancelAnimationFrame(phaseFrame);
       const sample = () => {
         const host = document.querySelector(".chat-pane-cache__pane--active");
@@ -838,6 +376,7 @@ function installEventLoadProbe() {
       }
     },
     endPhase() {
+      performance.mark(`engine:event-load:${phaseKind}:end`);
       cancelAnimationFrame(phaseFrame);
       return {
         actionWallMs: performance.now() - phaseStart,
@@ -847,47 +386,45 @@ function installEventLoadProbe() {
         startedAfterMs: phaseStart - started,
         backgroundReceiptsAtEnd: backgroundReceipts,
         toolsAtStart: phaseTools,
-        toolsAtEnd: tools,
+        toolsAtEnd: progress.tools,
         completedToolsAtStart: phaseCompletedTools,
-        completedToolsAtEnd: completedTools,
+        completedToolsAtEnd: progress.completedTools,
         backgroundActiveAtStart:
-          phaseStart < loadDeadline && phaseBackgroundReceipts < targetBackgroundReceipts,
+          phaseStart < loadDeadline && phaseBackgroundReceipts < progress.targetBackgroundReceipts,
         backgroundActiveAtEnd:
-          performance.now() < loadDeadline && backgroundReceipts < targetBackgroundReceipts,
+          performance.now() < loadDeadline &&
+          progress.backgroundReceipts < progress.targetBackgroundReceipts,
       };
     },
     ready() {
       return {
-        tools,
-        completedTools,
+        tools: progress.tools,
+        completedTools: progress.completedTools,
         backgroundEvents,
         foregroundEvents,
         backgroundReceipts,
-        targetBackgroundReceipts,
+        targetBackgroundReceipts: progress.targetBackgroundReceipts,
         elapsed: performance.now() - started,
         phaseStartedAt: phaseStart,
         phaseInputAt: phaseInput,
-        latestText,
-        displayedCheckpoint,
+        latestText: progress.latestText,
+        displayedCheckpoint: progress.displayedCheckpoint,
         socketGeneration,
         connectedGeneration,
+        lastSequence,
         socketCloses,
       };
-    },
-    currentRows() {
-      return observedKeys.map((key) => gateway.getSessionRow(key));
-    },
-    liveProven() {
-      liveProvenAt = performance.now();
     },
     beginScroll() {
       admitScrollTools();
     },
     settle() {
-      settle?.();
+      return new Promise<void>((resolve) => {
+        settled = resolve;
+        wire.send(JSON.stringify({ eventLoadCommand: "settle" }));
+      });
     },
     finish() {
-      clearInterval(timer);
       const elapsed = performance.now() - started;
       active = false;
       observer.disconnect();
@@ -899,15 +436,10 @@ function installEventLoadProbe() {
         backgroundBytes,
         mutations,
         addedRows,
-        tools,
-        completedTools,
-        producerElapsedMs,
-        liveProofMs: liveProvenAt ? liveProvenAt - started : 0,
-        foregroundDrainMs: foregroundCompletedAt ? foregroundCompletedAt - started : 0,
-        lateBackgroundEmissions,
+        tools: progress.tools,
+        completedTools: progress.completedTools,
         backgroundReceipts,
-        targetBackgroundReceipts,
-        maxBackgroundSchedulerLagMs,
+        targetBackgroundReceipts: progress.targetBackgroundReceipts,
         socketsOpened: socketGeneration,
         socketsClosed: socketCloses.length,
         byEvent,
@@ -933,9 +465,14 @@ async function phase(page: Page, kind: string, action: () => Promise<unknown>, t
 export function createEngineEventLoadScenarios(
   duration = 240_000,
   toolCount = 200,
+  inventory = 1_000,
+  interactionsOnly = false,
 ): EngineScenario[] {
   return [-1, 0, 5, 20, 100].map((count) => {
-    let requestPage: Page;
+    let wire: Awaited<ReturnType<typeof createEventLoadWire>>;
+    let fixtureRows: Parameters<typeof createEventLoadWire>[0];
+    let heldRows = 0;
+    let toolPreparationMs = 0;
     let roster: ReturnType<typeof createTeamScaleSidebarListOwner>;
     return {
       id: count === -1 ? "event-load-unloaded" : `event-load-${count}`,
@@ -945,22 +482,32 @@ export function createEngineEventLoadScenarios(
       initScript: `${engineProbeInitScript()};(() => { const __name = (value) => value; (${installEventLoadProbe.toString()})(); })();`,
       settings: { chatShowToolCalls: true, sidebarLiveActivity: true, sidebarAgentsMode: "chip" },
       setup: async (page) => {
-        requestPage = page;
+        wire = await createEventLoadWire(fixtureRows);
+        page.once("close", () => {
+          void wire.close();
+        });
+        await page.exposeBinding("__eventLoadRequest", (_source, method: string, params: unknown) =>
+          wire.request(method, params),
+        );
       },
       createRequestHandlers: () => ({
         "sessions.list": async (params) => {
           if (!isRecord(params)) {
             throw new Error("Expected sessions.list parameters");
           }
-          const currentRows = await requestPage.evaluate(() =>
-            Reflect.get(window, "__eventLoad").currentRows(),
-          );
-          roster.apply({ upsert: currentRows });
+          roster.apply({ upsert: wire?.currentRows() ?? fixtureRows });
           return roster.list(params).result;
         },
       }),
       fixtureOverrides: (_sandbox, base) => {
-        const sessions = base.sessions.map<(typeof base.sessions)[number]>((input, index) => {
+        const sessions = Array.from({ length: inventory }, (_, index): EventLoadRow => {
+          const input = base.sessions[index] ?? {
+            ...base.sessions[2]!,
+            key: `agent:main:interaction-${index}`,
+            sessionId: `interaction-session-${index}`,
+            label: `Interaction ${String(index).padStart(4, "0")}`,
+            updatedAt: 1_800_000_000_000 - index * 1_000,
+          };
           const row = { ...eventLoadRowDefaults, ...input };
           return index === 0 && count >= 0
             ? {
@@ -978,6 +525,7 @@ export function createEngineEventLoadScenarios(
                 }
               : row;
         });
+        fixtureRows = sessions;
         roster = createTeamScaleSidebarListOwner({
           rows: sessions,
           viewerProfileId: "interaction-viewer",
@@ -987,6 +535,7 @@ export function createEngineEventLoadScenarios(
         });
         return {
           sessions,
+          webSocketPassthroughPrefixes: ["ws://localhost:"],
           sessionTranscripts: {
             [foreground]: {
               messages: createEngineTranscript(400),
@@ -1005,20 +554,89 @@ export function createEngineEventLoadScenarios(
       },
       prepare: async (page) => {
         await waitForEngineTranscript(page, 400);
+        const context = await getControlUiContextHandle(page);
+        try {
+          heldRows = await context.evaluate(async (app, limit) => {
+            await app.sessions.refresh({ limit, force: true });
+            return app.sessions.state.result?.sessions.length ?? 0;
+          }, inventory);
+        } finally {
+          await context.dispose();
+        }
+        if (heldRows !== inventory) {
+          throw new Error(`Expected ${inventory} held rows, received ${heldRows}`);
+        }
+        await page.evaluate(async (url) => {
+          await Reflect.get(window, "__eventLoad").connect(url);
+          const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+          // The external source owns this stream's sequence; retire the mock tick timer.
+          gateway.suspendLatest();
+          for (const method of [
+            "chat.history",
+            "chat.startup",
+            "sessions.describe",
+            "sessions.messages.subscribe",
+            "sessions.messages.unsubscribe",
+          ]) {
+            gateway.setRequestHandler(method, ({ params, respond }) => {
+              Reflect.get(window, "__eventLoadRequest")(method, params).then(
+                respond,
+                (error: unknown) =>
+                  respond({
+                    __mockError: { code: "EVENT_LOAD_REQUEST_FAILED", message: String(error) },
+                  }),
+              );
+            });
+          }
+        }, wire.url);
+        const initial = await page.evaluate(() => ({
+          requests: (window as MockGatewayWindow).openclawControlUiE2eGateway!.requests,
+          sequence: Reflect.get(window, "__eventLoad").ready().lastSequence as number,
+        }));
+        wire.start(
+          {
+            count: Math.max(0, count),
+            duration,
+            toolCount: count === -1 ? 0 : toolCount,
+            foreground,
+            background,
+            receiptDefaults: eventLoadReceiptDefaults,
+            referenceFields: eventLoadReferenceFields,
+          },
+          initial.requests,
+          initial.sequence,
+        );
+        const preparationStarted = performance.now();
+        if (count >= 0) {
+          await page.waitForFunction(() => Reflect.get(window, "__eventLoad").ready().tools > 0);
+          const summary = page
+            .locator(`${pane} .chat-tool-msg-summary[aria-expanded]`)
+            .filter({ hasText: "verify-event-load-1" });
+          await summary.waitFor({ state: "visible" });
+          if ((await summary.getAttribute("aria-expanded")) === "false") {
+            // This is fixture setup; keep the composer's native typing focus.
+            await summary.evaluate((element: HTMLElement) => element.click());
+          }
+          const tool = page
+            .locator(`${pane} .chat-tool-msg-collapse`)
+            .filter({ hasText: "verify-event-load-1" })
+            .first();
+          await tool.waitFor({ state: "visible" });
+          await tool
+            .getByText("Tool 1: live output 2", { exact: false })
+            .waitFor({ state: "visible" });
+        }
+        toolPreparationMs = performance.now() - preparationStarted;
+        await page.locator(composer).focus();
       },
       run: async (page) => {
         const requestsBefore = await page.evaluate(
           () => (window as MockGatewayWindow).openclawControlUiE2eGateway!.requests.length,
         );
         await page.evaluate((options) => Reflect.get(window, "__eventLoad").start(options), {
-          count: Math.max(0, count),
           duration,
-          toolCount: count === -1 ? 0 : toolCount,
-          foreground,
-          background,
-          receiptDefaults: eventLoadReceiptDefaults,
-          referenceFields: eventLoadReferenceFields,
         });
+        wire.startBackground();
         const evidence: Record<string, number | boolean> = {};
         const recordPhase = (
           name: string,
@@ -1052,29 +670,12 @@ export function createEngineEventLoadScenarios(
           }
         };
         try {
-          if (count >= 0) {
-            await page.waitForFunction(() => Reflect.get(window, "__eventLoad").ready().tools > 0);
-            const summary = page
-              .locator(`${pane} .chat-tool-msg-summary[aria-expanded]`)
-              .filter({ hasText: "verify-event-load-1" });
-            await summary.waitFor({ state: "visible" });
-            if ((await summary.getAttribute("aria-expanded")) === "false") {
-              await summary.press("Enter");
-            }
-            const tool = page
-              .locator(`${pane} .chat-tool-msg-collapse`)
-              .filter({ hasText: "verify-event-load-1" })
-              .first();
-            await tool.waitFor({ state: "visible" });
-            await tool
-              .getByText("Tool 1: live output 2", { exact: false })
-              .waitFor({ state: "visible" });
-            await page.evaluate(() => Reflect.get(window, "__eventLoad").liveProven());
-            evidence.liveToolOutputVisible = true;
-          }
           const text = "Event load typing preserves every character.";
           const typing = await phase(page, "typing", async () => {
-            await page.locator(composer).pressSequentially(text, { delay: 35 });
+            await page.locator(composer).pressSequentially(text, {
+              delay: 35,
+              timeout: Math.max(30_000, duration),
+            });
             await frames(page);
           });
           evidence.typingActionWallMs = typing.actionWallMs;
@@ -1272,98 +873,113 @@ export function createEngineEventLoadScenarios(
           if (idleMetrics.scriptMs !== null) {
             evidence.idleScriptMs = idleMetrics.scriptMs;
           }
-          const key = count > 0 ? background : "agent:main:interaction-b";
-          const checkpoint = await page.evaluate(
-            () => Reflect.get(window, "__eventLoad").ready().displayedCheckpoint,
-          );
-          const switching = await phase(
-            page,
-            "session",
-            async () => {
-              await navigation(page, "sessions");
-              if (count > 0) {
-                await page.waitForFunction((sessionKey) => {
-                  const row = document.querySelector(
-                    `.sidebar-recent-session[data-session-key="${sessionKey}"]`,
-                  );
-                  return (
-                    row?.classList.contains("session-row-host--running") &&
-                    [...row.querySelectorAll(".sr-only[id]")].some((state) =>
-                      state.textContent?.includes("Unread"),
-                    )
-                  );
-                }, key);
-                evidence.activeStatusUnreadVisible = true;
-              }
-              await page
-                .locator(
-                  `.sidebar-recent-session[data-session-key="${key}"] .sidebar-recent-session__link`,
-                )
-                .click();
-              await page.waitForFunction(
-                (target) =>
-                  Reflect.get(
-                    document.querySelector(".chat-pane-cache__pane--active") ?? {},
-                    "sessionKey",
-                  ) === target,
-                key,
-              );
-              if (count > 0) {
+          if (!interactionsOnly) {
+            const key = count > 0 ? background : "agent:main:interaction-b";
+            const checkpoint = await page.evaluate(
+              () => Reflect.get(window, "__eventLoad").ready().displayedCheckpoint,
+            );
+            const switching = await phase(
+              page,
+              "session",
+              async () => {
+                await navigation(page, "sessions");
+                if (count > 0) {
+                  await page.waitForFunction((sessionKey) => {
+                    const row = document.querySelector(
+                      `.sidebar-recent-session[data-session-key="${sessionKey}"]`,
+                    );
+                    return (
+                      row?.classList.contains("session-row-host--running") &&
+                      [...row.querySelectorAll(".sr-only[id]")].some((state) =>
+                        state.textContent?.includes("Unread"),
+                      )
+                    );
+                  }, key);
+                  evidence.activeStatusUnreadVisible = true;
+                }
+                await page
+                  .locator(
+                    `.sidebar-recent-session[data-session-key="${key}"] .sidebar-recent-session__link`,
+                  )
+                  .click();
                 await page.waitForFunction(
-                  ({ key: sessionKey, checkpoint: expectedCheckpoint }) =>
-                    [
-                      ...document.querySelectorAll(".chat-pane-cache__pane--active .chat-text"),
-                    ].some((element) => {
-                      const match = /Event load checkpoint (\d+) for ([^.]+)\./u.exec(
-                        element.textContent ?? "",
-                      );
-                      return (
-                        match?.[2] === sessionKey &&
-                        Number(match[1]) >= expectedCheckpoint &&
-                        expectedCheckpoint > 0
-                      );
-                    }),
-                  { key, checkpoint },
+                  (target) =>
+                    Reflect.get(
+                      document.querySelector(".chat-pane-cache__pane--active") ?? {},
+                      "sessionKey",
+                    ) === target,
+                  key,
                 );
-              }
-              await frames(page);
-            },
-            key,
-          );
-          evidence.sessionSwitchActionWallMs = switching.actionWallMs;
-          recordPhase("sessionSwitch", switching);
-          if (switching.applicationMs !== undefined) {
-            evidence.sessionSwitchApplicationMs = switching.applicationMs;
-          }
-          const route = await phase(
-            page,
-            "route",
-            async () => {
-              await navigation(page, "pages");
-              await page.locator('.sidebar-pages a[href="/usage"]').click();
-              await page.locator("openclaw-usage-page .usage-page").waitFor({ state: "visible" });
-              await frames(page);
-            },
-            "openclaw-usage-page .usage-page",
-          );
-          evidence.routeSwitchActionWallMs = route.actionWallMs;
-          recordPhase("routeSwitch", route);
-          if (route.applicationMs !== undefined) {
-            evidence.routeSwitchApplicationMs = route.applicationMs;
+                if (count > 0) {
+                  await page.waitForFunction(
+                    ({ key: sessionKey, checkpoint: expectedCheckpoint }) =>
+                      [
+                        ...document.querySelectorAll(".chat-pane-cache__pane--active .chat-text"),
+                      ].some((element) => {
+                        const match = /Event load checkpoint (\d+) for ([^.]+)\./u.exec(
+                          element.textContent ?? "",
+                        );
+                        return (
+                          match?.[2] === sessionKey &&
+                          Number(match[1]) >= expectedCheckpoint &&
+                          expectedCheckpoint > 0
+                        );
+                      }),
+                    { key, checkpoint },
+                  );
+                }
+                await frames(page);
+              },
+              key,
+            );
+            evidence.sessionSwitchActionWallMs = switching.actionWallMs;
+            recordPhase("sessionSwitch", switching);
+            if (switching.applicationMs !== undefined) {
+              evidence.sessionSwitchApplicationMs = switching.applicationMs;
+            }
+            const route = await phase(
+              page,
+              "route",
+              async () => {
+                await navigation(page, "pages");
+                await page.locator('.sidebar-pages a[href="/usage"]').click();
+                await page.locator("openclaw-usage-page .usage-page").waitFor({ state: "visible" });
+                await frames(page);
+              },
+              "openclaw-usage-page .usage-page",
+            );
+            evidence.routeSwitchActionWallMs = route.actionWallMs;
+            recordPhase("routeSwitch", route);
+            if (route.applicationMs !== undefined) {
+              evidence.routeSwitchApplicationMs = route.applicationMs;
+            }
           }
         } finally {
+          const offered = wire.finish();
           const result = await page.evaluate(() => Reflect.get(window, "__eventLoad").finish());
           Object.assign(evidence, {
+            sessionInventory: inventory,
+            heldSessionRows: heldRows,
+            navigationMeasured: !interactionsOnly,
             backgroundSessions: Math.max(0, count),
+            producerOutsideRenderer: true,
+            offeredFrames: offered.offeredFrames,
+            offeredBackgroundFrames: offered.offeredBackgroundFrames,
+            offeredBytes: offered.offeredBytes,
+            offeredBackgroundHz: (offered.backgroundReceipts ?? 0) / (result.elapsed / 1_000),
+            offeredBackgroundFrameHz: offered.offeredBackgroundFrames / (result.elapsed / 1_000),
+            receivedBackgroundFrameHz: result.backgroundEvents / (result.elapsed / 1_000),
+            pendingBackgroundFrames: offered.offeredBackgroundFrames - result.backgroundEvents,
             foregroundTools: result.tools,
             completedTools: result.completedTools,
-            producerElapsedMs: result.producerElapsedMs,
-            liveProofMs: result.liveProofMs,
-            foregroundDrainMs: result.foregroundDrainMs,
-            lateBackgroundEmissions: result.lateBackgroundEmissions,
+            producerElapsedMs: offered.producerElapsedMs ?? 0,
+            toolPreparationMs,
+            liveToolOutputVisible: count >= 0,
+            foregroundDrainMs: offered.foregroundDrainMs ?? 0,
+            lateBackgroundEmissions: offered.lateBackgroundEmissions ?? 0,
             backgroundReceipts: result.backgroundReceipts,
             targetBackgroundReceipts: result.targetBackgroundReceipts,
-            maxBackgroundSchedulerLagMs: result.maxBackgroundSchedulerLagMs,
+            maxBackgroundSchedulerLagMs: offered.maxBackgroundSchedulerLagMs ?? 0,
             socketsOpened: result.socketsOpened,
             socketsClosed: result.socketsClosed,
             achievedBackgroundHz: result.backgroundReceipts / (result.elapsed / 1_000),
@@ -1411,7 +1027,7 @@ export function createEngineEventLoadScenarios(
           throw new Error("Event load typing sent a message");
         }
         evidence.inputPreserved = true;
-        evidence.switchHistoryCurrent = count > 0;
+        evidence.switchHistoryCurrent = !interactionsOnly && count > 0;
         return evidence;
       },
     };

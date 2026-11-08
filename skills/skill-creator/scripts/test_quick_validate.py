@@ -23,14 +23,11 @@ class TestQuickValidate(TestCase):
 
     def test_accepts_crlf_frontmatter(self):
         content = "---\r\nname: crlf-skill\r\ndescription: ok\r\n---\r\n# Skill\r\n"
-        valid, message = self.validate_content(content)
-        self.assertTrue(valid, message)
+        self.assertTrue(*self.validate_content(content))
 
     def test_rejects_missing_frontmatter_closing_fence(self):
         content = "---\nname: bad-skill\ndescription: missing end\n# no closing fence\n"
-        valid, message = self.validate_content(content)
-        self.assertFalse(valid)
-        self.assertEqual(message, "Invalid frontmatter format")
+        self.assertEqual(self.validate_content(content), (False, "Invalid frontmatter format"))
 
     def test_fallback_parser_handles_multiline_frontmatter_without_pyyaml(self):
         content = """---
@@ -63,8 +60,7 @@ metadata: |
             for description, expected in cases:
                 with self.subTest(description=description):
                     rendered = content.replace("DESCRIPTION", description)
-                    valid, message = self.validate_content(rendered)
-                    self.assertEqual(valid, expected, message)
+                    self.assertEqual(self.validate_content(rendered)[0], expected, description)
 
     def test_rejects_blank_name_or_description(self):
         cases = [
@@ -75,11 +71,10 @@ metadata: |
         ]
         for name, description, expected in cases:
             with self.subTest(name=name, description=description):
-                valid, message = self.validate_content(
-                    f"---\nname: {name}\ndescription: {description}\n---\n# Skill\n"
+                self.assertEqual(
+                    self.validate_content(f"---\nname: {name}\ndescription: {description}\n---\n# Skill\n"),
+                    (False, expected),
                 )
-                self.assertFalse(valid)
-                self.assertEqual(message, expected)
 
     def test_fallback_distinguishes_inline_comments_from_scalar_content(self):
         cases = [
@@ -98,6 +93,12 @@ metadata: |
             ("comment-skill", "'Summarize user''s # <reports>' # notes", False),
             ("comment-skill", "Summarize#<reports>", False),
             ("comment-skill", "|\n  Summarize # <reports>", False),
+            ("comment-skill", "Summarize\n  reports # <notes>", True),
+            ("comment-skill", "\n  Summarize reports # <notes>", True),
+            ("comment-skill", "Summarize\n  reports # " + "x" * 1024, True),
+            ("comment-skill", 'Summarize\n  "reports # <notes>', True),
+            ("comment-skill", '"Summarize\n  reports # <content>"', False),
+            ("comment-skill", '\n  "Summarize # <content>"', False),
         ]
         with patch.object(quick_validate, "yaml", None):
             for name, description, expected in cases:
@@ -119,8 +120,7 @@ command-arg-mode: raw
 ---
 # Skill
 """
-        valid, message = self.validate_content(content)
-        self.assertTrue(valid, message)
+        self.assertTrue(*self.validate_content(content))
 
 
 if __name__ == "__main__":

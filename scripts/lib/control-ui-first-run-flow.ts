@@ -157,7 +157,19 @@ export async function runControlUiFirstRunFlow(
   page.on("websocket", observeSocket);
   const submit = () =>
     page.locator(wizard).getByRole("button", { name: "Submit", exact: true }).click();
-  const wait = (selector: string) => page.locator(selector).first().waitFor({ state: "visible" });
+  const wait = (selector: string) =>
+    page.waitForFunction(
+      (target) => {
+        const element = document.querySelector(target);
+        if (!element || getComputedStyle(element).visibility === "hidden") {
+          return false;
+        }
+        const bounds = element.getBoundingClientRect();
+        return bounds.width > 0 && bounds.height > 0;
+      },
+      selector,
+      { polling: "raf" },
+    );
   try {
     const choice = 'openclaw-model-setup-page [data-auth-choice="custom-api-key"] button';
     await measure(
@@ -411,13 +423,11 @@ export async function runControlUiFirstRunFlow(
       "first-message-reply",
       async () => {
         await page.locator(send).click();
-        await page
-          .locator(reply)
-          .getByText("Synthetic first-run reply.", { exact: true })
-          .waitFor();
+        await wait(`${reply} p`);
+        assert.equal(await page.locator(`${reply} p`).textContent(), "Synthetic first-run reply.");
         await wait(`${composer}:not([disabled])`);
       },
-      `${reply} p`,
+      `body:has(${reply} p) ${composer}:not([disabled])`,
     );
 
     const assistantGroup = ".chat-pane-cache__pane--active .chat-group.assistant";
@@ -437,11 +447,11 @@ export async function runControlUiFirstRunFlow(
       "second-message-reply",
       async () => {
         await page.locator(send).click();
-        await page.locator(nextReply).waitFor();
+        await wait(nextReply);
         assert.equal(await page.locator(nextReply).textContent(), "Synthetic first-run reply.");
         await wait(`${composer}:not([disabled])`);
       },
-      nextReply,
+      `body:has(${nextReply}) ${composer}:not([disabled])`,
     );
 
     return {

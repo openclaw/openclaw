@@ -2790,14 +2790,16 @@ prepare_retained_repair() {
 		[[ ("$enabled" == disabled || "$enabled" == not-found) && "$active" == inactive ]] ||
 			fail 'retained repair preparation requires disabled inactive deployment timers'
 	done
-	binding="$("$node_bin" -e 'const [operation,target,current,pid,generation,journalSha256,configSha256]=process.argv.slice(1);process.stdout.write(JSON.stringify({operation,target,current,pid:Number(pid),generation,journalSha256,...(configSha256?{configSha256}:{})}));' \
-		"$repair_operation" "$requested_sha" "$operator_expected_sha" "$operator_expected_pid" "$operator_expected_generation" "$repair_journal_hash" "${repair_config_hash:-}")"
+	# Freeze once under the deployment lock before selecting the new intent's target.
+	freeze_origin_main
+	binding="$("$node_bin" -e 'const [operation,target,current,pid,generation,journalSha256,configSha256,frozenMain]=process.argv.slice(1);process.stdout.write(JSON.stringify({operation,target,current,pid:Number(pid),generation,journalSha256,...(configSha256?{configSha256}:{}),...(target==="main"?{frozenMain}:{})}));' \
+		"$repair_operation" "$requested_sha" "$operator_expected_sha" "$operator_expected_pid" "$operator_expected_generation" "$repair_journal_hash" "${repair_config_hash:-}" "$frozen_main")"
 	request="$(printf '%s' "$binding" | proof retained-repair-build request "$serving_root" @stdin)"
+	requested_sha="$(printf '%s' "$request" | "$node_bin" -e 'let s="";process.stdin.on("data",v=>s+=v).on("end",()=>process.stdout.write(JSON.parse(s).target.sha));')"
 	printf '%s' "$request" | proof retained-repair-build begin "$serving_root" @stdin >/dev/null
 	operation="$("$node_bin" -e 'process.stdout.write(JSON.stringify({operation:process.argv[1]}));' "$repair_operation")"
 	# Never waive the ordinary pending-journal gate: this separate owner binds it.
-	# Existing fetch/build/prewarm/seal owners run in ordinary errexit context.
-	freeze_origin_main
+	# Existing build/prewarm/seal owners run in ordinary errexit context.
 	printf '%s' "$operation" | proof retained-repair-build origin "$serving_root" @stdin >/dev/null
 	# A replay may see newer official main. The original exact C remains pinned.
 	frozen_main="$requested_sha"
@@ -4298,7 +4300,7 @@ if [[ "$mode" == retained-repair || "$mode" == retire-retained-repair ]]; then o
 
 if [[ "$mode" == prepare-retained-repair ]]; then
 	[[ "$repair_operation" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ &&
-		"$requested_sha" =~ ^[a-f0-9]{40}$ && "$operator_expected_sha" =~ ^[a-f0-9]{40}$ &&
+		( "$requested_sha" == main || "$requested_sha" =~ ^[a-f0-9]{40}$ ) && "$operator_expected_sha" =~ ^[a-f0-9]{40}$ &&
 		"$requested_sha" != "$operator_expected_sha" && "$operator_expected_pid" =~ ^[1-9][0-9]*$ &&
 		"$operator_expected_generation" =~ ^[1-9][0-9]*$ && "$repair_journal_hash" =~ ^[a-f0-9]{64}$ &&
 		-z "$reconcile_config_hash" && "$start_stopped_current" == 0 ]] || fail 'invalid retained repair incident binding'
