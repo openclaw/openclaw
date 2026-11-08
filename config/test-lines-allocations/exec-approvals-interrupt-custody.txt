@@ -1,0 +1,2 @@
+110
+# Exec approvals interrupt custody: ambient-signal identity on pending/get/grants-list/resolve-lookup reads, silent cancellation, config-fallback rethrow, and the resolve mutation boundary. Folded into the existing pending-resolve suite (no new test file); exact net growth +110 (132 added / 22 removed).

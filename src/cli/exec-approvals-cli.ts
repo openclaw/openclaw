@@ -43,6 +43,7 @@ import { classifyExecAllowlistScope } from "../infra/exec-command-resolution.js"
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   EXEC_APPROVALS_STDIN_MAX_BYTES,
   formatCliError,
@@ -130,15 +131,6 @@ async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string |
   return await resolveCliNodeId(opts, nodeTarget);
 }
 
-async function loadSnapshot(
-  opts: ExecApprovalsCliOpts,
-  nodeId: string | null,
-): Promise<ExecApprovalsSnapshot> {
-  const method = nodeId ? "exec.approvals.node.get" : "exec.approvals.get";
-  const params = nodeId ? { nodeId } : {};
-  return (await callGatewayFromCli(method, opts, params)) as ExecApprovalsSnapshot;
-}
-
 function isFileApprovalsSnapshot(
   snapshot: ExecApprovalsSnapshot,
 ): snapshot is FileExecApprovalsSnapshot {
@@ -156,6 +148,13 @@ function parseNativeAction(value: unknown, label: string): NativeExecApprovalAct
     return value;
   }
   throw new Error(`${label} must be allow, deny, or prompt.`);
+}
+
+async function loadSnapshot(opts: ExecApprovalsCliOpts, nodeId: string | null, ambient = true) {
+  const method = nodeId ? "exec.approvals.node.get" : "exec.approvals.get";
+  const params = nodeId ? { nodeId } : {};
+  const extra = { signal: ambient ? getAsyncWorkSignal() : undefined };
+  return (await callGatewayFromCli(method, opts, params, extra)) as ExecApprovalsSnapshot;
 }
 
 async function loadSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
@@ -214,7 +213,9 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
       native: params.native,
       baseHash: params.baseHash,
     });
-    next = await loadSnapshot(params.opts, params.nodeId);
+    // The readback belongs to the mutation, not to ambient cancellation: the write above may
+    // already have landed, and cancelling this read would hide that result from the operator.
+    next = await loadSnapshot(params.opts, params.nodeId, false);
   } else if (params.source === "local") {
     // Announced at the write, not at target resolution: no-op allowlist edits and
     // rejected `set` input never reach here and must not claim a write happened.
@@ -363,7 +364,7 @@ async function loadPendingApprovals(
   // The owner-specific list methods retain requester filtering unless the caller is an admin.
   // Request admin explicitly so this operator command cannot silently omit live approvals.
   const listCall = (method: string) =>
-    callGatewayFromCli(method, opts, {}, { scopes: [ADMIN_SCOPE] });
+    callGatewayFromCli(method, opts, {}, { scopes: [ADMIN_SCOPE], signal: getAsyncWorkSignal() });
   const [exec, plugin, systemAgent] = await Promise.all([
     listCall("exec.approval.list"),
     listCall("plugin.approval.list"),
@@ -414,16 +415,15 @@ async function loadConfigForApprovalsTarget(params: {
       "config.get",
       params.opts,
       {},
+      { signal: getAsyncWorkSignal() },
     )) as ConfigSnapshotLike;
     return {
       config: snapshot.config && typeof snapshot.config === "object" ? snapshot.config : null,
       timedOut: false,
     };
   } catch (err) {
-    return {
-      config: null,
-      timedOut: /^gateway timeout after \d+ms\b/i.test(formatCliError(err)),
-    };
+    getAsyncWorkSignal()?.throwIfAborted();
+    return { config: null, timedOut: /^gateway timeout after \d+ms\b/i.test(formatCliError(err)) };
   }
 }
 
@@ -751,9 +751,7 @@ export function registerExecApprovalsCli(program: Command) {
         // own (canReviewOperatorApproval), and forcing a local identity onto a
         // loopback token/password session can trigger pairing for an otherwise
         // authorized credential.
-        const approvalCallOptions = {
-          scopes: [ADMIN_SCOPE, APPROVALS_SCOPE] as OperatorScope[],
-        };
+        const approvalCallOptions = { scopes: [ADMIN_SCOPE, APPROVALS_SCOPE] as OperatorScope[] };
 
         const lookupOne = async (id: string, tolerateNotFound = false) => {
           try {
@@ -761,7 +759,7 @@ export function registerExecApprovalsCli(program: Command) {
               "approval.get",
               opts,
               { id },
-              approvalCallOptions,
+              { ...approvalCallOptions, signal: getAsyncWorkSignal() },
             )) as ApprovalGetResult;
           } catch (error) {
             if (
@@ -889,6 +887,7 @@ export function registerExecApprovalsCli(program: Command) {
           "exec.approval.grants.list",
           opts,
           limit !== undefined ? { limit } : {},
+          { signal: getAsyncWorkSignal() },
         )) as ExecApprovalGrantsListResult; // SAFETY: matches ExecApprovalGrantsListResultSchema.
         if (opts.json) {
           defaultRuntime.writeJson(result, 0);
