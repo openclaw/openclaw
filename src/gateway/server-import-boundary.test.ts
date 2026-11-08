@@ -11,6 +11,15 @@ const graph = createRuntimeImportGraph(
     "src/gateway/server-methods/sessions-create.ts",
     "src/gateway/server-methods/chat-send-external-entry.ts",
     "src/gateway/worker-environments/local-workspace-prewarm.ts",
+    "src/agents/embedded-agent-runner/run/attempt-setup.ts",
+    "src/worker/inference-stream.runtime.ts",
+    "src/agents/embedded-agent-runner/run/attempt.ts",
+    "src/agents/embedded-agent-runner/run-orchestrator.ts",
+    "src/process/spawn-broker/worker.ts",
+    "src/agents/embedded-agent.runtime.ts",
+    "src/auto-reply/reply/agent-runner-run.ts",
+    "src/auto-reply/reply/session-updates.ts",
+    "src/agents/command/attempt-execution.ts",
   ],
   { sourceImports: true },
 );
@@ -19,9 +28,12 @@ afterAll(() => graph.close());
 function collectStaticValueImports(entryRelativePath: string): string[] {
   const files = new Set([entryRelativePath]);
   for (const file of files) {
-    for (const { specifier, resolvedFileName } of graph.dependencies(file)) {
-      if (specifier.startsWith(".") && resolvedFileName) {
-        files.add(path.relative(repoRoot, resolvedFileName));
+    for (const { resolvedFileName } of graph.dependencies(file)) {
+      if (resolvedFileName) {
+        const relative = path.relative(repoRoot, resolvedFileName);
+        if (!relative.startsWith("..") && !relative.split(path.sep).includes("node_modules")) {
+          files.add(relative);
+        }
       }
     }
   }
@@ -29,6 +41,34 @@ function collectStaticValueImports(entryRelativePath: string): string[] {
 }
 
 describe("gateway startup import boundaries", () => {
+  it.each([
+    "src/agents/embedded-agent-runner/run/attempt.ts",
+    "src/agents/embedded-agent-runner/run-orchestrator.ts",
+    "src/agents/embedded-agent.runtime.ts",
+    "src/auto-reply/reply/agent-runner-run.ts",
+    "src/auto-reply/reply/session-updates.ts",
+    "src/agents/command/attempt-execution.ts",
+  ])("prepares %s without loading sandbox execution", (entry) => {
+    expect(collectStaticValueImports(entry)).not.toContain(
+      path.normalize("src/agents/sandbox/context.ts"),
+    );
+  });
+
+  it("starts the command broker without loading the execa runtime", () => {
+    expect(collectStaticValueImports("src/process/spawn-broker/worker.ts")).not.toContain(
+      path.normalize("src/process/spawn-broker/execa-worker.ts"),
+    );
+  });
+
+  it.each([
+    "src/agents/embedded-agent-runner/run/attempt-setup.ts",
+    "src/worker/inference-stream.runtime.ts",
+  ])("prepares %s without loading the computer tool runtime", (entry) => {
+    expect(collectStaticValueImports(entry)).not.toContain(
+      path.normalize("src/agents/tools/computer-tool.ts"),
+    );
+  });
+
   it("keeps sandbox workspace preparation out of the prewarm selection graph", () => {
     const modules = collectStaticValueImports(
       "src/gateway/worker-environments/local-workspace-prewarm.ts",

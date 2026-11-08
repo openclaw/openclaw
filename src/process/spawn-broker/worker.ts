@@ -9,7 +9,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
 import { spawnInAgentExecCgroup } from "../linux-exec-cgroup.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score-spawn.js";
-import { waitForBrokerChildCompletion } from "./child-completion.js";
+import { disposeFailedChild, waitForBrokerChildCompletion } from "./child-completion.js";
 import {
   drainCurrentBrokerProcessGroup,
   isBrokerChildGroupAlive,
@@ -17,7 +17,7 @@ import {
   type BrokerChildGroupIdentity,
 } from "./cleanup.js";
 import { createBrokerExecaAdmissionFailure } from "./execa-protocol.js";
-import { startBrokerExeca, type BrokerExecaProcess } from "./execa-worker.js";
+import type { BrokerExecaProcess } from "./execa-worker.js";
 import { prepareProcessOutputFile } from "./file-output.js";
 import { createBrokerReceiver } from "./ipc.js";
 import { holdPipeForTransfer, takePipePrefix } from "./pipe.js";
@@ -196,23 +196,6 @@ function shutdown(): void {
   })();
 }
 
-function disposeFailedChild(child: ChildProcess | undefined): void {
-  if (!child) {
-    return;
-  }
-  // Setup can fail before Node emits its queued spawn error.
-  child.once("error", () => {});
-  if (child.pid && child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGKILL");
-  }
-  if (child.connected) {
-    child.disconnect();
-  }
-  for (const stream of child.stdio ?? []) {
-    stream?.destroy();
-  }
-}
-
 async function readFile(message: Extract<BrokerRequest, { type: "read-file" }>): Promise<void> {
   const pending = { canceled: false, controller: new AbortController() };
   try {
@@ -319,10 +302,17 @@ async function launch(
           launchGrants.delete(message.id);
         }
       }
-      const execa =
-        message.type === "spawn-execa"
-          ? await startBrokerExeca(message.argv, message.options, assertActive, message.execCgroup)
-          : undefined;
+      let execa: BrokerExecaProcess | undefined;
+      if (message.type === "spawn-execa") {
+        const { startBrokerExeca } = await import("./execa-worker.js");
+        assertActive();
+        execa = await startBrokerExeca(
+          message.argv,
+          message.options,
+          assertActive,
+          message.execCgroup,
+        );
+      }
       const outputStdio = destination?.stdio;
       const child =
         execa?.child ??
