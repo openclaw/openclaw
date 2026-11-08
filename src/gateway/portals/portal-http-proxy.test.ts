@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import {
   createServer,
@@ -10,8 +11,10 @@ import {
 } from "node:http";
 import net from "node:net";
 import { duplexPair, type Duplex } from "node:stream";
+import { runInNewContext } from "node:vm";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { JSDOM } from "jsdom";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { readRequestText } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { mockIpv4OnlyLocalhostLookup } from "../../../test/helpers/loopback-dns.js";
@@ -61,8 +64,18 @@ async function expectEcho(socket: WebSocket, message: string) {
 
 function expectWaiting(result: HttpResult, port: number) {
   expect(result.status).toBe(502);
-  expect(result.body).toContain(`Waiting for the app on port ${port}…`);
-  expect(result.body).toContain('http-equiv="refresh" content="2"');
+  expect(result.headers["x-openclaw-portal-status"]).toBe("waiting");
+  expect(result.body).toContain("Waiting for the app</h1>");
+  expect(result.body).toContain(`This page opens as soon as port ${port} answers.`);
+  expect(result.body).not.toContain('http-equiv="refresh"');
+  for (const tag of ["style", "script"]) {
+    const content = result.body.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))?.[1];
+    expect(content).toBeTruthy();
+    const hash = createHash("sha256").update(content!).digest("base64");
+    expect(result.headers["content-security-policy"]).toContain(`${tag}-src 'sha256-${hash}'`);
+  }
+  expect(result.headers["content-security-policy"]).toContain("connect-src 'self'");
+  expect(result.headers["content-security-policy"]).not.toContain("unsafe-inline");
 }
 
 function cookieTarget(value: string, received: Array<string | undefined> = []) {
@@ -190,7 +203,16 @@ describe("portal HTTP proxy", () => {
 
     const unauthorized = await httpCall(portal);
     expect(unauthorized.status).toBe(401);
-    expect(unauthorized.body).toContain("This portal is private");
+    expect(unauthorized.body).toContain("This portal is private</h1>");
+    expect(unauthorized.body).toContain('aria-label="OpenClaw"');
+    expect(unauthorized.body).toContain('aria-hidden="true"');
+    expect(unauthorized.body).not.toContain("<script>");
+    expect(unauthorized.body).toContain("color-scheme:light");
+    expect(unauthorized.body).not.toContain("prefers-color-scheme");
+    const head = await httpCall(portal, "/", { method: "HEAD" });
+    expect(head.status).toBe(401);
+    expect(head.body).toBe("");
+    expect(head.headers["content-length"]).toBe(String(Buffer.byteLength(unauthorized.body)));
     expect(unauthorized.body).not.toContain(portal.tokenQuery);
     expect(unauthorized.headers["referrer-policy"]).toBe("no-referrer");
 
@@ -203,6 +225,63 @@ describe("portal HTTP proxy", () => {
     const cookieOnly = await authenticatedCall(portal, "/cookie?y=2");
     expect(cookieOnly).toMatchObject({ status: 200, body: "proxied" });
     expect(targetPaths).toEqual(["/preview?x=1", "/cookie?y=2"]);
+  });
+
+  it("keeps a waiting document mounted, explains a delayed app, and resumes after navigation", async () => {
+    const portal = await openPortal({
+      target: workerTarget(async () => {
+        throw new Error("Worker unavailable");
+      }),
+    });
+    const result = await authenticatedCall(portal);
+    const dom = new JSDOM(result.body);
+    const events = new EventTarget();
+    const reload = vi.fn();
+    const fetch = vi.fn<typeof globalThis.fetch>(
+      async () =>
+        new Response("", { status: 502, headers: { "X-OpenClaw-Portal-Status": "waiting" } }),
+    );
+    vi.useFakeTimers();
+    try {
+      runInNewContext(dom.window.document.querySelector("script")!.textContent!, {
+        document: dom.window.document,
+        location: { href: "https://preview.example.test/app#section", reload },
+        fetch,
+        setTimeout,
+        clearTimeout,
+        AbortController,
+        addEventListener: events.addEventListener.bind(events),
+      });
+      await vi.advanceTimersByTimeAsync(46_000);
+      expect(fetch).toHaveBeenCalledTimes(7);
+      expect(reload).not.toHaveBeenCalled();
+      expect(dom.window.document.getElementById("portal-status")?.textContent).toBe(
+        `The app is still unavailable. Check that it’s running on port ${target.port}.`,
+      );
+      expect(fetch.mock.calls[0]).toEqual([
+        "https://preview.example.test/app#section",
+        expect.objectContaining({
+          cache: "no-store",
+          credentials: "same-origin",
+          redirect: "manual",
+        }),
+      ]);
+      const pending = createDeferredCore<Response>();
+      fetch.mockImplementationOnce(() => pending.promise);
+      await vi.advanceTimersByTimeAsync(15_000);
+      events.dispatchEvent(new Event("pagehide"));
+      expect(fetch.mock.calls.at(-1)?.[1]?.signal?.aborted).toBe(true);
+      pending.reject(new Error("Aborted"));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fetch).toHaveBeenCalledTimes(8);
+      fetch.mockResolvedValueOnce(new Response("App error page", { status: 502 }));
+      events.dispatchEvent(new Event("pageshow"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reload).toHaveBeenCalledOnce();
+    } finally {
+      dom.window.close();
+      vi.useRealTimers();
+    }
   });
 
   it.for(["unauthorized", "unavailable", "unknown"] as const)(

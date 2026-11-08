@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   IncomingHttpHeaders,
   IncomingMessage,
@@ -9,6 +10,9 @@ import net from "node:net";
 import type { Duplex } from "node:stream";
 import { createLoopbackConnectOptions } from "../../infra/loopback-connect.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
+import { escapeHtml } from "../../shared/html-escape.js";
+import { openClawMascotStyles, renderOpenClawMascot } from "../../shared/openclaw-mascot.js";
+import { openClawWordmarkTextSvg } from "../../shared/openclaw-wordmark.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 
 const PORTAL_AUTH_NAME = "openclaw_portal";
@@ -193,6 +197,86 @@ function setProxyResponseHeader(
   }
 }
 
+// Keep the standalone page on the Gateway status page's light tokens and geometry.
+const PORTAL_PAGE_STYLES = `:root{color-scheme:light;--bg:#f8f8f8;--text:#353535;--text-strong:#202020;--muted:#5e5e5e;--mascot-ground:radial-gradient(closest-side,rgb(32 32 32/.16),rgb(32 32 32/.06) 60%,transparent);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.55;letter-spacing:-.01em;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}body{margin:0;background:var(--bg)}
+.shell{display:flex;min-height:100svh}.content{position:relative;display:flex;flex-direction:column;flex:1;min-width:0}
+.topbar{display:flex;align-items:flex-start;justify-content:center;padding:14.5px 12px 0}.wordmark{display:block;width:105px;height:32px;color:var(--text-strong)}
+main{position:relative;flex:1;min-height:calc(100svh - 64px)}
+.body{position:absolute;top:38%;left:50%;width:min(460px,calc(100% - 48px));transform:translateX(-50%);text-align:center}
+h1{position:relative;margin:0;color:var(--text-strong);font-size:22px;font-weight:600;line-height:28px;letter-spacing:-.01em;text-wrap:balance}
+p{margin:6px 0 0;color:var(--muted);font-size:14px;line-height:21px;text-wrap:pretty}
+@media(max-width:768px),(max-width:932px) and (max-height:500px) and (orientation:landscape){.content{padding:0 4px}.body{top:36%;left:24px;right:24px;width:auto;transform:none}h1{font-size:20px;line-height:26px}}
+${openClawMascotStyles({
+  busy: "[data-portal-waiting] .mascot",
+  error: "body:not([data-portal-waiting]) .mascot",
+  phone:
+    "@media(max-width:768px),(max-width:932px) and (max-height:500px) and (orientation:landscape)",
+})}`;
+
+// Like Gateway startup recovery, keep the document mounted while its endpoint is unavailable.
+const PORTAL_RECOVERY_SCRIPT = `(() => {
+  const status = document.getElementById("portal-status");
+  let timer, controller, attempts = 0, stopped = false;
+  async function check() {
+    if (controller || stopped) return;
+    clearTimeout(timer);
+    controller = new AbortController();
+    const timeout = setTimeout(() => controller?.abort(), 6000);
+    try {
+      const response = await fetch(location.href, {
+        cache: "no-store", credentials: "same-origin", redirect: "manual",
+        headers: { Accept: "text/html" }, signal: controller.signal,
+      });
+      await response.body?.cancel();
+      if (stopped) return;
+      // An app can answer with its own error or redirect; only our waiting page retries.
+      if (response.headers.get("X-OpenClaw-Portal-Status") !== "waiting") {
+        stopped = true;
+        location.reload();
+        return;
+      }
+    } catch {
+      // A failed request does not establish whether the app or its worker is still starting.
+    } finally {
+      clearTimeout(timeout);
+      controller = undefined;
+      if (!stopped) {
+        if (++attempts >= 6) status.textContent = "The app is still unavailable. Check that it’s running on port " + document.body.dataset.portalWaiting + ".";
+        timer = setTimeout(check, Math.min(15000, 1000 * 2 ** Math.min(attempts - 1, 4)));
+      }
+    }
+  }
+  addEventListener("pageshow", () => { if (stopped) { stopped = false; void check(); } });
+  addEventListener("online", check);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) void check(); });
+  addEventListener("pagehide", () => { stopped = true; clearTimeout(timer); controller?.abort(); });
+  timer = setTimeout(check, 1000);
+})();`;
+
+const PORTAL_PAGE_CSP = [
+  "default-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  `style-src 'sha256-${createHash("sha256").update(PORTAL_PAGE_STYLES).digest("base64")}'`,
+  `script-src 'sha256-${createHash("sha256").update(PORTAL_RECOVERY_SCRIPT).digest("base64")}'`,
+  "connect-src 'self'",
+].join("; ");
+
+function portalStatusHtml(targetPort?: number): string {
+  const waiting = targetPort !== undefined;
+  const port = escapeHtml(String(targetPort));
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>${waiting ? "Waiting for app" : "Private portal"}</title><style>${PORTAL_PAGE_STYLES}</style></head>
+<body${waiting ? ` data-portal-waiting="${port}"` : ""}><div class="shell"><div class="content">
+<header class="topbar">${openClawWordmarkTextSvg}</header><main><div class="body">
+<h1>${renderOpenClawMascot("openclaw-mascot-shell")}${waiting ? "Waiting for the app" : "This portal is private"}</h1>
+<p id="portal-status"${waiting ? ' role="status" aria-live="polite"' : ""}>${waiting ? `This page opens as soon as port ${port} answers.` : "Open it from the OpenClaw Control UI."}</p>
+${waiting ? "<noscript><p>Reload this page after the app starts.</p></noscript>" : ""}
+</div></main></div></div>${waiting ? `<script>${PORTAL_RECOVERY_SCRIPT}</script>` : ""}</body></html>`;
+}
+
 function htmlResponse(
   res: ServerResponse,
   statusCode: number,
@@ -205,25 +289,17 @@ function htmlResponse(
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", PORTAL_REFERRER_POLICY);
   res.setHeader("Content-Length", String(Buffer.byteLength(html)));
+  res.setHeader("Content-Security-Policy", PORTAL_PAGE_CSP);
   res.end(headOnly ? undefined : html);
 }
 
 function respondPortalUnauthorized(req: IncomingMessage, res: ServerResponse): void {
-  const html =
-    "<!doctype html><meta charset=utf-8><title>Private portal</title>" +
-    "<p>This portal is private. Open it from the OpenClaw Control UI.</p>";
-  htmlResponse(res, 401, html, req.method === "HEAD");
-}
-
-function portalWaitingHtml(targetPort: number): string {
-  return (
-    '<!doctype html><meta charset=utf-8><meta http-equiv="refresh" content="2">' +
-    `<title>Waiting for app</title><p>Waiting for the app on port ${targetPort}…</p>`
-  );
+  htmlResponse(res, 401, portalStatusHtml(), req.method === "HEAD");
 }
 
 function respondPortalWaiting(req: IncomingMessage, res: ServerResponse, targetPort: number): void {
-  htmlResponse(res, 502, portalWaitingHtml(targetPort), req.method === "HEAD");
+  res.setHeader("X-OpenClaw-Portal-Status", "waiting");
+  htmlResponse(res, 502, portalStatusHtml(targetPort), req.method === "HEAD");
 }
 
 async function connectPortalTarget(target: PortalTarget): Promise<Duplex> {
@@ -451,8 +527,14 @@ function rejectPortalUpgrade(socket: Duplex): void {
 function respondUpgradeWaiting(socket: Duplex, targetPort: number): void {
   rejectWebSocketUpgrade(socket, {
     status: 502,
-    body: { contentType: "text/html; charset=utf-8", text: portalWaitingHtml(targetPort) },
-    headers: { "Cache-Control": "no-store", "Referrer-Policy": PORTAL_REFERRER_POLICY },
+    body: { contentType: "text/html; charset=utf-8", text: portalStatusHtml(targetPort) },
+    headers: {
+      "Cache-Control": "no-store",
+      "Referrer-Policy": PORTAL_REFERRER_POLICY,
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": PORTAL_PAGE_CSP,
+      "X-OpenClaw-Portal-Status": "waiting",
+    },
   });
 }
 
