@@ -8,6 +8,7 @@ import {
   ThinkingLevel,
 } from "@google/genai";
 import {
+  isGoogleGemini31ProPreviewModel,
   isGoogleGemini3ProModel,
   isGoogleGemini3ThinkingLevelModel,
 } from "../internal/google-model-family.js";
@@ -190,10 +191,15 @@ export function buildGoogleGenerationConfig(
       } else if (thinking.budgetTokens !== undefined) {
         if (isGoogleGemini3ThinkingLevelModel(model.id) && thinking.budgetTokens >= 0) {
           const budget = thinking.budgetTokens;
-          thinkingConfig.thinkingLevel = getGoogleThinkingLevel(
-            budget === 0 ? "minimal" : budget <= 2048 ? "low" : budget <= 8192 ? "medium" : "high",
-            model,
-          );
+          const effort =
+            budget === 0
+              ? "minimal"
+              : budget <= 2048
+                ? "low"
+                : budget <= 8192 && !isGoogleGemini3ProModel(model.id)
+                  ? "medium"
+                  : "high";
+          thinkingConfig.thinkingLevel = getGoogleThinkingLevel(effort, model);
         } else {
           thinkingConfig.thinkingBudget = thinking.budgetTokens;
         }
@@ -346,6 +352,9 @@ function getGoogleThinkingLevel(
 ): ThinkingLevel {
   const lowEffort = effort === "minimal" || effort === "low";
   if (isGoogleGemini3ProModel(model.id)) {
+    if (effort === "medium" && isGoogleGemini31ProPreviewModel(model.id)) {
+      return ThinkingLevel.MEDIUM;
+    }
     return lowEffort ? ThinkingLevel.LOW : ThinkingLevel.HIGH;
   }
   if (isGemma4Model(model)) {

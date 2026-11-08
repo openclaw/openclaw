@@ -7,6 +7,7 @@ import type {
   ProviderFastModePolicyContext,
 } from "openclaw/plugin-sdk/provider-model-types";
 import {
+  isGoogleGemini31ProPreviewModel,
   isGoogleGemini3ProModel,
   isGoogleGemini3ThinkingLevelModel,
 } from "openclaw/plugin-sdk/provider-thinking-runtime";
@@ -155,19 +156,21 @@ export function resolveGoogleThinkingProfile({
     return undefined;
   }
 
-  const levels: ProviderThinkingProfile["levels"] = isGoogleGemini3ProModel(normalizedModelId)
-    ? [{ id: "off" }, { id: "low" }, { id: "adaptive" }, { id: "high" }]
-    : [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "adaptive" },
-        { id: "high" },
-      ];
+  const isPro = isGoogleGemini3ProModel(normalizedModelId);
+  const isGemini31ProPreview = isGoogleGemini31ProPreviewModel(normalizedModelId);
+  const levels: ProviderThinkingProfile["levels"] = [
+    { id: "off" },
+    ...(isPro ? [] : [{ id: "minimal" } as const]),
+    { id: "low" },
+    ...(!isPro || isGemini31ProPreview ? [{ id: "medium" } as const] : []),
+    { id: "adaptive" },
+    { id: "high" },
+  ];
 
   return {
     levels,
+    // Keep the provider-selected default when the caller has not chosen an effort.
+    ...(isGemini31ProPreview && reasoning ? { defaultLevel: "adaptive" } : {}),
     ...(isGemini3ThinkingModel ? { preserveWhenCatalogReasoningFalse: true } : {}),
   };
 }

@@ -239,6 +239,9 @@ a fixed OpenClaw level. Gemini 3 and Gemini 4 omit a fixed `thinkingLevel` so
 Google can choose the level; Gemini 2.5 sends Google's dynamic sentinel
 `thinkingBudget: -1`.
 
+Gemini 3.1 Pro Preview accepts `/think medium` as a fixed thinking level.
+With no effort selected, OpenClaw uses `adaptive` for this reasoning model.
+
 Gemini 4 Argon supports `low`, `medium`, and `high`. OpenClaw maps `minimal` and
 `off` to `low`, because thinking cannot be fully disabled on this model.
 

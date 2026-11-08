@@ -116,6 +116,12 @@ describe("Google transport thinking config", () => {
       options: { thinking: { enabled: true, level: "MINIMAL" } },
       expected: { includeThoughts: true, thinkingLevel: "LOW" },
     },
+    {
+      name: "Gemini 3.1 Pro keeps the legacy numeric budget mapping",
+      model: { id: "gemini-3.1-pro-preview" },
+      options: { thinking: { enabled: true, budgetTokens: 8192 } },
+      expected: { includeThoughts: true, thinkingLevel: "HIGH" },
+    },
     ...[
       { id: "gemini-2.5-flash-lite", reasoning: "minimal", thinkingBudget: 512 },
       { id: "gemini-2.5-flash-lite", reasoning: "low", thinkingBudget: 2048 },
@@ -155,11 +161,11 @@ describe("google thinking policy", () => {
     ["off", "LOW"],
     ["minimal", "LOW"],
     ["low", "LOW"],
-    ["medium", "HIGH"],
+    ["medium", "MEDIUM"],
     ["adaptive", undefined],
     ["high", "HIGH"],
     ["xhigh", "HIGH"],
-  ] as const)("maps Gemini 3 Pro thinking level %s to %s", (thinkingLevel, expected) => {
+  ] as const)("maps Gemini 3.1 Pro thinking level %s to %s", (thinkingLevel, expected) => {
     expect(
       resolveGoogleGemini3ThinkingLevel({
         modelId: "gemini-3.1-pro-preview",
@@ -188,6 +194,9 @@ describe("google thinking policy", () => {
     ["gemini-flash-latest", "adaptive", undefined],
     ["gemini-flash-latest", "high", "HIGH"],
     ["gemini-flash-latest", "xhigh", "HIGH"],
+    ["gemini-3-pro-preview", "medium", "HIGH"],
+    ["gemini-3.1-pro-high", "medium", "HIGH"],
+    ["models/gemini-3.1-pro-preview-customtools", "medium", "MEDIUM"],
     ["gemini-3.6-flash", "off", "MINIMAL"],
     ["gemini-3.6-flash", "minimal", "MINIMAL"],
     ["gemini-3.7-flash", "off", "LOW"],

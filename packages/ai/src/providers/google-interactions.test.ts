@@ -840,6 +840,11 @@ describe("google-interactions provider", () => {
       expected: { thinking_level: "minimal", thinking_summaries: "none" },
     },
     {
+      modelId: "gemini-3.1-pro-preview",
+      reasoning: "medium" as const,
+      expected: { thinking_level: "medium", thinking_summaries: "auto" },
+    },
+    {
       modelId: "gemini-3-flash-preview",
       reasoning: "adaptive" as never,
       expected: { thinking_summaries: "auto" },

@@ -1,6 +1,7 @@
 import { MODEL_CATALOG_THINKING_LEVELS } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
 export {
+  isGoogleGemini31ProPreviewModel,
   isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
   isGoogleGemini3ThinkingLevelModel,
