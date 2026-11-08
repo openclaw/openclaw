@@ -17,6 +17,11 @@ available from the package root and focused subpaths such as
 `@openclaw/ai/event-stream`, `@openclaw/ai/transports`, and
 `@openclaw/ai/validation`. No second OpenClaw runtime package is required.
 
+The Node package bundles the reachable OpenAI and `ws` runtime code to reduce
+startup module-file loading. Their licenses ship in `dist/openai.LICENSE` and
+`dist/ws.LICENSE`. Other provider SDKs and TypeBox retain their existing external
+dependency identities.
+
 Provider ids, credentials, model catalogs, retries, and failover remain
 application concerns. OpenClaw supplies those policies around this package.
 Host policy (request fetch guarding, secret redaction, strict-tool defaults,

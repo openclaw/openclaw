@@ -41,6 +41,7 @@ import {
   readLegacySessionStoreEntries,
   shouldFilterLegacySessionRecordsByTarget,
 } from "./legacy-store-inspection.js";
+import { isExistingLegacySessionStore } from "./legacy-store-source.js";
 import { SessionStoreMigrationRequiredError } from "./migration-required.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { isCanonicalSqliteSessionMainKeyCurrent } from "./session-canonical-key-read.js";
@@ -77,8 +78,8 @@ export function assertSessionStoreMigrationComplete(params: {
     const sourcePath = path.resolve(target.storePath);
     sourcesByPath.set(sourcePath, [...(sourcesByPath.get(sourcePath) ?? []), target]);
   }
-  const legacySources = [...sourcesByPath].filter(
-    ([storePath]) => !storePath.endsWith(".sqlite") && fs.existsSync(storePath),
+  const legacySources = [...sourcesByPath].filter(([storePath]) =>
+    isExistingLegacySessionStore(storePath),
   );
   if (legacySources.length === 0) {
     return;

@@ -9,6 +9,7 @@ import {
   type ConfigSnapshotReadOptions,
 } from "../config/io.js";
 import type { PreparedConfigRecovery } from "../config/io.types.js";
+import { isExistingLegacySessionStore } from "../config/sessions/legacy-store-source.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
@@ -288,12 +289,10 @@ async function assertStartupStateReady(params: {
     () => admissionMetrics,
   );
   const [
-    { assertSessionStoreMigrationComplete },
     { resolveAllAgentSessionStoreCandidateTargetsSync },
     { inspectOpenClawRegisteredAgentDatabases },
   ] = await measureDoctorConfigPreflightStep("admission.session-runtime-import", () =>
     Promise.all([
-      import("../config/sessions/startup-migration.js"),
       import("../config/sessions/targets.js"),
       import("../state/openclaw-agent-db-registry.js"),
     ]),
@@ -320,7 +319,17 @@ async function assertStartupStateReady(params: {
   );
   await measureDoctorConfigPreflightStep(
     "admission.session-readiness",
-    () => assertSessionStoreMigrationComplete({ ...params, targets }),
+    async () => {
+      // Clean profiles do not need the legacy source inspector and its schema graph.
+      if (!targets.some(({ storePath }) => isExistingLegacySessionStore(storePath))) {
+        return;
+      }
+      const { assertSessionStoreMigrationComplete } = await measureDoctorConfigPreflightStep(
+        "admission.session-migration-runtime-import",
+        () => import("../config/sessions/startup-migration.js"),
+      );
+      assertSessionStoreMigrationComplete({ ...params, targets });
+    },
     undefined,
     () => ({ targetCount: targets.length }),
   );
