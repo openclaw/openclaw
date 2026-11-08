@@ -8,6 +8,7 @@ function corners(circular: string, superelliptical: string, selectors: string) {
 }
 
 const CORNER_CASES = [
+  ...corners("3px", "3px", ".field .oc-checkbox"),
   ...corners("10px", "12.5px", ".btn, .nav-item"),
   ...corners("16px", "20px", ".slash-menu, .chat-reply-context-menu"),
   ...corners(
@@ -31,11 +32,22 @@ const ALL_CASES = [
   ...corners("9999px", "9999px", ".chip, .statusDot"),
   ...corners("10px", "10px", ".run-inspector__panel, .settings-segmented"),
   ...corners("14px", "17.5px", ".chat"),
+  ...corners(
+    "3px",
+    "3px",
+    ".chat-text .task-list-item-checkbox, .chat-thinking .task-list-item-checkbox, .round-checkbox",
+  ),
+  ...corners("2px", "2px", ".square-checkbox"),
 ];
 
 // Nested fixtures match the real DOM; keep non-opted descendants and menu items nested.
 const markup = `<main>
   <div class="chat">Chat</div>
+  <label class="field"><input class="oc-checkbox" type="checkbox" checked />Choice</label>
+  <div class="chat-text"><input class="task-list-item-checkbox" type="checkbox" checked disabled /></div>
+  <div class="chat-thinking"><input class="task-list-item-checkbox" type="checkbox" disabled /></div>
+  <label style="--radius-sm: 2px"><input class="oc-checkbox square-checkbox" type="checkbox" /></label>
+  <label style="--radius-sm: 12px"><input class="oc-checkbox round-checkbox" type="checkbox" /></label>
   <button class="btn" type="button">Send</button><div class="card">Surface</div>
   <section class="option-card" role="group"><div class="option-card__choices"><button type="button" class="option-card__choice">Choice</button></div></section>
   <div class="exec-approval-card">Surface</div><div class="agent-chat__input agent-chat__input--dictating">Surface</div>
@@ -72,6 +84,7 @@ const ROOT_RADIUS_TOKENS = {
 const css = readStyles(
   "styles/base",
   "styles/components",
+  "styles/checkbox",
   "styles/layout",
   "styles/option-card",
   "styles/chat/startup-layout",
