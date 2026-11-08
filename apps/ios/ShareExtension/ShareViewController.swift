@@ -156,7 +156,8 @@ final class ShareViewController: UIViewController {
                 token: config.token,
                 password: config.password),
             connectOptions: ShareGatewayRelaySettings.connectOptions(gatewayStableID: config.gatewayStableID),
-            sessionBox: config.webSocketSessionBox(),
+            sessionBox: ShareGatewayRelaySettings.webSocketSessionBox(
+                tlsFingerprintSHA256: config.tlsFingerprintSHA256),
             extraHeadersProvider: { try ShareGatewayRelaySettings.currentCustomHeaders(for: config) },
             onConnected: {},
             onDisconnected: { _ in },

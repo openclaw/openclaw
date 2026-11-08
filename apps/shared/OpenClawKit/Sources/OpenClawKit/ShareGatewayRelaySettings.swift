@@ -35,20 +35,20 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
         self.tlsFingerprintSHA256 = tlsFingerprintSHA256
         self.customHeaders = customHeaders
     }
+}
 
-    public func webSocketSessionBox() -> WebSocketSessionBox {
+public enum ShareGatewayRelaySettings {
+    public static func webSocketSessionBox(tlsFingerprintSHA256: String?) -> WebSocketSessionBox {
         WebSocketSessionBox(session: GatewayTLSPinningSession(
             params: GatewayTLSParams(
                 required: true,
-                expectedFingerprint: self.tlsFingerprintSHA256,
+                expectedFingerprint: tlsFingerprintSHA256,
                 allowTOFU: false,
                 storeKey: nil),
             allowsRedirects: false,
             allowsStoredCredentials: false))
     }
-}
 
-public enum ShareGatewayRelaySettings {
     private static let relayConfigKey = "share.gatewayRelay.config.v1"
     // On iOS an App Group is also a Keychain access group. Reuse the existing
     // group so the host and extension share only this credential bundle.

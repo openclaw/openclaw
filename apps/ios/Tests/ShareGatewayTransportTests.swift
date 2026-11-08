@@ -43,7 +43,8 @@ struct ShareGatewayTransportTests {
                     includeDeviceIdentity: true,
                     allowStoredDeviceAuth: false,
                     deviceAuthGatewayID: loaded.gatewayStableID),
-                sessionBox: loaded.webSocketSessionBox(),
+                sessionBox: ShareGatewayRelaySettings.webSocketSessionBox(
+                    tlsFingerprintSHA256: loaded.tlsFingerprintSHA256),
                 extraHeadersProvider: { try ShareGatewayRelaySettings.currentCustomHeaders(for: loaded) },
                 onConnected: {},
                 onDisconnected: { _ in },

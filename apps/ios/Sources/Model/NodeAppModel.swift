@@ -4192,7 +4192,14 @@ extension NodeAppModel {
                 operatorGateway: self.operatorGateway,
                 url: config.url,
                 gatewayStableID: config.nodeOptions.deviceAuthGatewayID ?? stableID,
-                sessionBox: config.webSocketSessionBox())
+                sessionBox: ShareGatewayRelaySettings.webSocketSessionBox(
+                    tlsFingerprintSHA256: config.tls?.expectedFingerprint),
+                extraHeadersProvider: {
+                    try await MainActor.run {
+                        guard shouldContinue() else { throw CancellationError() }
+                        return GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: stableID)
+                    }
+                })
         } catch {
             guard shouldContinue() else { return }
             ShareGatewayRelaySettings.saveLastEvent(
