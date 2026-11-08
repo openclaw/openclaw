@@ -1,0 +1,3 @@
+# Rendered Signal quote-ID/UUID regressions through public ingress, formatter and native/tool/CLI consumers;
+# preserve edit, last-entry debounce and quote-visibility/identity-alias contracts in the existing owner suite.
+432

@@ -3,13 +3,17 @@ import {
   resolveInboundSupplementalSenderAllowed,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asPositiveSafeInteger,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   formatSignalSenderDisplay,
   isSignalSenderAllowed,
+  looksLikeUuid,
   resolveSignalSender,
 } from "../identity.js";
-import type { SignalDataMessage } from "./event-handler.types.js";
+import type { SignalDataMessage, SignalQuoteContext } from "./event-handler.types.js";
 
 export function resolveSignalQuoteContext(params: {
   cfg: Parameters<typeof resolveChannelContextVisibilityMode>[0]["cfg"];
@@ -23,10 +27,15 @@ export function resolveSignalQuoteContext(params: {
     channel: "signal",
     accountId: params.accountId,
   });
-  const quoteText = normalizeOptionalString(params.dataMessage?.quote?.text) ?? "";
+  const quote = params.dataMessage?.quote;
+  const quoteText = normalizeOptionalString(quote?.text) ?? "";
+  const author = normalizeOptionalString(quote?.author);
+  // signal-cli's legacy author is a number when known, otherwise a bare UUID.
+  const authorIsUuid = author ? looksLikeUuid(author) : false;
   const quoteSender = resolveSignalSender({
-    sourceNumber: params.dataMessage?.quote?.author ?? null,
-    sourceUuid: params.dataMessage?.quote?.authorUuid ?? null,
+    sourceNumber:
+      normalizeOptionalString(quote?.authorNumber) ?? (authorIsUuid ? undefined : author),
+    sourceUuid: normalizeOptionalString(quote?.authorUuid) ?? (authorIsUuid ? author : undefined),
   });
   const quoteSenderAllowed = resolveInboundSupplementalSenderAllowed({
     isGroup: params.isGroup,
@@ -35,17 +44,21 @@ export function resolveSignalQuoteContext(params: {
     isSenderAllowed: (allowFrom) =>
       quoteSender ? isSignalSenderAllowed(quoteSender, allowFrom) : false,
   });
-  const visibleQuote = filterChannelInboundQuoteContext(contextVisibilityMode, {
+  const quoteId = asPositiveSafeInteger(quote?.id);
+  const filteredQuote = filterChannelInboundQuoteContext(contextVisibilityMode, {
+    id: quoteId === undefined ? undefined : String(quoteId),
     body: quoteText,
     sender: quoteSender ? formatSignalSenderDisplay(quoteSender) : undefined,
     senderAllowed: quoteSenderAllowed,
     isQuote: true,
   });
+  const visibleQuote: SignalQuoteContext | undefined = filteredQuote?.body
+    ? { id: filteredQuote.id, body: filteredQuote.body, sender: filteredQuote.sender }
+    : undefined;
 
   return {
     contextVisibilityMode,
     quoteSenderAllowed,
-    visibleQuoteText: visibleQuote?.body ?? "",
-    visibleQuoteSender: visibleQuote?.sender,
+    visibleQuote,
   };
 }

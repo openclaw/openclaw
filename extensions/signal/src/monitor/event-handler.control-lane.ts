@@ -11,6 +11,7 @@ import {
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SignalIngressLifecycle } from "../signal-ingress.js";
+import type { SignalQuoteContext } from "./event-handler.types.js";
 
 export type SignalInboundEntry = {
   /** Admission and buffered dispatch share this receipt-time snapshot. */
@@ -33,9 +34,7 @@ export type SignalInboundEntry = {
   commandAuthorized: boolean;
   canDetectMention?: boolean;
   wasMentioned?: boolean;
-  replyToBody?: string;
-  replyToSender?: string;
-  replyToIsQuote?: boolean;
+  quote?: SignalQuoteContext;
   turnAdoptionLifecycle?: SignalIngressLifecycle;
   channelIngress?: readonly ResolvedChannelMessageIngress[];
   resolveChannelIngress: (
