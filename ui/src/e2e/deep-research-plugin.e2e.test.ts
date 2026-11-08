@@ -91,7 +91,7 @@ const researchToolResult = {
   role: "toolResult",
   toolName: "deep_research",
   toolCallId: "research-call",
-  content: [{ type: "text", text: "Deep research running: Gathering evidence (round 1)" }],
+  content: [{ type: "text", text: "Started deep research" }],
   details: {
     pluginView: {
       type: "plugin_view",
@@ -100,7 +100,7 @@ const researchToolResult = {
       version: 1,
       toolName: "deep_research",
       toolCallId: "research-call",
-      summary: "Deep research running: Gathering evidence (round 1)",
+      summary: "Started deep research",
       payload: { jobId: id },
     },
   },
@@ -157,8 +157,7 @@ suite.define(() => {
         await pw(card.getByRole("alert")).toHaveText("Research jobs are unavailable.");
         await gateway.setMethodResponse(method("list"), list(running));
         await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
-        await pw(card.getByRole("status")).toHaveText("Researching");
-        await pw(card.locator('[aria-current="step"]')).toHaveText("Gather");
+        await pw(card.getByRole("status")).toHaveText("Gathering evidence (round 1)");
         await card.getByRole("button", { name: "Cancel", exact: true }).click();
         await gateway.waitForRequest(method("cancel"), { match: { jobId: id } });
         // A rejected action stays explained on the card that issued it.
@@ -168,8 +167,8 @@ suite.define(() => {
         await gateway.setMethodResponse(method("read"), read(partial));
         await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
         await pw(card.getByRole("status")).toHaveText("Partial report");
-        await pw(card.locator(".deep-research-card__meta")).toHaveText(
-          "1 source · 1 finding · 1 open gap",
+        await pw(card.locator(".deep-research-card__detail")).toHaveText(
+          "Partial report·1 source·1 finding·1 open gap",
         );
         const screenshot = await takeControlUiScreenshotFrame(page, card, [card], {
           animations: "disabled",

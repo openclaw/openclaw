@@ -81,7 +81,8 @@ export function createResearchTool(
           { jobId: job.id },
           {
             version: RESEARCH_INLINE_VIEW.version,
-            summary: `Deep research ${job.state}: ${job.progress}`,
+            // The saved summary sits above the live card, so it names the action, not a stale state.
+            summary: input.action === "start" ? "Started deep research" : "Resumed deep research",
           },
         );
         const hint = 'Call action "result" with this jobId for the complete retained result.';

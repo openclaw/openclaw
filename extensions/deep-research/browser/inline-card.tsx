@@ -6,13 +6,6 @@ import type { createResearchClient, Snapshot } from "./client.js";
 export type CardTone = "running" | "ready" | "attention" | "failed" | "idle";
 export type CardTab = "Progress" | "Report";
 
-const steps = [
-  { phase: "planning", label: "Plan" },
-  { phase: "gathering", label: "Gather" },
-  { phase: "assessing", label: "Assess" },
-  { phase: "auditing", label: "Audit" },
-] as const;
-
 const jobStatus: Record<ResearchView["state"], { label: string; tone: CardTone }> = {
   queued: { label: "Starting", tone: "running" },
   submitting: { label: "Starting", tone: "running" },
@@ -36,66 +29,24 @@ export function describeJob(job: Pick<ResearchView, "state" | "cancelRequested">
     : status;
 }
 
-type StepState = "done" | "active" | "pending";
-
-// Running jobs pulse their current step; terminal jobs keep the furthest step they reached.
-// Unknown phases (managed engines) show no stepper rather than an invented position.
-function stepStates(job: ResearchView): StepState[] | undefined {
-  if (job.state === "completed") {
-    return steps.map(() => "done");
-  }
-  const reached = steps.findIndex((step) => step.phase === job.phase);
-  const live = describeJob(job).tone === "running";
-  if (reached < 0) {
-    return live ? steps.map((_, index) => (index === 0 ? "active" : "pending")) : undefined;
-  }
-  return steps.map((_, index) => {
-    if (index < reached) {
-      return "done";
-    }
-    if (index === reached) {
-      return live ? "active" : "done";
-    }
-    return "pending";
-  });
-}
-
 function plural(count: number, noun: string): string {
   return count + " " + noun + (count === 1 ? "" : "s");
 }
 
-// Sources always; findings and gaps once the job has produced them.
-function metaLine(job: ResearchView): string {
-  const parts = [plural(job.counts?.sources ?? job.sources.length, "source")];
+// Running jobs describe their current step; settled jobs name their outcome.
+function details(job: ResearchView): string[] {
+  const status = describeJob(job);
+  const parts = [
+    status.tone === "running" ? job.summary : status.label,
+    plural(job.counts?.sources ?? job.sources.length, "source"),
+  ];
   if (job.findings.length) {
     parts.push(plural(job.findings.length, "finding"));
   }
   if (job.gaps.length) {
     parts.push(plural(job.gaps.length, "open gap"));
   }
-  return parts.join(" · ");
-}
-
-function SearchGlyph() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="10.5" cy="10.5" r="6.5" />
-      <path d="m20 20-4.6-4.6" />
-    </svg>
-  );
-}
-
-// Read and action failures stay visible whether or not a job has loaded.
-function ProblemNotice(props: { message: string | undefined }) {
-  return (
-    <Show when={props.message}>
-      {(message) => (
-        <p class="deep-research-card__error" role="alert">
-          {message()}
-        </p>
-      )}
-    </Show>
-  );
+  return parts;
 }
 
 /** Transcript card for the research job started by one `deep_research` tool call. */
@@ -114,113 +65,80 @@ export function ResearchInlineCard(props: {
   // The client falls back to another job when this one is not listed; never show that one.
   const job = () => (snapshot().job?.jobId === props.jobId ? snapshot().job : undefined);
   const canAct = () => snapshot().writable && !snapshot().offline && !snapshot().busy;
+  // Read and action failures stay visible whether or not a job has loaded.
   const problem = () => snapshot().actionError ?? snapshot().error;
   return (
     <section
       class="deep-research-card"
       aria-label="Deep research"
-      data-tone={job() ? describeJob(job()!).tone : "idle"}
+      data-tone={job() ? describeJob(job()!).tone : undefined}
     >
-      <Show
-        when={job()}
-        fallback={
-          <>
-            <div class="deep-research-card__header">
-              <span class="deep-research-card__glyph">
-                <SearchGlyph />
-              </span>
-              <span class="deep-research-card__eyebrow">Deep research</span>
-              <span class="deep-research-card__fallback" role="status">
-                {snapshot().loading ? "Loading research…" : props.summary}
-              </span>
-            </div>
-            <ProblemNotice message={problem()} />
-          </>
-        }
-      >
-        {(current) => {
-          const status = () => describeJob(current());
-          const findings = () => current().findings;
-          return (
+      <div class="deep-research-card__row">
+        <svg class="deep-research-card__icon" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="10.5" cy="10.5" r="6.5" />
+          <path d="m20 20-4.6-4.6" />
+        </svg>
+        <Show
+          when={job()}
+          fallback={
+            <p class="deep-research-card__detail" role="status">
+              {snapshot().loading ? "Loading research…" : props.summary}
+            </p>
+          }
+        >
+          {(current) => (
             <>
-              <div class="deep-research-card__header">
-                <span class="deep-research-card__glyph">
-                  <SearchGlyph />
-                </span>
-                <span class="deep-research-card__eyebrow">Deep research</span>
-                <span class="deep-research-card__pill" role="status">
-                  <span class="deep-research-card__dot" aria-hidden="true" />
-                  {status().label}
-                  <Show when={snapshot().offline}> · Offline</Show>
-                </span>
-              </div>
-              <h3 class="deep-research-card__title" title={current().question}>
-                {current().title}
-              </h3>
-              <Show when={stepStates(current())}>
-                {(states) => (
-                  <ol class="deep-research-card__steps" aria-label="Research steps">
-                    <For each={steps}>
-                      {(step, index) => (
-                        <li
-                          data-state={states()[index()]}
-                          aria-current={states()[index()] === "active" ? "step" : undefined}
-                        >
-                          <span class="deep-research-card__track" />
-                          <span class="deep-research-card__step-label">{step.label}</span>
-                        </li>
-                      )}
-                    </For>
-                  </ol>
-                )}
-              </Show>
-              <Show when={status().tone === "running" || !findings().length}>
-                <p class="deep-research-card__summary">{current().summary}</p>
-              </Show>
-              <Show when={findings().length}>
-                <ul class="deep-research-card__findings" aria-label="Top findings">
-                  <For each={findings().slice(0, 2)}>
-                    {(finding) => (
-                      <li>
-                        <span class="deep-research-card__finding-text">{finding.statement}</span>
-                        <span class="deep-research-card__cites">
-                          <For each={[...new Set(finding.evidence.map((item) => item.sourceId))]}>
-                            {(sourceId) => <span class="deep-research-card__cite">{sourceId}</span>}
-                          </For>
+              <div class="deep-research-card__text">
+                <p class="deep-research-card__title" title={current().question}>
+                  {current().title}
+                </p>
+                <p class="deep-research-card__detail">
+                  <span class="deep-research-card__status" role="status">
+                    {details(current())[0]}
+                  </span>
+                  <For each={details(current()).slice(1)}>
+                    {(part) => (
+                      <span>
+                        <span class="deep-research-card__separator" aria-hidden="true">
+                          ·
                         </span>
-                      </li>
+                        {part}
+                      </span>
                     )}
                   </For>
-                </ul>
-              </Show>
-              <ProblemNotice message={problem()} />
-              <div class="deep-research-card__footer">
-                <p class="deep-research-card__meta">{metaLine(current())}</p>
-                <div class="deep-research-card__actions">
-                  <For each={current().actions}>
-                    {(action) => (
-                      <button
-                        type="button"
-                        class="deep-research-card__button"
-                        disabled={!canAct()}
-                        onClick={() => void props.client.mutate(action)}
-                      >
-                        {action === "cancel" ? "Cancel" : "Resume"}
-                      </button>
-                    )}
-                  </For>
-                  <button
-                    type="button"
-                    class="deep-research-card__button deep-research-card__button--primary"
-                    onClick={() => props.open(current().report ? "Report" : "Progress")}
-                  >
-                    {current().report ? "Read report" : "View progress"}
-                  </button>
-                </div>
+                </p>
+              </div>
+              <div class="deep-research-card__actions">
+                <For each={current().actions}>
+                  {(action) => (
+                    <button
+                      type="button"
+                      class="deep-research-card__quiet"
+                      disabled={!canAct()}
+                      onClick={() => void props.client.mutate(action)}
+                    >
+                      {action === "cancel" ? "Cancel" : "Resume"}
+                    </button>
+                  )}
+                </For>
+                <button
+                  type="button"
+                  class="deep-research-card__button"
+                  onClick={() => props.open(current().report ? "Report" : "Progress")}
+                >
+                  {current().report ? "Read report" : "View progress"}
+                </button>
               </div>
             </>
-          );
-        }}
+          )}
+        </Show>
+      </div>
+      <Show when={problem()}>
+        {(message) => (
+          <p class="deep-research-card__error" role="alert">
+            {message()}
+          </p>
+        )}
       </Show>
     </section>
   );
