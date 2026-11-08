@@ -391,6 +391,10 @@ remain unsymbolized, and an unusually long stall can exhaust the sample cap;
 `truncated=true` identifies incomplete evidence. Recorder failures are logged
 once and disable recording for that monitor's lifetime.
 
+Linux kernel observations remain available when CPU recording is unsupported,
+conflicting, or fails. These reports use `cpuProfile=unavailable` instead of CPU
+sample counts and intervals; they retain the stall bounds and `kernel` evidence.
+
 `samples=0` means neither retained profile contains a timestamped sample in that
 stall interval. It does not prove the entire process stopped or identify the
 blocking operation. For example, Linux libuv blocks the sampling signal on the
