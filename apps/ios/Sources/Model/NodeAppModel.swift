@@ -4184,6 +4184,13 @@ extension NodeAppModel {
         await self.startVoiceWakeSync(shouldContinue: shouldContinue)
         guard shouldContinue() else { return }
         self.startGatewayHealthMonitor()
+        await self.prepareShareGatewayDeviceAuth(stableID: stableID, shouldContinue: shouldContinue)
+    }
+
+    private func prepareShareGatewayDeviceAuth(
+        stableID: String,
+        shouldContinue: @escaping @MainActor @Sendable () -> Bool) async
+    {
         guard let config = self.activeGatewayConnectConfig,
               config.ingressAuthorization == nil
         else { return }
