@@ -625,7 +625,7 @@ export function createControlUiSessionFixtures(
     read,
     resolve,
     sessionInfo,
-    requireSessionInfo(key: string) {
+    requireSessionInfo(this: void, key: string) {
       const row = sessionInfo(key);
       if (!row) {
         throw new Error(`Mock Gateway did not return session ${key}`);
@@ -703,7 +703,7 @@ export function createControlUiSessionFixtures(
     list,
     listResponse,
     materializedCount: () => materializedSequence,
-    replaceCanonicalRow(row: ControlUiSessionFixture) {
+    replaceCanonicalRow(this: void, row: ControlUiSessionFixture) {
       const value = record(row.key);
       // Published snapshots and mutation replies share the same canonical row.
       for (const field of [...Object.keys(value.row), ...Object.keys(row)]) {

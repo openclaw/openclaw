@@ -66,11 +66,11 @@ import {
   resolveEngineConfigurations,
   type EngineConfiguration,
 } from "./lib/control-ui-engine-configurations.ts";
-import { createEngineGestureScenarios } from "./lib/control-ui-engine-gesture-scenarios.ts";
 import {
   createEngineEventLoadScenarios,
   verifyEngineEventLoad,
 } from "./lib/control-ui-engine-event-load-scenarios.ts";
+import { createEngineGestureScenarios } from "./lib/control-ui-engine-gesture-scenarios.ts";
 import {
   createEngineIdleControls,
   createEngineIdleScenarios,

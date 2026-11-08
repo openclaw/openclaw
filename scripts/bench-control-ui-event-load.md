@@ -41,9 +41,10 @@ for up to six running background sessions; these receive stripped tool events,
 paced narration and, under the current protocol, durable message bodies. Exact
 message subscriptions govern foreground tool events and message bodies. Closing
 the sidebar releases its narration interests. First row receipts establish a full row version;
-subsequent receipts use matching-base field patches. Terminal receipts and
-switching to a previously background session verify status, unread state and
-authoritative history after the measurement window. Every background row must
+subsequent receipts use matching-base field patches. The measured session switch
+checks the background session's current history. After the measurement window,
+terminal receipts and a final revisit verify status, unread state and history.
+Every background row must
 settle, and all foreground tool results must remain in history. Blank scroll
 frames fail the scenario. Failed observations retain partial counters and CPU.
 
@@ -54,6 +55,8 @@ delta baselines belong to a connected socket: a replacement connection receives
 a full row before its deltas, and disconnected emissions do not advance that
 baseline. The observations record opened/closed socket counts; settlement failures
 also report close reasons and the rows that did not settle.
+The subscription cache follows the socket lifetime too: closing a connection
+retires its leases, so releasing a replacement lease restores bodyless broad receipts.
 
 Ground the fixture against the real Gateway before interpreting its results:
 
@@ -66,9 +69,11 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs \
 This capture starts isolated Gateway state and a loopback synthetic model. Three
 real agent runs execute read tools through the normal Gateway and transcript
 owners. The observer negotiates the Control UI's event capabilities and subscribes
-to one foreground session. Output contains event field names, counts and JSON
-frame sizes, with no authentication frames or message content. It validates the
-wire mix; it is not a real-provider performance result.
+to one foreground session. Standard output contains event field names, counts
+and JSON frame sizes, without authentication frames or message content. The local
+`wire.json` also retains sample synthetic payloads and may contain incidental host
+or path identity; inspect and redact it before sharing. This validates the wire
+mix; it is not a real-provider performance result.
 
 Read per-phase application timing alongside action wall time. Native input
 delivery, browser-local settlement and driver round trips are different costs.

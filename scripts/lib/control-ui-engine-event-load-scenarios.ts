@@ -182,14 +182,20 @@ function installEventLoadProbe() {
   const OriginalWebSocket = window.WebSocket;
   let socketGeneration = 0;
   let connectedGeneration = 0;
+  let socketRequestStart = 0;
+  const subscriptions = new Map<string, string>();
+  const subscriptionModes = new Map<string, string | undefined>();
   const socketCloses: Array<{ code: number; reason: string }> = [];
   window.WebSocket = new Proxy(OriginalWebSocket, {
     construct(target, args) {
+      socketRequestStart = gateway.requests.length;
       const socket: WebSocket = Reflect.construct(target, args);
       const generation = ++socketGeneration;
       socket.addEventListener("close", (event) => {
         if (connectedGeneration === generation) {
           connectedGeneration = 0;
+          subscriptions.clear();
+          subscriptionModes.clear();
         }
         if (socketCloses.length < 8) {
           socketCloses.push({ code: event.code, reason: event.reason });
@@ -347,8 +353,8 @@ function installEventLoadProbe() {
         },
       ]);
       const messageSequences = new Map<string, number>([[options.background, 1]]);
-      const subscriptions = new Map<string, string>();
-      const subscriptionModes = new Map<string, string | undefined>();
+      subscriptions.clear();
+      subscriptionModes.clear();
       const recordSubscription = (method: string, params: unknown) => {
         if (
           method !== "sessions.messages.subscribe" &&
@@ -366,7 +372,8 @@ function installEventLoadProbe() {
           subscriptionModes.delete(id);
         }
       };
-      for (const request of gateway.requests) {
+      // Closed transports retire their leases without unsubscribe requests.
+      for (const request of gateway.requests.slice(socketRequestStart)) {
         recordSubscription(request.method, request.params);
       }
       // A later subscription gets current authoritative history, not replayed offscreen deltas.
@@ -426,6 +433,7 @@ function installEventLoadProbe() {
             "updatedAt",
             "snapshotAt",
             "unread",
+            "lastMessageAt",
             "lastMessagePreview",
             "lastAssistantMessage",
             "agentStatus",
