@@ -45,6 +45,7 @@ let receipt: SendNodeMailRequest | undefined;
 let descriptor: GetNodeDescriptorResponse;
 let refusal: string | undefined;
 let reads = 0;
+let listedBeforeMail = false;
 let signatureErrors: string[] = [];
 let server: Awaited<ReturnType<typeof reserveTestPortListener<http.Server>>>;
 let origin: string;
@@ -85,7 +86,8 @@ beforeAll(async () => {
           } else {
             expect(req.url).toBe(`/v1/claws/${world.binding.body.claw_id}/node/descriptor`);
             reads++;
-            if (reads === 1) {
+            // Unlisted W is refused until approval; the first poll after mail is still pending.
+            if ((!receipt && !listedBeforeMail) || reads === 2) {
               res.writeHead(403).end(JSON.stringify({ error: { code: "forbidden" } }));
               return;
             }
@@ -107,6 +109,7 @@ beforeEach(async () => {
   receipt = undefined;
   refusal = undefined;
   reads = 0;
+  listedBeforeMail = false;
   signatureErrors = [];
   vi.clearAllMocks();
   const now = Math.floor(Date.now() / 1000);
@@ -199,7 +202,13 @@ test("refuses membership that omits W even when Discovery grants a descriptor re
 test("reports expired or denied invitation without exposing the link", async () => {
   refusal = "code_invalid";
   await expect(join()).rejects.toThrow("expired, was denied, or was already used");
-  expect(reads).toBe(0);
+  expect(reads).toBe(1);
+});
+
+test("refuses re-enrollment while old membership still lists W, before spending the invite", async () => {
+  listedBeforeMail = true;
+  await expect(join()).rejects.toThrow("already admitted");
+  expect(receipt).toBeUndefined();
 });
 
 test("refuses another claw even when the pinned root signed its binding", async () => {
@@ -229,7 +238,7 @@ test("cancellation while waiting stops before another descriptor read", async ()
       log: vi.fn(),
     }),
   ).rejects.toThrow("cancelled");
-  expect(reads).toBe(1);
+  expect(reads).toBe(2);
 });
 
 test("preserves the highest verified binding sequence when rejoining the same claw", async () => {

@@ -132,10 +132,6 @@ export async function enrollNode(params: {
   if (!valid.ok) {
     throw new Error(`Cannot enroll this node's declared command surface: ${valid.detail}`);
   }
-  const code = await nodeVerificationCode(redemption.body);
-  params.log(
-    `Waiting for approval from ${params.link.hostname}… code ${code.slice(0, 3)}-${code.slice(3)}`,
-  );
   const call = (endpoint: "sendNodeMail" | "getNodeDescriptor", body?: SendNodeMailRequest) =>
     discoveryCall({
       origin: params.discoveryUrl,
@@ -146,6 +142,29 @@ export async function enrollNode(params: {
       signal,
     });
   try {
+    // Membership names W, not the approved invitation or description: an already listed W would
+    // look approved before the owner decides on this invitation. Refuse before spending it.
+    const listed = await call("getNodeDescriptor").then(
+      () => true,
+      (error: unknown) => {
+        if (
+          error instanceof NodeDiscoveryError &&
+          ["forbidden", "not_found"].includes(error.code)
+        ) {
+          return false;
+        }
+        throw error;
+      },
+    );
+    if (listed) {
+      throw new Error(
+        `This node is already admitted to ${params.link.hostname}; run \`openclaw node run\` to reconnect. To change its commands, ask the owner to remove it on the Access page, then join with a new link.`,
+      );
+    }
+    const code = await nodeVerificationCode(redemption.body);
+    params.log(
+      `Waiting for approval from ${params.link.hostname}… code ${code.slice(0, 3)}-${code.slice(3)}`,
+    );
     await call("sendNodeMail", { to: "gateway", payload: { kind: "node_redemption", redemption } });
     let backoff = 1_000;
     for (;;) {

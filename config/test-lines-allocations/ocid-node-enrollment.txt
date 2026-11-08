@@ -1,2 +1,3 @@
-499
-# Node enrollment signing, pin/membership refusal, cancellation, CLI routing, and service success gate.
+551
+# Node enrollment signing, pin/membership and re-enrollment refusal, cancellation, CLI routing, service success gate, and Gateway refusal of unlisted or removed nodes.
+# 532 lines are this change; 19 reconcile main's inherited overage at ac26a0d7 (6586741 vs ceiling 6586722).

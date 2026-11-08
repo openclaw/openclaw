@@ -89,7 +89,9 @@ if the codes differ; opening the dialog alone does not approve anything.
 After approval, the node verifies and saves the OpenClaw ID target and runs in
 the foreground. Add `--service` to install and run it as a user service instead.
 The invitation is not a reconnect credential: use `openclaw node run` or the
-installed service for later connections.
+installed service for later connections. `node join` refuses a node that is
+still admitted and leaves the new invitation unused; to change its commands,
+the owner removes the node on the Access page and sends a new link.
 
 Options:
 
