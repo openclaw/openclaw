@@ -2704,6 +2704,9 @@ jobs:
           requirements="$(node --input-type=module <<'NODE'
           import { existsSync } from "node:fs";
           import { resolve } from "node:path";
+          const { loadPatternListFromEnv, matchesVitestGlob } = await import("./test/vitest/vitest.pattern-file.ts");
+          const selectedPatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE");
+          const isSelected = (file) => selectedPatterns === null || selectedPatterns.some((pattern) => matchesVitestGlob(file, resolve(pattern)));
           const webkitSuites = new Set([
             resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts"),
             resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
@@ -2712,11 +2715,12 @@ jobs:
             resolve("ui/src/e2e/logs-scroll.e2e.test.ts"),
             resolve("ui/src/e2e/chat-history-reading-stability.e2e.test.ts"),
             resolve("ui/src/e2e/chat-loading-animation-retention.e2e.test.ts"),
-          ].filter(existsSync));
+          ].filter((file) => existsSync(file) && isSelected(file)));
           const runtimeSuite = resolve("ui/src/e2e/stale-build-recovery.production.e2e.test.ts");
+          const hasRuntimeSuite = existsSync(runtimeSuite) && isSelected(runtimeSuite);
           let requiresWebkit = false;
           let requiresRuntime = false;
-          if (webkitSuites.size > 0 || existsSync(runtimeSuite)) {
+          if (webkitSuites.size > 0 || hasRuntimeSuite) {
             const { createVitest } = await import("vitest/node");
             const vitest = await createVitest({
               config: "test/vitest/vitest.ui-e2e.config.ts",

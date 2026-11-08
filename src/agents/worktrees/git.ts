@@ -167,7 +167,7 @@ async function runOwnedGitCommand<
       // Unknown option values (such as --server-option origin) cannot select a remote.
       const [remote, refspec, ...extra] = args
         .slice(1)
-        .filter((arg) => !REPAIRABLE_FETCH_FLAGS.has(arg));
+        .filter((arg) => !REPAIRABLE_FETCH_FLAGS.has(arg) && !arg.startsWith("--negotiation-tip="));
       if (
         remote !== "origin" ||
         extra.length > 0 ||
