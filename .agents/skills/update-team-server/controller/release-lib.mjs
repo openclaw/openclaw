@@ -6585,12 +6585,17 @@ function retainedAdoptionSource(paths, request) {
   return original;
 }
 
-function retainedAdoptionRequest(root, input) {
-  suspensionObject(input, ["version", "operation", "source", "oldClosure", "replacement", ...(Object.hasOwn(input, "retirement") ? ["retirement"] : [])], "controller adoption request");
+function retainedAdoptionRequest(root, input, historical = false) {
+  suspensionObject(input, ["version", "operation", "source", "oldClosure", "replacement", ...(historical ? ["historical"] : Object.hasOwn(input, "retirement") ? ["retirement"] : [])], "controller adoption request");
   if (input.version !== 1 || !Array.isArray(input.oldClosure) || input.oldClosure.length !== 4 ||
       !Array.isArray(input.replacement) || input.replacement.length !== 4)
     reject("controller adoption request must bind all four old and approved new files");
   const paths = retainedAdoptionLocations(root, input.operation);
+  if (historical) {
+    suspensionObject(input.historical, ["gate", "complete"], "controller adoption historical approval");
+    for (const descriptor of Object.values(input.historical)) validMigrationDescriptor(descriptor, "path", "historical adoption artifact");
+    if (input.historical.gate.path !== paths.gate) reject("controller adoption historical gate is not canonical");
+  }
   for (let index = 0; index < 4; index++) {
     validMigrationDescriptor(input.oldClosure[index], "path", "old controller file");
     validMigrationDescriptor(input.replacement[index], "path", "approved controller file");
@@ -6633,7 +6638,7 @@ function retainedAdoptionLoad(root, input) {
   suspensionObject(intent, ["version", "kind", "protocol", "request", "lock", "metadata", "original", "backups", "replacements", ...(Object.hasOwn(intent, "bootstrap") ? ["bootstrap"] : []), ...(Object.hasOwn(intent, "predecessor") ? ["predecessor"] : [])], "controller adoption intent");
   if (intent.version !== 1 || intent.kind !== "retained-controller-adoption" || intent.protocol !== retainedAdoptionProtocol || intent.request.operation !== input.operation)
     reject("controller adoption intent has the wrong owner");
-  retainedAdoptionRequest(root, intent.request);
+  retainedAdoptionRequest(root, intent.request, Object.hasOwn(intent.request, "historical"));
   if (!isDeepStrictEqual(intent.lock, retainedRepairLock())) reject("controller adoption lock inode changed");
   if (!isDeepStrictEqual(intent.metadata, paths.destinations.map((path, index) => ({
     path, mode: index === 0 ? 0o755 : 0o644, uid: paths.owner, gid: rootGroup(),
@@ -6663,7 +6668,7 @@ function retainedAdoptionLoad(root, input) {
   if (Object.hasOwn(intent, "predecessor")) {
     if (bootstrap) reject("controller adoption cannot have both bootstrap and completed predecessors");
     retainedAdoptionPredecessor(root, paths, intent.predecessor, intent.request);
-  }
+  } else if (intent.request.historical) reject("historical adoption lost its completed predecessor");
   retainedAdoptionProtocolCheck(replacements);
   return { paths, file, intent, original, backups, replacements, bootstrap };
 }
@@ -6762,14 +6767,16 @@ function retainedAdoptionPredecessor(root, paths, predecessor, request) {
   // never grants current admission or claims that its retired files remain installed.
   const completed = retainedAdoptionCompletion(root, { operation: gate.value.operation, intentSha256: gate.value.intent.sha256 }, false);
   if (!isDeepStrictEqual(completed.complete.descriptor, predecessor.complete) ||
-      !retainedAdoptionSourceMatches(paths, completed.intent.request.source, request) ||
-      !isDeepStrictEqual(completed.value.closure, request.oldClosure))
+      (request.historical ? !isDeepStrictEqual(request.historical, { gate: predecessor.gate, complete: predecessor.complete }) ||
+        isDeepStrictEqual(completed.intent.request.source, request.source) :
+        !retainedAdoptionSourceMatches(paths, completed.intent.request.source, request) ||
+        !isDeepStrictEqual(completed.value.closure, request.oldClosure)))
     reject("controller adoption completed predecessor differs from the approved incumbent");
   return completed;
 }
-function retainedAdoptionPrepare(root, input) {
+function retainedAdoptionPrepare(root, input, historical = false) {
   const lock = retainedRepairLock();
-  const paths = retainedAdoptionRequest(root, input);
+  const paths = retainedAdoptionRequest(root, input, historical);
   const gate = lstatSync(paths.gate, { throwIfNoEntry: false }) ? retainedAdoptionGate(paths) : undefined;
   if (gate?.value.operation === input.operation) {
     const binding = { operation: input.operation, intentSha256: gate.value.intent.sha256 };
@@ -6780,9 +6787,12 @@ function retainedAdoptionPrepare(root, input) {
     retainedAdoptionSource(paths, input);
     return binding;
   }
-  // A surviving bootstrap gate belongs to the first adoption only. A later
-  // operation instead needs the exact currently installed completed predecessor.
-  const previous = gate ? retainedAdoptionCompletion(root, { operation: gate.value.operation, intentSha256: gate.value.intent.sha256 }) : undefined;
+  // Historical completion proves immutable history only. Current source and
+  // installed files are independently approved and checked below.
+  const previous = gate ? retainedAdoptionCompletion(root, { operation: gate.value.operation, intentSha256: gate.value.intent.sha256 }, !historical) : undefined;
+  if (historical && (!previous || !isDeepStrictEqual(input.historical, { gate: gate.file.descriptor, complete: previous.complete.descriptor }) ||
+      isDeepStrictEqual(previous.intent.request.source, input.source)))
+    reject("historical adoption requires the exact completed gate of a different incident");
   if (input.retirement && !previous) reject("retired incident adoption requires a completed predecessor");
   const bootstrapGate = retainedBootstrapPaths(paths).gate;
   let bootstrap;
@@ -6790,7 +6800,7 @@ function retainedAdoptionPrepare(root, input) {
     bootstrap = retainedBootstrapClosed(retainedBootstrapLoad(root, input.operation, input), true);
   retainedAdoptionRunner(input, undefined, bootstrap?.intent.replacements[1]);
   const source = retainedAdoptionSource(paths, input);
-  if (previous && !retainedAdoptionSourceMatches(paths, previous.intent.request.source, input))
+  if (previous && !historical && !retainedAdoptionSourceMatches(paths, previous.intent.request.source, input))
     reject("controller adoption predecessor source changed");
   const old = bootstrap ? bootstrap.backups : retainedAdoptionReadClosure(paths);
   if (!bootstrap && !isDeepStrictEqual(old.map(file => file.descriptor), input.oldClosure)) reject("controller adoption old closure changed");
@@ -6819,7 +6829,6 @@ function retainedAdoptionPrepare(root, input) {
   if (predecessor) {
     const stage = retainedAdoptionStage(paths.prefix + ".gate.next", Buffer.from(JSON.stringify(nextGate) + "\n"), 0o600);
     retainedAdoptionPredecessor(root, paths, predecessor, input);
-    retainedAdoptionCompletion(root, { operation: gate.value.operation, intentSha256: gate.value.intent.sha256 });
     if (!isDeepStrictEqual(retainedAdoptionGate(paths).file.descriptor, predecessor.gate))
       reject("controller adoption predecessor gate changed before handoff");
     // EX FD9 serializes the one owner transfer. Preserve the prior gate above;
@@ -6964,9 +6973,10 @@ function retainedControllerAdoption(action, root, input) {
     case "retire-prestart": return retainedAdoptionRetirePrestart(root, input);
     case "bootstrap": return retainedBootstrap(root, input);
     case "prepare": return retainedAdoptionPrepare(root, input);
+    case "historical-successor": return retainedAdoptionPrepare(root, input, true);
     case "apply": return retainedAdoptionApply(root, input);
     case "context": return retainedAdoptionContext(root, input);
-    default: reject("controller adoption only implements bootstrap, prepare, apply and context");
+    default: reject("controller adoption only implements bootstrap, prepare, historical-successor, apply and context");
   }
 }
 
@@ -7280,7 +7290,7 @@ try {
   let result;
   switch (command) {
     case "retained-controller-adoption":
-      if (args.length !== 3) reject("usage: retained-controller-adoption prepare|apply|context ROOT INPUT");
+      if (args.length !== 3) reject("usage: retained-controller-adoption prepare|historical-successor|apply|context ROOT INPUT");
       result = JSON.stringify(retainedControllerAdoption(args[0], args[1], jsonArgument(args[2])));
       break;
     case "controller-adoption-gate":
