@@ -1,6 +1,6 @@
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { createComponent, flush } from "solid-js";
-import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { EventLogEntry } from "../../api/event-log.ts";

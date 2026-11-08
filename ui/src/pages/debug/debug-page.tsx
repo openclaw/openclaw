@@ -158,7 +158,7 @@ function createDiagnosticSource<T>(
 
 type DiagnosticSource<T> = ReturnType<typeof createDiagnosticSource<T>>;
 
-function DiagnosticFeedback<T>(props: { source: DiagnosticSource<T>; onRetry: () => void }) {
+function DiagnosticFeedback(props: { source: DiagnosticSource<unknown>; onRetry: () => void }) {
   const pending = () => (
     <Status
       kind="muted"
@@ -300,7 +300,7 @@ export function DebugPage() {
         state.callResult = state.callError = null;
       }
       if (needsRefresh) {
-        void loadDiagnostics();
+        loadDiagnostics();
       }
       syncPolling();
       publish();
@@ -313,11 +313,11 @@ export function DebugPage() {
       agent = next;
       models.reset();
       invalidate();
-      void loadDiagnostics();
+      loadDiagnostics();
       publish();
     });
     syncPolling();
-    void loadDiagnostics();
+    loadDiagnostics();
     return () => {
       disposed = true;
       invalidate();
@@ -363,7 +363,7 @@ export function DebugPage() {
         data-refresh-label={t("common.refresh")}
         data-refreshing-label={t("common.refreshing")}
         disabled={gateway.read().snapshot.phase !== "connected"}
-        onClick={() => void loadDiagnostics()}
+        onClick={() => loadDiagnostics()}
       >
         <Show
           when={gateway.read().snapshot.phase === "connected" && props.pending}
