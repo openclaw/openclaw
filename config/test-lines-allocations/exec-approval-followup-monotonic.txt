@@ -1,0 +1,5 @@
+# Net test-line growth for the exec approval followup monotonic-clock fix.
+# Adds an integer-rounding regression (fractional remaining budget -> integer agent.wait timeoutMs)
+# and switches the deadline regression's clock spy from Date.now to performance.now
+# to match the monotonic fix. Net delta +28 lines in bash-tools.exec-approval-followup.test.ts.
+28
