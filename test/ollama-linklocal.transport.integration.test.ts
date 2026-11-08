@@ -111,6 +111,15 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllEnvs());
 
+it("reaches HTTP for the supported local bind address 0.0.0.0", async () => {
+  fixture.lookup = async () => [{ address: "0.0.0.0", family: 4 }];
+  const localBind = "http://0.0.0.0:11434";
+  const { provider } = await createProvider(localBind);
+  await expect(provider.embed("hello")).resolves.toEqual([0.6, 0.8]);
+  expect(fixture.attempts).toEqual([`${localBind}/api/embed`]);
+  expect(fixture.requests).toHaveLength(1);
+});
+
 it.each([undefined, baseUrl])("returns Podman vectors with remote override %s", async (remote) => {
   const { provider } = await createProvider(baseUrl, remote);
   await expect(provider.embed("hello")).resolves.toEqual([0.6, 0.8]);

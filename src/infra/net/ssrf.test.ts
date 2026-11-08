@@ -246,6 +246,36 @@ describe("SSRF policy and pinning", () => {
     ).resolves.toMatchObject({ addresses: ["127.0.0.1"] });
   });
 
+  it("keeps an unspecified local bind address when private networks are allowed", async () => {
+    const lookupFn = vi.fn(async () => [{ address: "0.0.0.0", family: 4 }]);
+    await expect(
+      resolvePinnedHostnameWithPolicy("0.0.0.0", {
+        lookupFn,
+        policy: { allowPrivateNetwork: true, hostnameAllowlist: ["0.0.0.0"] },
+      }),
+    ).resolves.toMatchObject({ addresses: ["0.0.0.0"] });
+  });
+
+  it("keeps an IPv6 unspecified address when private networks are allowed", async () => {
+    const lookupFn = vi.fn(async () => [{ address: "::", family: 6 }]);
+    await expect(
+      resolvePinnedHostnameWithPolicy("::", {
+        lookupFn,
+        policy: { allowPrivateNetwork: true, hostnameAllowlist: ["::"] },
+      }),
+    ).resolves.toMatchObject({ addresses: ["::"] });
+  });
+
+  it("still rejects an unspecified answer when only the hostname is trusted", async () => {
+    const lookupFn = vi.fn(async () => [{ address: "0.0.0.0", family: 4 }]);
+    await expect(
+      resolvePinnedHostnameWithPolicy("0.0.0.0", {
+        lookupFn,
+        policy: { allowedHostnames: ["0.0.0.0"] },
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+  });
+
   it("keeps an RFC1918 answer when private networks are allowed", async () => {
     const lookupFn = vi.fn(async () => [{ address: "192.168.1.20", family: 4 }]);
     await expect(

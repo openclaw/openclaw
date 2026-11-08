@@ -420,8 +420,11 @@ function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
   const isPodmanGatewayLinkLocalAllowed = hasTrustedHostPodmanGatewayLinkLocalExemption(policy);
 
   for (const entry of results) {
+    // 0.0.0.0 and :: are local bind addresses. Private-network allow keeps
+    // them, matching loopback. Exact-host trust still rejects them. Metadata
+    // and non-exempt link-local answers stay blocked below.
     if (
-      isUnspecifiedIpAddress(entry.address) ||
+      (!allowResolvedLoopback && isUnspecifiedIpAddress(entry.address)) ||
       (!isLoopbackAllowed && isLoopbackIpAddressIncludingEmbeddedIpv4(entry.address)) ||
       isBlockedTrustedResolvedIpv6Address(entry.address) ||
       (isLinkLocalIpAddress(entry.address) &&
