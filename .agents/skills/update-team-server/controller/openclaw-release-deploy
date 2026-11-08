@@ -3272,7 +3272,7 @@ repair_load_context() {
 	candidate_info="$(repair_value snapshot.target.release)" || return 1
 	previous_release="$releases_root/$(repair_value snapshot.evidence.record.candidate.sha)"
 	candidate_release="$releases_root/$(repair_value snapshot.request.target.sha)"
-	protected_identity="$(repair_value snapshot.evidence.record.protectedPaths)" || return 1
+	protected_identity="$(repair_value protectedPaths)" || return 1
 	policy_identity="$(repair_value snapshot.policy)" || return 1
 	session_witness="$(repair_value snapshot.currentWitness)" || return 1
 	# Terminal failures may precede binding or lease acquisition. Never invent those facts.

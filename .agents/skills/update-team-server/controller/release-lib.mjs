@@ -4144,7 +4144,10 @@ function retainedRepairLifecycle(action, root, input) {
     if (action === "observe-failure") return { journal: source.descriptor, observation, phase: record.phase };
   }
   const context = retainedRepairLifecycleContext(root, input), { record, paths, snapshot } = context;
-  if (action === "inspect") return { ...context, snapshot, receipt: context.receipt };
+  if (action === "inspect") {
+    const { sha256, ...configIdentity } = snapshot.config;
+    return { ...context, protectedPaths: [configIdentity, ...snapshot.evidence.record.protectedPaths.slice(1)] };
+  }
   if (["REPAIR_FAILED", "REPAIR_COMPLETED"].includes(record.phase)) reject("repair is terminal and cannot be retried");
   const observedB = () => retainedRepairNative(root, context, "live-b");
   const stopped = () => { const value = retainedRepairNative(root, context, "stopped"); retainedRepairWriters(context); return value; };
@@ -6058,7 +6061,7 @@ function retainedRepairClaimEvidence(root, record) {
   const config=lstatSync(snapshot.config.path);
   if(!isDeepStrictEqual(migrationFile(snapshot.config.path,config.uid,{mode:0o600,group:config.gid}).descriptor,snapshot.config))
     reject("repair claim config changed");
-  for(const path of snapshot.evidence.record.protectedPaths)
+  for(const path of snapshot.evidence.record.protectedPaths.slice(1))
     if(!isDeepStrictEqual(identity(path.path),path)) reject("repair claim protected store changed");
   if(!isDeepStrictEqual(validateFrozenRelease(join(root,"releases",snapshot.request.target.sha),snapshot.request.target.sha,
       snapshot.request.target.manifestSha256,migrationOwner()),snapshot.target)) reject("repair claim target changed");

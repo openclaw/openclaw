@@ -16,13 +16,28 @@ same-schema target containing the product fix:
   "$OPERATION" "$BUILD_RECEIPT_SHA256"
 ```
 
-`OPERATION` is a new UUIDv4. `TARGET` is the exact official main frozen by
-preparation, `CURRENT` is the failed selected candidate, and `PID`/`START` bind
-its live process generation. `JOURNAL_SHA256` and optional `CONFIG_SHA256` are
-the reviewed files' SHA-256 digests. Use the `completed.sha256` from successful
-preparation as `BUILD_RECEIPT_SHA256`; activation consumes that exact receipt,
-including its config approval, without another config argument. Omit the final
-config digest when no reconciliation is needed.
+Read the incident bindings together before preparation; do not reuse values
+from an earlier process or journal:
+
+| Argument                 | Source                                                                                                                                                                     |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPERATION`              | A new UUIDv4, retained for preparation, activation, and resume.                                                                                                            |
+| `TARGET`                 | Full commit SHA on the verified official main mirror, containing the product fix. Preparation freezes official origin evidence and requires a distinct same-schema target. |
+| `CURRENT`                | Full candidate SHA in the retained journal, matching the selected `current` release and live Gateway working directory.                                                    |
+| `PID`                    | `MainPID` of the canonical system Gateway service.                                                                                                                         |
+| `START`                  | Field 22 of `/proc/$PID/stat` (start ticks), parsed after the final closing parenthesis of the process name.                                                               |
+| `JOURNAL_SHA256`         | SHA-256 of the reviewed original canonical `journal/activation.json`.                                                                                                      |
+| `CONFIG_SHA256`          | SHA-256 of the reviewed config at the journal's first protected path. Omit only when reconciliation is unnecessary.                                                        |
+| `BUILD_RECEIPT_SHA256`   | `completed.sha256` in successful preparation's JSON output. Activation inherits its exact config approval without another config argument.                                 |
+| `CURRENT_JOURNAL_SHA256` | On resume, a fresh SHA-256 of the current canonical journal, after reviewing its interrupted phase. This is not the original incident hash.                                |
+
+Use the deployment owner's existing private environment and operator profile.
+Preparation requires disabled, inactive deployment timers and the original live
+candidate generation; it builds off-path and does not need a load flag.
+`--allow-cpu-degraded` is intentionally invalid for retained preparation and
+activation. Target verification already accepts CPU/utilization-only warnings
+with bounded event-loop delay through the normal deployment acceptance policy;
+it never waives readiness, delayed event loops, or marker verification.
 
 Reconciliation uses the same config snapshot and native atomic-replacement audit
 as `--recover --reconcile-config`, including the separate backup, unchanged
@@ -33,6 +48,32 @@ acceptance. Neither a config digest nor a successful build waives those gates.
 The original journal bytes remain archived unchanged as the existing typed
 repair transaction takes over the canonical journal slot. Changed config or
 incident evidence refuses continuation.
+
+### Native config audit evidence
+
+The Gateway's `agents.delete` path uses the normal atomic config writer. That
+writer automatically records a `config.write` event with `source: "config-io"`
+and `result: "rename"` in the shared state database's `diagnostic_events` table,
+under `scope = 'config-audit'`. No special RPC label or operator-created artifact
+is required. The controller reads the newest 50,000 rows in that scope and
+binds the matching row's key and payload hash.
+
+The row must describe one direct replacement from the original journal inode:
+its previous hash and byte count match the separate current `<config>.bak`,
+and its previous device/inode match the journal. Its next hash, bytes,
+device/inode match the reviewed config. Both sides have mode `0600`, one link,
+the runtime UID, and the current config GID. The row also requires the exact
+config path, `existsBefore: true`, a finite timestamp, positive PID, and an
+`event_key` beginning with `<timestamp>:config.write:`. Both config files must
+remain safe regular files on the original filesystem.
+
+Audit persistence is best-effort: a successful native RPC alone does not prove
+this row exists. If reconciliation reports a missing native atomic-replacement
+audit, inspect the existing row and backup against those bindings. A later
+replacement, rotated backup, or failed audit write can explain the refusal.
+Do not manufacture/import a row, repeat `agents.delete`, or edit the journal
+to satisfy it. Missing or mismatched evidence remains a recovery blocker for
+the operator to diagnose; the config digest does not bypass this guard.
 
 After an interrupted activation, use the same operation with the observed
 canonical journal hash:
@@ -71,6 +112,28 @@ Ordinary adoption consumes that receipt, retains the original backups (not bridg
 Never install an arbitrary partial closure or treat repository publication as live permission. See [SOURCE.md](SOURCE.md) for the captured installed provenance, reviewed differences, and qualification limits.
 
 ## Qualification still required
+
+`retained-repair-native-config.test.mjs` exercises reviewed-config preparation,
+archived-journal activation, resume, and the installed root/PID1 start condition
+using real systemd and a synthetic HTTP application. It also refuses a late
+config replacement before execution and refuses completion without target
+acceptance. The ordinary standalone suite skips this service-mutating test.
+Run it only in a fresh disposable Docker container with systemd as PID 1,
+writable private cgroup v2, the standalone test prerequisites, `systemctl`,
+`busctl`, `ss`, and `curl`. There must be no Gateway unit or installed controller
+closure; copy the test sources to a separate root-owned directory first.
+
+Inside that disposable container, create the explicit test sentinel and run:
+
+```sh
+printf '%s\n' retained-repair-config > /run/openclaw-controller-disposable-proof
+OPENCLAW_CONTROLLER_NATIVE_PROOF=1 node --import ./test-environment.mjs \
+  --test ./retained-repair-native-config.test.mjs
+```
+
+The test installs and removes only its synthetic service and closure. Destroy
+the container afterward. This is start-condition proof, not a live Gateway or
+model-acceptance rehearsal.
 
 Real-systemd rehearsal must cover root/PID1 entry, typed ExecConditionEx, stop-history persistence, claim/dispatch crashes, absent/repopulated user manager, listener/writer/job races, guard removal/resume and all four-file adoption interruption points. Synthetic native IO tests prove controller decisions, not operating-system contracts. Repository publication does not certify this native rehearsal. Any adoption requires its exact operator procedure and approval; this reconciliation does not access or modify the deployment host.
 
