@@ -1,8 +1,8 @@
 import { projectSessionEntryRecord } from "../../../packages/memory-host-sdk/src/host/session-entry-projection.js";
 import {
-  buildSessionEntryInProcess,
+  renderSessionEntrySnapshot,
   readSessionEntryResetRecallCutoff,
-} from "../../../packages/memory-host-sdk/src/host/session-files.js";
+} from "../../../packages/memory-host-sdk/src/host/session-entry-render.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -100,7 +100,7 @@ export async function prepareSessionMemoryEntries(
     } else {
       retainSnapshot(snapshotKey(request), snapshot);
       const entry = snapshot
-        ? await buildSessionEntryInProcess(request.absPath, request.options, snapshot)
+        ? await renderSessionEntrySnapshot(request.absPath, request.options, snapshot)
         : null;
       value = {
         entry,

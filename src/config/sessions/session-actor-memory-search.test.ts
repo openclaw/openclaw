@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionLeafControl } from "../../agents/sessions/session-manager-types.js";
+import { readTranscriptStatsBatchReadOnlySync } from "../../plugin-sdk/memory-core-host-transcript-stats.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionActorAuthority, SessionActorStorage } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
@@ -258,3 +259,20 @@ describe("actor-owned transcript search", () => {
     expect((await search("fresh")).hits).toEqual([]);
   });
 });
+
+// The private stats seam must retain the same memory-only denial as the public facade.
+it.each([false, true])(
+  "rejects synchronous incognito stats before opening SQLite (explicit path: %s)",
+  (explicit) => {
+    const scope = {
+      agentId,
+      env,
+      sessionId: "stats-denied",
+      sessionKey: "agent:main:dashboard:incognito-stats-denied",
+      ...(explicit ? { storePath } : {}),
+    };
+    expect(() => readTranscriptStatsBatchReadOnlySync([scope])).toThrow(
+      "Await readTranscriptStatsBatchReadOnlyAsync",
+    );
+  },
+);

@@ -1,9 +1,7 @@
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import { listSessionTranscriptArchivesReadOnly } from "../config/sessions/session-accessor.sqlite-history.js";
-import {
-  readTranscriptStatsBatchReadOnlySync,
-  readTranscriptStatsSync,
-} from "../config/sessions/session-accessor.sqlite-read.js";
+import { readTranscriptStatsSync } from "../config/sessions/session-accessor.sqlite-read.js";
+import { readTranscriptStatsBatchReadOnlySync } from "../config/sessions/session-accessor.sqlite-transcript-stats-read.js";
 import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
 import {
   listDurableSqliteTargetPathsForSessionStorePath,

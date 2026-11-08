@@ -466,7 +466,8 @@
     "!dist/plugin-sdk/compiled-subprocess-testing.d.ts",
     "!dist/plugin-sdk/compiled-subprocess-testing.js",
     "!dist/plugin-sdk/memory-host-search.d.ts",
-    "!dist/plugin-sdk/codex-client-version-runtime.d.ts"
+    "!dist/plugin-sdk/codex-client-version-runtime.d.ts",
+    "!dist/plugin-sdk/memory-core-host-transcript-stats.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1414,6 +1415,9 @@
     },
     "./plugin-sdk/memory-core-host-status": {
       "default": "./dist/plugin-sdk/memory-core-host-status.js"
+    },
+    "./plugin-sdk/memory-core-host-transcript-stats": {
+      "default": "./dist/plugin-sdk/memory-core-host-transcript-stats.js"
     },
     "./plugin-sdk/memory-core-host-runtime-cli": {
       "default": "./dist/plugin-sdk/memory-core-host-runtime-cli.js"

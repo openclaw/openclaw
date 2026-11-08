@@ -2,6 +2,9 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "paths": {
+      "openclaw/plugin-sdk/memory-core-host-transcript-stats": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-transcript-stats.d.ts"
+      ],
       "openclaw/plugin-sdk/*": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"
       ],

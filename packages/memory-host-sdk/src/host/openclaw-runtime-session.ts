@@ -1,22 +1,19 @@
 // Session/runtime facade for memory transcript helpers.
 import path from "node:path";
-import { isMainThread } from "node:worker_threads";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { cloneEnvWithPlatformSemantics } from "../../../../src/config/config-env-vars.js";
 import {
   readTranscriptExportSnapshotReadOnlySync,
-  readTranscriptStatsBatchReadOnlySync as readAccessorTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
 } from "../../../../src/config/sessions/session-accessor.js";
 import type { SessionTranscriptReadScope } from "../../../../src/config/sessions/session-accessor.types.js";
 import {
-  captureSessionActorStorageOwner,
   withSessionActorStorage,
   type SelectedSessionActorStorageBinding,
 } from "../../../../src/config/sessions/session-actor-storage-binding.js";
 import { warnPluginSdkDeprecation } from "../../../../src/plugins/sdk-deprecation.js";
-import { getAsyncWorkSignal } from "../../../../src/shared/async-work-scope.js";
-import { IncognitoSessionSyncAccessError } from "../../../../src/state/incognito-session-error.js";
+import { captureMemoryOwner } from "./session-memory-authority.js";
+import { readTranscriptStatsBatchReadOnlySync } from "./session-transcript-stats-read.js";
 
 export { readAccessorTranscriptStatsSync as readTranscriptStatsSync };
 export { readTranscriptStatsAsync } from "../../../../src/config/sessions/session-transcript-stats.js";
@@ -30,46 +27,6 @@ export {
   listSessionEntriesReadOnly,
 } from "../../../../src/config/sessions/session-accessor.js";
 export { cloneEnvWithPlatformSemantics };
-
-/** Synchronous SDK calls cannot open memory-only session storage. */
-export function assertBoundIncognitoMemorySyncAccess(
-  scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "storePath" | "sessionKey">,
-  method: string,
-  replacement: string,
-) {
-  if (captureMemoryOwner(scope)) {
-    throw new IncognitoSessionSyncAccessError(method, replacement);
-  }
-}
-
-/** @deprecated Await readTranscriptStatsBatchReadOnlyAsync. Final compatibility day: 2026-12-31. */
-export function readTranscriptStatsBatchReadOnlySync(
-  scopes: Parameters<typeof readAccessorTranscriptStatsBatchReadOnlySync>[0],
-) {
-  if (isMainThread) {
-    warnPluginSdkDeprecation({
-      family: "session-store",
-      method: "readTranscriptStatsBatchReadOnlySync",
-      replacement: "readTranscriptStatsBatchReadOnlyAsync",
-    });
-  }
-  for (const scope of scopes) {
-    assertBoundIncognitoMemorySyncAccess(
-      scope,
-      "readTranscriptStatsBatchReadOnlySync",
-      "readTranscriptStatsBatchReadOnlyAsync",
-    );
-  }
-  return readAccessorTranscriptStatsBatchReadOnlySync(scopes);
-}
-
-function captureMemoryOwner(
-  scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "storePath" | "sessionKey">,
-) {
-  const signal = getAsyncWorkSignal();
-  const assertCurrent = () => signal?.throwIfAborted();
-  return captureSessionActorStorageOwner(scope, { assertCurrent, authorize: assertCurrent });
-}
 
 /** Capture the memory namespace once; reads never create a missing owner or session. */
 export function captureIncognitoMemoryReader(scope: SessionTranscriptReadScope) {
