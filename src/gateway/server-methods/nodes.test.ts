@@ -477,8 +477,9 @@ describe("nodeHandlers node.pair.approve", () => {
     });
     let reconciledBeforeReply = false;
     const runOperation = stateWorker.runOpenClawStateWorkerOperation;
-    const delivery = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-      (context, operation, options) =>
+    const delivery = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockImplementation((context, operation, options) =>
         runOperation(
           context,
           (scope) =>
@@ -499,7 +500,7 @@ describe("nodeHandlers node.pair.approve", () => {
             }),
           options,
         ),
-    );
+      );
     try {
       await invokeNode("node.pair.approve", approval.opts);
     } finally {
