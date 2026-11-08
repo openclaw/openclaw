@@ -1,0 +1,3 @@
+110
+# Exec-completion wake bundle MCP surface regressions: producer cap capture, sender denial, refresh, surface bound (#183589).
+# Exact measured net test LF growth; shared scalar unchanged and no spare ceiling credit.
