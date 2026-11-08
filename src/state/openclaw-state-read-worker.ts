@@ -329,22 +329,22 @@ class StateReadTransport {
       const task = pool.pool.runTask(
         () => {
           const physicalLocation = resolveSqliteDatabaseFilePath(location);
-          const requestForDispatch = () => {
-            authority.assertCurrent();
-            // Queue admission can outlive the captured file at this pathname.
-            if (expectedIdentity !== undefined) {
-              assertExistingDatabaseIdentity(physicalLocation, expectedIdentity);
-            }
-            return request;
-          };
+          const requestForDispatch = () =>
+            authority.acquire(() => {
+              // Queue admission can outlive the captured file at this pathname.
+              if (expectedIdentity !== undefined) {
+                assertExistingDatabaseIdentity(physicalLocation, expectedIdentity);
+              }
+              return request;
+            });
           const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation);
           if (!turn) {
             return requestForDispatch();
           }
-          return turn.then((release) => {
+          return turn.then(async (release) => {
             releaseAdmission = release;
             try {
-              return requestForDispatch();
+              return await requestForDispatch();
             } catch (error) {
               releaseAdmission();
               releaseAdmission = undefined;

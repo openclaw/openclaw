@@ -213,42 +213,53 @@ async function holdForeignStateOwner(
   return { exited };
 }
 
-it.each(["schema-lease", "offline-maintenance"] as const)(
-  "handles a foreign %s held after Gateway read admission",
-  async (holder) => {
-    await withOpenClawTestState({ label: `gateway-foreign-${holder}` }, async (state) => {
-      await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
-      const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
-      await closeOpenClawStateDatabaseAsync();
-      const stop = new AbortController();
-      let foreignOwner: Promise<unknown> | undefined;
-      let preparations = 0;
-      const ready = runStartupConfigPreflight({
-        gateway: true,
-        observe: false,
-        // The second preparation runs after read admission, right before native bootstrap.
-        beforeStatePreparation: async () => {
-          if (++preparations === 2) {
-            foreignOwner = (await holdForeignStateOwner(databasePath, holder, stop.signal)).exited;
-          }
-          return true;
-        },
-      });
-      try {
-        if (holder === "schema-lease") {
-          await expect(ready).resolves.toMatchObject({ snapshot: { valid: true } });
-        } else {
-          await expect(ready).rejects.toBeInstanceOf(StateDatabaseOfflineMaintenanceError);
+it.each([
+  ["schema-lease", "native-bootstrap"],
+  ["offline-maintenance", "native-bootstrap"],
+  ["schema-lease", "webhook-completion-read"],
+  ["offline-maintenance", "webhook-completion-read"],
+] as const)("handles a foreign %s held before %s", async (holder, stage) => {
+  await withOpenClawTestState({ label: `gateway-foreign-${holder}` }, async (state) => {
+    await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
+    const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
+    await closeOpenClawStateDatabaseAsync();
+    const stop = new AbortController();
+    let foreignOwner: Promise<unknown> | undefined;
+    let preparations = 0;
+    const ready = runStartupConfigPreflight({
+      gateway: true,
+      observe: false,
+      // The second preparation runs after read admission, right before native bootstrap.
+      beforeStatePreparation: async () => {
+        if (++preparations === 2 && stage === "native-bootstrap") {
+          foreignOwner = (await holdForeignStateOwner(databasePath, holder, stop.signal)).exited;
         }
-        expect(foreignOwner).toBeDefined();
-      } finally {
-        stop.abort();
-        await foreignOwner;
-        await closeOpenClawStateDatabaseAsync();
-      }
+        return true;
+      },
+      measure: async (name, run) => {
+        if (
+          stage === "webhook-completion-read" &&
+          name === "doctor.config-preflight.webhook-completion-read"
+        ) {
+          foreignOwner = (await holdForeignStateOwner(databasePath, holder, stop.signal)).exited;
+        }
+        return await run();
+      },
     });
-  },
-);
+    try {
+      if (holder === "schema-lease") {
+        await expect(ready).resolves.toMatchObject({ snapshot: { valid: true } });
+      } else {
+        await expect(ready).rejects.toBeInstanceOf(StateDatabaseOfflineMaintenanceError);
+      }
+      expect(foreignOwner).toBeDefined();
+    } finally {
+      stop.abort();
+      await foreignOwner;
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
+});
 
 it.each(["invalid config", "rejected guard"] as const)(
   "preserves pending native credentials before startup admission for %s",

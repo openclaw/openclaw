@@ -1,6 +1,9 @@
 import path from "node:path";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
+import { acquireWithWait } from "../infra/acquire-with-wait.js";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-errors.js";
 import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
 import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
@@ -24,6 +27,7 @@ import {
   openClawStateDatabaseCache,
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
 import { existingPathOrUndefined } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
@@ -102,6 +106,9 @@ export function startOpenClawStateReadOperation(
   let releasePreparedSource: (() => void) | undefined;
   let closing: Promise<void> | undefined;
   let cleaned = false;
+  let admissionDeadline: number | undefined;
+  const isPendingAdmission = (error: unknown) =>
+    error instanceof StateDatabaseAdmissionPendingError && error.databasePath === pathname;
   const authority: OpenClawStateReadAuthority = {
     signal,
     assertCurrent() {
@@ -109,6 +116,28 @@ export function startOpenClawStateReadOperation(
       context.maintenanceScope?.assertAdmission();
       context.admission.assertCurrent();
       openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
+    },
+    acquire<T>(operation: () => T): T | Promise<T> {
+      const acquire = () => {
+        authority.assertCurrent();
+        return operation();
+      };
+      try {
+        return acquire();
+      } catch (error) {
+        if (!isPendingAdmission(error)) {
+          throw error;
+        }
+      }
+      // Native borrowing and queued dispatch share one budget; never replay a read or snapshot.
+      admissionDeadline ??= performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS;
+      return acquireWithWait({
+        acquire,
+        shouldRetry: isPendingAdmission,
+        deadlineMs: admissionDeadline,
+        pollIntervalMs: 10,
+        sleep: (ms) => sleepWithAbort(ms, signal),
+      });
     },
   };
 
@@ -256,15 +285,24 @@ export function startOpenClawStateReadOperation(
     if (command.type === "admit") {
       return query(selectedTransport);
     }
-    const native =
-      !snapshot && preserveArtifacts
-        ? borrowOpenClawStateDatabaseForAsyncRead(pathname, "cached-read")
-        : undefined;
-    borrowed =
-      native ??
-      (!snapshot && !preserveArtifacts
-        ? retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read")
-        : undefined);
+    const borrowing = !snapshot
+      ? authority.acquire(() => {
+          const native = preserveArtifacts
+            ? borrowOpenClawStateDatabaseForAsyncRead(pathname, "cached-read")
+            : undefined;
+          return {
+            native,
+            borrowed:
+              native ??
+              (!preserveArtifacts
+                ? retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read")
+                : undefined),
+          };
+        })
+      : undefined;
+    const acquired = borrowing instanceof Promise ? await borrowing : borrowing;
+    const native = acquired?.native;
+    borrowed = acquired?.borrowed;
     const independentWarmSource =
       native &&
       selection.preferIndependentWarmRead &&

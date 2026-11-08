@@ -291,7 +291,15 @@ async function read(command: (typeof commands)[number]) {
   try {
     const outcome = await transport.startRead(
       { context: { environment, admission }, location: filename, checkFreshAdmission: false },
-      { signal, assertCurrent: admission.assertCurrent },
+      {
+        signal,
+        assertCurrent: admission.assertCurrent,
+        acquire<T>(operation: () => T): T {
+          signal.throwIfAborted();
+          admission.assertCurrent();
+          return operation();
+        },
+      },
     );
     if ("error" in outcome) {
       throw outcome.error;
