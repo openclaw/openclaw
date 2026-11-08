@@ -261,6 +261,18 @@ extension types and both unused-file scans pass. Both dependency phases and all
 three export phases completed with unchanged Gateway, UI and release-tool
 export findings. Exact-head CI and landing remain pending.
 
+Core tool-result classification, pinned main `9b8aa392679f`: consolidate three
+duplicate cases into the existing table that checks both classification APIs.
+Carry all six distinct completed/failure/exit inputs into that table; preserve
+every existing row and network-error, authenticated-error and hostile-reflection
+case. The unchanged baseline passed all 28 cases in
+[CI job 128652430604](https://github.com/openclaw/openclaw/actions/runs/42455052153/job/128652430604)
+at `f4976c968539`; the owner, test, dependency and harness inputs match the pinned
+base. The containing workflow failed elsewhere. The candidate has 31 expanded
+cases, 11 rather than 14 declarations, and 20 fewer test lines; production is
+unchanged. Candidate execution and removal scans remain pending because local
+dependencies are unqualified and the task-owned Testboxes did not start tests.
+
 Batches113–118, pinned main `a07facd84480`, used one native checkout and
 separate scoped proofs. Unchanged baselines passed: destinations6, History1,
 read coalescing1, fallback8, dictation33 and annotation lifetime11.
@@ -379,7 +391,7 @@ permission to delete without root qualification.
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Cua enum and Twitch settled flag. Each needs current-source and runtime keeper qualification.
-- Transfer rows before consolidating core failed-tool classification, CodeMode deadline duplication, Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
+- The core failed-tool consolidation above awaits candidate proof. Transfer rows before consolidating CodeMode deadline duplication, Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.
 - Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup and aggregate-only tool-result fidelity. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
 - Diagnostics OTel: the NodeSDK replay removal is runtime-qualified above; content capture proof remains a separate repair.
