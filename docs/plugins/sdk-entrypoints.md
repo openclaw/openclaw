@@ -281,6 +281,15 @@ and uses existing resource delivery for workers. Discovery assigns file ownershi
 request Gateway-local reads by returning source or path metadata.
 Stopping the binding revokes retained host readers.
 
+A transient node disconnect retries only idempotent Skill discovery, instruction
+and resource reads up to twice, after one and two seconds, within one 60-second budget.
+Each attempt reopens the configured node/workspace through current admission;
+partial output is discarded. Binding changes, cancellation and terminal denials
+stop the read. Watch subscriptions and mutations are not replayed by this retry.
+
+The node prepares both workspace command handlers before advertising availability.
+This keeps lazy source compilation outside a live request's progress deadline.
+
 The Skills worker also runs install and ClawHub operations. Install/remove use
 an authenticated adapter's duplex channel so Gateway policy and mutation checks
 run before the native filesystem operation. The adapter admits source roots and

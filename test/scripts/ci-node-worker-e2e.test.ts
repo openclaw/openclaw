@@ -32,7 +32,12 @@ it("selects node-worker process proofs for their owners without static test impo
     "src/cli/node-cli/register.ts",
     "src/agents/openclaw-plugin-tools.ts",
   ];
-  for (const file of [...owners, ...expectedFiles, "docs/ci.md"]) {
+  const skillsOwners = [
+    "extensions/file-transfer/index.ts",
+    "extensions/file-transfer/src/workspace-skills.ts",
+    "extensions/file-transfer/src/workspace-worker.ts",
+  ];
+  for (const file of [...owners, ...skillsOwners, ...expectedFiles, "docs/ci.md"]) {
     mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
     writeFileSync(path.join(cwd, file), "export {};\n");
   }
@@ -51,6 +56,17 @@ it("selects node-worker process proofs for their owners without static test impo
         .filter((file) => file.startsWith(runtimeRoot))
         .toSorted(),
     ).toEqual(expectedFiles);
+  }
+  for (const owner of skillsOwners) {
+    const targets = resolveChangedNodeTestTargets([owner], {
+      cwd,
+      selectionMode: "aggressive",
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    });
+    expect(targets.filter((file) => file.startsWith(runtimeRoot))).toEqual([
+      `${runtimeRoot}/paired-node-worker-skills-reconnect.e2e.test.ts`,
+    ]);
   }
   expect(
     resolveChangedNodeTestTargets(["docs/ci.md"], { cwd, selectionMode: "aggressive" }),

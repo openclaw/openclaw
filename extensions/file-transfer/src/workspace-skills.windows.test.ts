@@ -7,9 +7,13 @@ vi.mock("node:path", async (importOriginal) => {
   return { ...original, default: original.win32 };
 });
 
-vi.mock("./workspace-worker.js", () => ({
-  runNodeWorkspaceWorker: vi.fn(async () => "{}"),
-}));
+vi.mock("./workspace-worker.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./workspace-worker.js")>();
+  return {
+    ...original,
+    runNodeWorkspaceWorker: vi.fn(async () => "{}"),
+  };
+});
 
 it.each(["discovery", "watch"] as const)(
   "maps nested Windows Skill source paths for %s to the POSIX node root",
