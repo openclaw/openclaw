@@ -24,10 +24,14 @@ export function resolveSignalQuoteContext(params: {
     channel: "signal",
     accountId: params.accountId,
   });
-  const quoteText = renderSignalMentions(
-    normalizeOptionalString(params.dataMessage?.quote?.text) ?? "",
-    params.dataMessage?.quote?.mentions,
-  );
+  // Signal mention offsets refer to the untrimmed UTF-16 quote text.
+  const quoteText =
+    normalizeOptionalString(
+      renderSignalMentions(
+        params.dataMessage?.quote?.text ?? "",
+        params.dataMessage?.quote?.mentions,
+      ),
+    ) ?? "";
   const quoteSender = resolveSignalSender({
     sourceNumber: params.dataMessage?.quote?.author ?? null,
     sourceUuid: params.dataMessage?.quote?.authorUuid ?? null,

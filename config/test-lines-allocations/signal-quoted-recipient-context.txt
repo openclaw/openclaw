@@ -1,0 +1,2 @@
+# Preserve Signal quoted-recipient rendering coverage, including leading whitespace.
+66

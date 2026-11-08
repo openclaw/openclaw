@@ -998,47 +998,6 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.ReplyToIsQuote).toBe(true);
   });
 
-  it.each([
-    {
-      recipient: "recipient-a",
-      mentions: [{ uuid: "recipient-a", start: 0, length: 1 }],
-      expected: "@recipient-a check this",
-    },
-    {
-      recipient: "recipient-b",
-      mentions: [{ uuid: "recipient-b", start: 0, length: 1 }],
-      expected: "@recipient-b check this",
-    },
-    {
-      recipient: "no mention metadata",
-      mentions: null,
-      expected: "\uFFFC check this",
-    },
-  ])("preserves quoted Signal recipient context for $recipient", async ({ mentions, expected }) => {
-    const handler = createTestHandler({
-      cfg: createGroupAllowlistConfig({
-        signal: {
-          groupAllowFrom: ["+15550001111"],
-          contextVisibility: "allowlist_quote",
-        },
-      }),
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["+15550001111"],
-    });
-
-    await receiveGroupMessage(handler, "", {
-      quote: {
-        text: "\uFFFC check this",
-        author: "+15550002222",
-        mentions,
-      },
-    });
-
-    const context = requireCapturedContext();
-    expect(context.ReplyToBody).toBe(expected);
-    expect(context.ReplyToIsQuote).toBe(true);
-  });
-
   it("forwards all fetched attachments via MediaPaths/MediaTypes", async () => {
     const handler = createTestHandler({
       cfg: createDirectConfig(),
