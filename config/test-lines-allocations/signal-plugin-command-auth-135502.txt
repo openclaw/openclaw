@@ -1,0 +1,2 @@
+16
+# Signal access-policy regression: registered plugin command from an allowlisted direct sender is command-authorized (#135502).

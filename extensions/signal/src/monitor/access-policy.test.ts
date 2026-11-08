@@ -1,7 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { AccessGroupsConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, expect, it } from "vitest";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { resolveSignalSender } from "../identity.js";
 import { setSignalRuntime } from "../runtime.js";
 import { resolveSignalAccessState } from "./access-policy.js";
@@ -90,10 +91,25 @@ it.each<[string, "open" | "allowlist", string[], boolean, boolean]>([
     groupAllowFrom,
     sender: aliased ? aliasedSender : phone,
     isGroup: true,
-    hasControlCommand: true,
+    commandText: "/status",
   });
   expect(access).toMatchObject({
     senderAccess: { decision: "allow" },
     commandAccess: { authorized, shouldBlockControlCommand: !authorized },
   });
+});
+
+afterEach(() => clearPluginCommands());
+
+it("authorizes a registered plugin command from an allowlisted direct sender", async () => {
+  registerPluginCommand("signal-test-plugin", {
+    name: "signal-plugin-probe",
+    description: "Signal plugin command authorization probe",
+    handler: () => ({ text: "ok" }),
+  });
+  const access = await resolveAccess({
+    allowFrom: [phone.e164],
+    commandText: "/signal-plugin-probe",
+  });
+  expect(access.commandAccess.authorized).toBe(true);
 });
