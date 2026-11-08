@@ -46,7 +46,8 @@ const readyWindowRequestLimits = {
   // The three Settings sidebar assets can settle before page readiness on Linux.
   "skill-settings": 31,
   plugins: 56,
-  "plugin-settings": 59,
+  // Both lazy Settings sidebar assets can also finish before plugin readiness.
+  "plugin-settings": 61,
 };
 type Route = keyof typeof readyWindowRequestLimits;
 
