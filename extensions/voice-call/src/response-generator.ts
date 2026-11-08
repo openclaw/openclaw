@@ -462,8 +462,17 @@ export async function generateVoiceResponse(params: VoiceResponseParams) {
               return;
             }
             lastFlushedText = text;
+            // Playback runs in real time, so this await lasts as long as the
+            // reply takes to speak. A long reply outlives the runner's
+            // block-reply flush join, which abandons the await and proceeds
+            // with settlement while audio is still playing. Claim delivery at
+            // handoff so an abandoned flush can never re-speak the same reply;
+            // revert only on a real delivery failure.
+            deliveredEarly = true;
             try {
-              deliveredEarly = await onEarlyText(text);
+              if (!(await onEarlyText(text))) {
+                deliveredEarly = false;
+              }
             } catch (error) {
               console.error("[voice-call] Early TTS delivery failed:", error);
               deliveredEarly = false;

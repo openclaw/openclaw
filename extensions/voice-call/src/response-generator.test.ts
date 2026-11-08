@@ -327,6 +327,41 @@ describe("generateVoiceResponse", () => {
     });
   });
 
+  it("reports early delivery as pending while playback is still in flight", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
+    const answer = "A long chunked reply.";
+    const { promise: deliveryFinished, resolve: finishDelivery } = createDeferred<boolean>();
+    const { promise: deliveryStarted, resolve: reportDeliveryStarted } = createDeferred<void>();
+    const onEarlyText = vi.fn(async () => {
+      reportDeliveryStarted();
+      return await deliveryFinished;
+    });
+    let deliveryDuringPlayback: string | undefined;
+
+    runEmbeddedAgent.mockImplementationOnce(async (args) => {
+      await args.onBlockReply?.(spoken(answer), { assistantMessageIndex: 0 });
+      // Deliberately not awaited. Playback runs in real time, so a reply long
+      // enough to outlive the runner's block-reply flush join leaves this
+      // await abandoned while the audio is still playing.
+      const flushing = args.onBlockReplyFlush?.({
+        reason: "pre_compaction",
+        attemptAccepted: true,
+      });
+      await deliveryStarted;
+      deliveryDuringPlayback = await args.resolveReplyDelivery?.();
+      finishDelivery(true);
+      await flushing;
+      return agentResult(answer);
+    });
+
+    const { result } = await runGenerateVoiceResponse([], { runtime, onEarlyText });
+
+    expect(onEarlyText).toHaveBeenCalledOnce();
+    // Reporting "missing" here is what lets an abandoned flush speak the same
+    // reply a second time: the text is already handed to the transport.
+    expect(deliveryDuringPlayback).toBe("pending");
+    expect(result).toEqual({ text: answer, deliveredEarly: true });
+  });
   it.each(["before", "after"])(
     "discards pre-tool narration arriving %s the boundary",
     async (order) => {
