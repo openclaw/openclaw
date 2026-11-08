@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import {
@@ -30,6 +30,7 @@ import type { TranscriptSummaryWriteGuard } from "./store-types.js";
 
 type TranscriptSessionValues = Pick<
   MeetingTranscriptSessionRow,
+  | "started_at_ms"
   | "selector"
   | "export_key"
   | "session_slug"
@@ -45,7 +46,7 @@ type TranscriptSummaryValues = Pick<
 >;
 
 export function writeMeetingTranscriptSessionInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   params: {
     session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
     sessionValues: TranscriptSessionValues;
@@ -82,8 +83,9 @@ export function writeMeetingTranscriptSessionInDatabase(
     }
     sessionValues.metadata_json = metadata ? JSON.stringify(metadata) : null;
   }
+  const { started_at_ms, ...mutableValues } = sessionValues;
   const values = {
-    ...sessionValues,
+    ...mutableValues,
     ...deriveMeetingTranscriptSessionColumns(
       sessionValues.source_json,
       sessionValues.metadata_json,
@@ -96,6 +98,7 @@ export function writeMeetingTranscriptSessionInDatabase(
       .values({
         session_id: session.sessionId,
         started_at: session.startedAt,
+        started_at_ms,
         ...values,
         export_manifest_json: "{}",
         export_pending_json: "[]",
@@ -124,7 +127,7 @@ export function writeMeetingTranscriptSessionInDatabase(
 }
 
 export function deleteEmptyMeetingTranscriptCandidateInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   expectedInputRevision: string,
 ): void {
@@ -165,7 +168,7 @@ export function deleteEmptyMeetingTranscriptCandidateInDatabase(
 }
 
 export function writeMeetingTranscriptSummaryInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   summaryValues: TranscriptSummaryValues,
   guard?: TranscriptSummaryWriteGuard,
@@ -209,7 +212,7 @@ export function writeMeetingTranscriptSummaryInDatabase(
 }
 
 function updateMeetingTranscriptExportState(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   update: (
     stored:
@@ -229,7 +232,7 @@ function updateMeetingTranscriptExportState(
 }
 
 export function updateMeetingTranscriptExportManifestInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   exportedHashes: Readonly<Record<string, string>>,
   removedExports: ReadonlySet<string>,
@@ -253,7 +256,7 @@ export function updateMeetingTranscriptExportManifestInDatabase(
 }
 
 export function markMeetingTranscriptPendingExportsInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   fileNames: string[],
 ): void {

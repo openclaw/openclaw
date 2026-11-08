@@ -42,7 +42,7 @@ Common methods and events:
 | Nodes      | `node.list`, `node.invoke`, `node.pair.*`                  | Gateway WS plus node actions                 |
 | Events     | `tick`, `presence`, `agent`, `chat`, `health`, `shutdown`  | server push                                  |
 
-The authoritative advertised **discovery** inventory lives in `src/gateway/server-methods-list.ts` (`listGatewayMethods`, `GATEWAY_EVENTS`).
+The authoritative advertised **discovery** inventory lives in `src/gateway/server-methods-list.ts` (`listGatewayMethods`) and `src/gateway/events.ts` (`GATEWAY_EVENTS`).
 
 ## Where the schemas live
 
@@ -50,7 +50,7 @@ The authoritative advertised **discovery** inventory lives in `src/gateway/serve
 - Generator selection: `packages/gateway-protocol/src/schema/protocol-schema-selection.ts` derives registry names from the shared barrel's `*Schema` exports and explicit `skill-library.ts` imports, removing the `Schema` suffix. `EXCLUDED_SCHEMA_EXPORTS` keeps helpers and schemas with supplemental registry owners out of this derived selection.
 - Generator registry: `protocol-schemas.ts` composes the derived selection, `MigrationProtocolSchemas`, and `SessionPlacementProtocolSchemas`, rejecting duplicate keys and retaining the original TypeBox objects. `protocol-schema-types.ts` preserves each member's schema type and public readonly/writable modifiers.
 - Runtime validators: `packages/gateway-protocol/src/validator-registry.ts`, using the lazy TypeBox Compile owner in `protocol-validator.ts`
-- Advertised feature/discovery registry: `src/gateway/server-methods-list.ts`
+- Advertised feature/discovery registries: `src/gateway/server-methods-list.ts` and `src/gateway/events.ts`
 - Server handshake and method dispatch: `src/gateway/server-core-runtime.ts`
 - Node client: `src/gateway/client.ts`
 - Generated JSON Schema: `dist/protocol.schema.json` (build output, not committed)
@@ -285,10 +285,10 @@ Generated JSON Schema is a build artifact, not committed to the repo. During the
 ## When you change schemas
 
 1. Update the TypeBox schemas in the owning `packages/gateway-protocol/src/schema/*.ts` module. Check that a new module is exported by `schema-modules.ts`, review its automatic `*Schema` membership, and update helper exclusions or existing supplemental owner maps as needed.
-2. Register the method/event in `src/gateway/server-methods-list.ts`.
+2. Register the method in `src/gateway/server-methods-list.ts` or the event in `src/gateway/events.ts`.
 3. Update `src/gateway/method-scopes.ts` when the new RPC needs operator or node scope classification.
 4. Run `pnpm protocol:check`.
-5. Commit the regenerated Swift models.
+5. Commit the schema and generator source changes together. Generated JSON, Swift, and Kotlin outputs stay in ignored build directories and are not committed.
 
 ## Related
 

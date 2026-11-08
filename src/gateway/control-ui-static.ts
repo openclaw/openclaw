@@ -9,26 +9,21 @@ import {
 } from "../infra/http-content-encoding.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import type { ControlUiRootAsset } from "./control-ui-file.js";
+import { buildPdfPreviewWorkerCspHeader } from "./control-ui-csp.js";
+import { isControlUiCompressibleAsset, type ControlUiRootAsset } from "./control-ui-file.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import { matchesHttpIfModifiedSince } from "./http-conditional.js";
 import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
+import type { ControlUiRootState } from "./server-control-ui-root.js";
+
+const CONTROL_UI_ASSETS_MISSING_MESSAGE =
+  "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES = 4;
-const CONTROL_UI_COMPRESSIBLE_EXTENSIONS = new Set([
-  ".css",
-  ".html",
-  ".js",
-  ".json",
-  ".svg",
-  ".txt",
-  ".wasm",
-  ".webmanifest",
-]);
 
 const CONTROL_UI_CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".html": "text/html; charset=utf-8",
@@ -42,6 +37,7 @@ const CONTROL_UI_CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".jpeg": "image/jpeg",
   ".gif": "image/gif",
   ".webp": "image/webp",
+  ".mp4": "video/mp4",
   ".ico": "image/x-icon",
   ".txt": "text/plain; charset=utf-8",
   ".wasm": "application/wasm",
@@ -70,28 +66,28 @@ export function resolveControlUiHtmlEncoding(req: IncomingMessage): ControlUiEnc
   );
 }
 
-export function isControlUiCompressibleAsset(filePath: string): boolean {
-  return CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
-}
-
 type ControlUiRepresentation = {
   file: ControlUiRootAsset["file"];
   encoding?: ControlUiContentEncoding;
 };
 
-export function resolveControlUiRepresentation(params: {
+export function resolveControlUiAssetEncodings(params: {
   req: IncomingMessage;
-  asset: ControlUiRootAsset;
   contentPath: string;
   precompressed: boolean;
-}): ControlUiRepresentation | null {
-  const { req, asset, precompressed } = params;
-  const encodings = resolveHttpContentEncodings(
-    req.headers?.["accept-encoding"],
-    precompressed && isControlUiCompressibleAsset(params.contentPath)
+}): ControlUiRepresentationEncoding[] {
+  return resolveHttpContentEncodings(
+    params.req.headers?.["accept-encoding"],
+    params.precompressed && isControlUiCompressibleAsset(params.contentPath)
       ? CONTROL_UI_DYNAMIC_ENCODINGS
       : new Set<ControlUiContentEncoding>(),
   );
+}
+
+function resolveControlUiRepresentation(
+  asset: ControlUiRootAsset,
+  encodings: readonly ControlUiRepresentationEncoding[],
+): ControlUiRepresentation | null {
   // A missing sidecar changes availability, not this request's encoding preferences.
   for (const selected of encodings) {
     if (selected === "identity") {
@@ -110,11 +106,11 @@ export function resolveControlUiRepresentation(params: {
 
 function setControlUiEncodingHeaders(
   res: ServerResponse,
-  extension: string,
+  filePath: string,
   encoding: ControlUiRepresentationEncoding,
 ) {
   res.setHeader("Vary", "Accept-Encoding");
-  if (!CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(extension)) {
+  if (!isControlUiCompressibleAsset(filePath)) {
     return;
   }
   if (encoding !== "identity") {
@@ -125,22 +121,27 @@ function setControlUiEncodingHeaders(
 function setControlUiFileHeaders(
   res: ServerResponse,
   filePath: string,
-  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding; lastModifiedMs?: number },
+  options?: {
+    immutable?: boolean;
+    cacheControl?: string;
+    encoding?: ControlUiContentEncoding;
+    lastModifiedMs?: number;
+  },
 ) {
   const extension = path.extname(filePath).toLowerCase();
   res.setHeader("Content-Type", CONTROL_UI_CONTENT_TYPES[extension] ?? "application/octet-stream");
   res.setHeader(
     "Cache-Control",
-    options?.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache",
+    options?.cacheControl ?? (options?.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache"),
   );
   if (options?.lastModifiedMs !== undefined) {
     res.setHeader("Last-Modified", new Date(options.lastModifiedMs).toUTCString());
   }
-  setControlUiEncodingHeaders(res, extension, options?.encoding ?? "identity");
+  setControlUiEncodingHeaders(res, filePath, options?.encoding ?? "identity");
 }
 
 /** Revalidate no-cache static assets without generating entity tags. */
-export function isControlUiFileUnmodified(
+function isControlUiFileUnmodified(
   req: IncomingMessage,
   lastModifiedMs: number,
   nowMs = Date.now(),
@@ -156,16 +157,16 @@ export function isControlUiFileUnmodified(
   return matchesHttpIfModifiedSince(req, lastModifiedMs, nowMs);
 }
 
-export function respondControlUiNotModified(
+function respondControlUiNotModified(
   res: ServerResponse,
-  options: { immutable?: boolean; lastModifiedMs: number },
+  options: { immutable?: boolean; cacheControl?: string; lastModifiedMs: number },
 ) {
   res.statusCode = 304;
   // A 304 repeats the caching headers of the 200 it stands in for so caches
   // refresh their freshness metadata alongside the validator.
   res.setHeader(
     "Cache-Control",
-    options.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache",
+    options.cacheControl ?? (options.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache"),
   );
   res.setHeader("Last-Modified", new Date(options.lastModifiedMs).toUTCString());
   res.setHeader("Vary", "Accept-Encoding");
@@ -177,6 +178,7 @@ export function respondHeadForControlUiFile(
   filePath: string,
   options?: {
     immutable?: boolean;
+    cacheControl?: string;
     encoding?: ControlUiContentEncoding;
     contentLength?: number;
     lastModifiedMs?: number;
@@ -190,14 +192,72 @@ export function respondHeadForControlUiFile(
   res.end();
 }
 
-export function serveControlUiAsset(
+function serveControlUiAsset(
   res: ServerResponse,
   filePath: string,
   body: Buffer,
-  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding; lastModifiedMs?: number },
+  options?: {
+    immutable?: boolean;
+    cacheControl?: string;
+    encoding?: ControlUiContentEncoding;
+    lastModifiedMs?: number;
+  },
 ) {
   setControlUiFileHeaders(res, filePath, options);
   res.end(body);
+}
+
+/** Return false only when the selected representation still needs its body read. */
+export function respondControlUiStaticAsset(
+  req: IncomingMessage,
+  res: ServerResponse,
+  asset: ControlUiRootAsset,
+  options: {
+    fileRel: string;
+    encodings: readonly ControlUiRepresentationEncoding[];
+    immutable: boolean;
+  },
+): boolean {
+  const originatedAtMs = Date.now();
+  const lastModifiedMs = Math.floor(Math.min(asset.file.mtimeMs, originatedAtMs) / 1_000) * 1_000;
+  const representation = resolveControlUiRepresentation(asset, options.encodings);
+  if (!representation) {
+    respondControlUiNotAcceptable(res);
+    return true;
+  }
+  let cacheControl: string | undefined;
+  if (options.fileRel === "pdf-preview-worker.js") {
+    const ingress = getRemoteControlUiIngressContext(req);
+    assertRemoteControlUiIngressCurrent(ingress);
+    res.setHeader("Content-Security-Policy", buildPdfPreviewWorkerCspHeader(ingress));
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+    // Remote ancestor policy belongs to this ingress, not a shared immutable asset.
+    if (ingress) {
+      cacheControl = "private, no-store";
+    }
+  }
+  const headers = {
+    immutable: options.immutable,
+    cacheControl,
+    encoding: representation.encoding,
+    lastModifiedMs,
+  };
+  if (isControlUiFileUnmodified(req, lastModifiedMs, originatedAtMs)) {
+    respondControlUiNotModified(res, headers);
+    return true;
+  }
+  if (req.method === "HEAD") {
+    respondHeadForControlUiFile(res, options.fileRel, {
+      ...headers,
+      contentLength: representation.file.size,
+    });
+  } else if (representation.file.body) {
+    serveControlUiAsset(res, options.fileRel, representation.file.body, headers);
+  } else {
+    return false;
+  }
+  return true;
 }
 
 function cachedCompressedControlUiHtml(
@@ -228,6 +288,22 @@ function cachedCompressedControlUiHtml(
   return compression;
 }
 
+export function respondControlUiAssetsUnavailable(res: ServerResponse, root?: ControlUiRootState) {
+  const message =
+    root?.kind === "preparing"
+      ? "Control UI assets are being prepared. Try again shortly."
+      : root?.kind === "failed"
+        ? "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`."
+        : root?.kind === "invalid" && root.path
+          ? `Control UI assets not found at ${root.path}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`
+          : CONTROL_UI_ASSETS_MISSING_MESSAGE;
+  if (root?.kind === "preparing") {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Retry-After", "1");
+  }
+  respondPlainText(res, 503, message);
+}
+
 export function respondControlUiNotAcceptable(res: ServerResponse) {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Vary", "Accept-Encoding");
@@ -239,14 +315,13 @@ export async function sendControlUiHtmlBody(
   res: ServerResponse,
   body: string,
   isCurrent?: () => boolean,
-  staleRedirectPath?: string,
 ) {
   const encoding = resolveControlUiHtmlEncoding(req);
   if (encoding === "not-acceptable") {
     respondControlUiNotAcceptable(res);
     return;
   }
-  setControlUiEncodingHeaders(res, ".html", encoding);
+  setControlUiEncodingHeaders(res, "index.html", encoding);
   const encoded =
     encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding);
   const ingress = getRemoteControlUiIngressContext(req);
@@ -255,18 +330,10 @@ export async function sendControlUiHtmlBody(
   }
   if (isCurrent && !isCurrent()) {
     res.removeHeader("Content-Encoding");
-    if (!staleRedirectPath) {
-      respondPlainText(res, 403, "Session access changed. Reload the conversation.");
-      return;
-    }
-    // A session entry re-enters through its plain app path, where the normal
-    // auth gate decides access; the prepared entry document is never sent.
-    res.statusCode = 303;
-    res.setHeader("Location", staleRedirectPath);
     res.setHeader("Cache-Control", "no-store");
-    res.removeHeader("Content-Type");
     res.removeHeader("Content-Security-Policy");
-    res.end();
+    res.removeHeader("X-OpenClaw-Session-Entry");
+    respondPlainText(res, 403, "Session access changed. Reload the conversation or log in again.");
     return;
   }
   res.end(encoded);

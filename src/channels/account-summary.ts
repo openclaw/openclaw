@@ -108,6 +108,28 @@ export function formatChannelAllowFrom(params: {
   return normalizeStringEntries(params.allowFrom);
 }
 
+export function buildChannelAccountNotes(
+  snapshot: ChannelAccountSnapshot,
+  credentialNote?: string,
+): string[] {
+  const sources = [
+    ["token", snapshot.tokenSource],
+    ["bot", snapshot.botTokenSource],
+    ["app", snapshot.appTokenSource],
+    ["signing", snapshot.signingSecretSource],
+  ].flatMap(([label, source]) => (source && source !== "none" ? [`${label}:${source}`] : []));
+  return [
+    snapshot.enabled === false ? "disabled" : undefined,
+    snapshot.dmPolicy ? `dm:${snapshot.dmPolicy}` : undefined,
+    ...sources,
+    credentialNote,
+    snapshot.baseUrl,
+    snapshot.port != null ? `port:${snapshot.port}` : undefined,
+    snapshot.cliPath ? `cli:${snapshot.cliPath}` : undefined,
+    snapshot.dbPath ? `db:${snapshot.dbPath}` : undefined,
+  ].filter((note): note is string => Boolean(note));
+}
+
 export function resolveChannelAccountEnabled(params: {
   plugin: ChannelPlugin;
   account: unknown;
@@ -124,16 +146,12 @@ export async function resolveChannelAccountConfigured(params: {
   plugin: ChannelPlugin;
   account: unknown;
   cfg: OpenClawConfig;
-  readAccountConfiguredField?: boolean;
 }): Promise<boolean> {
   if (params.plugin.config.isConfigured) {
     return await params.plugin.config.isConfigured(params.account, params.cfg);
   }
-  if (params.readAccountConfiguredField) {
-    // Status inspection can project an explicit configured=false marker. Normal runtime
-    // account objects default to configured unless the plugin owns a stricter check.
-    const configured = isRecord(params.account) ? params.account.configured : undefined;
-    return configured !== false;
-  }
-  return true;
+  // Status inspection can project an explicit configured=false marker. Account
+  // objects otherwise default to configured unless the plugin owns a stricter check.
+  const configured = isRecord(params.account) ? params.account.configured : undefined;
+  return configured !== false;
 }

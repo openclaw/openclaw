@@ -25,7 +25,10 @@ For switching channels, see [Release channels](/install/development-channels).
 Extended-stable includes the Gateway, official npm plugins, and Docker images.
 It does not include native apps or ClawHub publication, and it does not change
 the regular stable channel. Its GitHub release is not marked Latest. A monthly
-line retires when `main` advances into the next month.
+line retires when `main` advances into the next month. Maintain only one
+extended-stable line: the trailing completed month relative to `main`'s version;
+older `.33+` lines are retired. Publishing a retired line requires an explicit
+maintainer decision; never bypass the release guards.
 
 ## Version naming
 
@@ -69,16 +72,20 @@ first published on the beta channel. Beta-profile evidence cannot qualify stable
 Every failed test needs an explicit release-lead decision: blocker or flake.
 Rerun a flake on the same Release SHA at most twice, file its fix-in-parallel
 issue or PR on `main`, and retain the original failure. Do not re-cut, change
-tooling, or start another Full Release Validation solely to clear a flake; a
-selected job that remains red blocks publication.
+tooling, or start another Full Release Validation solely to clear a flake.
+An intentional [release-tooling waiver](/reference/full-release-validation/evidence#release-tooling-waivers)
+is a reviewed policy change, not a retry. It requires validation under the new
+pinned tooling; the candidate stays unchanged.
 
 Blocking jobs include the CI coverage gate, seal/evidence,
 Build Artifacts, install smoke, survivor lanes, `update-first-hop-compat*`, pack/npm
 qualification, package integrity, and all Linux/Windows/macOS Gateway checks,
 including Windows packaged install/upgrade checks in Release Checks. A cancelled
 run still blocks. The selected `openclaw/ci-gate` must succeed; failed, missing,
-skipped, or cancelled coverage blocks. Publication waivers cannot bypass failures
-or required coverage. Validation covers source CI, packages, plugins,
+skipped, or cancelled coverage blocks. Only exact failed live-provider or
+Telegram leaves may use the checked-in release-tooling policy. FRV itself must
+conclude **success** before publication; the publisher has no waiver path.
+Validation covers source CI, packages, plugins,
 Gateway installs and upgrades, and selected app, UI, Telegram, QA, and
 live-provider checks. All-group qualification includes all nine Gateway
 install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwise
@@ -124,6 +131,62 @@ reason to wait, re-cut, or pause.
 See [Full release validation](/reference/full-release-validation) for coverage
 by profile and how to interpret the results.
 
+### Operator capabilities
+
+Repository write access, organization membership, branch-policy reads, CI bypass,
+release environment approval, and production deployment are separate capabilities.
+An unavailable [prior-CI exception](/reference/scripts/prior-ci) is not a blanket
+release blocker or proof that environment approval is unavailable. Conversely,
+repository MAINTAIN access or CI-bypass authority does not authorize an environment
+approval or production deployment.
+
+The candidate checklist reports pending environment approvals for its authenticated
+caller. It prints an approval command only when GitHub reports that caller can
+approve; otherwise an eligible environment reviewer must act. An unavailable
+approval-status read is reported as unknown, not as no pending approval, and does
+not stop validation monitoring. Public release evidence can still use its existing
+anonymous rate-limit fallback; caller-specific approval reads cannot.
+
+### Watch publication
+
+After the stable orchestrator has dispatched publication, keep its read-only
+watcher running in a separate shell:
+
+```bash
+pnpm release:stable YYYY.M.PATCH --watch
+```
+
+For any publish parent, including beta and resumed runs, watch it by run ID:
+
+```bash
+pnpm release:watch --run <publish-parent-run-id>
+```
+
+`release:stable --watch` authenticates the parent against the orchestrator's
+retained state. `release:watch` derives the parent's protected tooling tag and
+SHA from the run itself. Both correlate the parent's npm and ClawHub children by
+the exact parent run and attempt each child records, plus tooling identity. They
+exit as soon as an environment approval is pending on the parent or a child, or
+a publication run or job fails. That includes `continue-on-error` jobs such as
+the core child's Windows notification. Otherwise they wait until the observed
+publication tree succeeds. They only perform GitHub reads; they never approve,
+rerun, cancel, dispatch, or publish. On a GitHub rate limit they back off
+beyond the poll interval instead of failing.
+
+The exit contract is:
+
+- `0`: the observed tree succeeded, or `--once` found no item needing attention.
+- `1`: a pending environment approval, failed publication run, or failed job needs attention.
+- `2`: usage, identity, transport, truncation, timeout, or observation failed.
+
+Use `--once --json` for a single machine-readable snapshot. JSON has
+`contractVersion: 1` and a top-level `state` of `active`, `attention`, or
+`success`, plus exact parent, child, pending-approval, failed-run, and failed-job records.
+`--poll-seconds` changes the default interval (60 seconds for `release:stable`,
+120 for `release:watch`) and
+`--timeout-seconds` changes the default 12-hour observation deadline. These
+options do not create a daemon or persist watcher state.
+
 ### Plugin SDK evidence transport
 
 SDK comparison reports and release evidence use the
@@ -153,13 +216,15 @@ release dispatch or publication.
 New candidate qualification records three separate identities:
 
 - **C — candidate:** the exact commit whose source and publication bytes are checked.
-- **Q — qualification:** the full workflow closure at C, including reusable workflows,
-  local actions, scripts, planners, contracts, and coverage data. By default **Q=C**.
-- **P — admission, verification, and publication tooling:** an independently trusted
-  main revision or protected publication tag. P may differ from C/Q; C/Q does not
-  need to be an ancestor of P. Trust in P does not replace qualification of C.
+- **Q — qualification:** the candidate's test workflow closure at C, including
+  reusable workflows, local actions, scripts, planners, contracts, and coverage
+  data. By default **Q=C**.
+- **P — admission, aggregate validation, verification, and publication tooling:**
+  an independently trusted main revision or protected publication tag. P owns
+  the checked-in waiver policy and FRV's final verdict. P may differ from C/Q;
+  C/Q does not need to be an ancestor of P. Trust in P does not replace testing C.
 
-The canonical SHA-pinned helper first asks P to record the reviewed operator
+The standard SHA-pinned helper first asks P to record the reviewed operator
 attestation, complete normalized inputs, and data-only frozen Q coverage in an
 immutable admission artifact. Only then does that same helper dispatch Full
 Release Validation from an immutable `release-ci/*` ref at Q. A publication
@@ -169,8 +234,8 @@ Admission is not a successful test result or publication approval.
 `pnpm release:candidate --workflow-sha <P>` pins helper and publication tooling,
 not the qualification harness. Stable `npm-stable-v1` and admitted stable/full
 qualification already include mock-provider package Telegram proof. The helper
-reuses that authenticated proof for the exact FRV-qualified package, without a
-Telegram waiver; `npm-beta-v1` remains deferred, never passed. Separately packed
+reuses that authenticated proof for the exact FRV-qualified package;
+`npm-beta-v1` remains deferred, never passed. Separately packed
 historical packages and explicitly selected live-provider Telegram checks need
 their own proof at C. A supplemental check uses only the original retained
 `release-ci/*` ref verified at Q=C, with `harness_ref` pinned to that SHA; missing

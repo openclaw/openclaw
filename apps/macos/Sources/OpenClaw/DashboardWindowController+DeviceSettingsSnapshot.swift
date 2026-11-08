@@ -92,7 +92,7 @@ extension DashboardWindowController {
                     precise: defaults.object(forKey: locationPreciseKey) as? Bool ?? true),
                 additionalEntries: additionalEntries),
             voice: .init(
-                supported: voiceWakeSupported && SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(
+                supported: SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(
                     localeID: state.voiceWakeLocaleID),
                 wakeEnabled: state.swabbleEnabled,
                 wakeTriggersTalkMode: state.voiceWakeTriggersTalkMode,

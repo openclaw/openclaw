@@ -1,18 +1,26 @@
-import { createEffect, untrack } from "@solidjs/signals";
+import { createEffect } from "@solidjs/signals";
 
-/** Keep native text selection when an owner republishes the displayed value. */
-export function liveValue(value: () => string) {
-  let field: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | undefined;
-  createEffect(value, (next) => {
+/** Apply committed values to native fields while preserving unchanged text selection. */
+export function liveValue<T extends HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+  value: () => string,
+  onValueChange?: (field: T) => void,
+) {
+  let field: T | undefined;
+  let committedValue: string | undefined;
+  const writeValue = (next: string) => {
     if (field && field.value !== next) {
       field.value = next;
+      onValueChange?.(field);
     }
+  };
+  createEffect(value, (next) => {
+    committedValue = next;
+    writeValue(next);
   });
-  return (element: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement) => {
+  return (element: T) => {
     field = element;
-    const next = untrack(value);
-    if (element.value !== next) {
-      element.value = next;
+    if (committedValue !== undefined) {
+      writeValue(committedValue);
     }
   };
 }

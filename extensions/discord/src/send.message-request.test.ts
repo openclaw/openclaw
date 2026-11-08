@@ -1,6 +1,6 @@
 import type { APIMessageTopLevelComponent } from "discord-api-types/v10";
 import { describe, expect, it } from "vitest";
-import { serializePayload } from "./internal/discord.js";
+import { serializePayload } from "./internal/payload.js";
 
 describe("buildDiscordMessageRequest", () => {
   it.each([

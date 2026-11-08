@@ -171,11 +171,8 @@ function readImmutableManifest(repository, source) {
     throw new Error("GitHub returned invalid immutable Linux release identity.");
   }
   const proof = manifest.value.linuxPublication;
-  const expected = [
-    manifest.assetName,
-    `OpenClaw-${manifest.version}-amd64.deb`,
-    "SHA256SUMS.linux-app.txt",
-    ...(proof?.assets?.length === 6
+  const companionAssets =
+    proof?.assets?.length === 6
       ? [
           `OpenClaw-${manifest.version}-darwin-aarch64.dmg`,
           `OpenClaw-${manifest.version}-darwin-aarch64.app.tar.gz`,
@@ -183,7 +180,12 @@ function readImmutableManifest(repository, source) {
         ]
       : proof?.assets?.length === 4
         ? [`OpenClaw-${manifest.version}-windows-x86_64.exe`]
-        : []),
+        : [];
+  const expected = [
+    manifest.assetName,
+    `OpenClaw-${manifest.version}-amd64.deb`,
+    "SHA256SUMS.linux-app.txt",
+    ...companionAssets,
   ];
   const metadata = current.assets.filter((entry) => entry.name === name);
   if (
@@ -207,6 +209,9 @@ function readImmutableManifest(repository, source) {
   ) {
     throw new Error("Immutable Linux publication identity or metadata digest is invalid.");
   }
+  // Linux updater assets are permanent. Non-Linux companions built by the same
+  // workflow may be withdrawn by deleting them; a present one must still match.
+  const withdrawnCompanionAssets = [];
   for (const entry of proof.assets) {
     const matches = current.assets.filter((asset) => asset.name === entry.name);
     if (
@@ -214,7 +219,15 @@ function readImmutableManifest(repository, source) {
       entry.id < 1 ||
       !Number.isSafeInteger(entry.size) ||
       entry.size < 1 ||
-      !/^[a-f0-9]{64}$/u.test(entry.sha256) ||
+      !/^[a-f0-9]{64}$/u.test(entry.sha256)
+    ) {
+      throw new Error("Immutable Linux publication differs from its public asset inventory.");
+    }
+    if (matches.length === 0 && companionAssets.includes(entry.name)) {
+      withdrawnCompanionAssets.push(entry.name);
+      continue;
+    }
+    if (
       matches.length !== 1 ||
       matches[0].id !== entry.id ||
       matches[0].state !== "uploaded" ||
@@ -231,7 +244,17 @@ function readImmutableManifest(repository, source) {
     throw new Error("Immutable Linux publication source changed.");
   }
   inspectLinuxSourceAssets(repository, source, manifest);
-  return manifest;
+  return { ...manifest, withdrawnCompanionAssets };
+}
+
+function immutableObservation(immutable) {
+  return {
+    name: `OpenClaw-${immutable.version}-linux.json`,
+    sha256: hash(immutable.bytes),
+    ...(immutable.withdrawnCompanionAssets.length > 0
+      ? { withdrawnCompanionAssets: immutable.withdrawnCompanionAssets }
+      : {}),
+  };
 }
 
 function verifyAuthority(options) {
@@ -455,15 +478,7 @@ export function inspectLinuxUpdaterManifest({ repository, carrierTag }) {
   const immutable = readImmutableManifest(repository, carrier);
   const manifest = readManifest(repository, carrier);
   if (!manifest) {
-    return immutable
-      ? {
-          carrierTag,
-          immutableManifest: {
-            name: `OpenClaw-${immutable.version}-linux.json`,
-            sha256: hash(immutable.bytes),
-          },
-        }
-      : null;
+    return immutable ? { carrierTag, immutableManifest: immutableObservation(immutable) } : null;
   }
   const source = readRelease(repository, manifest.sourceTag);
   const publication = inspectLinuxSourceAssets(repository, source, manifest);
@@ -485,14 +500,7 @@ export function inspectLinuxUpdaterManifest({ repository, carrierTag }) {
     carrierTag,
     manifestSha256,
     sourceVersion: manifest.version,
-    ...(immutable
-      ? {
-          immutableManifest: {
-            name: `OpenClaw-${immutable.version}-linux.json`,
-            sha256: hash(immutable.bytes),
-          },
-        }
-      : {}),
+    ...(immutable ? { immutableManifest: immutableObservation(immutable) } : {}),
   };
 }
 
@@ -562,6 +570,9 @@ function status(options, record) {
     manifestSha256: hash(manifest.bytes),
     needsUpdaterPublication,
     needsChannelPublication,
+    ...(immutable?.withdrawnCompanionAssets.length > 0
+      ? { withdrawnCompanionAssets: immutable.withdrawnCompanionAssets }
+      : {}),
   });
 }
 

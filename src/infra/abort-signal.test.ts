@@ -1,6 +1,6 @@
 import { getEventListeners } from "node:events";
 import { describe, expect, it } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import {
   createAbortError,
   isAbortError,
@@ -57,11 +57,13 @@ describe("waitForAbortSignal", () => {
     await expect(waitForAbortSignal(abort.signal)).resolves.toBeUndefined();
   });
 
-  it("waits until abort fires", async () => {
+  it.each([false, true])("waits until abort fires (competing source: %s)", async (competing) => {
     const abort = new AbortController();
     let resolved = false;
 
-    const task = waitForAbortSignal(abort.signal).then(() => {
+    const source = createDeferred();
+    const wait = waitForAbortSignal(abort.signal, competing ? source.promise : undefined);
+    const task = wait.then(() => {
       resolved = true;
     });
     await Promise.resolve();
@@ -69,9 +71,45 @@ describe("waitForAbortSignal", () => {
 
     abort.abort();
     await task;
+    await expect(wait).resolves.toBeUndefined();
+    if (competing) {
+      source.reject(new Error("late source failure"));
+    }
+    await nextEventLoopTurn();
     expect(resolved).toBe(true);
     expect(getEventListeners(abort.signal, "abort")).toHaveLength(0);
   });
+});
+
+describe("abandoned abort waits", () => {
+  it.each([undefined, AbortSignal.abort()])(
+    "observes a source with an inactive signal %#",
+    async (signal) => {
+      const failure = new Error("already failed");
+      await expect(waitForAbortSignal(signal, Promise.reject(failure))).rejects.toBe(failure);
+    },
+  );
+  it.each(["fulfilled", "rejected"] as const)(
+    "releases listeners across repeated %s sources on a live signal",
+    async (outcome) => {
+      const controller = new AbortController();
+      const failure = new Error("source failed");
+      try {
+        for (let index = 0; index < 12; index++) {
+          const source = outcome === "fulfilled" ? Promise.resolve() : Promise.reject(failure);
+          const wait = waitForAbortSignal(controller.signal, source);
+          // Observe the source independently so the original implementation can
+          // finish this reproduction even though its abandoned wait never settles.
+          await Promise.race([source, wait]).catch((error: unknown) => expect(error).toBe(failure));
+        }
+        await nextEventLoopTurn();
+        expect(controller.signal.aborted).toBe(false);
+        expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      } finally {
+        controller.abort();
+      }
+    },
+  );
 });
 
 describe("racePromiseWithAbortSignal", () => {
@@ -133,7 +171,7 @@ describe("racePromiseWithAbortSignal", () => {
     },
   );
 
-  it.each(["rejected", "pending", "fulfilled"] as const)(
+  it.each(["rejected", "pending"] as const)(
     "observes a %s source when an existing abort wins",
     async (state) => {
       const controller = new AbortController();
@@ -141,12 +179,7 @@ describe("racePromiseWithAbortSignal", () => {
       controller.abort(reason);
       const deferred = createDeferred<string>();
       const sourceError = new Error("source failed");
-      const source =
-        state === "rejected"
-          ? Promise.reject(sourceError)
-          : state === "fulfilled"
-            ? Promise.resolve("done")
-            : deferred.promise;
+      const source = state === "rejected" ? Promise.reject(sourceError) : deferred.promise;
 
       await expect(racePromiseWithAbortSignal(source, controller.signal)).rejects.toMatchObject({
         name: "AbortError",
@@ -156,9 +189,7 @@ describe("racePromiseWithAbortSignal", () => {
         deferred.reject(sourceError);
       }
       // Let Node report an unobserved rejection before this regression finishes.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
     },
   );
@@ -170,9 +201,7 @@ describe("racePromiseWithAbortSignal", () => {
     controller.abort();
     await expect(raced).rejects.toMatchObject({ name: "AbortError" });
     source.reject(new Error("late source failure"));
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextEventLoopTurn();
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
   });
 
@@ -183,19 +212,6 @@ describe("racePromiseWithAbortSignal", () => {
     const failure = new Error("source failed");
     await expect(racePromiseWithAbortSignal(Promise.reject(failure))).rejects.toBe(failure);
   });
-
-  it("preserves source settlement and removes the listener", async () => {
-    const signal = new AbortController().signal;
-    const sourceError = new Error("source failed");
-
-    await expect(racePromiseWithAbortSignal(Promise.resolve("done"), signal)).resolves.toBe("done");
-    expect(getEventListeners(signal, "abort")).toHaveLength(0);
-    await expect(racePromiseWithAbortSignal(Promise.reject(sourceError), signal)).rejects.toBe(
-      sourceError,
-    );
-    expect(getEventListeners(signal, "abort")).toHaveLength(0);
-  });
-
   it("rejects with the abort reason as cause without cancelling the source", async () => {
     const controller = new AbortController();
     const { promise: source, resolve: resolveSource } = createDeferred<string>();

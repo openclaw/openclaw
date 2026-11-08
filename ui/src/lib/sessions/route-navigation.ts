@@ -21,15 +21,6 @@ export const SESSION_NAVIGATION_KEY_PARAM = "__openclawSessionKey";
 export const SESSION_COMPOSER_FOCUS_PARAM = "__openclawComposerFocus";
 export const SESSION_DASHBOARD_EXPANDED_PARAM = "dashboard";
 
-export function composerDraftSearch(draft: string): string {
-  return `?${new URLSearchParams({ draft, [SESSION_COMPOSER_FOCUS_PARAM]: "1" }).toString()}`;
-}
-
-type SessionNavigationContext<TRouteId extends string> = Pick<
-  ApplicationContext<TRouteId>,
-  "agents" | "agentSelection" | "basePath" | "gateway" | "sessions"
->;
-
 type SessionNavigationTargetOptions = {
   face: BoardFace;
   sessionKey: string;
@@ -39,28 +30,6 @@ type SessionNavigationTargetOptions = {
   preferenceDerivedFace?: boolean;
   focusComposer?: boolean;
   navigationKey?: string;
-};
-
-type ContextSessionNavigationTargetParams<TRouteId extends string> =
-  SessionNavigationTargetOptions & {
-    context: SessionNavigationContext<TRouteId>;
-    agentId?: string;
-    fallbackAgentId?: never;
-    row?: never;
-    mainKey?: never;
-  };
-
-type ExplicitSessionNavigationTargetParams = SessionNavigationTargetOptions & {
-  context?: never;
-  fallbackAgentId: string;
-  row?: Pick<GatewaySessionRow, "displayName" | "key">;
-  mainKey?: string | null;
-  agentId?: never;
-};
-
-type SessionNavigationTarget = {
-  href: string;
-  options: ApplicationNavigationOptions & { pathname: string };
 };
 
 export function isSessionKeyAddressable(sessionKey: string, globalScope: boolean): boolean {
@@ -141,8 +110,28 @@ export function resolveSessionNavigationAgentId<TRouteId extends string>(
 }
 
 export function sessionNavigationTarget<TRouteId extends string>(
-  params: ContextSessionNavigationTargetParams<TRouteId> | ExplicitSessionNavigationTargetParams,
-): SessionNavigationTarget {
+  params:
+    | (SessionNavigationTargetOptions & {
+        context: Pick<
+          ApplicationContext<TRouteId>,
+          "agents" | "agentSelection" | "basePath" | "gateway" | "sessions"
+        >;
+        agentId?: string;
+        fallbackAgentId?: never;
+        row?: never;
+        mainKey?: never;
+      })
+    | (SessionNavigationTargetOptions & {
+        context?: never;
+        fallbackAgentId: string;
+        row?: Pick<GatewaySessionRow, "displayName" | "key">;
+        mainKey?: string | null;
+        agentId?: never;
+      }),
+): {
+  href: string;
+  options: ApplicationNavigationOptions & { pathname: string };
+} {
   const context = params.context;
   const sessionKey = params.sessionKey;
   let fallbackAgentId: string;

@@ -118,6 +118,8 @@ async function useRestrictedSearchMetadata(others: "none" | "view" = "none") {
   };
 }
 
+const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+
 describe("sessions.search gateway method", () => {
   beforeEach(() => {
     cfg = {
@@ -136,7 +138,7 @@ describe("sessions.search gateway method", () => {
   });
 
   it("finds visible rows in a cold retired main store without an explicit key filter", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
       const { viewer, other } = await useRestrictedSearchMetadata();
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const visibleKey = "agent:main:retained";
@@ -170,7 +172,7 @@ describe("sessions.search gateway method", () => {
   });
 
   it("reports duplicate retired rows before searching either transcript store", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState(profileState, async (state) => {
       const { viewer } = await useRestrictedSearchMetadata();
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       cfg = {
@@ -210,7 +212,7 @@ describe("sessions.search gateway method", () => {
   });
 
   it("hides a retired session whose visibility changes while its transcript is searched", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
       const { viewer, other } = await useRestrictedSearchMetadata("view");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const sessionKey = "agent:main:retained";
@@ -430,7 +432,7 @@ describe("sessions.search gateway method", () => {
     expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
   });
 
-  it("searches only scoped keys in existing retired stores and deduplicates migrated hits", async () => {
+  it.each([false, true])("deduplicates retired copies (identified: %s)", async (identified) => {
     resolveExistingAgentSessionStoreTargetsAsyncMock.mockResolvedValue([
       { agentId: "retired", storePath: "/stores/retired-a/sessions.json" },
       { agentId: "retired", storePath: "/stores/retired-b/sessions.json" },
@@ -444,6 +446,12 @@ describe("sessions.search gateway method", () => {
       snippet: "needle",
       score: 3,
     };
+    readSessionEntrySummariesMock.mockResolvedValue([
+      {
+        sessionKey: duplicate.sessionKey,
+        entry: { sessionId: duplicate.sessionId, updatedAt: 1 },
+      },
+    ]);
     searchSessionTranscriptsMock
       .mockReturnValueOnce({
         hits: [duplicate, { ...duplicate, messageId: "message-2", score: 1 }],
@@ -456,12 +464,16 @@ describe("sessions.search gateway method", () => {
         archivedTranscriptsExcluded: 3,
       });
 
-    const respond = await callSearch({
-      agentId: "retired",
-      query: "needle",
-      sessionKeys: ["main"],
-      limit: 3,
-    });
+    const respond = await callSearch(
+      {
+        agentId: "retired",
+        query: "needle",
+        ...(identified ? {} : { sessionKeys: ["main"] }),
+        limit: 3,
+      },
+      identified ? ["operator.read"] : undefined,
+      identified ? "legacy-search-viewer" : undefined,
+    );
 
     expect(searchSessionTranscriptsMock).toHaveBeenCalledTimes(2);
     expect(resolveExistingAgentSessionStoreTargetsAsyncMock).toHaveBeenCalledOnce();

@@ -74,25 +74,19 @@ export function createSessionRosterProjection(
     };
     return {
       projectFields,
+      currentRow: (row: GatewaySessionRow, agentId?: string | null) => {
+        const key = identity(row, agentId);
+        const held = key && (primaryRows.get(key) ?? observedRows.get(key)?.[0]);
+        return held ? projectFields(held, agentId) : undefined;
+      },
       projectRows: (rows: readonly GatewaySessionRow[]): GatewaySessionRow[] =>
         rows.map((row) => projectFields(row)),
     };
   };
   const projectFields = (row: GatewaySessionRow, agentId?: string | null) =>
     prepareProjection([row]).projectFields(row, agentId);
-  const heldRowsFor = (row: GatewaySessionRow, agentId?: string | null) => {
-    const key = identity(row, agentId);
-    if (!key) {
-      return [];
-    }
-    const { primaryRows, observedRows } = captureHeldRows();
-    const primary = primaryRows.get(key);
-    return [...(primary ? [primary] : []), ...(observedRows.get(key) ?? [])];
-  };
-  const currentRow = (row: GatewaySessionRow, agentId?: string | null) => {
-    const held = heldRowsFor(row, agentId)[0];
-    return held ? projectFields(held, agentId) : undefined;
-  };
+  const currentRow = (row: GatewaySessionRow, agentId?: string | null) =>
+    prepareProjection([row]).currentRow(row, agentId);
   return {
     indexRows,
     merge,

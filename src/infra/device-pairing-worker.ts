@@ -1,22 +1,34 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { reserveWorkerEnvironmentNativePublication } from "../gateway/worker-environments/store-native-publication.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import type { WorkerOperations } from "../state/worker-operation-registry.js";
+import { clearDeviceAuthToken } from "./device-auth-store.js";
+import type { DeviceBootstrapOperations } from "./device-bootstrap.worker-kernel.js";
 import type { DevicePairingAdmissionFacts } from "./device-pairing-admission.types.js";
 import { invalidatePairedCardRendererCache } from "./device-pairing-card-renderer.js";
+import type { devicePairingOperations } from "./device-pairing-core.worker.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
+import type { nodePairingOperations } from "./device-pairing-node.worker.js";
 import { captureDevicePairingPublication } from "./device-pairing-publication.js";
 import type { DevicePairingCommitReceipt } from "./device-pairing-read.types.js";
 import { listDevicePairingStoreRecordsReadOnly } from "./device-pairing-store-readonly.js";
-import type { DevicePairingWorkerOperations } from "./device-pairing-worker-contract.js";
 import type { PairedDevice } from "./device-pairing.types.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
+
+type DevicePairingWorkerOperations = WorkerOperations<typeof devicePairingOperations> &
+  WorkerOperations<typeof nodePairingOperations> &
+  DeviceBootstrapOperations;
+
+const pairingLog = createSubsystemLogger("gateway/device-pairing");
 
 export const DevicePairingAuthorityRefusedError = resolveGlobalSingleton(
   Symbol.for("openclaw.devicePairingAuthorityRefusedError"),
@@ -27,6 +39,14 @@ export const DevicePairingAuthorityRefusedError = resolveGlobalSingleton(
       }
     },
 );
+
+const setupChanges = resolveGlobalSingleton(
+  Symbol.for("openclaw.devicePairSetupChanges"),
+  () => new Set<(databasePath: string) => void>(),
+);
+
+export const onDevicePairSetupChange = (listener: (databasePath: string) => void) =>
+  registerListener(setupChanges, listener);
 
 // The broker owns this private channel; domain kernels supply the discriminated facts.
 function admissionFacts(value: unknown): DevicePairingAdmissionFacts[] {
@@ -81,6 +101,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       options.baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: options.baseDir } } : {},
     );
   const captured = structuredClone(command);
+  const credentialEnvironment = { ...process.env, ...context.environment };
   const operation = withDevicePairingLock(async () => {
     context.admission.assertCurrent();
     options.assertCurrent?.();
@@ -94,6 +115,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
     const mutation = publication?.beginMutation();
     let admission: SqliteWorkerOperationAdmission | undefined;
     let published = false;
+    let cacheCleanup: Promise<boolean> | undefined;
     let publishEnvironment: ReturnType<typeof reserveWorkerEnvironmentNativePublication>;
     const install = () => {
       if (!mutation) {
@@ -102,6 +124,17 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       const committed = admission?.committed;
       if (committed && !published) {
         const receipt = commitReceipt(committed.facts);
+        if (receipt.retiredNodeToken) {
+          cacheCleanup = clearDeviceAuthToken({
+            ...receipt.retiredNodeToken,
+            role: "node",
+            env: credentialEnvironment,
+          }).catch((error: unknown) => {
+            // Server revocation is committed. A failed cache cleanup cannot restore authority.
+            pairingLog.warn(`Local retired node token cleanup failed: ${String(error)}`);
+            return false;
+          });
+        }
         const environment = receipt.workerEnvironment;
         let environmentPublished = false;
         if (environment && publishEnvironment) {
@@ -128,7 +161,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
     };
     const removeService = publication?.servicePending(install);
     try {
-      return await runOpenClawStateWorkerOperation(
+      const result = await runOpenClawStateWorkerOperation(
         context,
         async (scope) => {
           try {
@@ -164,15 +197,26 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
           },
         },
       );
+      await cacheCleanup;
+      return result;
     } finally {
       try {
         install();
       } finally {
         mutation?.finish(!admission || admission.settlement?.kind === "completed");
         removeService?.();
+        // Unknown outcomes can have committed; retry discovery without reviving authority.
+        if (
+          captured.type === "bootstrap.consume" ||
+          captured.type === "bootstrap.confirm" ||
+          captured.type === "bootstrap.ensure" ||
+          captured.type === "bootstrap.readCompletion"
+        ) {
+          notifyListeners(setupChanges, context.admission.databasePath);
+        }
       }
     }
-  });
+  }, captured.type);
   const onAuthorityRefused = options.onAuthorityRefused;
   return onAuthorityRefused
     ? operation.catch((error: unknown) => {
@@ -197,6 +241,6 @@ export async function withCurrentDevicePairingSnapshot<T>(
     }
     const action = prepare(paired);
     return { value: action?.start() };
-  });
+  }, "devicePairing.list");
   return begun.value;
 }

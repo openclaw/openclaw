@@ -37,9 +37,5 @@ export function isAcpTagVisible(settings: AcpProjectionSettings, tag: string | u
   if (!tag || !isAcpSessionUpdateTag(tag)) {
     return true;
   }
-  const override = settings.tagVisibility[tag];
-  if (typeof override === "boolean") {
-    return override;
-  }
-  return ACP_TAG_VISIBILITY_DEFAULTS[tag];
+  return settings.tagVisibility[tag] ?? ACP_TAG_VISIBILITY_DEFAULTS[tag];
 }

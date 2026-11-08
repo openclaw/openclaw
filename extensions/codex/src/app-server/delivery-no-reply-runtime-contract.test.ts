@@ -7,9 +7,10 @@ import {
   DELIVERY_NO_REPLY_RUNTIME_CONTRACT,
   openFileBackedSessionManagerForTest,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
 import { afterEach, describe, expect, it } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import { prepareCodexServerNotification } from "./protocol-validators.js";
+import type { CodexServerNotification } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-delivery-contract";
@@ -41,10 +42,10 @@ function forCurrentTurn(
   method: ProjectorNotification["method"],
   params: Record<string, unknown>,
 ): ProjectorNotification {
-  return {
+  return prepareCodexServerNotification({
     method,
     params: { threadId: THREAD_ID, turnId: TURN_ID, ...params },
-  } as ProjectorNotification;
+  } as CodexServerNotification);
 }
 
 afterEach(async () => {
@@ -56,14 +57,19 @@ afterEach(async () => {
 
 describe("Delivery/NO_REPLY runtime contract - Codex app-server adapter", () => {
   it.each([
-    `  ${DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText}  `,
-    DELIVERY_NO_REPLY_RUNTIME_CONTRACT.jsonSilentText,
-  ])("preserves silent terminal text %s for shared delivery suppression", async (text) => {
+    { text: `  ${DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText}  `, disposition: "silent" },
+    { text: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.jsonSilentText, disposition: "visible" },
+  ])("prepares $disposition terminal text at the producer", async ({ text, disposition }) => {
     const projector = new CodexAppServerEventProjector(await createParams(), THREAD_ID, TURN_ID);
     await projector.handleNotification(
       forCurrentTurn("item/agentMessage/delta", {
         itemId: "msg-1",
         delta: text,
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "msg-1", phase: "final_answer", text },
       }),
     );
 
@@ -76,7 +82,10 @@ describe("Delivery/NO_REPLY runtime contract - Codex app-server adapter", () => 
       toolAudioAsVoice: false,
     });
 
-    expect(result.assistantTexts).toEqual([text.trim()]);
-    expect(isSilentReplyPayloadText(result.assistantTexts[0])).toBe(true);
+    expect(result.assistantTexts).toEqual(disposition === "silent" ? [] : [text]);
+    expect(result.preparedTerminalReply).toEqual({
+      text: disposition === "silent" ? "" : text,
+      terminalReply: disposition === "silent" ? { disposition } : { disposition, text },
+    });
   });
 });

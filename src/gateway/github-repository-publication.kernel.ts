@@ -32,6 +32,7 @@ export function repositoryGitHubPublicationDigest(row: RepositoryGitHubPublicati
         row.workspace_tree,
         row.previous_head_commit,
         row.created_at_ms,
+        ...(row.draft != null ? [row.draft] : []),
         ...(row.requester_authority_json !== null ? [row.requester_authority_json] : []),
       ]),
     )

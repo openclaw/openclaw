@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog, type AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -7,15 +7,17 @@ import { appendSessionTranscriptMessagesByIdentity } from "openclaw/plugin-sdk/s
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readCodexSessionMeta } from "../session-catalog-provenance.js";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
-import { readCodexRolloutSnapshot } from "../session-rollout-snapshot.js";
 import { codexUpstreamBaseline } from "../session-upstream-marker.js";
+import { CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS } from "./attempt-client-cleanup.js";
 import { prepareCanonicalCodexFork } from "./canonical-fork-preparation.js";
 import { claimCodexAppServerLiveThread, hasCodexAppServerLiveThread } from "./client-runtime.js";
+import { wasCodexAppServerThreadClosed } from "./client-thread-closure.js";
 import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
+import type { CodexAppServerClient } from "./client.js";
 import { parseCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { checkCodexThreadAppAvailability } from "./plugin-thread-attestation.js";
 import { assertCodexThreadForkResponse } from "./protocol-validators.js";
-import { flattenCodexDynamicToolFunctions } from "./protocol.js";
+import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import { CodexAppServerScopedRequestRejectedError } from "./request.js";
 import {
   sessionBindingIdentity,
@@ -34,6 +36,32 @@ import {
 type Boundary = Extract<CodexUpstreamForkBoundaryResult, { ok: true }> & {
   canonical: NonNullable<Extract<CodexUpstreamForkBoundaryResult, { ok: true }>["canonical"]>;
 };
+
+/** Resolves once the connection closes the thread or exits; both drop its writer lock. */
+function waitForCodexForkUnload(client: CodexAppServerClient, threadId: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const finish = (unloaded: boolean) => {
+      clearTimeout(timer);
+      stopNotifications();
+      stopClose();
+      resolve(unloaded);
+    };
+    const timer = setTimeout(() => finish(false), CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS);
+    const stopNotifications = client.addNotificationHandler((notification) => {
+      if (
+        notification.method === "thread/closed" &&
+        isJsonObject(notification.params) &&
+        notification.params.threadId === threadId
+      ) {
+        finish(true);
+      }
+    });
+    const stopClose = client.addCloseHandler(() => finish(true));
+    if (wasCodexAppServerThreadClosed(client, threadId) || client.getCloseError()) {
+      finish(true);
+    }
+  });
+}
 
 /** Native history stays native; only the verified local display prefix is copied. */
 export async function forkCanonicalCodexSession(params: {
@@ -140,18 +168,21 @@ export async function forkCanonicalCodexSession(params: {
               ownership.assertCurrent();
             }
           };
-          const snapshot = await readCodexRolloutSnapshot({
-            sessionsRoot: context.localSessionsRoot!,
-            rolloutPath: resolved.canonical.thread.path!,
-            threadId: sourceBinding.threadId,
-            assertCurrent,
-          });
+          const metadata = await readCodexSessionMeta(
+            context.localSessionsRoot!,
+            resolved.canonical.thread.path!.replace(/\.zst$/, ""),
+            sourceBinding.threadId,
+            { canonicalSource: true },
+          );
           assertCurrent();
+          if (!metadata) {
+            throw new Error("The source Codex rollout metadata could not be verified");
+          }
           if (!sourceBinding.dynamicToolsFingerprint) {
             throw new Error("The source session has no verified native catalog binding");
           }
           const sourceCatalog = parseCodexNativeToolCatalog(
-            snapshot.metadata,
+            metadata,
             sourceBinding.threadId,
             sourceBinding.dynamicToolsFingerprint,
           );
@@ -166,19 +197,13 @@ export async function forkCanonicalCodexSession(params: {
             dynamicTools: sourceCatalog,
           });
           assertCurrent();
-          await snapshot.assertUnchanged();
-          assertCurrent();
-          await resolved.canonical.assertUnchanged();
-          assertCurrent();
-          if (!isDeepStrictEqual(bindingStore.read(sourceIdentity), sourceBinding)) {
-            throw new Error("Codex source binding changed during preparation");
-          }
-          assertCurrent();
           let raw: unknown;
           try {
             raw = await control.forkThread(
               {
                 ...prepared.request,
+                // Lets readiness unload the child so its turn connection can take the writer.
+                config: { ...prepared.request.config, thread_unload_delay_secs: 0 },
                 threadId: sourceBinding.threadId,
                 beforeTurnId: resolved.boundary.beforeTurnId,
                 model,
@@ -239,7 +264,7 @@ export async function forkCanonicalCodexSession(params: {
               "Codex did not apply the exact beforeTurnId cut. Reconnect to a compatible server and retry.",
             );
           }
-          const metadata = response.thread.path
+          const childMetadata = response.thread.path
             ? await readCodexSessionMeta(
                 context.localSessionsRoot!,
                 response.thread.path,
@@ -247,22 +272,18 @@ export async function forkCanonicalCodexSession(params: {
               )
             : undefined;
           assertCurrent();
-          if (!metadata || metadata.model_provider !== modelProvider) {
+          if (!childMetadata || childMetadata.model_provider !== modelProvider) {
             throw new Error("The fresh Codex fork metadata could not be verified");
           }
-          const childCatalog = parseCodexNativeToolCatalog(metadata, freshThreadId);
+          const childCatalog = parseCodexNativeToolCatalog(childMetadata, freshThreadId);
           if (!isDeepStrictEqual(sourceCatalog, childCatalog)) {
             throw new Error("Codex fork did not preserve the actual native tool catalog");
           }
-          await snapshot.assertUnchanged();
-          assertCurrent();
           await checkCodexThreadAppAvailability({
             client: context.client,
             threadId: freshThreadId,
             appIds: prepared.provisionalAppIds,
           });
-          assertCurrent();
-          await resolved.canonical.assertUnchanged();
           assertCurrent();
           try {
             await refreshCodexThreadPolicy({
@@ -279,29 +300,18 @@ export async function forkCanonicalCodexSession(params: {
             }
             throw error;
           }
-          const appended = await appendSessionTranscriptMessagesByIdentity({
+          await appendSessionTranscriptMessagesByIdentity({
             config,
             storePath: resolveStorePath(config.session?.store, { agentId: created.agentId }),
             agentId: created.agentId,
             sessionKey: created.key,
             sessionId: created.sessionId,
             messages: resolved.canonical.prefix.map((entry) => ({
-              message: structuredClone(entry.message),
+              message: entry.message,
               idempotencyLookup: "scan" as const,
             })),
           });
           assertCurrent();
-          if (
-            appended.length !== resolved.canonical.prefix.length ||
-            appended.some(
-              (item, index) =>
-                !item.appended ||
-                !isDeepStrictEqual(item.message, resolved.canonical.prefix[index]?.message) ||
-                (index > 0 && item.effectiveParentId !== appended[index - 1]?.messageId),
-            )
-          ) {
-            throw new Error("The saved Codex display prefix could not be copied completely");
-          }
           await initialization.linkAsync({
             sessionKey: created.key,
             agentId: created.agentId,
@@ -331,13 +341,21 @@ export async function forkCanonicalCodexSession(params: {
             historyCoveredThrough: new Date().toISOString(),
           });
           assertCurrent();
-          await ownership.release(freshThreadId, assertCurrent);
+          // Codex holds one writer lock per home while a thread is loaded, and the child's
+          // turns run on the supervision turn connection, another process. Release this
+          // catalog connection's writer before readiness; the fork's zero unload delay makes
+          // unsubscribe close it. A missed close stays visible as the child's resume error.
+          const unloaded = waitForCodexForkUnload(context.client, freshThreadId);
+          // The close notification may invalidate the released claim before its ACK settles.
+          await ownership.release(freshThreadId, () => {
+            fork.assertCurrent();
+            initialization.assertCurrent();
+          });
           subscriptionReleased = true;
-          initialization.assertCurrent();
-          await resolved.canonical.assertUnchanged();
-          initialization.assertCurrent();
-          if (!isDeepStrictEqual(bindingStore.read(sourceIdentity), sourceBinding)) {
-            throw new Error("Codex source binding changed before fork readiness");
+          if (!(await unloaded)) {
+            embeddedAgentLog.warn("codex canonical fork did not unload before readiness", {
+              threadId: freshThreadId,
+            });
           }
           initialization.assertCurrent();
           return { pluginExtensions: created.entry.pluginExtensions };

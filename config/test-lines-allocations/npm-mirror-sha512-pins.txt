@@ -1,0 +1,2 @@
+# Preserve reviewed archive integrity for SHA1-only registries; reject ambiguous pins and strong mismatches.
+136

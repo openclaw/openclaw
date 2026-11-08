@@ -23,7 +23,6 @@ import {
   listDevicePairing,
   listEffectivePairedDeviceRoles,
   requestDevicePairing,
-  updatePairedDeviceMetadata,
 } from "../../../infra/device-pairing.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { isBrowserCopilotClient } from "../../../utils/message-channel.js";
@@ -31,7 +30,12 @@ import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing
 import { retireDeviceTokenClients } from "../../device-token-client-lifecycle.js";
 import { normalizeNodeHostCompatibilityMetadata } from "../../node-legacy-protocol-filter.js";
 import { isScopelessNodePairingRequest } from "../../node-pairing-auto-approve.js";
+import {
+  openclawIdPeerKeyOf,
+  recordDeviceTokenPeer,
+} from "../../openclaw-id/device-token-binding.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
+import { broadcastRejectedDevicePairing } from "../../pairing-events.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import {
@@ -110,7 +114,11 @@ export async function authorizeGatewayConnectDevice(
     close(1008, truncateCloseReason(closeReason ?? message));
   };
   const roleConfiguredHumanOperator = role === "operator" && Boolean(configSnapshot.gateway?.roles);
-  const sharedSecretOwner = authMethod === "token" || authMethod === "password";
+  // An admitted OpenClaw ID owner device is the Gateway owner, like a shared-secret client.
+  const sharedSecretOwner =
+    authMethod === "token" ||
+    authMethod === "password" ||
+    (authMethod === "trusted-proxy" && authResult.openclawId?.kind === "owner");
   if (
     roleConfiguredHumanOperator &&
     !sharedSecretOwner &&
@@ -189,7 +197,7 @@ export async function authorizeGatewayConnectDevice(
         scopes,
         hasRequestedScopes,
         connectionScopeCap: (capped: string[]) =>
-          applyConnectionScopeCap({ scopes: capped, upgradeReq: context.handler.upgradeReq }),
+          applyConnectionScopeCap({ role, scopes: capped, upgradeReq: context.handler.upgradeReq }),
       };
       const plan = await resolvePairingApprovalPlan(pairingPlanParams);
       // Same-key reconnects reuse paired grants without pairing or false upgrade audits.
@@ -265,16 +273,7 @@ export async function authorizeGatewayConnectDevice(
       // UIs so they drop the stale prompts instead of stacking alerts forever.
       const supersededResolvedAt = Date.now();
       for (const superseded of pairing.superseded ?? []) {
-        requestContext.broadcast(
-          "device.pair.resolved",
-          {
-            requestId: superseded.requestId,
-            deviceId: superseded.deviceId,
-            decision: "rejected",
-            ts: supersededResolvedAt,
-          },
-          { dropIfSlow: true },
-        );
+        broadcastRejectedDevicePairing(requestContext.broadcast, superseded, supersededResolvedAt);
       }
       let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
       const inlineApprovalAttempted =
@@ -376,6 +375,9 @@ export async function authorizeGatewayConnectDevice(
             try {
               await pruneSupersededSilentPairingsAfterApproval({
                 deviceId: approved.device.deviceId,
+                connectedDeviceIds: [...context.handler.clients].flatMap((client) =>
+                  client.connect.device && !client.invalidated ? [client.connect.device.id] : [],
+                ),
                 context: requestContext,
               });
             } catch (error) {
@@ -519,7 +521,9 @@ export async function authorizeGatewayConnectDevice(
       return true;
     };
 
+    const lookupStartedAt = performance.now();
     const paired = await getPairedDevice(device.id);
+    context.recordAttachTiming?.("deviceLookupMs", lookupStartedAt);
     const isPaired = paired?.publicKey === devicePublicKey;
     if (paired && !isPaired && state.remoteIngressPrincipal) {
       failPairingHandshake({
@@ -546,7 +550,11 @@ export async function authorizeGatewayConnectDevice(
         pairedClientId = paired.clientId;
         pairedBrowserOrigin = paired.browserOrigin;
         hasServerApprovedDeviceTokenBaseline = true;
-        await updatePairedDeviceMetadata(device.id, clientAccessMetadata);
+        context.pendingDeviceMetadata = {
+          deviceId: device.id,
+          identity: paired,
+          patch: clientAccessMetadata,
+        };
       } else if (
         controlUiPairingKind === "auth-none" ||
         (skipLocalBackendSelfPairing && authMethod !== "device-token")
@@ -592,6 +600,7 @@ export async function authorizeGatewayConnectDevice(
 
   // Ingress authenticates exclusively from its live principal grant and signed
   // device proof. Never mint a reusable credential that can outlive that grant.
+  const tokensStartedAt = performance.now();
   const { deviceToken, bootstrapDeviceTokens } =
     state.remoteIngressPrincipal || (roleConfiguredHumanOperator && authResult.user?.trim())
       ? { deviceToken: null, bootstrapDeviceTokens: [] }
@@ -601,6 +610,21 @@ export async function authorizeGatewayConnectDevice(
           hasApprovedDeviceBaseline: hasServerApprovedDeviceTokenBaseline,
           isIssuanceCurrent: isConnectAuthorizationCurrent,
         });
+
+  // A token issued over the OpenClaw ID tunnel belongs to the device key that obtained it.
+  const issuedPeerKey = openclawIdPeerKeyOf(context.handler.ingressAttribution);
+  if (issuedPeerKey && state.device) {
+    for (const issued of [deviceToken, ...bootstrapDeviceTokens]) {
+      if (issued) {
+        await recordDeviceTokenPeer({
+          deviceId: state.device.id,
+          role: issued.role,
+          peerKey: issuedPeerKey,
+        });
+      }
+    }
+  }
+  context.recordAttachTiming?.("deviceTokensMs", tokensStartedAt);
 
   return {
     ...state,

@@ -1,10 +1,10 @@
-// Doctor migration for config and state left by the retired Phone Control lease model.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isMissingPathError } from "../infra/errors.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -61,7 +61,7 @@ async function inspectStatePath(filePath: string, label: string): Promise<StateP
   }
 }
 
-function isStringArray(value: unknown): boolean {
+function isNonBlankStringArray(value: unknown): boolean {
   return (
     Array.isArray(value) && value.every((entry) => typeof entry === "string" && entry.trim() !== "")
   );
@@ -79,7 +79,7 @@ function isRetiredArmState(value: unknown): value is RetiredArmState {
     return false;
   }
   if (value.version === 1) {
-    return isStringArray(value.removedFromDeny);
+    return isNonBlankStringArray(value.removedFromDeny);
   }
   if (value.version !== 2 && value.version !== 3) {
     return false;
@@ -87,9 +87,9 @@ function isRetiredArmState(value: unknown): value is RetiredArmState {
   if (
     typeof value.group !== "string" ||
     !RETIRED_ARM_GROUPS.has(value.group) ||
-    !isStringArray(value.armedCommands) ||
-    !isStringArray(value.addedToAllow) ||
-    !isStringArray(value.removedFromDeny)
+    !isNonBlankStringArray(value.armedCommands) ||
+    !isNonBlankStringArray(value.addedToAllow) ||
+    !isNonBlankStringArray(value.removedFromDeny)
   ) {
     return false;
   }
@@ -100,7 +100,7 @@ function isRetiredArmState(value: unknown): value is RetiredArmState {
     typeof value.generation === "string" &&
     value.generation.trim() !== "" &&
     (value.phase === "preparing" || value.phase === "active") &&
-    isStringArray(value.persistentAllows)
+    isNonBlankStringArray(value.persistentAllows)
   );
 }
 
@@ -139,7 +139,9 @@ async function readRetiredArmStates(env: NodeJS.ProcessEnv) {
   let legacyStateValid = false;
   if (legacyInspection.status === "file") {
     try {
-      legacyState = JSON.parse(await fs.readFile(legacyPath, "utf8")) as unknown;
+      legacyState = JSON.parse(
+        decodeUtf8Input(await fs.readFile(legacyPath), legacyPath),
+      ) as unknown;
       legacyStateValid = isRetiredArmState(legacyState);
       if (!legacyStateValid) {
         warnings.push(`Retired Phone Control lease state at ${legacyPath} is malformed.`);

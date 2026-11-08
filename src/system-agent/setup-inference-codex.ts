@@ -16,7 +16,7 @@ import {
 } from "../plugins/installed-plugin-index-install-owner.js";
 import { isTrustedOfficialPluginInstallRecord } from "../plugins/official-external-install-records.js";
 import { getOfficialExternalPluginCatalogEntry } from "../plugins/official-external-plugin-catalog.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
@@ -63,18 +63,15 @@ type PrepareCodexRuntimeParams = {
   automaticSetup?: true;
   modelRef?: string;
   agentId?: string;
-  ensureCodex: NonNullable<StageContext["deps"]["ensureCodexRuntimePlugin"]>;
-  markRetained?: StageContext["deps"]["markRetainedManagedNpmInstall"];
-  resolveMetadata?: StageContext["deps"]["resolvePluginMetadataSnapshot"];
+  ensureCodex: typeof import("../commands/runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
 };
 
 async function prepareCodexRuntimePlugin(
   params: PrepareCodexRuntimeParams,
 ): Promise<{ config: OpenClawConfig } | StageFailure> {
   if (params.automaticSetup) {
-    const resolveMetadata =
-      params.resolveMetadata ??
-      (await import("../plugins/plugin-metadata-snapshot.js")).resolvePluginMetadataSnapshot;
+    const { resolvePluginMetadataSnapshot: resolveMetadata } =
+      await import("../plugins/plugin-metadata-snapshot.js");
     const metadata = resolveMetadata({
       config: params.cfg,
       workspaceDir: params.workspace,
@@ -145,9 +142,8 @@ async function prepareCodexRuntimePlugin(
   }
   const install = ensured.cfg.plugins?.installs?.codex;
   if (install?.source === "npm" && install.installPath) {
-    const markRetained =
-      params.markRetained ??
-      (await import("../plugins/managed-npm-retention.js")).markRetainedManagedNpmInstall;
+    const { markRetainedManagedNpmInstall: markRetained } =
+      await import("../plugins/managed-npm-retention.js");
     if (
       !(await markRetained({
         packageDir: install.installPath,
@@ -173,9 +169,9 @@ export async function prepareAutomaticSetupCodex(params: {
   signal?: AbortSignal;
 }): Promise<{ ok: true; config: OpenClawConfig } | StageFailure> {
   const leaseOptions = { signal: params.signal, assertCurrent: params.beforePersistentApply };
-  return await withPluginLifecycleLease(leaseOptions, async () => {
+  return await withPluginLifecycleLeaseAsync(leaseOptions, async () => {
     const { ensureCodexRuntimePluginForSupervision } =
-      await import("../commands/codex-runtime-plugin-install.js");
+      await import("../commands/runtime-plugin-install.js");
     const prepared = await prepareCodexRuntimePlugin({
       ...params,
       automaticSetup: true,
@@ -194,11 +190,9 @@ export async function stageCodexCandidate(
 ): Promise<StagedCandidate | StageFailure> {
   const beforePersistentApply = () => throwIfSetupInferenceCancelled(ctx.params);
   const leaseOptions = { signal: ctx.params.signal, assertCurrent: beforePersistentApply };
-  return await withPluginLifecycleLease(leaseOptions, async () => {
-    const ensureCodex =
-      ctx.deps.ensureCodexRuntimePlugin ??
-      (await import("../commands/codex-runtime-plugin-install.js"))
-        .ensureCodexRuntimePluginForModelSelection;
+  return await withPluginLifecycleLeaseAsync(leaseOptions, async () => {
+    const { ensureCodexRuntimePluginForModelSelection: ensureCodex } =
+      await import("../commands/runtime-plugin-install.js");
     const prepared = await prepareCodexRuntimePlugin({
       cfg: ctx.cfg,
       runtime: ctx.params.runtime,
@@ -210,8 +204,6 @@ export async function stageCodexCandidate(
       modelRef,
       agentId: ctx.routeAgentId,
       ensureCodex,
-      markRetained: ctx.deps.markRetainedManagedNpmInstall,
-      resolveMetadata: ctx.deps.resolvePluginMetadataSnapshot,
     });
     if ("error" in prepared) {
       return prepared;
@@ -250,7 +242,7 @@ export async function stageCodexCandidate(
     }
     // The normal auth owner checks configured/env keys without native discovery or refresh.
     try {
-      const auth = await (ctx.deps.resolveApiKeyForProvider ?? resolveApiKeyForProviderCore)({
+      const auth = await resolveApiKeyForProviderCore({
         cfg: config,
         store,
         provider: "openai",
@@ -270,13 +262,11 @@ export async function stageCodexCandidate(
       }
     }
     throwIfSetupInferenceCancelled(ctx.params);
-    const credential = (ctx.deps.readCodexCliActiveApiKey ?? readCodexCliActiveApiKey)({
+    const credential = readCodexCliActiveApiKey({
       allowKeychainPrompt: true,
     });
     if (!credential) {
-      const choices = (
-        ctx.deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
-      )({
+      const choices = resolveManifestProviderAuthChoices({
         config,
         workspaceDir: ctx.workspace,
         includeUntrustedWorkspacePlugins: false,

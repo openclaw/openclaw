@@ -69,12 +69,21 @@ describe("Matrix verification CLI owner admission", () => {
     const program = new Command();
     registerMatrixCli({ program });
 
-    await program.parseAsync(
+    const parsed = program.parseAsync(
       ["matrix", "verify", ...args, "--account", "ops", ...(json ? ["--json"] : [])],
       {
         from: "user",
       },
     );
+    if (json) {
+      await expect(parsed).rejects.toThrow("fixture owner refused");
+      expect(output).not.toHaveBeenCalled();
+      expect(diagnostics).not.toHaveBeenCalled();
+    } else {
+      await parsed;
+      expect(process.exitCode).toBe(1);
+      expect(diagnostics).toHaveBeenCalledWith(expect.stringContaining("fixture owner refused"));
+    }
 
     expect(fixture.admit).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ method, runLocal: expect.any(Function) }),
@@ -86,9 +95,5 @@ describe("Matrix verification CLI owner admission", () => {
     }
     expect(fixture.config).not.toHaveBeenCalled();
     expect(fixture.verification).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
-    expect(json ? output : diagnostics).toHaveBeenCalledWith(
-      expect.stringContaining("fixture owner refused"),
-    );
   });
 });

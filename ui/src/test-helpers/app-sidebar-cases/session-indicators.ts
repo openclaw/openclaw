@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
+import { sessionListResult } from "../chat-model.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
 import { settleRoster } from "./roster.test-support.ts";
@@ -48,16 +49,9 @@ describe("AppSidebar session indicators", () => {
     const svgKey = "agent:main:svg";
     const svgIcon = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>')}`;
     const sessions = createSessionsHarness("main", [glyphKey, emojiKey, svgKey]);
-    const result = sessions.sessions.state.result;
-    if (!result) {
-      throw new Error("expected session list");
-    }
-    const glyph = result.sessions.find((row) => row.key === glyphKey);
-    const emoji = result.sessions.find((row) => row.key === emojiKey);
-    const svg = result.sessions.find((row) => row.key === svgKey);
-    if (!glyph || !emoji || !svg) {
-      throw new Error("expected icon sessions");
-    }
+    const glyph = sessions.row(glyphKey);
+    const emoji = sessions.row(emojiKey);
+    const svg = sessions.row(svgKey);
     glyph.icon = "braces";
     emoji.icon = "🦞";
     svg.icon = svgIcon;
@@ -70,7 +64,7 @@ describe("AppSidebar session indicators", () => {
     const emojiRow = sidebar.querySelector(`[data-session-key="${emojiKey}"]`);
     const svgRow = () => sidebar.querySelector(`[data-session-key="${svgKey}"]`);
 
-    expect(glyphRow?.querySelector(".session-glyph__icon svg")).not.toBeNull();
+    expect(glyphRow?.querySelector(".session-glyph__icon .session-css-icon")).not.toBeNull();
     expect(glyphRow?.querySelector(".session-glyph__emoji")).toBeNull();
     expect(emojiRow?.querySelector(".session-glyph__emoji")?.textContent).toBe("🦞");
     expect(emojiRow?.querySelector(".session-glyph__icon")).toBeNull();
@@ -93,10 +87,7 @@ describe("AppSidebar session indicators", () => {
     const avatarKey = "agent:main:channel-avatar";
     const ownerKey = "agent:main:owner-fallback";
     const sessions = createSessionsHarness("main", [iconKey, avatarKey, ownerKey]);
-    const result = sessions.sessions.state.result;
-    if (!result) {
-      throw new Error("expected session list");
-    }
+    const result = sessions.result;
     for (const row of result.sessions) {
       row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
       row.owner = { actor: row.createdActor };
@@ -104,10 +95,7 @@ describe("AppSidebar session indicators", () => {
         row.channelAvatarUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(row.key)}`;
       }
     }
-    const iconRow = result.sessions.find((row) => row.key === iconKey);
-    if (!iconRow) {
-      throw new Error("expected icon row");
-    }
+    const iconRow = sessions.row(iconKey);
     iconRow.icon = "🦞";
     result.owners = [
       { type: "human", id: "profile-ada", label: "Ada" },
@@ -168,14 +156,8 @@ describe("AppSidebar session indicators", () => {
     const missingUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(avatarKey)}?v=old`;
     const restoredUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(avatarKey)}?v=new`;
     const sessions = createSessionsHarness("main", [avatarKey]);
-    const result = sessions.sessions.state.result;
-    if (!result) {
-      throw new Error("expected session list");
-    }
-    const row = result.sessions.find((sessionRow) => sessionRow.key === avatarKey);
-    if (!row) {
-      throw new Error("expected avatar row");
-    }
+    const result = sessions.result;
+    const row = sessions.row(avatarKey);
     row.channelAvatarUrl = missingUrl;
     row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     row.owner = { actor: row.createdActor };
@@ -250,14 +232,8 @@ describe("AppSidebar session indicators", () => {
   it("keeps the owner chip when avatar auth is not ready", async () => {
     const avatarKey = "agent:main:avatar-auth-pending";
     const sessions = createSessionsHarness("main", [avatarKey]);
-    const result = sessions.sessions.state.result;
-    if (!result) {
-      throw new Error("expected session list");
-    }
-    const row = result.sessions.find((sessionRow) => sessionRow.key === avatarKey);
-    if (!row) {
-      throw new Error("expected avatar row");
-    }
+    const result = sessions.result;
+    const row = sessions.row(avatarKey);
     row.channelAvatarUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(avatarKey)}`;
     row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     row.owner = { actor: row.createdActor };
@@ -284,16 +260,13 @@ describe("AppSidebar session indicators", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it.each(["running", "queued"] as const)(
-    "presents main-session %s activity once in the agent header with draft and outbox badges",
+  it.each(["running"] as const)(
+    "presents main-session %s activity once around the agent avatar",
     async (status) => {
       const mainKey = "agent:main:main";
       const workingKey = "agent:main:working";
       const sessions = createSessionsHarness("main", [mainKey, workingKey]);
-      const result = sessions.sessions.state.result;
-      if (!result) {
-        throw new Error("expected session list");
-      }
+      const result = sessions.result;
       for (const row of result.sessions) {
         row.hasActiveRun = true;
         row.status = status;
@@ -319,65 +292,21 @@ describe("AppSidebar session indicators", () => {
       await settleRoster(sidebar);
 
       const home = sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__header');
-      const homeRing = home?.querySelector(".session-glyph--running .session-glyph__ring");
+      const homeRing = home?.querySelector(
+        ".sidebar-agent-roster__avatar .session-glyph--running .session-glyph__ring",
+      );
       expect(home?.querySelector(".sidebar-agent-roster__avatar")).not.toBeNull();
       expect(homeRing).not.toBeNull();
       expect(home?.querySelectorAll(".session-run-spinner")).toHaveLength(0);
-      expect(home?.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
-      const activityLabel = status === "queued" ? "Queued" : "Active run";
+      expect(home?.querySelectorAll('[aria-label="Unread"]')).toHaveLength(0);
+      const activityLabel = "Active run";
       expect(homeRing?.getAttribute("aria-label")).toBe(activityLabel);
-      expect(homeRing?.classList.contains("session-glyph__ring--queued")).toBe(status === "queued");
+      expect(homeRing?.classList.contains("session-glyph__ring--queued")).toBe(false);
       expect(
         home?.querySelectorAll(`.session-glyph__ring[aria-label="${activityLabel}"]`),
       ).toHaveLength(1);
-      expect(home?.querySelector(".session-row-badge--attention")?.textContent).toContain("2");
-      expect(home?.querySelector(".session-row-badge--draft")).not.toBeNull();
-    },
-  );
-
-  it.each(["running", "queued"] as const)(
-    "announces %s and unread once with an owner chip or an empty leading slot",
-    async (status) => {
-      const keys = ["agent:main:owned-running", "agent:main:plain-running"];
-      const sessions = createSessionsHarness("main", keys);
-      const result = sessions.sessions.state.result!;
-      for (const row of result.sessions) {
-        row.hasActiveRun = true;
-        row.status = status;
-        row.unread = true;
-        if (row.key === keys[0]) {
-          row.owner = { actor: { type: "human", id: "ada", label: "Ada" } };
-        }
-      }
-      result.owners = [
-        { type: "human", id: "ada", label: "Ada" },
-        { type: "human", id: "bob", label: "Bob" },
-      ];
-      const { sidebar } = await mountSidebar(
-        createGatewayHarness({} as GatewayBrowserClient).gateway,
-        sessions.sessions,
-      );
-      for (const key of keys) {
-        const row = sidebar.querySelector(`[data-session-key="${key}"]`)!;
-        const ring = row.querySelector(
-          ".sidebar-session-indicator .session-glyph--running .session-glyph__ring",
-        );
-        expect.soft(ring).not.toBeNull();
-        expect.soft(row.querySelector(".session-row-state")).toBeNull();
-        expect(row.querySelector(".session-unread-dot")).toBeNull();
-        expect(row.querySelector(".session-glyph__badge--unread")).toBeNull();
-        expect(row.querySelector(".session-owner-chip") !== null).toBe(key === keys[0]);
-        const link = row.querySelector("a")!;
-        const description = sidebar.querySelector(
-          `[id="${link.getAttribute("aria-describedby")}"]`,
-        )!;
-        expect.soft(description.textContent).toBe("Unread");
-        expect.soft(description.getAttribute("aria-hidden")).toBe("true");
-        expect
-          .soft(ring?.getAttribute("aria-label"))
-          .toBe(status === "queued" ? "Queued" : "Active run");
-        expect.soft(row.querySelectorAll('[aria-label="Unread"]')).toHaveLength(0);
-      }
+      expect(home?.querySelector(".session-row-badge--attention")).toBeNull();
+      expect(home?.querySelector(".session-row-badge--draft")).toBeNull();
     },
   );
 
@@ -389,17 +318,14 @@ describe("AppSidebar session indicators", () => {
     const openPullRequestKey = "agent:main:open-pr-child";
     const mergedPullRequestKey = "agent:main:merged-pr-child";
     const sessions = createSessionsHarness("main", [parentKey]);
-    sessions.list.mockResolvedValue({
-      ts: 2,
-      path: "",
-      count: 5,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [
+    sessions.list.mockResolvedValue(
+      sessionListResult(2, [
         {
           key: pinnedKey,
           spawnedBy: parentKey,
           kind: "direct",
           label: "Pinned child",
+          createdAt: 5,
           updatedAt: 2,
           pinned: true,
           hasActiveRun: true,
@@ -412,6 +338,7 @@ describe("AppSidebar session indicators", () => {
           spawnedBy: parentKey,
           kind: "direct",
           label: "Running child",
+          createdAt: 4,
           updatedAt: 2,
           hasActiveRun: true,
           status: "running",
@@ -423,6 +350,7 @@ describe("AppSidebar session indicators", () => {
           spawnedBy: parentKey,
           kind: "direct",
           label: "Queued child",
+          createdAt: 3,
           updatedAt: 2,
           hasActiveRun: true,
           hasActiveSubagentRun: true,
@@ -433,6 +361,7 @@ describe("AppSidebar session indicators", () => {
           spawnedBy: parentKey,
           kind: "direct",
           label: "Open PR child",
+          createdAt: 2,
           updatedAt: 2,
           hasActiveRun: true,
           status: "queued",
@@ -449,11 +378,12 @@ describe("AppSidebar session indicators", () => {
           spawnedBy: parentKey,
           kind: "direct",
           label: "Merged PR child",
+          createdAt: 1,
           updatedAt: 2,
           worktree: { id: "wt-merged", branch: "feature/merged", repoRoot: "/repo" },
         },
-      ],
-    });
+      ]),
+    );
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
     gatewayHarness.publish({
       hello: {
@@ -486,7 +416,9 @@ describe("AppSidebar session indicators", () => {
       },
     });
     await settleLitElement(sidebar);
-    sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
+    expect(
+      sidebar.querySelector("[data-child-session-toggle]")?.getAttribute("aria-expanded"),
+    ).toBe("true");
     await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(4),
     );
@@ -499,7 +431,7 @@ describe("AppSidebar session indicators", () => {
       numbers: [2],
       state: "merged",
     });
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await sidebar.updateComplete;
 
     await waitForFast(() => {
@@ -573,10 +505,7 @@ describe("AppSidebar session indicators", () => {
       mergedPullRequest: "agent:main:merged-pr",
     };
     const sessions = createSessionsHarness("main", Object.values(keys));
-    const result = sessions.sessions.state.result;
-    if (!result) {
-      throw new Error("expected session list");
-    }
+    const result = sessions.result;
     for (const row of result.sessions) {
       if (row.key === keys.forked) {
         row.forkSource = { sessionKey: "agent:main:main", sessionId: "source-session" };
@@ -663,10 +592,10 @@ describe("AppSidebar session indicators", () => {
     expect(runningUnread?.querySelector(".sr-only")?.textContent).toBe("Unread");
 
     const openPullRequestIcon = sidebar.querySelector(
-      `[data-session-key="${keys.openPullRequest}"] [data-pull-request-state="open"] svg`,
+      `[data-session-key="${keys.openPullRequest}"] [data-pull-request-state="open"] .session-css-icon`,
     );
     const mergedPullRequestIcon = sidebar.querySelector(
-      `[data-session-key="${keys.mergedPullRequest}"] [data-pull-request-state="merged"] svg`,
+      `[data-session-key="${keys.mergedPullRequest}"] [data-pull-request-state="merged"] .session-css-icon`,
     );
     expect(openPullRequestIcon).not.toBeNull();
     expect(mergedPullRequestIcon).not.toBeNull();
@@ -677,7 +606,9 @@ describe("AppSidebar session indicators", () => {
       expectEmptyLead(row);
       expect(row?.querySelector(".session-row-badges [data-pull-request-state]")).not.toBeNull();
       expect(row?.querySelector("a")?.hasAttribute("title")).toBe(false);
-      expect(row?.querySelector("[data-pull-request-state]")?.hasAttribute("title")).toBe(false);
+      expect(row?.querySelector("[data-pull-request-state]")?.getAttribute("title")).toContain(
+        "#1",
+      );
     }
 
     const openPullRequestRow = result.sessions.find((row) => row.key === keys.openPullRequest);

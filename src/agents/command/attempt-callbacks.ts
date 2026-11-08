@@ -1,8 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { AgentMessage } from "../runtime/index.js";
 
 export type AgentAttemptLifecycleState = {
-  currentTurnUserMessagePersisted: boolean;
   lifecycleError?: string;
   lifecycleErrorObservation?: Record<string, unknown>;
   lifecycleFinishing: boolean;
@@ -37,12 +35,16 @@ export function createAgentAttemptLifecycleCallbacks(
   state: AgentAttemptLifecycleState,
   onRuntimeTurnStarted?: () => void | Promise<void>,
 ): {
-  onUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  onAttemptStart: () => void;
+  onAttemptTerminalReplaced: () => void;
   onAgentEvent: (evt: AgentAttemptLifecycleEvent) => void | Promise<void>;
 } {
   return {
-    onUserMessagePersisted: () => {
-      state.currentTurnUserMessagePersisted = true;
+    onAttemptStart: () => resetAgentAttemptLifecycle(state),
+    onAttemptTerminalReplaced: () => {
+      if (!state.lifecycleEnded) {
+        resetAgentAttemptLifecycle(state);
+      }
     },
     onAgentEvent: (evt) => {
       if (evt.stream !== "lifecycle" || typeof evt.data?.phase !== "string") {

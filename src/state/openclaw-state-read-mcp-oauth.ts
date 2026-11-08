@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   countMcpOAuthPrincipalsInDatabase,
   listMcpOAuthStoreKeysInDatabase,
@@ -6,10 +5,11 @@ import {
   readMcpOAuthStoreIfPresentInDatabase,
   readMcpOAuthStatusesInDatabase,
 } from "../agents/mcp-oauth-store.kernel.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 
 export function readMcpOAuthStateCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: Extract<OpenClawStateReadCommand, { type: `mcpOAuth.${string}` }>,
 ) {
   if (command.type === "mcpOAuth.statuses") {

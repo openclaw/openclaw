@@ -11,14 +11,17 @@ import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   readPluginControlUiAssets,
+  pluginControlUiRevision,
   type PluginControlUiAsset,
 } from "../plugins/control-ui-assets.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import { loadPluginManifest, type PluginManifestControlUi } from "../plugins/manifest.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { hasCanonicalPluginDistribution } from "../plugins/plugin-runtime-artifact-binding.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "../plugins/registry.js";
 import { getPluginRegistryForContext } from "../plugins/runtime.js";
+import { isOpenClawIdPluginVisible } from "../shared/openclaw-id-policy.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import {
   controlUiPluginAssetPrefix,
@@ -85,7 +88,14 @@ function pluginState(record: PluginRecord): BrowserPluginState {
 
 function browserOwners(registry: PluginRegistry): PluginRecord[] {
   return registry.plugins
-    .filter((record) => record.enabled && record.status === "loaded" && record.controlUi)
+    .filter(
+      (record) =>
+        isOpenClawIdPluginVisible(record.id, getRuntimeConfigSnapshot()) &&
+        record.enabled &&
+        record.status === "loaded" &&
+        record.controlUi &&
+        record.controlUi.activation !== "settings-only",
+    )
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
@@ -94,7 +104,7 @@ async function staticBrowserImports(
   assets: ReadonlyMap<string, PluginControlUiAsset>,
   assetUrl: (name: string) => string,
 ): Promise<string[]> {
-  const { parse } = await import("@babel/parser");
+  const { build } = await import("esbuild");
   const modules = new Map(
     [...assets]
       .filter(([name]) => /\.m?js$/u.test(name))
@@ -108,23 +118,28 @@ async function staticBrowserImports(
     if (!asset) {
       continue;
     }
-    let statements;
+    let imports;
     try {
-      statements = parse(asset.body.toString("utf8"), { sourceType: "module" }).program.body;
+      // The native compiler reads imports without constructing a JavaScript AST on the Gateway.
+      const result = await build({
+        stdin: { contents: asset.body.toString("utf8"), loader: "js" },
+        format: "esm",
+        treeShaking: false,
+        write: false,
+        metafile: true,
+        logLevel: "silent",
+      });
+      imports = Object.values(result.metafile.outputs).flatMap((output) => output.imports);
     } catch {
       // Preloading is optional; parser support must not change browser build admission.
       continue;
     }
-    for (const statement of statements) {
+    for (const imported of imports) {
+      const specifier = imported.path;
       if (
-        statement.type !== "ImportDeclaration" &&
-        statement.type !== "ExportNamedDeclaration" &&
-        statement.type !== "ExportAllDeclaration"
+        imported.kind !== "import-statement" ||
+        (!specifier.startsWith("./") && !specifier.startsWith("../"))
       ) {
-        continue;
-      }
-      const specifier = statement.source?.value;
-      if (!specifier || (!specifier.startsWith("./") && !specifier.startsWith("../"))) {
         continue;
       }
       const target = new URL(specifier, url).href;
@@ -145,7 +160,7 @@ async function snapshotBrowserBuild(
   if (!declaration || !record.rootDir || !isControlUiPluginAllowed(record)) {
     throw new Error("plugin is no longer active");
   }
-  const { entryName, styles, assets, bytes } = await readPluginControlUiAssets(
+  const { entryName, styles, assets, bytes, panelIcon } = await readPluginControlUiAssets(
     record.rootDir,
     declaration,
     {
@@ -155,13 +170,7 @@ async function snapshotBrowserBuild(
       }),
     },
   );
-  const digest = createHash("sha256").update(JSON.stringify({ declaration, uiCapabilities }));
-  for (const [name, asset] of [...assets].toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    digest.update(`${name}\0${asset.body.length}\0`).update(asset.body);
-  }
-  const revision = digest.digest("hex");
+  const revision = pluginControlUiRevision(declaration, uiCapabilities, assets, panelIcon?.dataUrl);
   const basePath = getRuntimeConfigSnapshot()?.gateway?.controlUi?.basePath;
   const prefix = `${controlUiPluginAssetPrefix(record.id, basePath)}${revision}/`;
   const assetUrl = (name: string) =>
@@ -177,7 +186,16 @@ async function snapshotBrowserBuild(
       entryUrl: assetUrl(entryName),
       imports,
       styles: styles.map(assetUrl),
+      ...(panelIcon ? { panelIcon: panelIcon.dataUrl } : {}),
       ...(uiCapabilities !== undefined ? { uiCapabilities } : {}),
+      ...(hasCanonicalPluginDistribution(record) && record.packageName && record.packageVersion
+        ? {
+            bundledDistribution: {
+              packageName: record.packageName,
+              packageVersion: record.packageVersion,
+            },
+          }
+        : {}),
     },
   };
 }

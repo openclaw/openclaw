@@ -19,6 +19,34 @@ main.content:where(.content--logs-page) .content-header {
   flex: 0 0 auto;
 }
 
+/* The page column stays in the fill-height chain, and the log's blocks keep their
+   tight rhythm rather than the page's section gap. */
+.settings-workspace--fill-height > .settings-workspace__body > .settings-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 0;
+  padding-bottom: 0;
+}
+
+:where(
+  .settings-workspace--fill-height > .settings-workspace__body > .settings-page > :not(:first-child)
+) {
+  margin-top: var(--space-5);
+}
+
+/* The shell's page-end space is for reading past a form; a viewer wants the height. */
+.shell--settings:not(.shell--mobile-nav) .content.content--logs-page {
+  padding-bottom: var(--space-5);
+}
+
+.logs-layout {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+}
+
 .settings-workspace--fill-height .logs-card {
   flex: 1 1 auto;
   min-height: 0;
@@ -26,95 +54,93 @@ main.content:where(.content--logs-page) .content-header {
   flex-direction: column;
 }
 
-.settings-workspace--fill-height .logs-card > .settings-row {
-  flex: 0 0 auto;
-}
-
 /* Log stream rules load with the logs page; keep them out of the startup sheet. */
 .log-stream {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--card);
   max-height: calc(100vh - 280px);
   min-height: 200px;
   overflow: auto;
   container-type: inline-size;
 }
 
+.log-stream--windowed {
+  overflow-anchor: none;
+}
+
 .log-row {
   display: grid;
-  grid-template-columns: 90px 70px minmax(140px, 200px) minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
+  grid-template-columns: var(--log-time-width, 11ch) 5ch 26ch minmax(0, 1fr);
+  column-gap: 1.5ch;
+  padding: 1px var(--space-3);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
   transition: background var(--duration-fast) ease;
 }
 
 .log-row:hover {
-  background: var(--bg-hover);
-}
-
-.log-row:last-child {
-  border-bottom: none;
+  background: var(--surface-hover);
 }
 
 .log-time,
 .log-subsystem {
   color: var(--muted);
-  font-family: var(--mono);
+}
+
+.log-time {
+  grid-column: 1;
+  overflow-wrap: anywhere;
 }
 
 .log-level {
-  font-size: 12px;
-  font-weight: 500;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 2px 6px;
-  width: fit-content;
+  grid-column: 2;
 }
 
-.log-level.trace,
-.log-level.debug,
-.log-chip.trace,
-.log-chip.debug {
+.log-subsystem {
+  grid-column: 3;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Severity is the word's ink. Trace and debug recede with their message; warnings and
+   worse are the only color in the stream. */
+.log-row.trace .log-level,
+.log-row.debug .log-level,
+.log-row.trace .log-message,
+.log-row.debug .log-message {
   color: var(--muted);
 }
 
-.log-level.info,
-.log-chip.info {
-  color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 30%, transparent);
-}
-
-.log-level.warn,
-.log-chip.warn {
+.log-row.warn .log-level {
   color: var(--warn);
-  border-color: var(--warn-subtle);
 }
 
-.log-level.error,
-.log-level.fatal,
-.log-chip.error,
-.log-chip.fatal {
+.log-row.error .log-level,
+.log-row.fatal .log-level {
   color: var(--danger);
-  border-color: var(--danger-subtle);
+}
+
+.log-row.fatal .log-level {
+  font-weight: 700;
 }
 
 .log-message {
+  grid-column: 4;
+  min-width: 0;
   white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--mono);
+  overflow-wrap: anywhere;
 }
 
-@container (max-width: 620px) {
+/* No room for four columns: the meta becomes one line and the message takes the width. */
+@container (max-width: 640px) {
   .log-row {
-    grid-template-columns: 70px 60px minmax(0, 1fr);
+    grid-template-columns: var(--log-time-width, 11ch) 5ch minmax(0, 1fr);
+    padding-block: var(--space-1);
   }
 
-  .log-subsystem {
-    display: none;
+  .log-message {
+    grid-column: 1 / -1;
   }
 }
 
@@ -122,4 +148,205 @@ main.content:where(.content--logs-page) .content-header {
   flex: 1 1 auto;
   min-height: 0;
   max-height: none;
+}
+
+.logs-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+
+.logs-toolbar__search {
+  position: relative;
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.logs-toolbar__search-icon {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  display: flex;
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.logs-toolbar__search-icon svg,
+.logs-toolbar__button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.logs-toolbar__search input {
+  height: var(--settings-control-height);
+  padding-left: 34px;
+}
+
+.logs-toolbar__search input::-webkit-search-cancel-button {
+  width: 14px;
+  height: 14px;
+  background: var(--muted);
+  cursor: var(--cursor-action);
+  appearance: none;
+  mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M18 6 6 18'/><path d='m6 6 12 12'/></svg>")
+    center / contain no-repeat;
+}
+
+.logs-toolbar .logs-toolbar__button {
+  flex: 0 0 auto;
+  justify-content: center;
+  width: var(--settings-control-height);
+  height: var(--settings-control-height);
+  padding: 0;
+}
+
+/* The menu wraps its trigger in an inline label; center the icon, not its text line. */
+.logs-toolbar__button .oc-menu-item__label {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.logs-toolbar .logs-toolbar__levels {
+  width: auto;
+  max-width: 34ch;
+  padding-inline: var(--space-3);
+}
+
+.logs-toolbar__levels-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logs-toolbar__follow {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--control-ui-text-sm);
+  cursor: var(--cursor-action);
+}
+
+.logs-footer {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  min-height: 1.5em;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.5;
+}
+
+.logs-footer__file {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.logs-footer .settings-status {
+  font-size: inherit;
+  white-space: normal;
+}
+
+/* Down to the phone the stream owns the rest of the page; only a landscape phone scrolls it. */
+@media (max-width: 640px), (max-width: 768px) and (min-height: 501px) {
+  main.content.content--logs-page {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  main.content.content--logs-page > openclaw-router-outlet {
+    display: flex;
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+  }
+
+  .content.content--logs-page openclaw-logs-page {
+    display: contents;
+  }
+
+  .content.content--logs-page .settings-workspace--fill-height,
+  .content.content--logs-page .settings-workspace--fill-height > .settings-workspace__body {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    height: auto;
+    min-height: 0;
+  }
+
+  .content.content--logs-page .settings-workspace--fill-height .logs-card {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .content.content--logs-page .settings-workspace--fill-height .log-stream {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+  }
+}
+
+/* Phone: no frame around the stream, and the filter collapses to its icon. */
+@media (max-width: 640px) {
+  .content.content--logs-page
+    .settings-workspace--fill-height
+    > .settings-workspace__body
+    > .settings-page {
+    padding-top: 0;
+  }
+
+  /* The stream starts right under the description. */
+  main.content.content--logs-page .content-header + * {
+    margin-top: 0;
+  }
+
+  .content.content--logs-page .logs-refresh-status,
+  .content.content--logs-page .logs-layout {
+    margin-top: var(--space-3);
+  }
+
+  .content.content--logs-page .logs-layout {
+    gap: var(--space-2);
+  }
+
+  .content.content--logs-page .settings-workspace--fill-height .logs-card {
+    padding: 0;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .content.content--logs-page .settings-workspace--fill-height .log-stream {
+    border-radius: 0;
+  }
+
+  .log-row {
+    padding-inline: 0;
+  }
+
+  .logs-toolbar__levels-label {
+    display: none;
+  }
+
+  .logs-toolbar .logs-toolbar__levels {
+    width: var(--settings-control-height);
+    padding: 0;
+  }
 }

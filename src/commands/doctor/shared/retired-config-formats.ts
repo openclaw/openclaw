@@ -31,7 +31,10 @@ export function findRetiredConfigUpgradeRequirement(
   };
   checkKeys(config, "", ["heartbeat"]);
   checkKeys(config.routing, "routing", ["allowFrom", "groupChat"]);
-  checkKeys(config.plugins, "plugins", ["installs"]);
+  const installs = isRecord(config.plugins) ? config.plugins.installs : undefined;
+  if (!isRecord(installs) || Object.keys(installs).length > 0) {
+    checkKeys(config.plugins, "plugins", ["installs"]);
+  }
   const providers = isRecord(config.models) ? config.models.providers : undefined;
   if (isRecord(providers)) {
     for (const [id, provider] of Object.entries(providers)) {

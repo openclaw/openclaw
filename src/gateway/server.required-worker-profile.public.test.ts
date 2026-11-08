@@ -8,7 +8,10 @@ import {
   setupGatewaySessionsTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness(async () => {
+  // Keep cold creation-family loading outside the public RPC response deadline.
+  await import("./server-methods/sessions-create.js");
+});
 
 // Real isolated Gateway and authenticated WebSocket RPC. No provider credentials,
 // remote worker, or model turn: an unavailable required profile must retain the
@@ -20,7 +23,7 @@ test("public required sessions.create publishes an owned non-main session before
   const key = "agent:main:dashboard:required-publication";
   const { ws } = await openClient({
     scopes: ["operator.write", "operator.read"],
-    deviceIdentityPath: path.join(dir, "required-writer.json"),
+    deviceIdentityPath: path.join(dir, "required-writer", "client", "credentials.sqlite"),
   });
   try {
     const created = await rpcReq<{

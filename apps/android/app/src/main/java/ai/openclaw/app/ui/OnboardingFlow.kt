@@ -647,10 +647,9 @@ fun OnboardingFlow(
     }
 
     fun handleScannedSetupCode(
-      rawValue: String,
+      scanned: GatewayScannedSetupCodeResult,
       inputSource: OnboardingGatewayInputSource,
     ) {
-      val scanned = resolveScannedSetupCodeResult(rawValue)
       if (scanned.setupCode == null) {
         val errorCode =
           when (scanned.error) {
@@ -722,12 +721,12 @@ fun OnboardingFlow(
         setupBarcodeScanner
           .process(image)
           .addOnSuccessListener { barcodes ->
-            val rawValue = barcodes.firstNotNullOfOrNull { barcode -> barcode.rawValue?.takeIf { it.isNotBlank() } }
-            if (rawValue == null) {
+            val scanned = resolveScannedSetupCodeResult(barcodes.asSequence().map { it.rawValue })
+            if (scanned == null) {
               showSetupScanError(OnboardingErrorCode.ImageMissingQr)
               return@addOnSuccessListener
             }
-            handleScannedSetupCode(rawValue, inputSource = OnboardingGatewayInputSource.SetupGallery)
+            handleScannedSetupCode(scanned, inputSource = OnboardingGatewayInputSource.SetupGallery)
           }.addOnFailureListener {
             showSetupScanError(OnboardingErrorCode.ImageQrReadFailed)
           }
@@ -819,7 +818,7 @@ fun OnboardingFlow(
             }
           },
           onRequestCameraPermission = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
-          onCodeScanned = { rawValue -> handleScannedSetupCode(rawValue, inputSource = OnboardingGatewayInputSource.SetupScanner) },
+          onCodeScanned = { rawValue -> handleScannedSetupCode(resolveScannedSetupCodeResult(rawValue), inputSource = OnboardingGatewayInputSource.SetupScanner) },
           onCameraError = {
             showSetupScanError(OnboardingErrorCode.CameraStartFailed)
           },
@@ -1593,7 +1592,7 @@ private fun analyzeSetupQrFrame(
   scanner
     .process(inputImage)
     .addOnSuccessListener { barcodes ->
-      val rawValue = barcodes.firstNotNullOfOrNull { barcode -> barcode.rawValue?.takeIf { it.isNotBlank() } }
+      val rawValue = resolveScannedSetupCodeResult(barcodes.asSequence().map { it.rawValue })?.setupCode
       if (rawValue != null && scanActive.get() && handledScan.compareAndSet(false, true)) {
         onCodeScanned(rawValue)
       }

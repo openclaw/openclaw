@@ -10,6 +10,19 @@ OpenClaw remembers things by writing plain Markdown files in your agent's
 workspace (default `~/.openclaw/workspace`). The model only remembers what gets
 saved to disk; there is no hidden state.
 
+Workspace `USER.md` and `MEMORY.md` context does not require a memory search
+plugin to implement provenance classification. When that optional capability is
+missing, OpenClaw uses its workspace provenance records. Files recorded as
+untrusted and remote files without a valid read-source identity remain excluded.
+The Gateway logs one warning per excluded file and process (`excluding MEMORY.md
+from automatic memory context: memory provenance is untrusted`), and
+`openclaw doctor` lists each excluded `MEMORY.md`, `USER.md`, or personal
+`users/<profile-id>/USER.md` with the time
+and session of its last recorded tracked write. That record keeps only the
+latest tracked write, so it can name a later session than the write that
+quarantined the file. See
+[Memory provenance and deletion](/concepts/memory-provenance#freeform-edits-and-quarantine).
+
 ## How it works
 
 Your agent has four memory-related files:
@@ -47,6 +60,10 @@ of a session. It is not a raw transcript, daily log, or exhaustive archive.
 observations, session summaries, and raw context that may still be useful
 later. These are indexed for `memory_search` and `memory_get`, but are not
 injected into the bootstrap prompt on every turn.
+
+Daily-memory maintenance requires valid UTF-8. If decoding fails, the operation
+stops before rewriting that file. Preserve the original and convert a copy to
+UTF-8 before retrying.
 
 Over time, useful material from daily notes is distilled into `MEMORY.md` by
 the default [dreaming](/concepts/dreaming) sweep. The generated workspace
@@ -144,6 +161,33 @@ Use [scheduled tasks](/automation/cron-jobs) for exact reminders, timed checks,
 and recurring work. Memory can still summarize the durable context around that
 work.
 
+## PostgreSQL memory search
+
+The built-in `memory-core` plugin can index and search a PostgreSQL agent database.
+SQLite remains the default. PostgreSQL memory search is supported on the
+[qualified runtime](/gateway/postgresql#support-matrix). Text ranking is
+engine-local, so result ordering and scores can differ from SQLite. PostgreSQL
+uses the faster native `ts_rank` function and calibrates its unnormalized rank
+`r` as `r / (r + 0.0027)` before the shared hybrid merge. The calibration is fitted to
+the previous keyword score scale, giving keywords a useful weight without penalizing
+long chunks by their full length. It is not BM25: PostgreSQL's native rank lacks
+corpus-wide inverse document frequency (IDF), so common and mixed-frequency
+queries can still rank differently. Hybrid search retains the same vector/text
+weights.
+
+Install `unaccent` in the selected PostgreSQL database for full text, `pg_trgm`
+when using the trigram tokenizer, and `vector` for semantic search. For keyword-only
+search, explicitly set `memory.search.provider: "none"` (or the agent override).
+This mode needs no `vector` extension and appears in memory status as provider
+`none`, search mode `fts-only`. A vector request without the capability fails with
+`DATABASE_SEARCH_CAPABILITY_UNAVAILABLE` and an actionable next step.
+
+Forgetting removes indexed text and vectors together with their source rows.
+`openclaw memory reset` clears derived memory data while preserving memory files,
+sessions, and the admitted search schema; run `openclaw memory index` to rebuild.
+See [Database engines](/reference/database-engines#search-on-postgresql) for setup,
+permissions, storage diagnostics, and PostgreSQL limitations.
+
 ## Memory tools
 
 The agent has three tools for working with memory:
@@ -155,6 +199,25 @@ The agent has three tools for working with memory:
   standing intents. Time-based reminders continue to use scheduled tasks.
 
 All three tools are provided by the active memory plugin (default: `memory-core`).
+
+The agent can answer directly when the conversation, bootstrap files, or supplied
+recall fully answers the question. It uses memory tools to retrieve missing facts
+when that context is absent or only answers part of the question. Partial, stale,
+or unavailable recall still requires disclosure.
+
+Automatic project recall has a one-second preparation budget, including provider
+startup and cleanup. If the budget expires, the turn continues without project
+candidates and the Gateway logs `project memory recall skipped` with the reason.
+Late results are discarded. The read may finish under the current turn's existing
+authority; the budget does not cancel storage work. Memory tools remain available
+for explicit retrieval.
+Cold or busy stores can therefore omit automatic recall on consecutive turns;
+explicit retrieval uses the memory tool's own lifetime rather than this budget.
+
+If `memory_search` reports that its storage scope closed, run
+`openclaw plugins reload memory-core`, or restart the Gateway, then retry.
+This is a storage lifecycle failure, not an embedding provider error. See
+[Plugin reload](/cli/plugins/uninstall-and-update#reload) for reload behavior.
 
 When session indexing is enabled, `memory_search` can also return session
 transcript hits. Their `sessions/...jsonl` paths are search references, not files
@@ -263,29 +326,18 @@ other flush plans are not resolved for sessions that cannot write it. It exposes
 tools, subject to normal tool policies. Those tools receive the source turn's
 memory audience and sandbox state. Missing lookup tools produce a warning but do
 not block a flush that can still persist. The flush is skipped if no valid
-audience or permitted persistence tool is available. It succeeds when a
+audience or permitted persistence tool is available. Source-session and sandbox
+policy denials skip provider flush preparation before a maintenance turn is
+dispatched. These skips are debug diagnostics, not failed lane tasks. Model-specific
+policy and dynamic tool availability are checked by the selected attempt. It succeeds when a
 persistence tool completes without error or the agent returns `NO_REPLY`; lookup
 success alone does not complete the flush. Skipping or failing this optional step
 does not prevent compaction. Plugin authors can find the contract and retry
 identity in [Pre-compaction memory flush](/plugins/sdk-overview/memory-and-context#pre-compaction-memory-flush).
 
-To keep that housekeeping turn on a local model, set an exact override that
-applies only to the memory-flush turn (it does not inherit the active
-session's model fallback chain):
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "compaction": {
-        "memoryFlush": {
-          "model": "ollama/qwen3:8b"
-        }
-      }
-    }
-  }
-}
-```
+The flush uses the active session model and its normal fallback chain. To keep
+memory extraction local, use a local model for the session and configure local
+fallbacks.
 
 <Tip>
 The memory flush gives the agent a chance to save important facts before

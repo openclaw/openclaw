@@ -1,7 +1,10 @@
 // Imported by agent.test.ts to share its handler mocks and runtime fixture.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
+import * as modelRuntime from "../../agents/prepared-model-runtime.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -10,6 +13,7 @@ import {
   invokeAgent,
   makeContext,
   mockCallArg,
+  primeMainAgentRun,
 } from "./agent.test-harness.js";
 import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 import * as sessionCreateProject from "./session-create-project.js";
@@ -18,6 +22,50 @@ const mocks = getAgentTestMocks();
 
 describe("gateway agent worktree preparation", () => {
   afterEach(describe0AfterEach0);
+
+  it("attributes Gateway preparation leases to their run and releases completed work", async () => {
+    const instance = new PluginInstance("retention-probe");
+    const observations: ReturnType<typeof instance.retentionSnapshot>[] = [];
+    const acquire = vi
+      .mocked(modelRuntime.acquireAgentRunPreparedModelRuntime)
+      .getMockImplementation();
+    if (!acquire) {
+      throw new Error("Handler fixture did not install runtime acquisition");
+    }
+    using _ = vi
+      .spyOn(modelRuntime, "acquireAgentRunPreparedModelRuntime")
+      .mockImplementation(async (...args) => {
+        const lease = await acquire(...args);
+        const release = instance.retainWork("prepared-generation-lease");
+        observations.push(instance.retentionSnapshot());
+        return {
+          ...lease,
+          async [Symbol.asyncDispose]() {
+            try {
+              await lease[Symbol.asyncDispose]();
+            } finally {
+              release();
+            }
+          },
+        };
+      });
+    for (const runId of ["preparation-first", "preparation-second"]) {
+      primeMainAgentRun();
+      const context = makeContext();
+      const execution = new AsyncWorkScope();
+      context.trackExecution = (run) => execution.track(run);
+      await invokeAgent(
+        { message: "hi", sessionKey: "agent:main:main", idempotencyKey: runId },
+        { context },
+      );
+      await execution.drain();
+      expect(instance.retentionSnapshot().total).toBe(0);
+    }
+    expect(observations.map((snapshot) => snapshot.references[0]?.owner)).toEqual([
+      { runId: "preparation-first", serviceId: "gateway-agent-turn" },
+      { runId: "preparation-second", serviceId: "gateway-agent-turn" },
+    ]);
+  });
 
   it.for(["ok", "error"] as const)(
     "settles routed recipient dedupe after worktree preparation returns %s",
@@ -69,7 +117,7 @@ describe("gateway agent worktree preparation", () => {
         expect(mockCallArg(respond, 0, 1)).toMatchObject({ runId, sessionKey, status: "accepted" });
         await vi.advanceTimersByTimeAsync(10);
         await withinTest(preparing.promise, signal);
-        expect(context.chatAbortControllers.has(runId)).toBe(true);
+        expect(rpcSourceTesting.has(runId)).toBe(true);
         expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject({
           runId,
           sessionKey,
@@ -86,7 +134,7 @@ describe("gateway agent worktree preparation", () => {
         await vi.advanceTimersByTimeAsync(10);
         await withinTest(execution.drain(), signal);
       }
-      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(rpcSourceTesting.has(runId)).toBe(false);
       expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject({
         runId,
         status: outcome,

@@ -53,7 +53,7 @@ function applyNativeOverlay(
 }
 
 const ownAdmission = new AsyncLocalStorage<object>();
-function createWorkerEnvironmentProjection() {
+function createWorkerEnvironmentProjection(revocationListeners = new Set<(id: string) => void>()) {
   const environments = new Map<string, WorkerEnvironmentRecord>();
   const credentials = new Map<string, WorkerCredentialRecord>();
   const attachments = new Map<string, WorkerEnvironmentAttachmentRecord>();
@@ -69,7 +69,6 @@ function createWorkerEnvironmentProjection() {
       attachmentAuthorityUnchanged: boolean;
     }
   >();
-  const revocationListeners = new Set<(environmentId: string) => void>();
   let sequence = 0;
   let version = 0;
   let active = true;
@@ -106,12 +105,13 @@ function createWorkerEnvironmentProjection() {
     attachmentAuthorities.clear();
     nativeOverlays.clear();
     pending.clear();
-    revocationListeners.clear();
     sorted = undefined;
     reconcilable = undefined;
   };
   return {
     incarnation: randomUUID(),
+    // Subscriptions belong to live store facades, across database generations.
+    revocationListeners,
     get active() {
       return active;
     },
@@ -419,7 +419,7 @@ function createWorkerEnvironmentProjection() {
 function createWorkerEnvironmentProjectionRegistry() {
   type Owner = ReturnType<typeof createWorkerEnvironmentProjection>;
   const owners = new Map<string, { owner: Owner; identity: () => DatabasePathIdentity }>();
-  const get = (identity: DatabasePathIdentity): Owner | undefined => {
+  const get = (identity: DatabasePathIdentity, includeRetired = false): Owner | undefined => {
     for (const [key, entry] of owners) {
       const current = entry.identity();
       if (
@@ -429,8 +429,7 @@ function createWorkerEnvironmentProjectionRegistry() {
       ) {
         continue;
       }
-      if (!entry.owner.active) {
-        owners.delete(key);
+      if (!entry.owner.active && !includeRetired) {
         return undefined;
       }
       // First creation promotes the existing admission even through another filesystem alias.
@@ -444,7 +443,7 @@ function createWorkerEnvironmentProjectionRegistry() {
   };
   const remove = (owner: Owner) => {
     for (const [key, entry] of owners) {
-      if (entry.owner === owner) {
+      if (entry.owner === owner && owner.revocationListeners.size === 0) {
         owners.delete(key);
       }
     }
@@ -453,11 +452,11 @@ function createWorkerEnvironmentProjectionRegistry() {
     get,
     acquire(identity: () => DatabasePathIdentity): Owner {
       const current = identity();
-      const existing = get(current);
-      if (existing) {
+      const existing = get(current, true);
+      if (existing?.active) {
         return existing;
       }
-      const owner = createWorkerEnvironmentProjection();
+      const owner = createWorkerEnvironmentProjection(existing?.revocationListeners);
       owners.set(current.key, { owner, identity });
       return owner;
     },
@@ -468,11 +467,11 @@ function createWorkerEnvironmentProjectionRegistry() {
         return;
       }
       owner.close();
-      remove(owner);
     },
     close() {
       for (const { owner } of owners.values()) {
         owner.close();
+        owner.revocationListeners.clear();
       }
       owners.clear();
     },

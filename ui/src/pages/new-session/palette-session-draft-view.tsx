@@ -1,18 +1,50 @@
-import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
+import { createMemo, Show } from "solid-js";
+import { AttachmentPreview } from "../chat/components/chat-attachments.tsx";
+import type { ChatCommentAction } from "../chat/components/chat-selection-annotations.tsx";
+import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
+import type { PaletteSessionDraft } from "./palette-session-draft.ts";
+import { PaletteSessionSettingsView } from "./palette-session-settings-view.tsx";
 
-export function PaletteSessionAttachments(props: { preview: unknown }) {
+type DraftProps = { draft: PaletteSessionDraft; revision: object };
+
+export function PaletteSessionControls(props: DraftProps) {
+  const view = createMemo(() => {
+    void props.revision;
+    return props.draft.settingsView();
+  });
+  return <Show when={view()}>{(settings) => <PaletteSessionSettingsView {...settings()} />}</Show>;
+}
+
+export function PaletteSessionAttachments(props: DraftProps) {
+  const preview = createMemo(() => {
+    void props.revision;
+    const attachments = props.draft.attachmentProps();
+    if (!attachments) {
+      return undefined;
+    }
+    const current = attachments.attachments ?? [];
+    return (attachments.attachmentReads?.project(current).length ?? current.length)
+      ? attachments
+      : undefined;
+  });
   return (
-    <div class="cmd-palette__attachments">
-      <LitContent value={props.preview} />
-    </div>
+    <Show when={preview()}>
+      <div
+        class="cmd-palette__attachments"
+        onOpenclaw-comment-action={(event: CustomEvent<ChatCommentAction>) =>
+          props.draft.removeComment(event.detail)
+        }
+      >
+        <AttachmentPreview {...preview()!} readRevision={props.revision} />
+      </div>
+    </Show>
   );
 }
 
-export function PaletteSessionRecovery(props: { onOpen: () => void }) {
-  return (
-    <button class="btn btn--sm" type="button" onClick={() => props.onOpen()}>
-      {t("sessionsView.openSession")}
-    </button>
-  );
+export function PaletteSessionAuxiliary(props: DraftProps) {
+  const view = createMemo(() => {
+    void props.revision;
+    return props.draft.auxiliaryView();
+  });
+  return <ConnectMachineDialog {...view()} />;
 }

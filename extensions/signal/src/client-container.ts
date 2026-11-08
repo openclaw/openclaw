@@ -17,9 +17,9 @@ import {
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { startWebSocketKeepalive, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { SignalRpcOptions } from "./client-types.js";
 import type { SignalReceivePayload } from "./monitor/event-handler.types.js";
-import { WebSocket } from "./ws-runtime.js";
 
 type ContainerRpcOptions = SignalRpcOptions & {
   maxAttachmentBytes?: number;
@@ -86,8 +86,10 @@ async function withSignalRestDeadline<T>(
   const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
   const deadlineAtMs = Date.now() + safeTimeoutMs;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(signalRestRequestTimeoutError()), safeTimeoutMs);
-  timer.unref?.();
+  const timer = setTimeout(
+    () => controller.abort(signalRestRequestTimeoutError()),
+    safeTimeoutMs,
+  ).unref();
   try {
     return await run({
       signal: controller.signal,
@@ -161,8 +163,7 @@ function containerReceiveCheck(
     const timer = setTimeout(() => {
       settle({ ok: false, status: null, error: "Signal container receive WebSocket timed out" });
       ws?.terminate();
-    }, safeTimeoutMs);
-    timer.unref?.();
+    }, safeTimeoutMs).unref();
     const settle = (result: { ok: boolean; status?: number | null; error?: string | null }) => {
       if (settled) {
         return;
@@ -408,6 +409,17 @@ export async function streamContainerEvents(params: {
 
     ws.on("open", () => {
       log("[signal-ws] connected");
+      // A network path that dies without a FIN never emits close; the missed pong
+      // ends this stream so the outer loop reconnects. The helper stops on close.
+      startWebSocketKeepalive(ws, () => {
+        // Local receive backpressure can leave the peer's pong unread. The
+        // keepalive keeps checking, and resumes enforcement when reads resume.
+        if (ws.isPaused) {
+          return;
+        }
+        logError("[signal-ws] heartbeat timed out; reconnecting");
+        ws.terminate();
+      });
       params.onStreamOpen?.();
     });
 
@@ -430,8 +442,8 @@ export async function streamContainerEvents(params: {
             ws.close();
           });
         }
-      } catch (err) {
-        logError(`[signal-ws] parse error: ${coerceErrorMessage(err)}`);
+      } catch {
+        logError("[signal-ws] parse error: invalid JSON frame");
       }
     });
 
@@ -450,10 +462,6 @@ export async function streamContainerEvents(params: {
       log("[signal-ws] ping received");
     });
 
-    ws.on("pong", () => {
-      log("[signal-ws] pong received");
-    });
-
     if (params.abortSignal) {
       abortHandler = () => {
         log("[signal-ws] aborted, closing connection");
@@ -465,8 +473,7 @@ export async function streamContainerEvents(params: {
           );
           ws.terminate();
           resolveOnce();
-        }, WS_SHUTDOWN_DRAIN_TIMEOUT_MS);
-        shutdownDrainTimer.unref?.();
+        }, WS_SHUTDOWN_DRAIN_TIMEOUT_MS).unref();
         ws.close();
       };
       params.abortSignal.addEventListener("abort", abortHandler, { once: true });

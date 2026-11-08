@@ -75,30 +75,44 @@ Gateway config reload watches the active config file path (resolved from profile
 - Default bind mode: `loopback`. Inside a detected container environment the effective default is `auto` (resolves to `0.0.0.0` for port-forwarding), unless Tailscale serve/funnel is active, which always forces `loopback`.
 - Auth is required by default. Shared-secret setups use `gateway.auth.token` / `gateway.auth.password` (or `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`), and non-loopback reverse-proxy setups can use `gateway.auth.mode: "trusted-proxy"`.
 
+Worker startup recovery retries transient SQLite locks during tool recovery,
+stale turn-claim cleanup, and workspace-journal pruning, logging each retry.
+Workspace recovery must finish
+before worker placements start. If the lock persists through five attempts,
+startup stops with guidance to run `openclaw doctor` or
+`openclaw gateway status --deep`; it does not bypass workspace rollback safety.
+
 ### Module compile cache
 
-Foreground Gateway runs through the packaged CLI and the compiled `dist/entry.js`
-and `dist/index.js` entries automatically enable Node's on-disk module compile
-cache. This includes compiled source deployments
-that retain their Git checkout. Cache entries live outside the release directory,
-under the operating system's temporary directory by default. Set
-`NODE_COMPILE_CACHE` to a writable persistent cache root to retain them across
-host reboots. OpenClaw namespaces that root by package version and build identity;
-each new build starts with its own cache. `NODE_DISABLE_COMPILE_CACHE=1` disables
-it. An unavailable cache produces one diagnostic and startup continues.
-With Node's permission model enabled, an already-active cache remains caller-owned
-so cache scoping never requires launching a process that permissions may forbid.
-One-shot commands do not enable a cache by default: cold cache persistence on Node
-and Bun can delay process exit after output. Setting `NODE_COMPILE_CACHE` explicitly
-opts those commands in. Explicit Gateway prewarming still populates the cache.
+The Gateway main thread runs without Node's on-disk module compile cache. Node
+flushes cached bytecode synchronously, which can stall the event loop during
+startup or shutdown. This trades main-thread cache reuse for responsive lifecycle
+handling. Gateway workers and child processes retain the cache and flush their
+startup and newly loaded database operation modules on their own threads.
 
-The first boot populates the cache; later boots reuse it. Deployment systems can
-warm a candidate before cutover by booting and cleanly stopping it with isolated
+Cache entries live outside the release directory, under the operating system's
+temporary directory by default. Set `NODE_COMPILE_CACHE` to a writable persistent
+root to retain worker caches across host reboots. OpenClaw namespaces that root
+by package version and build identity; each new build starts with its own cache.
+`NODE_DISABLE_COMPILE_CACHE=1` disables caching for the Gateway and its workers.
+An unavailable cache produces a diagnostic and startup continues.
+
+An inherited active cache requires a startup respawn to leave the main thread
+uncached; platforms with `execve` preserve the serving PID. Node's permission
+model retains an already-active caller cache because it may forbid process
+replacement. One-shot commands keep caching opt-in through `NODE_COMPILE_CACHE`;
+explicit release prewarming still populates the cache. See
+[compile-cache environment policy](/help/environment#temporary-compile-cache).
+
+Deployment systems can
+warm a candidate's worker caches before cutover by booting and cleanly stopping it with isolated
 state, a loopback port, the runtime user, and the same cache root. Warm it at its
 final release path: moving the release after warming can prevent Node from
 reusing its entries. Recent build caches coexist, including the serving release
-and a prepared candidate. Cleanup bounds the combined cache to 512 MiB and
-expires bytecode older than seven days.
+and a prepared candidate. Detached cleanup targets 512 MiB and 4,096 files across
+the combined cache, expires bytecode older than seven days, and continues after
+short commands exit. Large backlogs are pruned over bounded passes; see the
+[maintenance policy](/help/environment#temporary-compile-cache).
 
 ## OpenAI-compatible endpoints
 
@@ -177,7 +191,7 @@ What to expect:
 
 Checklist per instance:
 
-- Unique `gateway.port`
+- Unique `gateway.port`, with base ports at least 120 apart to avoid derived-port overlap
 - Unique `OPENCLAW_CONFIG_PATH`
 - Unique `OPENCLAW_STATE_DIR`
 - Unique `agents.defaults.workspace`
@@ -186,7 +200,7 @@ Example:
 
 ```bash
 OPENCLAW_CONFIG_PATH=~/.openclaw/a.json OPENCLAW_STATE_DIR=~/.openclaw-a openclaw gateway --port 19001
-OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b openclaw gateway --port 19002
+OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b openclaw gateway --port 19121
 ```
 
 Detailed setup: [/gateway/multiple-gateways](/gateway/multiple-gateways).
@@ -237,6 +251,8 @@ On macOS, `gateway stop` uses `launchctl bootout` and verifies that the LaunchAg
 If shutdown cannot be verified, the command fails with the exact `launchctl bootout gui/<uid>/<label>` command to run from an external terminal in the service owner's logged-in macOS session. A free Gateway port alone does not prove that the service is stopped.
 
 LaunchAgent labels are `ai.openclaw.gateway` (default) or `ai.openclaw.<profile>` (named profile). `openclaw doctor` audits and repairs service config drift.
+
+On macOS, service restarts preserve multiline environment values, including PEM keys, embedded quotes, and trailing newlines. If an older restart already truncated a value in the generated service environment, another restart cannot reconstruct it. Restore the complete value in its authored configuration or environment and reinstall with `openclaw gateway install --force`.
 
 ### Existing system LaunchDaemons
 
@@ -308,7 +324,7 @@ KillMode=mixed
 WantedBy=default.target
 ```
 
-`TimeoutStopSec=330` covers the Gateway's maximum 315-second stop drain plus a 15-second cleanup and exit margin. The Gateway clamps its drain to the installed unit's effective stop timeout; see [Systemd stop deadlines](/gateway/restart-recovery#systemd-stop-deadlines). To inspect the current managed unit body, run `systemctl --user cat openclaw-gateway.service` (or `systemctl --user cat openclaw-gateway-<profile>.service` for a named profile).
+`TimeoutStopSec=330` is the generated unit's outer stop allowance. A committed stop marks running root sessions and aborts work promptly, then bounds persistence and cleanup. The Gateway caps cleanup to the installed unit's effective stop timeout; see [Systemd stop deadlines](/gateway/restart-recovery#systemd-stop-deadlines). To inspect the current managed unit body, run `systemctl --user cat openclaw-gateway.service` (or `systemctl --user cat openclaw-gateway-<profile>.service` for a named profile).
 
   </Tab>
 
@@ -374,7 +390,9 @@ sudo systemctl enable --now openclaw-gateway[-<profile>].service
   </Tab>
 </Tabs>
 
-Invalid configuration errors exit with code `78`. Linux systemd units use `RestartPreventExitStatus=78` to stop relaunching until the config is fixed. launchd and Windows Task Scheduler do not have an equivalent per-exit-code stop rule, so the Gateway also persists rapid unclean boot history and suppresses channel/provider account auto-start after repeated startup failures. In that safe mode the control plane still starts for inspection and repair, main-session restart recovery pauses until the full breaker window drains and then resumes automatically in the same process, config hot reloads and `secrets.reload` refuse automatic channel restarts, and an explicit operator `channels.start` request can override the suppression. Step-by-step recovery lives in [Restart recovery](/gateway/restart-recovery#safety-valves-and-observability).
+Invalid configuration errors exit with code `78`. Linux systemd units use `RestartPreventExitStatus=78` to stop relaunching until the config is fixed. launchd and Windows Task Scheduler do not have an equivalent per-exit-code stop rule, so the Gateway also persists rapid unclean boot history and suppresses channel/provider account auto-start after repeated startup failures. In that safe mode the control plane still starts for inspection and repair, config hot reloads and `secrets.reload` refuse automatic channel restarts, and an explicit operator `channels.start` request can override the suppression. Step-by-step recovery lives in [Restart recovery](/gateway/restart-recovery#safety-valves-and-observability).
+
+When a systemd service starts on state that needs migration while another OpenClaw process holds that state, the Gateway waits for it and then exits with code `1`, not `78`, so systemd retries instead of leaving the service down.
 
 ## Dev profile quick path
 

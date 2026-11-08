@@ -1,8 +1,8 @@
-// Creates channel-native approval runtimes and delivery flows.
 import type {
   ChannelApprovalNativeAdapter,
   ChannelApprovalNativeAdapterAsync,
 } from "../channels/plugins/approval-native.types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import {
@@ -102,7 +102,7 @@ export function createChannelNativeApprovalRuntimeAsync<
     TPendingContent,
     TRequest,
     TResolved
-  >,
+  > & { getRequestConfig?: (request: ApprovalRequest) => OpenClawConfig },
 ): ExecApprovalChannelRuntime<TRequest, TResolved> {
   const nowMs = adapter.nowMs ?? Date.now;
   const handledEventKinds = new Set<ChannelApprovalKind>(adapter.eventKinds ?? ["exec"]);
@@ -118,7 +118,7 @@ export function createChannelNativeApprovalRuntimeAsync<
     shouldHandle: (request) => adapter.shouldHandle(request as NormalizedApprovalRequest<TRequest>),
     classifyRoute: (request) =>
       classifyApprovalRequestChannelRouteAsync({
-        cfg: adapter.cfg,
+        cfg: adapter.getRequestConfig?.(request) ?? adapter.cfg,
         request,
         channel: adapter.channel ?? "",
       }),
@@ -201,7 +201,7 @@ export function createChannelNativeApprovalRuntimeAsync<
           nowMs: nowMs(),
         });
         const plannedDelivery = await resolveChannelNativeApprovalDeliveryPlan({
-          cfg: adapter.cfg,
+          cfg: adapter.getRequestConfig?.(request) ?? adapter.cfg,
           accountId: adapter.accountId,
           approvalKind,
           request,

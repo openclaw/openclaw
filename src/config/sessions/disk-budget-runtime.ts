@@ -39,7 +39,7 @@ export function drainSessionDiskBudgetWorkers(): Promise<void> {
 export async function measureSessionPhysicalDiskUsage(
   storePath: string,
 ): Promise<SessionPhysicalDiskUsage> {
-  // Capture the locator before queueing; only four totals cross back to the caller.
+  // Capture the locator before queueing; only byte totals cross back to the caller.
   const pending = measurements.pool.run(path.resolve(storePath), {});
   measurements.pending.add(pending);
   try {

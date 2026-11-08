@@ -58,6 +58,14 @@ current environment and gives recovery guidance; it does not generate a
 replacement secret or overwrite the configured reference. The CLI and Gateway
 service can have different environments.
 
+When `hooks.token` is a whole `${NAME}` reference, the Gateway keeps `NAME` out
+of the environment that agent `exec` commands, CLI backends and other host exec
+children inherit. The name active at launch is withheld, so an `exec` prepared
+before a reload of `hooks.token` still drops the newly referenced name when it
+starts. A command can still set its own value for that name. Child processes
+started outside host exec, such as plugin daemons, MCP servers and ACP
+harnesses, are not covered by this rule.
+
 `hooks.token` should be distinct from active Gateway shared-secret auth
 (`gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` /
 `OPENCLAW_GATEWAY_PASSWORD`). Startup logs a non-fatal warning on reuse;
@@ -349,6 +357,8 @@ When `hooks.enabled: true` and `hooks.gmail.account` is set, the Gateway starts
 are available, and renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
 Do not start a second foreground watcher on the same listener. Setup output can
 contain tokens; see the [CLI reference](/cli/webhooks).
+
+The watcher probes the selected Gog executable. Gog v0.48.0 and supporting builds use `--token-env` and `--hook-token-env` automatically. Older Gog and inconclusive probes keep the existing connection working through legacy arguments, with one warning per watcher lifecycle; these connections remain affected by local process-argument token exposure until Gog is upgraded. Serve retries never downgrade environment transport. Startup does not upgrade packages. Interactive setup/run and explicit `openclaw doctor --repair` can upgrade eligible, unpinned Homebrew installations; custom wrappers and other installations remain operator-managed. After upgrading Gog, restart the watcher or Gateway. See [compatibility and upgrades](/cli/webhooks#webhooks-gmail-run). A started watcher is not readiness or registration proof.
 
 A successful push or hook response is transport/admission evidence, not proof of
 completed email processing or delivery. Verify the restricted reader through

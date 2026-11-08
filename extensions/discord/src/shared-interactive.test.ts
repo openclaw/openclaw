@@ -1,14 +1,59 @@
-// Discord tests cover shared interactive plugin behavior.
 import { buildApprovalResolutionRef } from "openclaw/plugin-sdk/approval-reference-runtime";
+import type {
+  MessagePresentationButton,
+  MessagePresentationSelectBlock,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { describe, expect, it } from "vitest";
 import { parseExecApprovalData } from "./approval-custom-id.js";
 import { buildDiscordActivityCustomId } from "./component-custom-id.js";
 import { buildDiscordComponentMessage } from "./components.js";
-import { parseCustomId } from "./internal/discord.js";
+import type { DiscordComponentButtonSpec } from "./components.types.js";
+import { parseCustomId } from "./internal/components.base.js";
 import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
 } from "./shared-interactive.js";
+
+function renderButtons(
+  buttons: MessagePresentationButton[],
+  options?: Parameters<typeof buildDiscordPresentationComponents>[1],
+) {
+  return buildDiscordPresentationComponents({ blocks: [{ type: "buttons", buttons }] }, options);
+}
+function legacyButtons(buttons: MessagePresentationButton[]) {
+  return buildDiscordInteractiveComponents({ blocks: [{ type: "buttons", buttons }] });
+}
+function renderSelect(options: MessagePresentationSelectBlock["options"]) {
+  return buildDiscordPresentationComponents({
+    blocks: [{ type: "select", options, placeholder: "Pick" }],
+  });
+}
+type Approval = Extract<NonNullable<MessagePresentationButton["action"]>, { type: "approval" }>;
+const approval = (
+  approvalId: string,
+  approvalKind: Approval["approvalKind"],
+  decision: Approval["decision"],
+): Approval => ({ type: "approval", approvalId, approvalKind, decision });
+function expectButtons(
+  rendered: ReturnType<typeof buildDiscordPresentationComponents>,
+  buttons: DiscordComponentButtonSpec[],
+) {
+  expect(rendered).toEqual({ blocks: [{ type: "actions", buttons }] });
+}
+const select = (
+  callbackDataKind: "command" | "callback",
+  options: Array<{ label: string; value: string }>,
+) => ({
+  blocks: [
+    { type: "actions", select: { type: "string", placeholder: "Pick", callbackDataKind, options } },
+  ],
+});
+
+function firstCustomId(rendered: ReturnType<typeof buildDiscordPresentationComponents>) {
+  const block = rendered?.blocks?.[0];
+  return block?.type === "actions" ? block.buttons?.[0]?.internalCustomId : undefined;
+}
+const parseApproval = (id: string) => parseExecApprovalData(parseCustomId(id).data);
 
 describe("buildDiscordInteractiveComponents", () => {
   it("maps shared buttons and selects into Discord component blocks", () => {
@@ -52,23 +97,16 @@ describe("buildDiscordInteractiveComponents", () => {
 
   it("preserves opaque callback authority through the legacy renderer", () => {
     expect(
-      buildDiscordInteractiveComponents({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Unavailable",
-                action: { type: "web-app", widgetId: "invalid" },
-              },
-              {
-                label: "Continue",
-                action: { type: "callback", value: "/codex permissions yolo" },
-              },
-            ],
-          },
-        ],
-      }),
+      legacyButtons([
+        {
+          label: "Unavailable",
+          action: { type: "web-app", widgetId: "invalid" },
+        },
+        {
+          label: "Continue",
+          action: { type: "callback", value: "/codex permissions yolo" },
+        },
+      ]),
     ).toMatchObject({
       blocks: [
         {
@@ -87,63 +125,36 @@ describe("buildDiscordInteractiveComponents", () => {
 
   it("renders hosted widget actions as Discord Activity buttons", () => {
     const widgetId = "AAAAAAAAAAAAAAAAAAAAAA";
-    expect(
-      buildDiscordPresentationComponents({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Open widget",
-                action: { type: "web-app", widgetId },
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual({
-      blocks: [
+    expectButtons(
+      renderButtons([
         {
-          type: "actions",
-          buttons: [
-            {
-              label: "Open widget",
-              style: "secondary",
-              internalCustomId: buildDiscordActivityCustomId(widgetId),
-            },
-          ],
+          label: "Open widget",
+          action: { type: "web-app", widgetId },
+        },
+      ]),
+      [
+        {
+          label: "Open widget",
+          style: "secondary",
+          internalCustomId: buildDiscordActivityCustomId(widgetId),
         },
       ],
-    });
+    );
   });
 
   it("renders system-agent approvals as actionable Discord controls", () => {
-    const rendered = buildDiscordPresentationComponents({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Allow Once",
-              action: {
-                type: "approval",
-                approvalId: "change-1",
-                approvalKind: "system-agent",
-                decision: "allow-once",
-              },
-              value: "/approve change-1 allow-once",
-              style: "success",
-            },
-          ],
-        },
-      ],
-    });
+    const rendered = renderButtons([
+      {
+        label: "Allow Once",
+        action: approval("change-1", "system-agent", "allow-once"),
+        value: "/approve change-1 allow-once",
+        style: "success",
+      },
+    ]);
 
-    const firstBlock = rendered?.blocks?.[0];
-    const customId =
-      firstBlock?.type === "actions" ? firstBlock.buttons?.[0]?.internalCustomId : undefined;
+    const customId = firstCustomId(rendered);
     expect(customId).toBe("execapproval:kind=system-agent;id=change-1;action=allow-once");
-    expect(parseExecApprovalData(parseCustomId(customId ?? "").data)).toEqual({
+    expect(parseApproval(customId ?? "")).toEqual({
       approvalId: "change-1",
       approvalKind: "system-agent",
       action: "allow-once",
@@ -151,45 +162,23 @@ describe("buildDiscordInteractiveComponents", () => {
   });
 
   it("renders typed approvals as actionable transport-private Discord controls", () => {
-    const rendered = buildDiscordPresentationComponents({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Deny",
-              action: {
-                type: "approval",
-                approvalId: "opaque:approval;id=7",
-                approvalKind: "plugin",
-                decision: "deny",
-              },
-              value: "/approve opaque:approval;id=7 deny",
-              style: "danger",
-            },
-          ],
-        },
-      ],
-    });
+    const rendered = renderButtons([
+      {
+        label: "Deny",
+        action: approval("opaque:approval;id=7", "plugin", "deny"),
+        value: "/approve opaque:approval;id=7 deny",
+        style: "danger",
+      },
+    ]);
 
-    expect(rendered).toEqual({
-      blocks: [
-        {
-          type: "actions",
-          buttons: [
-            {
-              label: "Deny",
-              style: "danger",
-              internalCustomId:
-                "execapproval:kind=plugin;id=opaque%3Aapproval%3Bid%3D7;action=deny",
-            },
-          ],
-        },
-      ],
-    });
-    const firstBlock = rendered?.blocks?.[0];
-    const customId =
-      firstBlock?.type === "actions" ? firstBlock.buttons?.[0]?.internalCustomId : undefined;
+    expectButtons(rendered, [
+      {
+        label: "Deny",
+        style: "danger",
+        internalCustomId: "execapproval:kind=plugin;id=opaque%3Aapproval%3Bid%3D7;action=deny",
+      },
+    ]);
+    const customId = firstCustomId(rendered);
     expect(customId).toBeDefined();
     if (!rendered) {
       throw new Error("Expected Discord presentation components");
@@ -200,7 +189,7 @@ describe("buildDiscordInteractiveComponents", () => {
       | undefined;
     expect(serialized?.components?.[0]?.components?.[0]?.custom_id).toBe(customId);
     expect(built.entries).toEqual([]);
-    expect(parseExecApprovalData(parseCustomId(customId ?? "").data)).toEqual({
+    expect(parseApproval(customId ?? "")).toEqual({
       approvalId: "opaque:approval;id=7",
       approvalKind: "plugin",
       action: "deny",
@@ -210,28 +199,21 @@ describe("buildDiscordInteractiveComponents", () => {
   it("uses declared-choice indices when custom input is interleaved", () => {
     const questionId = "ask_0123456789abcdef0123456789abcdef";
     expect(
-      buildDiscordPresentationComponents(
-        {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Production",
-                  action: { type: "question", questionId, optionValue: "Production" },
-                },
-                {
-                  label: "Other…",
-                  action: { type: "question", questionId, intent: "custom-input" },
-                },
-                {
-                  label: "Staging",
-                  action: { type: "question", questionId, optionValue: "Staging" },
-                },
-              ],
-            },
-          ],
-        },
+      renderButtons(
+        [
+          {
+            label: "Production",
+            action: { type: "question", questionId, optionValue: "Production" },
+          },
+          {
+            label: "Other…",
+            action: { type: "question", questionId, intent: "custom-input" },
+          },
+          {
+            label: "Staging",
+            action: { type: "question", questionId, optionValue: "Staging" },
+          },
+        ],
         {
           questionOptionIndices: new Map([
             [
@@ -257,81 +239,42 @@ describe("buildDiscordInteractiveComponents", () => {
   });
 
   it("rejects malformed approval custom ids and compacts overlong canonical ids", () => {
-    expect(
-      parseExecApprovalData(parseCustomId("execapproval:kind=exec;id=%zz;action=allow-once").data),
-    ).toBeNull();
-    expect(
-      parseExecApprovalData(
-        parseCustomId("execapproval:kind=exec;id=approval-1;action=/approve").data,
-      ),
-    ).toBeNull();
+    expect(parseApproval("execapproval:kind=exec;id=%zz;action=allow-once")).toBeNull();
+    expect(parseApproval("execapproval:kind=exec;id=approval-1;action=/approve")).toBeNull();
     const overlongId = `approval/${"\u{1F4F1}".repeat(40)}`;
-    const rendered = buildDiscordPresentationComponents({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Review",
-              action: {
-                type: "approval",
-                approvalId: overlongId,
-                approvalKind: "exec",
-                decision: "allow-once",
-              },
-            },
-          ],
-        },
-      ],
-    });
-    const firstBlock = rendered?.blocks?.[0];
-    const customId =
-      firstBlock?.type === "actions" ? firstBlock.buttons?.[0]?.internalCustomId : undefined;
+    const rendered = renderButtons([
+      {
+        label: "Review",
+        action: approval(overlongId, "exec", "allow-once"),
+      },
+    ]);
+    const customId = firstCustomId(rendered);
     expect(customId?.length).toBeLessThanOrEqual(100);
-    expect(parseExecApprovalData(parseCustomId(customId ?? "").data)).toEqual({
+    expect(parseApproval(customId ?? "")).toEqual({
       approvalId: buildApprovalResolutionRef({ approvalId: overlongId, approvalKind: "exec" }),
       approvalKind: "exec",
       action: "allow-once",
     });
     expect(
-      buildDiscordPresentationComponents({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Invalid",
-                action: {
-                  type: "approval",
-                  approvalId: "approval-1",
-                  approvalKind: "invalid" as "exec",
-                  decision: "allow-once",
-                },
-              },
-            ],
-          },
-        ],
-      }),
+      renderButtons([
+        {
+          label: "Invalid",
+          action: approval("approval-1", "invalid" as "exec", "allow-once"),
+        },
+      ]),
     ).toBeUndefined();
   });
 
   it("splits long shared button rows to stay within Discord action limits", () => {
     expect(
-      buildDiscordInteractiveComponents({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              { label: "One", value: "1" },
-              { label: "Two", value: "2" },
-              { label: "Three", value: "3" },
-              { label: "Four", value: "4" },
-              { label: "Five", value: "5" },
-              { label: "Six", value: "6" },
-            ],
-          },
-        ],
-      }),
+      legacyButtons([
+        { label: "One", value: "1" },
+        { label: "Two", value: "2" },
+        { label: "Three", value: "3" },
+        { label: "Four", value: "4" },
+        { label: "Five", value: "5" },
+        { label: "Six", value: "6" },
+      ]),
     ).toEqual({
       blocks: [
         {
@@ -386,149 +329,56 @@ describe("buildDiscordInteractiveComponents", () => {
   });
 
   it("preserves disabled presentation buttons for Discord components", () => {
-    expect(
-      buildDiscordPresentationComponents({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              { label: "Already handled", value: "done", disabled: true },
-              { label: "Open docs", url: "https://example.com/docs", disabled: true },
-            ],
-          },
-        ],
-      }),
-    ).toEqual({
-      blocks: [
+    expectButtons(
+      renderButtons([
+        { label: "Already handled", value: "done", disabled: true },
+        { label: "Open docs", url: "https://example.com/docs", disabled: true },
+      ]),
+      [
         {
-          type: "actions",
-          buttons: [
-            {
-              label: "Already handled",
-              style: "secondary",
-              callbackData: "done",
-              disabled: true,
-            },
-            {
-              label: "Open docs",
-              style: "link",
-              url: "https://example.com/docs",
-              disabled: true,
-            },
-          ],
+          label: "Already handled",
+          style: "secondary",
+          callbackData: "done",
+          disabled: true,
+        },
+        {
+          label: "Open docs",
+          style: "link",
+          url: "https://example.com/docs",
+          disabled: true,
         },
       ],
-    });
+    );
   });
 
   it("preserves reusable presentation buttons for Discord action entries", () => {
-    expect(
-      buildDiscordPresentationComponents({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Refresh", value: "refresh", reusable: true }],
-          },
-        ],
-      }),
-    ).toEqual({
-      blocks: [
-        {
-          type: "actions",
-          buttons: [
-            { label: "Refresh", style: "secondary", callbackData: "refresh", reusable: true },
-          ],
-        },
-      ],
-    });
+    expectButtons(renderButtons([{ label: "Refresh", value: "refresh", reusable: true }]), [
+      { label: "Refresh", style: "secondary", callbackData: "refresh", reusable: true },
+    ]);
   });
 
-  it("preserves typed command actions for command-only select options", () => {
-    expect(
-      buildDiscordPresentationComponents({
-        blocks: [
-          {
-            type: "select",
-            placeholder: "Pick",
-            options: [
-              {
-                label: "Run",
-                action: { type: "command", command: "/codex permissions yolo" },
-                value: "/codex permissions yolo",
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual({
-      blocks: [
-        {
-          type: "actions",
-          select: {
-            type: "string",
-            placeholder: "Pick",
-            callbackDataKind: "command",
-            options: [{ label: "Run", value: "/codex permissions yolo" }],
-          },
-        },
-      ],
-    });
-  });
-
-  it("marks typed callback actions for callback-only select options", () => {
-    expect(
-      buildDiscordPresentationComponents({
-        blocks: [
-          {
-            type: "select",
-            placeholder: "Pick",
-            options: [
-              {
-                label: "Inspect",
-                action: { type: "callback", value: "inspect:123" },
-                value: "inspect:123",
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual({
-      blocks: [
-        {
-          type: "actions",
-          select: {
-            type: "string",
-            placeholder: "Pick",
-            callbackDataKind: "callback",
-            options: [{ label: "Inspect", value: "inspect:123" }],
-          },
-        },
-      ],
-    });
+  it.each([
+    { kind: "command", label: "Run", value: "/codex permissions yolo" },
+    { kind: "callback", label: "Inspect", value: "inspect:123" },
+  ] as const)("preserves typed $kind select actions", ({ kind, label, value }) => {
+    const action = kind === "command" ? { type: kind, command: value } : { type: kind, value };
+    expect(renderSelect([{ label, action, value }])).toEqual(select(kind, [{ label, value }]));
   });
 
   it("does not render mixed command and callback select actions", () => {
     expect(
-      buildDiscordPresentationComponents({
-        blocks: [
-          {
-            type: "select",
-            placeholder: "Pick",
-            options: [
-              {
-                label: "Run",
-                action: { type: "command", command: "/codex run" },
-                value: "/codex run",
-              },
-              {
-                label: "Inspect",
-                action: { type: "callback", value: "inspect:123" },
-                value: "inspect:123",
-              },
-            ],
-          },
-        ],
-      }),
+      renderSelect([
+        {
+          label: "Run",
+          action: { type: "command", command: "/codex run" },
+          value: "/codex run",
+        },
+        {
+          label: "Inspect",
+          action: { type: "callback", value: "inspect:123" },
+          value: "inspect:123",
+        },
+      ]),
     ).toBeUndefined();
   });
 });

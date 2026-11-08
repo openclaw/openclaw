@@ -1,6 +1,9 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { buildAgentMainSessionKey } from "@openclaw/session-url-contract";
-import { isSubagentSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import type { SessionEntry } from "./types.js";
 
 // Pins are sidebar-root facts; promotion does not change execution lineage.
@@ -10,7 +13,8 @@ export function isPinnableSessionEntry(
   storeKey: string,
   entry: Pick<SessionEntry, "spawnedBy" | "parentSessionKey" | "sidebarRoot"> | undefined,
 ): boolean {
-  if (isSubagentSessionKey(storeKey)) {
+  const parsed = parseAgentSessionKey(storeKey);
+  if (normalizeLowercaseStringOrEmpty(parsed?.rest ?? storeKey).startsWith("subagent:")) {
     return false;
   }
   if (entry?.sidebarRoot === true) {
@@ -23,7 +27,6 @@ export function isPinnableSessionEntry(
   if (!parentSessionKey) {
     return true;
   }
-  const parsed = parseAgentSessionKey(storeKey);
   return (
     parsed !== null && parentSessionKey === buildAgentMainSessionKey({ agentId: parsed.agentId })
   );

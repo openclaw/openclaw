@@ -1,38 +1,35 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isHardlinkFallbackError } from "../infra/directory-durability.js";
-import { hasErrnoCode } from "../infra/errno.js";
 import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
+import { lstatIfExists } from "../infra/path-existence.js";
 import { readWorkspaceFileWithGuards } from "./workspace-file-read.js";
 
 export class WorkspaceBootstrapSeedConflictError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
+  constructor(message: string) {
+    super(message);
     this.name = "WorkspaceBootstrapSeedConflictError";
   }
 }
 
 export async function publishBootstrapFile(
   filePath: string,
-  content: string | Buffer,
+  content: string | Buffer | (() => Promise<string>),
   beforePersistentApply?: () => void,
 ): Promise<boolean> {
   const dir = await fs.realpath(path.dirname(filePath));
   const targetPath = path.join(dir, path.basename(filePath));
   // Existing entries, including dangling symlinks, need no staging writes.
   // Preserve the exclusive-create no-op on read-only established workspaces.
-  const existing = await fs.lstat(targetPath).catch((error: unknown) => {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
-  });
+  const existing = await lstatIfExists(targetPath, "ENOENT");
   beforePersistentApply?.();
   if (existing) {
     return false;
   }
+  const resolvedContent = typeof content === "function" ? await content() : content;
   const root = await fsRoot(dir);
   try {
-    await root.create(targetPath, content, {
+    await root.create(targetPath, resolvedContent, {
       atomic: true,
       durable: "file",
       mkdir: false,
@@ -57,11 +54,11 @@ export async function publishBootstrapFile(
 
 export async function publishAgentInstructions(
   filePath: string,
-  template: string,
+  template: () => Promise<string>,
   purpose: string | undefined,
   beforePersistentApply?: () => void,
 ): Promise<void> {
-  const content = purpose ? `# Agent purpose\n\n${purpose}\n\n${template}` : template;
+  const content = purpose ? `# Agent purpose\n\n${purpose}\n\n${await template()}` : template;
   const created = await publishBootstrapFile(filePath, content, beforePersistentApply);
   if (purpose && !created) {
     const existing = await readWorkspaceFileWithGuards({

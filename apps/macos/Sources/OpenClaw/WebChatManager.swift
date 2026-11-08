@@ -250,7 +250,7 @@ final class WebChatManager {
                     requestedRoute: route,
                     sourceIsCurrent: sourceIsCurrent)
             } catch is CancellationError {
-                webChatManagerLogger.debug("Cancelled native Gateway window open after its owner changed")
+                // Owner retirement cancels the pending open.
             } catch {
                 guard generation == self.windowGeneration else { return }
                 Self.showProfileError(error, message: "Could Not Open Gateway Window")

@@ -1,7 +1,8 @@
 import type { Chat, Message, RichBlock, RichBlockCaption, RichText } from "grammy/types";
-import type {
-  ChannelInboundMediaInput,
-  NormalizedLocation,
+import {
+  type ChannelInboundMediaInput,
+  formatLocationText,
+  type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -76,7 +77,7 @@ const TELEGRAM_RICH_MESSAGE_PLACEHOLDER = "[unsupported Telegram rich_message re
 
 type TelegramTextMessage = Pick<
   Message,
-  "text" | "caption" | "entities" | "caption_entities" | "poll"
+  "text" | "caption" | "entities" | "caption_entities" | "poll" | "contact"
 > & { rich_message?: Message.RichMessageMessage["rich_message"] };
 
 function compactRichText(value: string): string {
@@ -238,6 +239,17 @@ export function getTelegramTextParts(msg: TelegramTextMessage): {
   if (text) {
     return { text, entities: msg.entities ?? msg.caption_entities ?? [] };
   }
+  if (msg.contact) {
+    const name = [msg.contact.first_name, msg.contact.last_name]
+      .map((value) => normalizeOptionalString(value))
+      .filter(Boolean)
+      .join(" ");
+    const phone = normalizeOptionalString(msg.contact.phone_number);
+    return {
+      text: `[Shared contact] ${[name, phone].filter(Boolean).join(", ") || "no details"}`,
+      entities: [],
+    };
+  }
   return { text: msg.poll ? formatTelegramPollText(msg.poll) : "", entities: [] };
 }
 
@@ -302,6 +314,9 @@ function isBotCommandAddressedToMention(command: string, mention: string): boole
 }
 
 export function hasBotMention(msg: Message, botUsername: string, botId?: number) {
+  if (msg.contact) {
+    return false;
+  }
   const { text, entities } = getTelegramTextParts(msg);
   const mention = normalizeLowercaseStringOrEmpty(`@${botUsername}`);
   if (hasStandaloneTelegramMention(normalizeLowercaseStringOrEmpty(text), mention)) {
@@ -413,6 +428,24 @@ export function normalizeForwardedContext(msg: Message): TelegramForwardedContex
       origin satisfies never;
       return null;
   }
+}
+
+/** Location counts as user text downstream and is forwarded structurally; dice is neither. */
+export type TelegramNonTextBody =
+  | { kind: "location"; text: string; location: NormalizedLocation }
+  | { kind: "dice"; text: string };
+
+/** Shared by inbound bodies, cached messages, and reply targets. */
+export function resolveTelegramNonTextBody(msg: Message): TelegramNonTextBody | undefined {
+  const location = extractTelegramLocation(msg);
+  if (location) {
+    return { kind: "location", text: formatLocationText(location), location };
+  }
+  const dice = msg.dice;
+  const emoji = normalizeOptionalString(dice?.emoji);
+  return dice && emoji && Number.isFinite(dice.value)
+    ? { kind: "dice", text: `[Dice ${emoji} = ${dice.value}]` }
+    : undefined;
 }
 
 export function extractTelegramLocation(msg: Message): NormalizedLocation | null {

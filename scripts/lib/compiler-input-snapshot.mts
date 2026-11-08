@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { CompilerOptions } from "typescript/unstable/sync";
+import type { CompilerOptions } from "typescript/sync";
 import {
   ARTIFACT_CACHE_VERSION,
   portableRelativePath,
@@ -40,6 +40,8 @@ function skipNamespaceEntry(id: string, name: string, installed: boolean) {
     id === ".tmp" ||
     id === ".cache/openclaw-pnpm-store" ||
     id === ".cache/vitest" ||
+    id === ".cache/openclaw-vitest-fs-cache" ||
+    id === ".cache/openclaw-node-compile-cache" ||
     id === "apps/macos/.build" ||
     id === "apps/macos/.build-local" ||
     id === "apps/macos-mlx-tts/.build" ||
@@ -435,6 +437,20 @@ export class CompilerInputSnapshot {
       ),
     );
     return this.toolPaths;
+  }
+
+  /** For caches that already capture and verify their source and config file bytes. */
+  environmentSignature(args: string[]) {
+    return digest(
+      JSON.stringify([
+        "recorded-compiler-inputs-v1",
+        ARTIFACT_CACHE_VERSION,
+        this.namespace(),
+        this.toolchainPaths(),
+        this.toolchain(),
+        args,
+      ]),
+    );
   }
 
   signature(

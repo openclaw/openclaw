@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
@@ -6,10 +7,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  clearLegacyPluginInternalHooks,
-  listLegacyPluginInternalHookEventKeys,
-  listLegacyPluginInternalHooks,
-} from "../plugins/legacy-internal-hook-state.js";
+  getActivePluginRegistry,
+  getPluginRegistrationContext,
+  requireActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
   InternalHookEvent,
@@ -142,6 +143,21 @@ const internalHooksEnabledState = resolveGlobalSingleton<{ enabled: boolean }>(
 );
 const log = createSubsystemLogger("internal-hooks");
 
+function listActiveRegistrations() {
+  return getActivePluginRegistry()?.legacyInternalHooks ?? [];
+}
+
+function listLegacyPluginInternalHooks(event: string): InternalHookHandler[] {
+  return listActiveRegistrations()
+    .filter((registration) => registration.event === event)
+    .map((registration) => registration.handler);
+}
+
+function clearLegacyPluginInternalHooks(): void {
+  const context = getPluginRegistrationContext();
+  (context?.registry ?? requireActivePluginRegistry()).legacyInternalHooks.length = 0;
+}
+
 /** Register for a family (e.g. "command") or an exact action (e.g. "command:new"). */
 export function registerInternalHook(eventKey: string, handler: InternalHookHandler): void {
   if (!handlers.has(eventKey)) {
@@ -173,10 +189,6 @@ export function clearInternalHooks(): void {
 
 export function setInternalHooksEnabled(enabled: boolean): void {
   internalHooksEnabledState.enabled = enabled;
-}
-
-export function getRegisteredEventKeys(): string[] {
-  return [...new Set([...handlers.keys(), ...listLegacyPluginInternalHookEventKeys()])];
 }
 
 export function hasInternalHookListeners(type: InternalHookEventType, action: string): boolean {
@@ -222,10 +234,33 @@ export function createInternalHookEvent(
     type,
     action,
     sessionKey,
-    context,
+    context:
+      "sessionEntry" in context || "previousSessionEntry" in context
+        ? omitHookContextOperatorSources(context)
+        : context,
     timestamp: new Date(),
     messages: [],
   };
+}
+
+/** Hook listeners receive session entries, never their recorded authentication sources. */
+export function omitHookSessionOperatorSources<T>(entry: T): T {
+  if (!isRecord(entry) || !Object.hasOwn(entry, "operatorSources")) {
+    return entry;
+  }
+  const { operatorSources: _private, ...rest } = entry;
+  // SAFETY: removing one private key keeps every other field of the caller's entry shape.
+  return rest as T;
+}
+
+function omitHookContextOperatorSources(context: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...context };
+  for (const key of ["sessionEntry", "previousSessionEntry"]) {
+    if (key in next) {
+      next[key] = omitHookSessionOperatorSources(next[key]);
+    }
+  }
+  return next;
 }
 
 function hasHookEventContext(
@@ -251,19 +286,4 @@ export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentB
 
 export function isGatewayStartupEvent(event: InternalHookEvent): event is GatewayStartupHookEvent {
   return hasHookEventContext(event, "gateway", "startup");
-}
-
-export function isSessionPatchEvent(event: InternalHookEvent): event is SessionPatchHookEvent {
-  if (!hasHookEventContext(event, "session", "patch")) {
-    return false;
-  }
-  const context = event.context;
-  return (
-    typeof context.patch === "object" &&
-    context.patch !== null &&
-    typeof context.cfg === "object" &&
-    context.cfg !== null &&
-    typeof context.sessionEntry === "object" &&
-    context.sessionEntry !== null
-  );
 }

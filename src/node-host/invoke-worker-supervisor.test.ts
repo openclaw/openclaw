@@ -507,7 +507,6 @@ setInterval(() => {}, 1000);
     expect(retainBundles).toHaveBeenCalledWith({
       gatewayNamespace: input.gatewayNamespace,
       bundleHashes: ["a".repeat(64)],
-      acknowledgedGeneration: 3,
     });
     expect(inspectBundle).toHaveBeenCalledWith({
       gatewayNamespace: input.gatewayNamespace,
@@ -842,21 +841,31 @@ setInterval(() => {}, 1000);
     });
   });
 
-  it("returns a bounded generic error without leaking supervisor details", async () => {
-    const leaked = `/private/path/${"secret".repeat(2_000)}`;
+  it("returns a generic error but logs the bounded, redacted supervisor cause", async () => {
+    const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const leaked = `cleanup incomplete at /private/path Bearer sk-abcdefghijklmnopqrstuv ${"x".repeat(12_000)}`;
     const supervisor = supervisorWith(fullReceipt());
     supervisor.status.mockRejectedValueOnce(new Error(leaked));
+    try {
+      const { result } = await invokePrivate({
+        command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+        paramsJSON: JSON.stringify({ launchId: "launch-1" }),
+        supervisor,
+      });
 
-    const { result } = await invokePrivate({
-      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
-      paramsJSON: JSON.stringify({ launchId: "launch-1" }),
-      supervisor,
-    });
-
-    expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-    const message = result?.error?.message ?? "";
-    expect(message).not.toContain("private/path");
-    expect(message.length).toBeLessThan(256);
+      expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+      const message = result?.error?.message ?? "";
+      expect(message).not.toContain("private/path");
+      expect(message.length).toBeLessThan(256);
+      expect(warn).toHaveBeenCalledOnce();
+      const logged = String(warn.mock.calls[0]?.[0]);
+      expect(logged).toContain(`(${NODE_WORKER_SUPERVISOR_STATUS_COMMAND}, UNAVAILABLE)`);
+      expect(logged).toContain("cleanup incomplete");
+      expect(logged).not.toContain("sk-abcdefghijklmnopqrstuv");
+      expect(logged.length).toBeLessThan(leaked.length);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("preserves a terminal capacity result across node invoke", async () => {

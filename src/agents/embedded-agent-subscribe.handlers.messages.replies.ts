@@ -24,26 +24,6 @@ export function hasReplyDirectiveMetadata(
   );
 }
 
-export function mergeReplyDirectiveResults(
-  first: ReplyDirectiveParseResult | null | undefined,
-  second: ReplyDirectiveParseResult | null | undefined,
-): ReplyDirectiveParseResult | null {
-  if (!first) {
-    return second ?? null;
-  }
-  if (!second) {
-    return first;
-  }
-  return {
-    text: `${first.text ?? ""}${second.text ?? ""}`,
-    replyToId: second.replyToId ?? first.replyToId,
-    replyToCurrent: first.replyToCurrent || second.replyToCurrent,
-    replyToTag: first.replyToTag || second.replyToTag,
-    audioAsVoice: first.audioAsVoice || second.audioAsVoice || undefined,
-    isSilent: first.isSilent || second.isSilent,
-  };
-}
-
 /** Moves queued tool media into a non-reasoning assistant reply payload. */
 export function consumePendingToolMediaIntoReply(
   state: PendingToolMediaState,

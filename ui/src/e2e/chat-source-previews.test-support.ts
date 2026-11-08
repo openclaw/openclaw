@@ -12,18 +12,29 @@ export const sourcePreviewFixture = {
     "Check the [wind and rain forecast](https://weather.example.org/weekend) before leaving.",
 };
 
-export function sourcePreviewHistory(sessionUrl?: string) {
+export function sourcePreviewHistory(sessionUrl: string) {
   const fixture = sourcePreviewFixture;
   const start = Date.UTC(2026, 8, 14, 12, 0);
-  const metadata = (seq: number) => ({
+  const message = (seq: number, role: string, text: string, extra = {}) => ({
     __openclaw: { id: `source-preview-${seq}`, seq, runId: fixture.runId },
     timestamp: start + seq * 5_000,
+    role,
+    content: [{ type: "text", text }],
+    ...extra,
   });
+  const toolExchange = (seq: number, id: string, name: string, args: object, details: object) => [
+    message(seq, "assistant", "", {
+      content: [{ type: "toolCall", id, name, arguments: args }],
+    }),
+    message(seq + 1, "toolResult", JSON.stringify(details), {
+      toolCallId: id,
+      toolName: name,
+      details,
+    }),
+  ];
   const search = {
     kind: "results",
-    provider: "fixture",
     query: "weekend cycling checklist and weather",
-    count: sessionUrl ? 5 : 3,
     results: [
       { title: wrapWebContent(fixture.checklistTitle, "web_search"), url: fixture.checklistUrl },
       {
@@ -38,17 +49,13 @@ export function sourcePreviewHistory(sessionUrl?: string) {
         title: wrapWebContent("City bike rentals", "web_search"),
         url: "https://rentals.example.com/",
       },
-      ...(sessionUrl
-        ? [
-            { title: wrapWebContent("Trip planning session", "web_search"), url: sessionUrl },
-            {
-              title: wrapWebContent("Route planner issue", "web_search"),
-              url: "https://github.com/example/route-planner/issues/42",
-            },
-          ]
-        : []),
+      { title: wrapWebContent("Trip planning session", "web_search"), url: sessionUrl },
+      {
+        title: wrapWebContent("Route planner issue", "web_search"),
+        url: "https://github.com/example/route-planner/issues/42",
+      },
     ],
-    externalContent: { untrusted: true, source: "web_search", wrapped: true, provider: "fixture" },
+    externalContent: { untrusted: true, source: "web_search", wrapped: true },
   };
   const page = {
     url: fixture.checklistUrl,
@@ -59,72 +66,18 @@ export function sourcePreviewHistory(sessionUrl?: string) {
       "web_fetch",
     ),
     status: 200,
-    extractMode: "markdown",
-    extractor: "fixture",
-    truncated: false,
     externalContent: { untrusted: true, source: "web_fetch", wrapped: true },
   };
   return [
-    {
-      ...metadata(1),
-      role: "user",
-      content: [{ type: "text", text: "Help me pack for a weekend bike trip." }],
-    },
-    {
-      ...metadata(2),
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "source-search",
-          name: "web_search",
-          arguments: { query: search.query },
-        },
-      ],
-    },
-    {
-      ...metadata(3),
-      role: "toolResult",
-      toolCallId: "source-search",
-      toolName: "web_search",
-      details: search,
-      content: [{ type: "text", text: JSON.stringify(search) }],
-    },
-    {
-      ...metadata(4),
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "source-fetch",
-          name: "web_fetch",
-          arguments: { url: fixture.checklistUrl },
-        },
-      ],
-    },
-    {
-      ...metadata(5),
-      role: "toolResult",
-      toolCallId: "source-fetch",
-      toolName: "web_fetch",
-      details: page,
-      content: [{ type: "text", text: JSON.stringify(page) }],
-    },
-    {
-      ...metadata(6),
-      role: "assistant",
-      phase: "final_answer",
-      stopReason: "stop",
-      content: [
-        {
-          type: "text",
-          text:
-            fixture.answer +
-            (sessionUrl
-              ? `\n\nRelated: [trip planning session](${sessionUrl}) · [route planner issue](https://github.com/example/route-planner/issues/42).`
-              : ""),
-        },
-      ],
-    },
+    message(1, "user", "Help me pack for a weekend bike trip."),
+    ...toolExchange(2, "source-search", "web_search", { query: search.query }, search),
+    ...toolExchange(4, "source-fetch", "web_fetch", { url: fixture.checklistUrl }, page),
+    message(
+      6,
+      "assistant",
+      fixture.answer +
+        `\n\nRelated: [trip planning session](${sessionUrl}) · [route planner issue](https://github.com/example/route-planner/issues/42).`,
+      { phase: "final_answer", stopReason: "stop" },
+    ),
   ];
 }

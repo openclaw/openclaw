@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Diagnostic } from "typescript/unstable/sync";
+import type { Diagnostic } from "typescript/sync";
 import { collectNativeTypeScriptDiagnostics } from "../../scripts/lib/native-typescript-diagnostics.mts";
 import { createNativeTypeScriptProject } from "../../scripts/lib/native-typescript.mts";
 

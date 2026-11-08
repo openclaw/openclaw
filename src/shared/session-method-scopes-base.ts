@@ -7,10 +7,20 @@ export type SessionOperatorScope = "operator.sessions.read" | "operator.sessions
 const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "agent.identity.get",
   "agents.list",
+  "artifacts.list",
+  "artifacts.get",
+  "artifacts.download",
+  "board.get",
   "canvas.document.preview",
+  "canvas.document.view",
+  "controlUi.sessionPullRequests.subscribe",
+  "controlUi.sessionPullRequests.checks",
+  "mentions.dismiss",
+  "mentions.list",
   "models.list",
   "progressCard.get",
   "projects.list",
+  "projects.checkoutOptions",
   "session.suggestions.list",
   "session.reactions.list",
   "sessions.groups.list",
@@ -22,15 +32,20 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "sessions.viewers.set",
   "sessions.preview",
   "sessions.describe",
+  "sessions.diff",
   "sessions.branches.list",
   "sessions.get",
   "sessions.github.options",
+  "sessions.github.readiness",
   "sessions.github.status",
   "sessions.resolve",
   "sessions.search",
   "sessions.files.list",
   "sessions.files.get",
+  "sessions.files.download",
   "sessions.files.assets",
+  "sessions.files.preview",
+  "sessions.files.preview.release",
   "sessions.setInvolvement",
   "chat.history",
   "chat.startup",
@@ -40,11 +55,20 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "session.members.listEvidence",
   "themes.get",
   "themes.list",
+  "tools.effective",
+  "users.mentionable",
+  "users.personalFile.get",
+  "users.personalFile.set",
   "users.prefs.get",
+  "users.prefs.set",
   "users.self",
+  "users.setAvatar",
+  "users.setDisplayName",
 ]);
 
 const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
+  "board.update",
+  "board.widget.put",
   "question.request",
   "question.waitAnswer",
   "question.resolve",
@@ -52,11 +76,11 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "question.list",
   "chat.send",
   "chat.abort",
+  "chat.steerNow",
   "sessions.create",
   "sessions.patch",
   "sessions.patchMany",
   "sessions.fork",
-  "sessions.recover",
   "sessions.send",
   "sessions.steer",
   "sessions.processes.stop",
@@ -70,7 +94,51 @@ export function resolveSessionMethodScope(
   method: string,
   params?: unknown,
 ): SessionOperatorScope | undefined {
-  if (SESSION_READ_METHODS.has(method)) {
+  // Discovery has no params; runtime admission and handlers still require a
+  // session-bound request without operator-only provider/model overrides.
+  if (method === "talk.catalog") {
+    return params === undefined ||
+      (isRecord(params) &&
+        typeof params.sessionKey === "string" &&
+        params.sessionKey.trim().length > 0 &&
+        Object.keys(params).every((key) => key === "sessionKey"))
+      ? "operator.sessions.read"
+      : undefined;
+  }
+  if (method === "talk.session.create") {
+    return params === undefined ||
+      (isRecord(params) &&
+        params.mode === "transcription" &&
+        typeof params.sessionKey === "string" &&
+        params.sessionKey.trim().length > 0 &&
+        Object.keys(params).every((key) =>
+          ["sessionKey", "mode", "transport", "brain"].includes(key),
+        ))
+      ? "operator.sessions.write"
+      : undefined;
+  }
+  if (method === "talk.session.appendAudio" || method === "talk.session.close") {
+    return "operator.sessions.write";
+  }
+  // Selecting a device filesystem, or cloning/reusing a repository by URL with the
+  // Gateway's GitHub identity, requires the broader operator capability.
+  if (
+    method === "sessions.create" &&
+    isRecord(params) &&
+    (params.deviceFolder !== undefined || params.projectGitUrl !== undefined)
+  ) {
+    return undefined;
+  }
+  // Session readers can invoke only stored named queries. The closed RPC schema
+  // rejects overrides; the Gateway checks the definition and live grant at delivery.
+  if (
+    SESSION_READ_METHODS.has(method) ||
+    (method === "board.data.read" &&
+      isRecord(params) &&
+      typeof params.queryName === "string" &&
+      typeof params.ticket === "string" &&
+      Object.keys(params).every((key) => key === "ticket" || key === "queryName"))
+  ) {
     return "operator.sessions.read";
   }
   if (
@@ -98,6 +166,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "model",
   "agentRuntime",
   "thinkingLevel",
+  "cyberAccessProgram",
   "fastMode",
   "permissionMode",
   "communication",
@@ -124,80 +193,61 @@ const SESSIONS_DELETE_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
   "archivedOnly",
 ]);
 
-function resolveSessionsPatchRequiredScope(params: unknown): SessionMutationOperatorScope {
-  if (!isRecord(params)) {
-    return "operator.write";
-  }
-  if (params.permissionMode === "full" || Object.hasOwn(params, "sandboxMode")) {
-    return "operator.admin";
-  }
-  return Object.keys(params).every(
-    (key) =>
-      SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS.has(key) ||
-      SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS.has(key),
-  )
-    ? "operator.write"
-    : "operator.admin";
-}
-
-function resolveSessionsPatchManyRequiredScope(params: unknown): SessionMutationOperatorScope {
-  if (!isRecord(params) || !isRecord(params.patch)) {
-    return "operator.write";
-  }
-  if (params.patch.permissionMode === "full" || Object.hasOwn(params.patch, "sandboxMode")) {
-    return "operator.admin";
-  }
-  return Object.keys(params.patch).every((key) => SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS.has(key))
-    ? "operator.write"
-    : "operator.admin";
-}
-
-function resolveSessionsCreateRequiredScope(params: unknown): SessionMutationOperatorScope {
-  if (!isRecord(params)) {
-    return "operator.write";
-  }
-  if (
-    params.incognito === true ||
-    (typeof params.key === "string" && isIncognitoSessionKey(params.key)) ||
-    (typeof params.parentSessionKey === "string" &&
-      isIncognitoSessionKey(params.parentSessionKey)) ||
-    Object.hasOwn(params, "execNode") ||
-    Object.hasOwn(params, "toolOverrides") ||
-    params.permissionMode === "full"
-  ) {
-    return "operator.admin";
-  }
-  return "operator.write";
-}
-
-function resolveSessionsDeleteRequiredScope(params: unknown): SessionMutationOperatorScope {
-  if (!isRecord(params) || params.archivedOnly !== true) {
-    return "operator.admin";
-  }
-  return Object.keys(params).every((key) => SESSIONS_DELETE_WRITE_SCOPE_FIELDS.has(key))
-    ? "operator.write"
-    : "operator.admin";
-}
-
 /** Browser-safe session mutation policy for methods without protocol validation. */
 export function resolveBaseSessionMutationRequiredScope(
   method: string,
   params?: unknown,
 ): SessionMutationOperatorScope | undefined {
-  if (method === "sessions.recover") {
+  if (method === "sessions.create") {
+    if (!isRecord(params)) {
+      return "operator.write";
+    }
+    if (
+      params.incognito === true ||
+      (typeof params.key === "string" && isIncognitoSessionKey(params.key)) ||
+      (typeof params.parentSessionKey === "string" &&
+        isIncognitoSessionKey(params.parentSessionKey)) ||
+      Object.hasOwn(params, "execNode") ||
+      Object.hasOwn(params, "toolOverrides") ||
+      params.permissionMode === "full"
+    ) {
+      return "operator.admin";
+    }
     return "operator.write";
   }
-  if (method === "sessions.create") {
-    return resolveSessionsCreateRequiredScope(params);
-  }
   if (method === "sessions.patch") {
-    return resolveSessionsPatchRequiredScope(params);
+    if (!isRecord(params)) {
+      return "operator.write";
+    }
+    if (params.permissionMode === "full" || Object.hasOwn(params, "sandboxMode")) {
+      return "operator.admin";
+    }
+    return Object.keys(params).every(
+      (key) =>
+        SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS.has(key) ||
+        SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS.has(key),
+    )
+      ? "operator.write"
+      : "operator.admin";
   }
   if (method === "sessions.patchMany") {
-    return resolveSessionsPatchManyRequiredScope(params);
+    if (!isRecord(params) || !isRecord(params.patch)) {
+      return "operator.write";
+    }
+    if (params.patch.permissionMode === "full" || Object.hasOwn(params.patch, "sandboxMode")) {
+      return "operator.admin";
+    }
+    return Object.keys(params.patch).every((key) => SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS.has(key))
+      ? "operator.write"
+      : "operator.admin";
   }
   if (method === "sessions.delete") {
-    return resolveSessionsDeleteRequiredScope(params);
+    if (!isRecord(params) || params.archivedOnly !== true) {
+      return "operator.admin";
+    }
+    return Object.keys(params).every((key) => SESSIONS_DELETE_WRITE_SCOPE_FIELDS.has(key))
+      ? "operator.write"
+      : "operator.admin";
   }
   return undefined;
 }

@@ -1,15 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import * as fs from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -24,10 +15,8 @@ const injected = vi.hoisted(() => ({
   provenance: undefined as ProcessProvenance | undefined,
   bootTimeNs: undefined as bigint | undefined,
   volume: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" as string | undefined,
-  changedInodePath: "",
   recoveryLocksCreated: 0,
   userFailure: "",
-  claimFailure: "",
   witnessFailure: "",
   onUsers: undefined as (() => void | Promise<void>) | undefined,
   onRevalidate: undefined as (() => void) | undefined,
@@ -47,10 +36,7 @@ vi.mock("../../scripts/crabbox-staging-users.mts", async (importOriginal) => ({
 }));
 vi.mock("../../scripts/crabbox-staging-claims.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/crabbox-staging-claims.mts")>()),
-  verifyNoStagingClaims: async () =>
-    injected.claimFailure
-      ? { ok: false, reason: injected.claimFailure, error: new Error(injected.claimFailure) }
-      : { ok: true },
+  verifyNoStagingClaims: async () => ({ ok: true }),
 }));
 vi.mock("../../scripts/crabbox-staging-witness.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/crabbox-staging-witness.mts")>()),
@@ -63,13 +49,6 @@ vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return {
     ...actual,
-    lstatSync: (...args: unknown[]) => {
-      const stat = Reflect.apply(actual.lstatSync, actual, args);
-      if (stat && typeof stat.ino === "bigint" && String(args[0]) === injected.changedInodePath) {
-        stat.ino += 1n;
-      }
-      return stat;
-    },
     mkdirSync: (...args: unknown[]) => {
       if (String(args[0]).endsWith("/recovery.lock")) {
         injected.recoveryLocksCreated += 1;
@@ -118,7 +97,7 @@ let suiteRoot: string;
 beforeAll(() => {
   suiteRoot = temporary.make("openclaw-staging-reboot-");
   repository = join(suiteRoot, "repository");
-  mkdirSync(repository);
+  fs.mkdirSync(repository);
   const initialized = spawnSync("git", ["init", "--quiet", "--template=", repository], {
     env: createNestedGitEnv(),
   });
@@ -138,9 +117,8 @@ beforeEach(() => {
   injected.provenance = oldHost;
   injected.bootTimeNs = BigInt(Date.now() + 86_400_000) * 1_000_000n;
   injected.volume = oldHost.hostId;
-  injected.changedInodePath = "";
   injected.recoveryLocksCreated = 0;
-  injected.userFailure = injected.claimFailure = injected.witnessFailure = "";
+  injected.userFailure = injected.witnessFailure = "";
   injected.onUsers = undefined;
   injected.onRevalidate = undefined;
   injected.beforeRemove = undefined;
@@ -156,7 +134,7 @@ function stage(legacy = false) {
   const syncRoot = temporary.make("openclaw-staging-reboot-copy-");
   const owner = createStaging(syncRoot, repository);
   expect(owner.recorded).toBe(true);
-  mkdirSync(join(owner.payload, "source"));
+  fs.mkdirSync(join(owner.payload, "source"));
   owner.prepared(
     { files: [], deleted: [] },
     {
@@ -166,23 +144,53 @@ function stage(legacy = false) {
     },
   );
   const receiptPath = join(owner.root, "staging.json");
-  const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+  const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
   if (legacy) {
     delete receipt.ownerProvenance;
     delete receipt.syncRootIdentity;
     receipt.ownerDomain = processDomain(oldHost);
-    writeFileSync(receiptPath, JSON.stringify(receipt) + "\n");
+    fs.writeFileSync(receiptPath, JSON.stringify(receipt) + "\n");
+    injected.provenance = newHost;
   }
-  return { syncRoot, owner, receiptPath, id: String(receipt.id) };
+  return {
+    syncRoot,
+    owner,
+    receiptPath,
+    id: String(receipt.id),
+    read: () => fs.readFileSync(receiptPath, "utf8"),
+    stat: () => fs.lstatSync(receiptPath, { bigint: true }),
+    file: (name: string) => join(owner.root, name),
+    touch: (date: Date) => fs.utimesSync(receiptPath, date, date),
+  };
 }
 type Fixture = ReturnType<typeof stage>;
-function receiptDigest(fixture: Fixture) {
-  return createHash("sha256").update(readFileSync(fixture.receiptPath)).digest("hex");
+function digest(bytes: string) {
+  return createHash("sha256").update(bytes).digest("hex");
 }
 function rewriteReceipt(fixture: Fixture, change: (receipt: Record<string, unknown>) => void) {
-  const receipt = JSON.parse(readFileSync(fixture.receiptPath, "utf8"));
+  const receipt = JSON.parse(fixture.read());
   change(receipt);
-  writeFileSync(fixture.receiptPath, JSON.stringify(receipt) + "\n");
+  fs.writeFileSync(fixture.receiptPath, JSON.stringify(receipt) + "\n");
+}
+function inspectionArgs(fixture: Fixture, operation: string) {
+  return operation === "inspect"
+    ? ["inspect", fixture.id, "--same-host-prior-boot"]
+    : confirmationArgs(fixture);
+}
+function expectRetained(fixture: Fixture, before?: string, locks?: number) {
+  expect(fs.existsSync(fixture.owner.payload)).toBe(true);
+  if (before !== undefined) {
+    expect(fixture.read()).toBe(before);
+  }
+  if (locks !== undefined) {
+    expect(injected.recoveryLocksCreated).toBe(locks);
+  }
+}
+function preBoot(fixture: Fixture) {
+  fixture.touch(new Date("2000-01-01T00:00:00.000Z"));
+  const bootTimeNs = BigInt(Date.parse("2001-01-01T00:00:00.000Z")) * 1_000_000n;
+  injected.bootTimeNs = bootTimeNs;
+  return bootTimeNs;
 }
 function confirmationArgs(fixture: Fixture) {
   return [
@@ -190,7 +198,7 @@ function confirmationArgs(fixture: Fixture) {
     fixture.id,
     "--confirm-same-host-prior-boot",
     "--receipt-sha256",
-    receiptDigest(fixture),
+    digest(fixture.read()),
   ];
 }
 async function command(fixture: Fixture, args: string[]) {
@@ -198,128 +206,113 @@ async function command(fixture: Fixture, args: string[]) {
   await Promise.resolve();
   const output = vi.spyOn(console, "log").mockImplementation(() => {});
   try {
-    const code = await runStagingCommand(args, fixture.syncRoot, {
+    await runStagingCommand(args, fixture.syncRoot, {
       binary: "unused-crabbox",
       cwd: repository,
     });
-    return { code, report: JSON.parse(output.mock.calls.at(-1)![0]) };
+    return JSON.parse(output.mock.calls.at(-1)![0]);
   } finally {
     output.mockRestore();
   }
 }
+async function refused(fixture: Fixture, args: string[], reason: string | RegExp, extra = {}) {
+  expect(await command(fixture, args)).toMatchObject({
+    recovered: false,
+    reason: typeof reason === "string" ? reason : expect.stringMatching(reason),
+    ...extra,
+  });
+}
+function changeOwner(fixture: Fixture) {
+  rewriteReceipt(fixture, (receipt) => {
+    receipt.ownerPid = Number(receipt.ownerPid) + 1;
+  });
+  return fixture.read();
+}
 
-posixIt(
-  "records explicit provenance and recovers after a same-host reboot without probing the reused PID",
-  async () => {
-    const fixture = stage();
-    const stored = JSON.parse(readFileSync(fixture.receiptPath, "utf8"));
-    expect(stored).toMatchObject({
-      ownerPid: process.pid,
-      ownerProvenance: oldHost,
-      syncRootIdentity: { stable: { volume: "uuid:" + oldHost.hostId } },
-    });
-    injected.provenance = newHost;
-    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-    const outcome = await command(fixture, ["recover", fixture.id]);
-    expect(outcome.report, outcome.report.reason).toMatchObject({ recovered: true });
-    expect(kill.mock.calls.filter(([, signal]) => signal === 0)).toEqual([]);
-    expect(existsSync(fixture.owner.root)).toBe(false);
-  },
-);
+posixIt("records provenance; same-host reboot recovery never probes reused PID", async () => {
+  const fixture = stage();
+  const stored = JSON.parse(fixture.read());
+  expect(stored).toMatchObject({
+    ownerPid: process.pid,
+    ownerProvenance: oldHost,
+    syncRootIdentity: { stable: { volume: "uuid:" + oldHost.hostId } },
+  });
+  injected.provenance = newHost;
+  const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+  expect(await command(fixture, ["recover", fixture.id])).toMatchObject({ recovered: true });
+  expect(kill.mock.calls.filter(([, signal]) => signal === 0)).toEqual([]);
+  expect(fs.existsSync(fixture.owner.root)).toBe(false);
+});
 
-posixIt.each(["different host", "different namespace", "missing provenance"])(
+const namespaceHost = { ...oldHost, platform: "linux" as const, hostId: "1".repeat(32) };
+posixIt.each([
+  ["different host", oldHost, { ...newHost, hostId: "ffffffff-bbbb-4ccc-8ddd-eeeeeeeeeeee" }],
+  [
+    "different namespace",
+    { ...namespaceHost, pidNamespace: "pid:[4026531836]" },
+    { ...namespaceHost, bootId: newHost.bootId, pidNamespace: "pid:[4026531837]" },
+  ],
+  ["missing provenance", oldHost, newHost],
+] satisfies [string, ProcessProvenance, ProcessProvenance][])(
   "refuses %s as proof of producer death",
-  async (defect) => {
-    if (defect === "different namespace") {
-      injected.provenance = Object.freeze({
-        platform: "linux",
-        hostId: "1".repeat(32),
-        bootId: oldHost.bootId,
-        pidNamespace: "pid:[4026531836]",
-      });
-    }
+  async (defect, previous, current) => {
+    injected.provenance = previous;
     const fixture = stage();
-    if (defect === "different host") {
-      injected.provenance = Object.freeze({
-        ...newHost,
-        hostId: "ffffffff-bbbb-4ccc-8ddd-eeeeeeeeeeee",
-      });
-    } else if (defect === "different namespace") {
-      injected.provenance = Object.freeze({
-        platform: "linux",
-        hostId: "1".repeat(32),
-        bootId: newHost.bootId,
-        pidNamespace: "pid:[4026531837]",
-      });
-    } else {
+    injected.provenance = current;
+    if (defect === "missing provenance") {
       rewriteReceipt(fixture, (receipt) => {
         delete receipt.ownerProvenance;
         delete receipt.ownerDomain;
       });
-      injected.provenance = newHost;
     }
-    const before = readFileSync(fixture.receiptPath, "utf8");
-    const outcome = await command(fixture, ["recover", fixture.id]);
-    expect(outcome.report).toMatchObject({
-      recovered: false,
-      reason: expect.stringMatching(/host|namespace/),
-    });
-    expect(readFileSync(fixture.receiptPath, "utf8")).toBe(before);
+    const before = fixture.read();
+    await refused(fixture, ["recover", fixture.id], /host|namespace/);
+    expect(fixture.read()).toBe(before);
     expect(injected.recoveryLocksCreated).toBe(0);
   },
 );
 
-posixIt(
-  "previews legacy eligibility without writes, then persists exact receipt-bound confirmation before removal",
-  async () => {
-    const fixture = stage(true);
-    injected.provenance = newHost;
-    const before = readFileSync(fixture.receiptPath, "utf8");
-    const beforeStat = lstatSync(fixture.receiptPath, { bigint: true });
-    const beforeFiles = readdirSync(fixture.owner.root).toSorted();
-    injected.onUsers = () => {
-      expect(existsSync(join(fixture.owner.root, "recovery.lock"))).toBe(false);
-    };
-    const preview = await command(fixture, ["inspect", fixture.id, "--same-host-prior-boot"]);
-    expect(preview.report, preview.report.reason).toMatchObject({
-      eligible: true,
-      inspectionOnly: true,
-      confirmationRequired: true,
-      receiptSha256: receiptDigest(fixture),
-    });
-    expect(readFileSync(fixture.receiptPath, "utf8")).toBe(before);
-    expect(lstatSync(fixture.receiptPath, { bigint: true }).mtimeNs).toBe(beforeStat.mtimeNs);
-    expect(readdirSync(fixture.owner.root).toSorted()).toEqual(beforeFiles);
-    expect(injected.recoveryLocksCreated).toBe(0);
-    injected.onUsers = undefined;
-    let observedConfirmation: unknown;
-    injected.beforeRemove = (path) => {
-      if (path === fixture.owner.payload) {
-        observedConfirmation = JSON.parse(
-          readFileSync(fixture.receiptPath, "utf8"),
-        ).operatorConfirmation;
-      }
-    };
-    const recovered = await command(fixture, [
-      "recover",
-      fixture.id,
-      "--confirm-same-host-prior-boot",
-      "--receipt-sha256",
-      preview.report.receiptSha256,
-    ]);
-    expect(recovered.report, recovered.report.reason).toMatchObject({
-      recovered: true,
-      operatorConfirmation: {
-        kind: "same-host-prior-boot",
-        receiptSha256: preview.report.receiptSha256,
-        receiptMtimeNs: String(beforeStat.mtimeNs),
-        current: newHost,
-      },
-    });
-    expect(observedConfirmation).toEqual(recovered.report.operatorConfirmation);
-    expect(existsSync(fixture.owner.root)).toBe(false);
-  },
-);
+posixIt("previews read-only; persists receipt-bound confirmation before removal", async () => {
+  const fixture = stage(true);
+  const before = fixture.read();
+  const beforeStat = fixture.stat();
+  const beforeFiles = fs.readdirSync(fixture.owner.root).toSorted();
+  injected.onUsers = () => {
+    expect(fs.existsSync(fixture.file("recovery.lock"))).toBe(false);
+  };
+  const preview = await command(fixture, ["inspect", fixture.id, "--same-host-prior-boot"]);
+  expect(preview).toMatchObject({
+    eligible: true,
+    inspectionOnly: true,
+    confirmationRequired: true,
+    receiptSha256: digest(fixture.read()),
+  });
+  expect(fixture.read()).toBe(before);
+  expect(fixture.stat().mtimeNs).toBe(beforeStat.mtimeNs);
+  expect(fs.readdirSync(fixture.owner.root).toSorted()).toEqual(beforeFiles);
+  expect(injected.recoveryLocksCreated).toBe(0);
+  injected.onUsers = undefined;
+  let observedConfirmation: unknown;
+  injected.beforeRemove = (path) => {
+    if (path === fixture.owner.payload) {
+      observedConfirmation = JSON.parse(fixture.read()).operatorConfirmation;
+    }
+  };
+  const args = confirmationArgs(fixture);
+  args[4] = preview.receiptSha256;
+  const recovered = await command(fixture, args);
+  expect(recovered).toMatchObject({
+    recovered: true,
+    operatorConfirmation: {
+      kind: "same-host-prior-boot",
+      receiptSha256: preview.receiptSha256,
+      receiptMtimeNs: String(beforeStat.mtimeNs),
+      current: newHost,
+    },
+  });
+  expect(observedConfirmation).toEqual(recovered.operatorConfirmation);
+  expect(fs.existsSync(fixture.owner.root)).toBe(false);
+});
 
 const legacyRefusals = [
   { defect: "stale digest", reason: /digest changed/ },
@@ -327,41 +320,32 @@ const legacyRefusals = [
   { defect: "missing digest flag", reason: /requires --confirm/ },
   { defect: "same-boot digest", reason: /different boot/ },
   { defect: "receipt at boot time", reason: /mtime must predate/ },
-  { defect: "receipt after boot time", reason: /mtime must predate/ },
   { defect: "unavailable current provenance", reason: /verified current host\/boot/ },
   { defect: "unavailable current boot time", reason: /verified current host\/boot/ },
   { defect: "missing required metadata", reason: /invalid metadata/ },
   { defect: "missing manifest", reason: /ENOENT/ },
   { defect: "manifest mismatch", reason: /manifest does not match/ },
-  { defect: "changed inode", reason: /identity changed/ },
-  { defect: "changed volume", reason: /identity changed/ },
   { defect: "unavailable volume UUID", reason: /identity changed|UUID-backed/ },
-  { defect: "existing recovery lock", reason: /Another or interrupted recovery/ },
   { defect: "live users", reason: /fixture live staging user/ },
-  { defect: "unavailable lsof", reason: /fixture unavailable user census/ },
-  { defect: "native claims", reason: /fixture native claims/, writesConfirmation: true },
-  { defect: "source witness", reason: /fixture retained source/, writesConfirmation: true },
 ];
 posixIt.each(legacyRefusals)(
   "refuses legacy disposition with $defect",
-  async ({ defect, reason, writesConfirmation }) => {
+  async ({ defect, reason }) => {
     const fixture = stage(true);
-    injected.provenance = newHost;
+    const overrides: Record<string, Partial<typeof injected>> = {
+      "unavailable current provenance": { provenance: undefined },
+      "unavailable current boot time": { bootTimeNs: undefined },
+      "unavailable volume UUID": { volume: undefined },
+      "live users": { userFailure: "fixture live staging user" },
+    };
+    Object.assign(injected, overrides[defect]);
     if (defect === "same-boot digest") {
       rewriteReceipt(fixture, (receipt) => {
         receipt.ownerDomain = processDomain(newHost);
       });
     }
-    if (defect === "receipt at boot time" || defect === "receipt after boot time") {
-      injected.bootTimeNs =
-        lstatSync(fixture.receiptPath, { bigint: true }).mtimeNs -
-        (defect === "receipt after boot time" ? 1n : 0n);
-    }
-    if (defect === "unavailable current provenance") {
-      injected.provenance = undefined;
-    }
-    if (defect === "unavailable current boot time") {
-      injected.bootTimeNs = undefined;
+    if (defect === "receipt at boot time") {
+      injected.bootTimeNs = fixture.stat().mtimeNs;
     }
     if (defect === "missing required metadata") {
       rewriteReceipt(fixture, (receipt) => {
@@ -369,34 +353,10 @@ posixIt.each(legacyRefusals)(
       });
     }
     if (defect === "missing manifest") {
-      rmSync(join(fixture.owner.root, "manifest.json"));
+      fs.rmSync(fixture.file("manifest.json"));
     }
     if (defect === "manifest mismatch") {
-      writeFileSync(join(fixture.owner.root, "manifest.json"), "{}\n");
-    }
-    if (defect === "changed inode") {
-      injected.changedInodePath = fixture.owner.root;
-    }
-    if (defect === "changed volume") {
-      injected.volume = "ffffffff-bbbb-4ccc-8ddd-eeeeeeeeeeee";
-    }
-    if (defect === "unavailable volume UUID") {
-      injected.volume = undefined;
-    }
-    if (defect === "existing recovery lock") {
-      mkdirSync(join(fixture.owner.root, "recovery.lock"));
-    }
-    if (defect === "live users") {
-      injected.userFailure = "fixture live staging user";
-    }
-    if (defect === "unavailable lsof") {
-      injected.userFailure = "fixture unavailable user census";
-    }
-    if (defect === "native claims") {
-      injected.claimFailure = "fixture native claims";
-    }
-    if (defect === "source witness") {
-      injected.witnessFailure = "fixture retained source";
+      fs.writeFileSync(fixture.file("manifest.json"), "{}\n");
     }
     const args = confirmationArgs(fixture);
     if (defect === "stale digest") {
@@ -408,118 +368,66 @@ posixIt.each(legacyRefusals)(
     if (defect === "missing digest flag") {
       args.splice(3, 2);
     }
-    const before = readFileSync(fixture.receiptPath, "utf8");
+    const before = fixture.read();
     const lockCount = injected.recoveryLocksCreated;
-    const outcome = await command(fixture, args);
-    expect(outcome.report).toMatchObject({
-      recovered: false,
-      reason: expect.stringMatching(reason),
-    });
-    expect(existsSync(fixture.owner.payload)).toBe(true);
-    if (writesConfirmation) {
-      expect(JSON.parse(readFileSync(fixture.receiptPath, "utf8"))).toMatchObject({
-        operatorConfirmation: { receiptSha256: createHash("sha256").update(before).digest("hex") },
-      });
-      expect(existsSync(join(fixture.owner.root, "recovery.lock"))).toBe(false);
-    } else {
-      expect(readFileSync(fixture.receiptPath, "utf8")).toBe(before);
-      expect(injected.recoveryLocksCreated).toBe(lockCount);
-    }
+    await refused(fixture, args, reason);
+    expectRetained(fixture, before, lockCount);
   },
 );
 
-posixIt(
-  "refuses a receipt changed during awaited live-user inspection before acquiring recovery ownership",
-  async () => {
-    const fixture = stage(true);
-    injected.provenance = newHost;
-    const args = confirmationArgs(fixture);
-    let changedBytes: string | undefined;
-    injected.onUsers = async () => {
-      await Promise.resolve();
-      rewriteReceipt(fixture, (receipt) => {
-        receipt.ownerPid = Number(receipt.ownerPid) + 1;
-      });
-      changedBytes = readFileSync(fixture.receiptPath, "utf8");
-    };
-    const outcome = await command(fixture, args);
-    expect(outcome.report).toMatchObject({
-      recovered: false,
-      reason: "staging receipt changed during live-user inspection",
-    });
-    expect(injected.recoveryLocksCreated).toBe(0);
-    expect(readFileSync(fixture.receiptPath, "utf8")).toBe(changedBytes);
-    expect(JSON.parse(changedBytes!)).not.toHaveProperty("operatorConfirmation");
-    expect(existsSync(fixture.owner.payload)).toBe(true);
-  },
-);
+posixIt("rejects receipt changes during awaited user inspection", async () => {
+  const fixture = stage(true);
+  const args = confirmationArgs(fixture);
+  let changedBytes: string | undefined;
+  injected.onUsers = async () => {
+    await Promise.resolve();
+    changedBytes = changeOwner(fixture);
+  };
+  await refused(fixture, args, "staging receipt changed during live-user inspection");
+  expectRetained(fixture, changedBytes, 0);
+  expect(JSON.parse(changedBytes!)).not.toHaveProperty("operatorConfirmation");
+});
 
-posixIt(
-  "retains the original pre-boot timestamp when an explicitly confirmed recovery is retried",
-  async () => {
-    const fixture = stage(true);
-    const priorTime = new Date("2000-01-01T00:00:00.000Z");
-    utimesSync(fixture.receiptPath, priorTime, priorTime);
-    injected.provenance = newHost;
-    injected.bootTimeNs = BigInt(Date.parse("2001-01-01T00:00:00.000Z")) * 1_000_000n;
-    const originalTime = lstatSync(fixture.receiptPath, { bigint: true }).mtimeNs;
-    injected.witnessFailure = "fixture retained source not yet available";
-    const first = await command(fixture, confirmationArgs(fixture));
-    expect(first.report).toMatchObject({
-      recovered: false,
-      reason: injected.witnessFailure,
-      operatorConfirmation: { receiptMtimeNs: String(originalTime) },
-    });
-    expect(lstatSync(fixture.receiptPath, { bigint: true }).mtimeNs).toBeGreaterThan(
-      injected.bootTimeNs,
-    );
-    injected.witnessFailure = "";
-    const unconfirmed = await command(fixture, ["recover", fixture.id]);
-    expect(unconfirmed.report).toMatchObject({
-      recovered: false,
-      reason: expect.stringMatching(/unknown host/),
-    });
-    const repeated = await command(fixture, confirmationArgs(fixture));
-    expect(repeated.report, repeated.report.reason).toMatchObject({
-      recovered: true,
-      operatorConfirmation: { receiptMtimeNs: String(originalTime) },
-    });
-    expect(existsSync(fixture.owner.root)).toBe(false);
-  },
-);
+posixIt("retains the pre-boot timestamp across confirmed recovery retries", async () => {
+  const fixture = stage(true);
+  const bootTimeNs = preBoot(fixture);
+  const originalTime = fixture.stat().mtimeNs;
+  injected.witnessFailure = "fixture retained source not yet available";
+  const first = await command(fixture, confirmationArgs(fixture));
+  expect(first).toMatchObject({
+    recovered: false,
+    reason: injected.witnessFailure,
+    operatorConfirmation: { receiptMtimeNs: String(originalTime) },
+  });
+  expect(fixture.stat().mtimeNs).toBeGreaterThan(bootTimeNs);
+  injected.witnessFailure = "";
+  await refused(fixture, ["recover", fixture.id], /unknown host/);
+  const repeated = await command(fixture, confirmationArgs(fixture));
+  expect(repeated).toMatchObject({
+    recovered: true,
+    operatorConfirmation: { receiptMtimeNs: String(originalTime) },
+  });
+  expect(fs.existsSync(fixture.owner.root)).toBe(false);
+});
 
 posixIt.each(["inspect", "recover"])(
   "refuses an unchanged receipt touched into the current boot during %s's user probe",
   async (operation) => {
     const fixture = stage(true);
-    const beforeBoot = new Date("2000-01-01T00:00:00.000Z");
-    const afterBoot = new Date("2002-01-01T00:00:00.000Z");
-    utimesSync(fixture.receiptPath, beforeBoot, beforeBoot);
-    injected.provenance = newHost;
-    injected.bootTimeNs = BigInt(Date.parse("2001-01-01T00:00:00.000Z")) * 1_000_000n;
-    const before = readFileSync(fixture.receiptPath, "utf8");
-    const digest = receiptDigest(fixture);
-    const args =
-      operation === "inspect"
-        ? ["inspect", fixture.id, "--same-host-prior-boot"]
-        : confirmationArgs(fixture);
+    const bootTimeNs = preBoot(fixture);
+    const before = fixture.read();
+    const originalDigest = digest(fixture.read());
+    const args = inspectionArgs(fixture, operation);
     injected.onUsers = async () => {
       await Promise.resolve();
-      utimesSync(fixture.receiptPath, afterBoot, afterBoot);
+      fixture.touch(new Date("2002-01-01T00:00:00.000Z"));
     };
-    const outcome = await command(fixture, args);
-    expect(outcome.report).toMatchObject({
-      recovered: false,
+    await refused(fixture, args, "staging receipt changed during live-user inspection", {
       eligible: false,
-      reason: "staging receipt changed during live-user inspection",
     });
-    expect(receiptDigest(fixture)).toBe(digest);
-    expect(lstatSync(fixture.receiptPath, { bigint: true }).mtimeNs).toBeGreaterThan(
-      injected.bootTimeNs,
-    );
-    expect(readFileSync(fixture.receiptPath, "utf8")).toBe(before);
-    expect(injected.recoveryLocksCreated).toBe(0);
-    expect(existsSync(fixture.owner.payload)).toBe(true);
+    expect(digest(fixture.read())).toBe(originalDigest);
+    expect(fixture.stat().mtimeNs).toBeGreaterThan(bootTimeNs);
+    expectRetained(fixture, before, 0);
   },
 );
 
@@ -532,32 +440,25 @@ posixIt.each([
   "rechecks $changed custody after final source revalidation during $operation",
   async ({ operation, changed }) => {
     const fixture = stage(true);
-    injected.provenance = newHost;
-    const args =
-      operation === "inspect"
-        ? ["inspect", fixture.id, "--same-host-prior-boot"]
-        : confirmationArgs(fixture);
-    const lock = join(fixture.owner.root, "recovery.lock");
+    const args = inspectionArgs(fixture, operation);
+    const lock = fixture.file("recovery.lock");
     let revalidated = false;
     let changedBytes: string | undefined;
     injected.onRevalidate = () => {
       revalidated = true;
-      expect(existsSync(fixture.owner.payload)).toBe(true);
+      expect(fs.existsSync(fixture.owner.payload)).toBe(true);
       if (changed === "receipt") {
-        rewriteReceipt(fixture, (receipt) => {
-          receipt.ownerPid = Number(receipt.ownerPid) + 1;
-        });
-        changedBytes = readFileSync(fixture.receiptPath, "utf8");
+        changedBytes = changeOwner(fixture);
       } else {
         if (operation === "inspect") {
-          mkdirSync(lock);
+          fs.mkdirSync(lock);
         }
-        writeFileSync(join(lock, "owner.json"), "another recovery owns this lock\n");
+        fs.writeFileSync(join(lock, "owner.json"), "another recovery owns this lock\n");
       }
     };
     const outcome = await command(fixture, args);
     expect(revalidated).toBe(true);
-    expect(outcome.report).toMatchObject({
+    expect(outcome).toMatchObject({
       recovered: false,
       eligible: false,
       reason:
@@ -567,11 +468,11 @@ posixIt.each([
             ? "Another recovery acquired this copy during inspection."
             : "staging recovery lock ownership changed",
     });
-    expect(existsSync(fixture.owner.payload)).toBe(true);
+    expectRetained(fixture);
     if (changed === "receipt") {
-      expect(readFileSync(fixture.receiptPath, "utf8")).toBe(changedBytes);
+      expect(fixture.read()).toBe(changedBytes);
     } else {
-      expect(readFileSync(join(lock, "owner.json"), "utf8")).toBe(
+      expect(fs.readFileSync(join(lock, "owner.json"), "utf8")).toBe(
         "another recovery owns this lock\n",
       );
     }

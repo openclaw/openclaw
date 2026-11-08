@@ -39,6 +39,8 @@ export type ConfigWriteAuditOrigin =
   | "cli";
 
 export type ConfigWriteOptions = {
+  /** Offline database-config repair cannot inspect or record shared database state. */
+  databaseAccess?: "none";
   /** Doctor/update supplies inspected facts; ordinary writes do not query migration state. */
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
   /** Candidate's source/runtime basis within its write snapshot; omitted inputs use active globals. */
@@ -55,6 +57,8 @@ export type ConfigWriteOptions = {
   assertConfigPathForWrite?: () => void;
   /** Internal synchronous live-owner assertion checked at guarded publication effects. */
   assertCurrent?: () => void;
+  /** Synchronous requester admission immediately before publication; not post-commit ownership. */
+  assertBeforePublish?: () => void;
   /** Paths that must be removed from the persisted payload. */
   unsetPaths?: string[][];
   /** Caller-authored paths that stay persisted even when equal to defaults. */
@@ -131,6 +135,8 @@ export type ConfigSnapshotReadOptions = {
   lowerPrecedenceEnv?: Readonly<Record<string, string>>;
   allowCurrentPluginMetadata?: boolean;
   recoverSuspicious?: boolean;
+  /** Admission can reject this source while retaining routing and dotenv effects. */
+  onSourceEnvApplied?: (restore: () => void) => void;
   allowSuspiciousRecovery?: (
     candidate: OpenClawConfig,
     current: OpenClawConfig,
@@ -145,6 +151,8 @@ export type ConfigSnapshotReadOptions = {
 export type ConfigSnapshotMetadataReadOptions = ConfigSnapshotReadOptions & {
   /** CLI diagnostics prepare metadata before validation; strict mode also retains source facts. */
   prepareValidation?: "runtime" | "strict";
+  /** Keep validation's metadata lazy when the caller needs no complete plugin inventory. */
+  completePluginMetadata?: boolean;
 };
 
 export type ReadConfigFileSnapshotInternalResult = {

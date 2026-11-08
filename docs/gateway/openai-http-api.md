@@ -232,7 +232,7 @@ When `stream: true`, tool calls arrive as incremental SSE chunks: an initial ass
 
 For required or function-pinned tool choices, prose is held until the matching call is confirmed. When the run returns finalized prose, the stream uses that text instead of provisional deltas.
 
-If `stream_options.include_usage=true`, a trailing usage chunk is emitted before `[DONE]`.
+If `stream_options.include_usage=true` and complete usage is available, a trailing usage chunk is emitted before `[DONE]`. Interrupted responses without final accounting omit that chunk; JSON responses omit `usage` too. Missing or provisional counts are not replaced with zeros.
 
 ### Tool follow-up loop
 
@@ -348,7 +348,9 @@ Responses include `usage.prompt_tokens` and `usage.total_tokens`. Native Ollama 
 
 Provider failures use the same error mapping as chat completions: missing provider credentials return `401 authentication_error` with setup guidance, unknown provider models return `404 invalid_request_error`, and provider overload returns `503 api_error`. Credential values are redacted. Unexpected failures return `500 api_error` with `internal error`.
 
-For models that support it, a positive integer `dimensions` requests the output vector size. It overrides the selected agent's active `memory.search.outputDimensionality` and also applies when memory search is disabled. Omitting it keeps the configured or provider default size.
+If provider cleanup fails, the Gateway logs restart guidance and blocks further embeddings requests for that agent/provider until restart. Other agent/provider scopes remain available.
+
+For models that support it, a positive integer `dimensions` requests the output vector size. It overrides the selected agent's active `memory.search.outputDimensionality` and also applies when memory search is disabled. Omitting it keeps the configured or provider default size. When the memory provider uses the OpenAI-compatible embeddings transport (such as `openai-compatible` or `omlx`), a backend that returns a different vector size fails the request with `400 invalid_request_error` and code `embedding_dimensions_mismatch` instead of returning vectors of the wrong size. The message states the requested and returned sizes; retrying cannot succeed until `dimensions` and `memory.search.outputDimensionality` are omitted or the backend honors them.
 
 ## Related
 

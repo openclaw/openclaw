@@ -267,10 +267,12 @@ openclaw directory groups members \
 When the Gateway is connected, directory reads reuse its authenticated Buzz
 connection and in-memory snapshot. A standalone directory command opens one
 bounded authenticated connection, loads the current snapshot, and closes it.
-Ordinary directory errors are logged without reconnecting. If a directory or
-profile subscription does not reach EOSE within 10 seconds, OpenClaw treats the
-Buzz relay session as stalled and recycles only that Buzz account connection.
-The Gateway keeps running.
+Ordinary directory errors are logged without reconnecting. If a directory snapshot
+query does not reach EOSE within 10 seconds, OpenClaw treats the Buzz relay session
+as stalled and recycles only that Buzz account connection. The Gateway keeps
+running. Live member profile reads are best-effort: new membership selections
+replace unfinished reads without waiting for EOSE. A failed or stalled profile
+read can leave fallback labels until the next selection change or reconnect.
 
 Archived rooms are omitted from directory results and live room subscriptions.
 If a configured room is archived or restored while OpenClaw is connected, the
@@ -299,7 +301,6 @@ workspace, or model while one Gateway and Buzz bot serve all of them:
     ownership: "explicit",
     defaults: {
       authInheritance: { agentId: "support" },
-      heartbeat: { agentId: "support" },
       systemAgent: { agentId: "support" },
     },
     entries: {
@@ -354,6 +355,11 @@ Startup and reconnect recover eligible messages from the last 24 hours, but
 never from before that room's first activation by this Buzz account. That
 activation floor survives restarts. Sender-supplied timestamps do not advance it.
 Replay deduplication prevents completed messages from running again.
+
+A relay rate limit during history recovery pauses only the affected room and
+honors the relay's retry delay. Other rooms and channels continue delivering.
+After three retries, OpenClaw warns that the room's history recovery is incomplete
+and keeps the connection available for live messages.
 
 Use `groupPolicy: "allowlist"` with `groupAllowFrom` in manual configuration
 when only specific room members should be able to activate the agent.
@@ -436,6 +442,13 @@ while the reply was running.
 Membership is checked against the latest received roster when context is used.
 If the same identity leaves and rejoins before then, its previously authorized
 messages can remain in the window. Leaving does not erase conversation history.
+
+### Thread sessions
+
+Each Buzz reply thread has its own session, identified by its root event ID.
+Top-level messages keep the room session. A new thread starts without the room
+transcript or a room-level `/model` override; select a model in the thread or
+configure the agent defaults. Existing room sessions remain available.
 
 ### Reply placement
 

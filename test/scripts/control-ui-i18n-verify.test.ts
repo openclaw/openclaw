@@ -205,13 +205,23 @@ describe("syncControlUiCatalogFallbackBaseline", () => {
     );
   });
 
-  it("preserves the first missing/malformed memory error during scoped sync", async () => {
+  it("lets scoped sync bootstrap around absent memory but keeps it fatal otherwise", async () => {
     fixture.files.delete(memoryPath("fr"));
-    fixture.files.set(memoryPath("de"), "{");
+    await expect(syncControlUiCatalogFallbackBaseline(writeOptions)).rejects.toThrow(
+      "ui/src/i18n/.i18n/fr.tm.jsonl does not contain fr translations",
+    );
     await expect(
-      syncControlUiCatalogFallbackBaseline({ ...writeOptions, allowCatalogDrift: true }),
+      syncControlUiCatalogFallbackBaseline({ checkOnly: true, write: false }),
     ).rejects.toThrow("ui/src/i18n/.i18n/fr.tm.jsonl does not contain fr translations");
+    expect(fixture.writes).toEqual([]);
 
+    await syncControlUiCatalogFallbackBaseline({ ...writeOptions, allowCatalogDrift: true });
+    expect(fixture.files.get(baselinePath)).toBe(
+      baseline({ "group.second": ["de"], missing: ["de"] }),
+    );
+  });
+
+  it("rejects malformed memory during scoped sync", async () => {
     fixture.files.set(memoryPath("fr"), "{");
     fixture.files.delete(memoryPath("de"));
     await expect(

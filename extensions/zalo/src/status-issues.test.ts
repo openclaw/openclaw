@@ -1,12 +1,15 @@
 // Zalo tests cover status issues plugin behavior.
+import assert from "node:assert/strict";
 import { expectOpenDmPolicyConfigIssue } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, it } from "vitest";
-import { collectZaloStatusIssues } from "./status-issues.js";
+import { zaloPlugin } from "./channel.js";
 
 describe("collectZaloStatusIssues", () => {
   it("warns when dmPolicy is open", () => {
+    const collectIssues = zaloPlugin.status?.collectStatusIssues;
+    assert(collectIssues);
     expectOpenDmPolicyConfigIssue({
-      collectIssues: collectZaloStatusIssues,
+      collectIssues,
       account: {
         accountId: "default",
         enabled: true,

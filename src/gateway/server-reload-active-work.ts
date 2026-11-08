@@ -5,19 +5,15 @@ import { hasPluginLifecycleLeaseDemand } from "../plugins/plugin-lifecycle-lease
 import type { ChannelKind } from "./config-reload-plan.js";
 import type { GatewayDeferredChannelReload } from "./config-reload-status.types.js";
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
-import {
-  isCurrentGatewayReloadGeneration,
-  isGatewayReloadGenerationAborted,
-} from "./server-reload-generation.js";
 
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
 
 export function createGatewayActiveWorkTracker(options: {
   params: Pick<GatewayReloadHandlerParams, "logReload">;
-  myGeneration: number;
+  reloadSignal: AbortSignal;
 }) {
-  const { params, myGeneration } = options;
+  const { params, reloadSignal } = options;
   let deferredChannelReload:
     | {
         channels: ChannelKind[];
@@ -26,12 +22,7 @@ export function createGatewayActiveWorkTracker(options: {
       }
     | undefined;
   const getDeferredChannelReloads = (): readonly GatewayDeferredChannelReload[] => {
-    if (
-      !deferredChannelReload ||
-      !isCurrentGatewayReloadGeneration(myGeneration) ||
-      isGatewayReloadGenerationAborted(myGeneration) ||
-      !deferredChannelReload.isCurrent()
-    ) {
+    if (!deferredChannelReload || reloadSignal.aborted || !deferredChannelReload.isCurrent()) {
       return [];
     }
     const { channels, publicationPending } = deferredChannelReload;
@@ -108,11 +99,11 @@ export function createGatewayActiveWorkTracker(options: {
     deferredChannelReload = deferred;
     try {
       while (true) {
-        if (!isTransactionCurrent() || isGatewayReloadGenerationAborted(myGeneration)) {
+        if (!isTransactionCurrent() || reloadSignal.aborted) {
           return true;
         }
         await sleepWithAbort(CHANNEL_RELOAD_DEFERRAL_POLL_MS, undefined, { ref: false });
-        if (!isTransactionCurrent() || isGatewayReloadGenerationAborted(myGeneration)) {
+        if (!isTransactionCurrent() || reloadSignal.aborted) {
           return true;
         }
         const current = getActiveCounts();

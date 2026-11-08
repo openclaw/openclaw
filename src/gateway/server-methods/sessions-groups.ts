@@ -4,6 +4,7 @@ import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
+  validateSessionsGroupsCreateParams,
   validateSessionsGroupsDefaultsParams,
   validateSessionsGroupsDeleteParams,
   validateSessionsGroupsListParams,
@@ -17,6 +18,7 @@ import { ensureSessionGroupCatalog, readSessionGroupCatalog } from "../session-g
 import { filterMutableSessionGroupRecords } from "../session-group-defaults-access.js";
 import {
   deleteSessionGroup,
+  ensureSessionGroupRegistered,
   putSessionGroups,
   renameSessionGroup,
   SessionGroupNotEmptyError,
@@ -24,9 +26,10 @@ import {
   updateSessionGroupDefaults,
 } from "../session-groups.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 import {
   isWorkspacePathContainmentCurrent,
   resolveWorkspacePathContainment,
@@ -67,13 +70,25 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       respond(true, { defaults }, undefined);
     },
   ),
-  "sessions.groups.put": async ({ params, respond, context, sessionMutationAuthorization }) => {
-    if (
-      !assertValidParams(params, validateSessionsGroupsPutParams, "sessions.groups.put", respond)
-    ) {
-      return;
-    }
-    try {
+  "sessions.groups.create": defineValidatedGatewayHandler(
+    "sessions.groups.create",
+    validateSessionsGroupsCreateParams,
+    async ({ params, respond, context, sessionMutationAuthorization }) => {
+      await ensureSessionGroupRegistered(
+        params.name,
+        process.env,
+        sessionMutationAuthorization?.assertCurrent,
+      );
+      const { groups, sectionOrder } = readSessionGroupCatalog();
+      respond(true, { ok: true, groups, sectionOrder }, undefined);
+      emitSessionsChanged(context, { reason: "groups" }, { catalogOnly: true });
+    },
+    (error) => sessionGroupMutationError(error),
+  ),
+  "sessions.groups.put": defineValidatedGatewayHandler(
+    "sessions.groups.put",
+    validateSessionsGroupsPutParams,
+    async ({ params, respond, context, sessionMutationAuthorization }) => {
       const groups = await putSessionGroups({
         cfg: context.getRuntimeConfig(),
         names: params.names,
@@ -88,10 +103,9 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       );
       // Catalog-only changes still need to reach other open clients.
       emitSessionsChanged(context, { reason: "groups" }, { catalogOnly: true });
-    } catch (error) {
-      respond(false, undefined, sessionGroupMutationError(error, SessionGroupNotEmptyError));
-    }
-  },
+    },
+    (error) => sessionGroupMutationError(error, SessionGroupNotEmptyError),
+  ),
   "sessions.groups.rename": defineValidatedGatewayHandler(
     "sessions.groups.rename",
     validateSessionsGroupsRenameParams,
@@ -118,20 +132,12 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     validateSessionsGroupsUpdateParams,
     async ({ params, respond, context, client, sessionMutationAuthorization }) => {
       if (params.cwd && !path.isAbsolute(params.cwd)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "session group cwd must be absolute"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "session group cwd must be absolute");
         return;
       }
       const name = normalizeOptionalString(params.name);
       if (!name) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "session group name must not be empty"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "session group name must not be empty");
         return;
       }
       let cwd = params.cwd;
@@ -172,11 +178,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         context.getRuntimeConfig(),
       );
       if (!defaults) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown session group: ${name}`),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, `unknown session group: ${name}`);
         return;
       }
       respond(

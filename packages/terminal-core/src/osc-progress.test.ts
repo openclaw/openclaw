@@ -4,9 +4,9 @@ import { formatOscProgress, supportsOscProgress } from "./osc-progress.js";
 
 describe("OSC progress", () => {
   it("detects supported terminal environments", () => {
-    expect(supportsOscProgress({ TERM_PROGRAM: "WezTerm" }, true)).toBe(true);
-    expect(supportsOscProgress({ TERM_PROGRAM: "Apple_Terminal" }, true)).toBe(false);
-    expect(supportsOscProgress({ WT_SESSION: "1" }, false)).toBe(false);
+    expect(supportsOscProgress({ TERM_PROGRAM: "WezTerm" })).toBe(true);
+    expect(supportsOscProgress({ TERM_PROGRAM: "Apple_Terminal" })).toBe(false);
+    expect(supportsOscProgress({ WT_SESSION: "1" })).toBe(true);
   });
 
   it("formats OSC 9;4 progress sequences", () => {

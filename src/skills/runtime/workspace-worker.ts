@@ -355,7 +355,8 @@ export async function serveWorkspaceSkills(options: {
       // SAFETY: The adapter serializes the native source plan; workspace identity is checked next.
       const discovery = decoded as WorkspaceSkillSourceRequest;
       assertWorkspace(discovery, workspace);
-      const { readWorkspaceSkillSources } = await import("../loading/workspace-skill-loader.js");
+      const { readWorkspaceSkillSources } =
+        await import("../loading/workspace-skill-source-reader.js");
       await write(readWorkspaceSkillSources(discovery));
       return;
     }

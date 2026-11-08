@@ -7,6 +7,7 @@ import type { executeJobCore } from "./timer-execution.js";
 
 export type CronCoreRunOutcome = Awaited<ReturnType<typeof executeJobCore>> & {
   isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
+  executionSettlement?: Promise<unknown>;
 };
 export type CronRunProgress = {
   completedCoreResult?: CronCoreRunOutcome;
@@ -84,8 +85,10 @@ export function withPrimaryWebhookInterruption(params: {
     ...params,
     outcome: params.outcome ?? { status: "not-delivered" },
   });
-  // Preserve successful payload and accepted delivery facts while attributing an interrupted delivery.
-  return params.outcome?.status !== "delivered" && params.errorClassification
+  // Delivery interruption must not replace a completed core failure's classification.
+  return result.status !== "error" &&
+    params.outcome?.status !== "delivered" &&
+    params.errorClassification
     ? { ...result, errorClassification: params.errorClassification }
     : result;
 }

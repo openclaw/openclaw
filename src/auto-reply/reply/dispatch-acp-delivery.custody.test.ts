@@ -99,7 +99,7 @@ describe("ACP routed delivery custody", () => {
           })
           .mockResolvedValueOnce({ ok: true, delivered: true });
       }
-      const coordinator = createVisibleChatAcpCoordinator(
+      const coordinator = await createVisibleChatAcpCoordinator(
         createAcpTestConfig(),
         dispatcher,
         routed,
@@ -136,7 +136,7 @@ describe("ACP routed delivery custody", () => {
       const dispatcher = createReplyDispatcher({
         deliver: async () => ({ visibleReplySent: true }),
       });
-      const coordinator = createVisibleChatAcpCoordinator(
+      const coordinator = await createVisibleChatAcpCoordinator(
         createAcpTestConfig({ tts: { auto: "always" } }),
         dispatcher,
         routed,
@@ -167,7 +167,7 @@ describe("ACP routed delivery custody", () => {
   );
 
   it("keeps an explicit runtime final canonical when its caption is retried", async () => {
-    const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig());
+    const coordinator = await createVisibleChatAcpCoordinator(createAcpTestConfig());
     await coordinator.deliver("block", { text: "Earlier block." }, { skipTts: true });
     deliveryMocks.routeReply
       .mockResolvedValueOnce({
@@ -221,7 +221,7 @@ describe("ACP routed delivery custody", () => {
         queueCustody,
         error: "later chunk failed",
       });
-      const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig());
+      const coordinator = await createVisibleChatAcpCoordinator(createAcpTestConfig());
 
       await expect(
         coordinator.deliver("final", { text: "hello" }, { skipTts: true }),
@@ -243,12 +243,9 @@ describe("ACP routed delivery custody", () => {
         delivered: false,
         queueCustody,
         ambiguous,
-        ...(ok
-          ? { reason: "adapter_returned_no_identity" }
-          : { error: "delivery remains unconfirmed" }),
       });
       const dispatcher = createDispatcher();
-      const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig(), dispatcher);
+      const coordinator = await createVisibleChatAcpCoordinator(createAcpTestConfig(), dispatcher);
       const payload = markReplyPayloadAsTtsSupplement({
         text: "hello",
         mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
@@ -263,7 +260,6 @@ describe("ACP routed delivery custody", () => {
       );
       expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
       expect(coordinator.hasDeliveredFinalReply()).toBe(false);
-      expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
       expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
       expect(coordinator.hasDeliveredVisibleText()).toBe(false);
       expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
@@ -293,7 +289,7 @@ describe("ACP routed delivery custody", () => {
           : {}),
       });
       const dispatcher = createDispatcher();
-      const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig(), dispatcher);
+      const coordinator = await createVisibleChatAcpCoordinator(createAcpTestConfig(), dispatcher);
       const payload = markReplyPayloadAsTtsSupplement({
         text: "hello",
         mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
@@ -308,7 +304,6 @@ describe("ACP routed delivery custody", () => {
         );
         expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
         expect(coordinator.hasDeliveredFinalReply()).toBe(false);
-        expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
         expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
         expect(coordinator.hasDeliveredVisibleText()).toBe(false);
         expect(coordinator.applyRoutedCounts({ tool: 0, block: 0, final: 0 })).toEqual({
@@ -330,7 +325,6 @@ describe("ACP routed delivery custody", () => {
       );
       expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
       expect(coordinator.hasDeliveredFinalReply()).toBe(true);
-      expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(true);
       expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
       expect(coordinator.hasDeliveredVisibleText()).toBe(true);
       expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
@@ -351,7 +345,7 @@ describe("ACP routed delivery custody", () => {
         delivered: false,
         queueCustody: "held",
       });
-      const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig());
+      const coordinator = await createVisibleChatAcpCoordinator(createAcpTestConfig());
       await expect(
         coordinator.deliver("block", { text: "Working on it.", ...classification }),
       ).resolves.toBe(true);
@@ -365,7 +359,6 @@ describe("ACP routed delivery custody", () => {
           payload: { text: "The answer." },
         }),
       );
-      expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(true);
     },
   );
 });
@@ -387,7 +380,11 @@ describe("ACP direct identityless delivery", () => {
         });
       },
     });
-    const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig(), dispatcher, false);
+    const coordinator = await createVisibleChatAcpCoordinator(
+      createAcpTestConfig(),
+      dispatcher,
+      false,
+    );
     for (const text of ["uncovered", "pending"]) {
       await coordinator.deliver("block", { text }, { skipTts: true });
     }
@@ -417,7 +414,7 @@ describe("ACP partial direct delivery", () => {
         throw failure;
       },
     });
-    const coordinator = createAcpDispatchDeliveryCoordinator({
+    const coordinator = await createAcpDispatchDeliveryCoordinator({
       preparedTtsPreferences: {},
       cfg: createAcpTestConfig(),
       ctx: buildTestCtx({ Provider: "visiblechat", Surface: "visiblechat" }),
@@ -441,7 +438,6 @@ describe("ACP partial direct delivery", () => {
     await expect(coordinator.recoverBlockText()).resolves.toBe(false);
     expect(coordinator.hasPendingAnswerDelivery()).toBe(true);
     expect(coordinator.hasPendingFinalTtsMedia()).toBe(true);
-    expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
     await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
   });
 });
@@ -461,7 +457,7 @@ it("releases outer cancellation while retaining admitted final ownership and tra
       return { visibleReplySent: false, finalization: finalization.promise };
     },
   });
-  const coordinator = createVisibleChatAcpCoordinator(
+  const coordinator = await createVisibleChatAcpCoordinator(
     createAcpTestConfig(),
     dispatcher,
     false,
@@ -493,7 +489,6 @@ it("releases outer cancellation while retaining admitted final ownership and tra
     expect(finalSettled).toBe(false);
     expect(transcriptSettled).toBe(false);
     expect(coordinator.hasDeliveredFinalReply()).toBe(false);
-    expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
   } finally {
     finalization.reject(
       Object.assign(

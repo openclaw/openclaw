@@ -8,6 +8,7 @@ import {
   capturePluginStateMutationSettlement,
 } from "./plugin-state-operation-epochs.js";
 import { PluginStateOperationInvalidatedError } from "./plugin-state-operation-error.js";
+import { beginPluginStatePublication } from "./plugin-state-publication.js";
 import { capturePluginStateNativeBindingStore } from "./plugin-state-store.native-binding.js";
 import type {
   PluginStateKeyedStore,
@@ -126,10 +127,15 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
       return binding.options;
     });
   assertActive();
+  let preparedEmptyShortcut = false;
   return {
     async execute(command, options) {
       assertActive();
       const writes = select(options.writeStores);
+      const emptyStores = options.ifEmpty ? select([options.ifEmpty.store]) : [];
+      if (options.ifEmpty && writes.length) {
+        throw invalidInput("Plugin state empty shortcuts require a read-only operation.");
+      }
       const watches = select(options.watchStores ?? bindings.map((_, index) => index));
       const receiptId = randomUUID();
       const missing = Object.hasOwn(options, "missingValue")
@@ -140,11 +146,14 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
         : undefined;
       const prior = capturePluginStateMutationSettlement(
         context.admission.coordinationKey,
-        [...watches, ...writes],
+        [...watches, ...writes, ...emptyStores],
         mutation?.token,
       );
       let validUntil: number | undefined;
       let committed = writes.length === 0;
+      const publication = writes.length
+        ? beginPluginStatePublication(() => context.admission.identity.key)
+        : undefined;
       try {
         if (prior) {
           await prior;
@@ -171,16 +180,17 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
             exportName: handler.exportName,
             stores: bindings.map(({ options: { env: _env, ...scope } }) => scope),
             writeStores: [...options.writeStores],
+            ifEmpty: options.ifEmpty,
             command,
             receiptId,
           },
           {
             missing: missing ? () => missing : undefined,
+            preparedEmptyShortcut,
             onCommitted(facts) {
               if (facts.receiptId !== receiptId) {
                 throw new Error("Plugin state operation received another operation's receipt");
               }
-              validUntil = facts.validUntil;
               committed = true;
             },
           },
@@ -188,6 +198,7 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
         if (!committed) {
           throw new Error("Plugin state operation has no committed receipt");
         }
+        preparedEmptyShortcut ||= result.emptyShortcut === true;
         validUntil = result.validUntil;
         if (writes.length === 0) {
           assertActive();
@@ -204,7 +215,11 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
         });
         return receipt;
       } finally {
-        mutation?.finish();
+        try {
+          publication?.finish("completed");
+        } finally {
+          mutation?.finish();
+        }
       }
     },
   };

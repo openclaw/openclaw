@@ -79,6 +79,11 @@ succeed; Gateway invocation waits for that snapshot independently of publication
 Registration returns a synchronous handle whose optional `deferMcpToolApprovals`
 field remains undefined until policy preparation finishes.
 
+Foreground hook callbacks must name the native thread and accepted turn of the
+current run, even when warm threads reuse their hook commands and generation.
+Late callbacks cannot inherit a successor run's policy. Separately admitted
+direct children keep their existing retained authority.
+
 The cold hook CLI reads the locator without loading shared-state writer startup.
 On Node, this one-shot process uses a read-only connection with no SQLite lock
 wait; transient lock contention yields to the existing retry and deadline owner.
@@ -142,6 +147,19 @@ native tool record; OpenClaw can mirror selected events but cannot rewrite
 the native thread unless Codex exposes that through app-server or native hook
 callbacks.
 
+A `before_tool_call` rewrite on a Codex `PreToolUse` event returns the
+replacement as `updatedInput` when Codex can apply it: `command` for native
+shell and `apply_patch`, or the JSON object arguments for MCP tools within the
+[size, depth, and number limits](/plugins/codex-harness-runtime/v1-support-contract).
+Codex then applies its normal approval and sandbox policy to the replacement. OpenClaw
+denies the call for any other rewrite, including extra shell fields such as
+`workdir`, other native tools, and rewrites that arrive during a report-mode
+approval, when Codex has already fixed the command.
+
+Codex keeps the last completed `updatedInput` from its `PreToolUse` hooks, so a
+separate Codex hook from another config layer can replace an OpenClaw rewrite.
+OpenClaw policy does not see that hook's input.
+
 Codex app-server report-mode `PreToolUse` events defer plugin approval to the
 matching app-server approval. If an OpenClaw `before_tool_call` hook returns
 `requireApproval` while the native payload sets `openclaw_approval_mode:
@@ -156,6 +174,12 @@ Codex app-server item notifications also provide async `after_tool_call`
 observations for native tool completions not already covered by the native
 `PostToolUse` relay. These are telemetry/compatibility only; they cannot
 block, delay, or mutate the native tool call.
+
+When `post_tool_use` is enabled, the relay also records native `send_input`
+receipts before observer middleware runs. This preserves separate follow-up
+assignments when Code Mode wraps the nested tool result. Disabling that event,
+or a managed-only Codex hook policy, leaves this receipt path unavailable;
+observational hooks do not become a requirement for thread startup.
 
 Compaction and LLM lifecycle projections come from Codex app-server
 notifications and OpenClaw adapter state, not native Codex hook commands.

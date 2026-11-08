@@ -5,6 +5,7 @@
  */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { imageResultFromFile } from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
@@ -37,6 +38,7 @@ const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
   console: "\n[truncated — retry with a stricter level or targetId]",
   requests: "\n[truncated — retry with a narrower filter or smaller limit]",
   errors: "\n[truncated — retry with a smaller limit]",
+  judge: "\n[truncated judgment — inspect the page before acting]",
   tabs: "\n[truncated — retry with action=snapshot and a specific targetId]",
   act: "\n[truncated — inspect the affected targetId with action=snapshot]",
   download: "\n[truncated — retry with a specific targetId and download ref]",
@@ -121,6 +123,7 @@ export function wrapBrowserExternalJson(params: {
     truncated: wrapped.truncated,
     safeDetails: {
       ok: true,
+      text: wrapped.text,
       externalContent: {
         untrusted: true,
         source: "browser",
@@ -189,6 +192,7 @@ function isAriaRefsUnsupportedError(err: unknown): boolean {
 }
 
 export async function executeSnapshotAction(params: {
+  getConfig?: () => OpenClawConfig;
   input: Record<string, unknown>;
   target: BrowserClientTarget;
   profile?: string;
@@ -196,7 +200,8 @@ export async function executeSnapshotAction(params: {
   onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const { input, target, profile } = params;
-  const snapshotDefaults = getRuntimeConfig().browser?.snapshotDefaults;
+  const getConfig = params.getConfig ?? getRuntimeConfig;
+  const snapshotDefaults = getConfig().browser?.snapshotDefaults;
   const format: "ai" | "aria" | undefined =
     input.snapshotFormat === "ai" ? "ai" : input.snapshotFormat === "aria" ? "aria" : undefined;
   const formatExplicit = format !== undefined;
@@ -297,17 +302,18 @@ export async function executeSnapshotAction(params: {
     text: string,
     details: Record<string, unknown>,
   ): Promise<AgentToolResult<unknown>> => {
+    const resultDetails = { ...details, text };
     if (labels && snapshot.format === "ai" && snapshot.imagePath) {
       return await imageResultFromFile({
         label: "browser:snapshot",
         path: snapshot.imagePath,
         extraText: text,
         // Keep model-only screenshots out of automatic channel delivery.
-        details: { ...details, media: { outbound: false } },
-        imageSanitization: resolveRuntimeImageSanitization(),
+        details: { ...resultDetails, media: { outbound: false } },
+        imageSanitization: resolveRuntimeImageSanitization(getConfig),
       });
     }
-    return textResult(text, details);
+    return textResult(text, resultDetails);
   };
   const query = normalizeOptionalString(input.query);
   if (query && !snapshot.blockedByDialog) {
@@ -400,6 +406,7 @@ export async function executeSnapshotAction(params: {
  * would be an uncapped aria tree); a full snapshot stays one explicit call away.
  */
 export async function appendNavigatedPageState(params: {
+  getConfig?: () => OpenClawConfig;
   result: AgentToolResult<unknown>;
   targetId?: string;
   target: BrowserClientTarget;
@@ -409,6 +416,7 @@ export async function appendNavigatedPageState(params: {
   let snapshot: AgentToolResult<unknown>;
   try {
     snapshot = await executeSnapshotAction({
+      getConfig: params.getConfig,
       input: { targetId: params.targetId, mode: "efficient" },
       target: params.target,
       profile: params.profile,

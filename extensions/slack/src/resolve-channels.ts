@@ -21,9 +21,6 @@ export type SlackChannelResolution = {
 
 function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return {};
-  }
   const mention = trimmed.match(/^<#([A-Z0-9]+)(?:\|([^>]+))?>$/i);
   if (mention) {
     const id = mention[1]?.toUpperCase();
@@ -38,7 +35,7 @@ function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
   if (/^[CG][A-Z0-9]{8,}$/i.test(prefixed)) {
     return { id: prefixed.toUpperCase() };
   }
-  const name = prefixed.replace(/^#/, "").trim();
+  const name = normalizeLowercaseStringOrEmpty(prefixed.replace(/^#/, ""));
   return name ? { name } : {};
 }
 
@@ -68,12 +65,8 @@ function resolveByName(
   name: string,
   channels: readonly SlackChannelLookup[],
 ): SlackChannelLookup | undefined {
-  const target = normalizeLowercaseStringOrEmpty(name);
-  if (!target) {
-    return undefined;
-  }
   const matches = channels.filter(
-    (channel) => normalizeLowercaseStringOrEmpty(channel.name) === target,
+    (channel) => normalizeLowercaseStringOrEmpty(channel.name) === name,
   );
   return matches.find((channel) => !channel.archived) ?? matches[0];
 }

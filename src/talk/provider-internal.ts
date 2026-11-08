@@ -5,6 +5,7 @@
  * public Plugin SDK. External providers continue to implement only the stable
  * RealtimeVoiceProviderPlugin contract.
  */
+import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   RealtimeVoicePublicClientHints,
@@ -13,11 +14,13 @@ import type {
 import { resolveBundledProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
-  RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeVoiceProviderConfiguredContext,
+} from "./provider-contexts.js";
+import type {
+  RealtimeVoiceBrowserSession,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
-  RealtimeVoiceProviderConfiguredContext,
 } from "./provider-types.js";
 
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
@@ -29,6 +32,8 @@ export type InternalRealtimeVoiceProviderCapabilities = RealtimeVoiceProviderCap
   voiceSelectionPolicy?: "allowlist-default";
   /** Model-specific voice choices; the provider's voices remain the default catalog. */
   voicesByModel?: Record<string, readonly string[]>;
+  /** Static Settings facts for a model family; these never grant session authority. */
+  modelFamilySettings?: TalkCatalogResult["realtime"]["providers"][number]["modelFamilySettings"];
   /** The provider owns agent delegation instead of exposing client-side function tools. */
   handlesAgentConsult?: boolean;
   /** The provider can keep browser media direct while exposing its control wire to Gateway. */
@@ -47,10 +52,12 @@ export type InternalRealtimeVoiceBrowserSessionCreateRequest =
   };
 
 export type InternalRealtimeVoiceProviderApi = {
+  /** @deprecated Use isBrowserSessionConfiguredAsync. Compatibility ends 2026-12-31. Removal in the first January 2027 stable release. */
   isBrowserSessionConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
   isBrowserSessionConfiguredAsync?: (
     ctx: RealtimeVoiceProviderConfiguredContext,
   ) => Promise<boolean>;
+  /** @deprecated Use resolveBrowserSessionCapabilitiesAsync. Compatibility ends 2026-12-31. Removal in the first January 2027 stable release. */
   resolveBrowserSessionCapabilities?: (
     ctx: RealtimeVoiceProviderConfiguredContext & {
       /** Effective per-session model after request overrides. */
@@ -64,6 +71,7 @@ export type InternalRealtimeVoiceProviderApi = {
       clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
     },
   ) => Promise<InternalRealtimeVoiceProviderCapabilities>;
+  /** @deprecated Use isGatewayRelayConfiguredAsync. Compatibility ends 2026-12-31. Removal in the first January 2027 stable release. */
   isGatewayRelayConfigured?: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean | undefined;
   isGatewayRelayConfiguredAsync?: (
     ctx: RealtimeVoiceProviderConfiguredContext,

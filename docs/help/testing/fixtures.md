@@ -133,6 +133,12 @@ use the worker and must finish before cleanup.
 
 ## Compiled subprocesses and timeout helpers
 
+`createOpenClawTestInstance` waits for both `/readyz` and `/startupz` on its
+isolated Gateway. Failed probes back off from 10 ms to at most 500 ms within
+the original startup deadline. This also bounds refusal traffic when an
+agent-launched test inherits the secret egress proxy environment; it does not
+bypass the proxy's loopback traffic policy.
+
 - Load compiled-subprocess declarations (`scripts/lib/vitest-worker-declarations.mts`)
   at collection. The first such load in a Vitest invocation prepares the whole
   compiled worker generation (tens of seconds warm, minutes cold), so an
@@ -142,6 +148,10 @@ use the worker and must finish before cleanup.
   `src/test-utils/prepare-compiled-subprocesses.ts` in core. Extension tests use
   `import "openclaw/plugin-sdk/compiled-subprocess-testing";` instead. Add the
   preload only to suites that already load a declaration.
+- Nested shutdown fixtures prepare one generation during collection, then borrow it
+  through the supervisor and `run-vitest.mjs` forwarding shim. Keep the descriptor
+  on the existing bootstrap/IPC contract so each owner joins its child before
+  returning the loan; do not put cold compilation inside a shutdown deadline.
 
 Replace grandfathered `withTestTimeout`/`raceWithTimeoutResult` races with
 `awaitGateBeforeSettlement(gate, operation, message)` or `withinTest(work, signal)`

@@ -3,7 +3,9 @@ import type { PreManagedServiceStop } from "../cli/update-cli/update-command-ser
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasGatewayServiceStopUnsafeError } from "../daemon/service-inspection-error.js";
+import { isErrno } from "../infra/errno.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
@@ -17,12 +19,63 @@ import {
   type DoctorMaintenanceRefusal,
 } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import type { RuntimeEnv } from "../runtime.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
 } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
+
+/** An app's package-update authority does not own repair of its already offline state. */
+export async function readOfflineAppOwnedDoctorInspection(
+  error: unknown,
+  env: NodeJS.ProcessEnv,
+): Promise<(PreManagedServiceStop & { serviceMutationSkipMessage: string }) | undefined> {
+  const { GatewayServiceUpdateOwnershipError } =
+    await import("../cli/update-cli/update-command-service-plan.js");
+  if (
+    hasCommandProcessCleanupError(error) ||
+    !(error instanceof GatewayServiceUpdateOwnershipError) ||
+    !error.failureFacts.some(
+      (fact) => fact.check === "managed-service" && fact.code === "service-mutation-refused",
+    )
+  ) {
+    return undefined;
+  }
+  const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
+  const { assertDoctorServiceSelection } = await import("./doctor-service-repair-policy.js");
+  const state = await readGatewayServiceState(resolveGatewayService(), {
+    env,
+    requireEffective: true,
+    validateEnvBeforeStatusRead: (serviceEnv) => assertDoctorServiceSelection(env, serviceEnv),
+  });
+  if (!state.command) {
+    return undefined;
+  }
+  const { summarizeGatewayServiceLayout } = await import("../daemon/service-layout.js");
+  const { readInstallOwner, formatInstallOwnerMessage } = await import("../infra/install-owner.js");
+  const owner = await readInstallOwner(
+    (await summarizeGatewayServiceLayout(state.command))?.packageRootReal ?? null,
+  );
+  const { isManagedGatewayServiceOffline } =
+    await import("../cli/update-cli/update-command-service-publication.js");
+  if (!owner || !(await isManagedGatewayServiceOffline(state))) {
+    return undefined;
+  }
+  const message = `${formatInstallOwnerMessage(owner)} Doctor can repair offline state; Gateway service installation and activation remain with the app.`;
+  return {
+    stopped: false,
+    inspected: true,
+    runtimeInspected: true,
+    running: false,
+    offline: true,
+    serviceEnv: state.env,
+    serviceMutationAllowed: false,
+    serviceUpdateVerdict: { kind: "unavailable", message },
+    serviceMutationSkipMessage: message,
+  };
+}
 
 /** Observe the selected installation without bootstrapping it or inheriting a discovery view. */
 export async function readDoctorGatewayOwnerLease(
@@ -40,9 +93,6 @@ export async function readDoctorGatewayOwnerLease(
   signal.throwIfAborted();
   if (!reply) {
     return undefined;
-  }
-  if (!reply.ok || reply.type !== "gatewayOwnerLease.read") {
-    throw new Error("Unexpected Doctor Gateway owner lease read result");
   }
   // The recorded process may have exited while the reader and its private snapshot settled.
   return reply.lease
@@ -97,6 +147,36 @@ export function classifyDoctorMaintenanceRefusal(error: unknown): DoctorMaintena
   };
 }
 
+/** Default CLI output omits nested causes; report the target without replacing the failure. */
+export async function reportDoctorReadOnlyFilesystemError(
+  error: unknown,
+  runtime?: RuntimeEnv,
+): Promise<void> {
+  const failure = collectNestedErrorCandidates(error).find(
+    (cause): cause is NodeJS.ErrnoException => isErrno(cause) && cause.code === "EROFS",
+  );
+  if (!failure) {
+    return;
+  }
+  const quote = (value: string) =>
+    JSON.stringify(value).replace(
+      /[\p{Cc}\p{Bidi_Control}\u2028\u2029]/gu,
+      (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
+  const operation =
+    "operation" in failure && typeof failure.operation === "string"
+      ? failure.operation
+      : typeof failure.syscall === "string"
+        ? failure.syscall
+        : "write";
+  const target =
+    typeof failure.path === "string" ? quote(failure.path) : "an unreported target path";
+  const outputRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
+  outputRuntime.error(
+    `Doctor encountered a read-only filesystem (EROFS): ${quote(operation)} at ${target}.\nProvide a writable mount covering the affected path; changing ownership or file modes alone cannot fix a read-only mount. Docker writable-storage layout: https://docs.openclaw.ai/install/docker#read-only-container-root`,
+  );
+}
+
 /** The same persisted-state admission protects completion and exceptional restoration. */
 export async function assertDoctorMaintenanceReady(
   cfg: OpenClawConfig,
@@ -111,19 +191,27 @@ export async function assertDoctorMaintenanceReady(
   assertSessionStoreMigrationComplete({ cfg, env, operation: "doctor" });
   const { assertOpenClawDatabasesReady } = await import("../state/openclaw-database-preflight.js");
   const { resolveConfiguredAgentDatabaseTargets } = await import("../config/sessions/targets.js");
-  await assertOpenClawDatabasesReady({
-    env,
-    config: cfg,
-    operation: "doctor",
-    onDeferredSchemaPublication: (publication) => {
-      schemaPublicationDeferred = true;
-      log(publication.message);
-    },
-    onVerified: (schemas) => {
-      refusedDatabasePaths = schemas.agentRefusals?.flatMap((refusal) => refusal.paths) ?? [];
-    },
-    configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(cfg, { env }),
-  });
+  try {
+    await assertOpenClawDatabasesReady({
+      env,
+      config: cfg,
+      operation: "doctor",
+      onDeferredSchemaPublication: (publication) => {
+        schemaPublicationDeferred = true;
+        log(publication.message);
+      },
+      onVerified: (schemas) => {
+        refusedDatabasePaths = schemas.agentRefusals?.flatMap((refusal) => refusal.paths) ?? [];
+      },
+      configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(cfg, { env }),
+    });
+  } catch (error) {
+    throw new DoctorMaintenanceRefusalError(
+      formatErrorMessage(error),
+      { kind: "data-at-risk", reason: "incomplete-migration" },
+      { cause: error },
+    );
+  }
   const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
   await assertConfiguredWorkspaceStateReady({ cfg, operation: "doctor" });
   const { assertNoPendingLegacyExecApprovals } =
@@ -177,5 +265,6 @@ export function assertDoctorMaintenanceInspection(
   throw new DoctorMaintenanceRefusalError(
     `Doctor could not enter maintenance. Error: ${detail} ${guidance}`,
     { kind: "data-at-risk", reason: "gateway-state-unverified" },
+    { failureFacts: inspection.blockFailureFacts },
   );
 }

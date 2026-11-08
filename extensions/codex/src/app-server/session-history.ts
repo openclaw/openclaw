@@ -95,34 +95,28 @@ export async function readCodexMirroredSessionHistoryMessages(
   contextTokenBudget?: number,
 ): Promise<AgentMessage[] | undefined> {
   signal?.throwIfAborted();
-  try {
-    let result: AgentMessage[] | undefined;
-    const resolved = await resolveCodexHistoryTarget(target, admission);
-    const read = (messages: Iterable<AgentMessage>) => Array.from(messages);
-    if (resolved.kind === "sqlite") {
-      const loaded = await SessionManager.openModelContextAsync(resolved.target, {
-        admission,
-        signal,
-        limits: resolveAgentHarnessHistoryLimits(contextTokenBudget),
-      });
-      result = consumeCodexHistory(
-        loaded.buildSessionContext().messages,
-        loaded.getHeader(),
-        target.sessionId,
-        read,
-        "codex mirrored model context",
-      );
-    } else {
-      const history = await readCodexNativeHistory(resolved, target.sessionId, read, admission);
-      result = history.status === "ok" ? history.value : undefined;
-    }
-    signal?.throwIfAborted();
-    return result;
-  } catch (error) {
-    signal?.throwIfAborted();
-    // A rejected bounded read is not an empty transcript: preserve the existing session.
-    throw error;
+  let result: AgentMessage[] | undefined;
+  const resolved = await resolveCodexHistoryTarget(target, admission);
+  const read = (messages: Iterable<AgentMessage>) => Array.from(messages);
+  if (resolved.kind === "sqlite") {
+    const loaded = await SessionManager.openModelContextAsync(resolved.target, {
+      admission,
+      signal,
+      limits: resolveAgentHarnessHistoryLimits(contextTokenBudget),
+    });
+    result = consumeCodexHistory(
+      loaded.buildSessionContext().messages,
+      loaded.getHeader(),
+      target.sessionId,
+      read,
+      "codex mirrored model context",
+    );
+  } else {
+    const history = await readCodexNativeHistory(resolved, target.sessionId, read, admission);
+    result = history.status === "ok" ? history.value : undefined;
   }
+  signal?.throwIfAborted();
+  return result;
 }
 
 async function resolveSqliteMarkerSessionKey(

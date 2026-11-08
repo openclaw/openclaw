@@ -31,7 +31,7 @@ Common forms:
   limits, MCP servers, and skills.
 - `/codex models` lists live Codex app-server models.
 - `/codex threads [filter]` lists recent Codex app-server threads.
-- `/codex goal` reads or updates the attached thread's native Codex goal. Codex automatic goal continuation stays disabled; OpenClaw does not own autonomous follow-on turns yet.
+- `/codex goal` reads or updates the attached thread's native Codex goal. Codex automatic goal continuation stays disabled. Use OpenClaw's [`/goal`](/tools/goal) for an objective pursued through the shared continuation queue.
 - `/codex resume <thread-id>` attaches the current OpenClaw session to an
   existing Codex thread.
 - `/codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]`
@@ -55,13 +55,19 @@ Common forms:
 - `/codex mcp` lists Codex app-server MCP server status.
 - `/codex skills` lists Codex app-server skills.
 - `/codex plugins list` shows configured native plugins; `/codex plugins
-available` discovers Codex marketplace plugins in the bound workspace.
+  available` discovers Codex marketplace plugins in the bound workspace.
 - `/codex plugins install <plugin>@<marketplace>` installs and authorizes one
   discovered plugin. `/codex plugins enable <name>` and `/codex plugins
-disable <name>` update its persisted policy. Mutations require an owner or
+  disable <name>` update its persisted policy. Mutations require an owner or
   `operator.admin` gateway client.
 - `/codex computer-use [status|install]` manages Codex Computer Use.
 - `/codex help` lists the full command tree.
+
+Without a thread ID, `/codex bind` creates a separate native thread on the next
+message. When transferring an existing OpenClaw Codex harness session, it copies
+bounded visible user and assistant history; it does not carry the harness tool
+catalog or developer instructions. Queued reply ownership does not block this
+transfer. Started source execution must finish or be stopped first.
 
 When `/codex resume` attaches a thread without an existing verified harness
 binding, its next turn checks the native thread's stored tool catalog and
@@ -88,6 +94,14 @@ If an ordinary OpenClaw-managed native thread was deleted, the next turn starts
 a fresh native thread while keeping the selected model and provider. This
 recovery preserves pending manual attachments and native-model-owned threads.
 It does not replay a turn whose native outcome is uncertain.
+
+For a `/codex bind` conversation, an app-server restart can unload the bound
+thread without deleting its history. If Codex rejects the next turn before
+accepting its input, OpenClaw resumes that same thread and submits the message
+once more. It does not create a replacement thread. Deleted history,
+authentication failures, and uncertain turn outcomes stay visible instead of
+triggering automatic replay. If recovery reports unavailable history, rebind
+the conversation and resend the message.
 
 ### Shared Fast mode and Codex fast mode
 
@@ -129,17 +143,42 @@ chat behavior. Use `/codex diagnostics [note]` only when you specifically
 want the Codex feedback upload for the currently attached thread without
 the full Gateway diagnostics bundle.
 
+### Verify tool access before a Codex turn
+
+OpenClaw has no supported diagnostic that runs Codex turn admission and tool
+construction, returns the complete model-facing tool inventory, and stops before
+inference. A manually created native thread or mock harness does not capture an
+admitted OpenClaw turn.
+
+Before a pilot, review the saved tool policy, the target session's
+[`tools.effective` preview](/gateway/protocol/operator-methods#operator-helper-methods),
+and `/codex status` for connectivity and MCP server status. These are provisional
+checks: credentials, discovery, turn authority, and restricted-turn policy can
+change the native, dynamic, MCP, and app tools offered, along with execution and
+shell-fallback settings.
+
+If inference is permitted, run a pilot in an isolated test session with the
+intended policy, then [inspect its native thread](/plugins/codex-harness/commands#inspect-codex-threads-locally).
+Observed behavior helps investigate access but does not establish a complete
+inventory. If inference is not permitted, leave the pilot inactive and use only
+the provisional checks. Approving `/diagnostics` or `/codex diagnostics` sends
+Codex thread feedback and logs to OpenAI; neither is an offline inventory check.
+
 ### Inspect Codex threads locally
 
 The fastest way to inspect a bad Codex run is often to open the native
 Codex thread directly:
 
 ```bash
-codex resume <thread-id>
+CODEX_HOME="/path/to/selected-native-home" codex resume <thread-id>
 ```
 
-Get the thread id from the completed `/diagnostics` reply, `/codex binding`,
-or `/codex threads [filter]`.
+Find the thread id with `/codex threads [filter]`. `/codex binding` reports it
+for explicitly bound conversations; a completed `/diagnostics` reply can also
+include it. Run the CLI on the app-server host with the runtime's selected
+`CODEX_HOME`: local stdio defaults to the agent directory's `codex-home`, while
+user-home scope selects the native user home. Explicit home settings can override
+these defaults. See [environment isolation](/plugins/codex-harness/app-server#environment-isolation).
 
 For upload mechanics and runtime-level diagnostics boundaries, see
 [Codex harness runtime](/plugins/codex-harness-runtime#codex-feedback-upload).

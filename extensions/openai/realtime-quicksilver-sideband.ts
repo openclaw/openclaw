@@ -1,4 +1,5 @@
 import { sleepWithAbort, toErrorObject } from "openclaw/plugin-sdk/realtime-voice-provider";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import type {
@@ -90,8 +91,7 @@ function waitForSocketOpen(params: {
     const timeout = setTimeout(
       () => finish(new Error("GPT-Live sideband connection timed out")),
       SIDEBAND_CONNECT_TIMEOUT_MS,
-    );
-    timeout.unref?.();
+    ).unref();
     params.socket.once("open", onOpen);
     params.socket.on("error", onError);
     params.socket.on("close", onClose);
@@ -206,24 +206,9 @@ export function waitForOpenAIQuicksilverConnectStep<T>(
   promise: Promise<T>,
   signal: AbortSignal,
 ): Promise<T> {
-  if (signal.aborted) {
-    return Promise.reject(openAIQuicksilverConnectAbortError(signal));
-  }
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
-      reject(openAIQuicksilverConnectAbortError(signal));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(toErrorObject(error, "OpenAI GPT-Live gateway relay failed"));
-      },
-    );
-  });
+  return racePromiseWithAbortSignal(promise, signal, openAIQuicksilverConnectAbortError).catch(
+    (error: unknown) => {
+      throw toErrorObject(error, "OpenAI GPT-Live gateway relay failed");
+    },
+  );
 }

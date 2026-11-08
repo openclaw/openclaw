@@ -274,16 +274,13 @@ async function updateRetainedCacheNode(params: {
   }
 }
 
-export function createTelegramMessageCache(params?: {
-  maxMessages?: number;
-  scope?: string;
-}): TelegramMessageCache {
+export function createTelegramMessageCache(params?: { scope?: string }): TelegramMessageCache {
   const runtime = getOptionalTelegramRuntime();
   const hasRetainedStore = runtime != null;
   const persistentStore = resolveDefaultPersistentStore();
-  const maxMessages =
-    params?.maxMessages ??
-    (persistentStore ? TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES : DEFAULT_MAX_MESSAGES);
+  const maxMessages = persistentStore
+    ? TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES
+    : DEFAULT_MAX_MESSAGES;
   const scopeKey =
     persistentStore || hasRetainedStore
       ? resolveTelegramMessageCachePersistentScopeKey(params?.scope ?? "default")
@@ -724,7 +721,6 @@ export async function buildTelegramReplyChain(params: {
   accountId: string;
   chatId: string | number;
   msg: Message;
-  maxDepth?: number;
 }): Promise<TelegramCachedMessageNode[]> {
   const replyMessage = resolveReplyMessage(params.msg);
   if (!replyMessage?.message_id || String(replyMessage.chat?.id) !== String(params.chatId)) {
@@ -732,7 +728,7 @@ export async function buildTelegramReplyChain(params: {
   }
   const get = (messageId: string) =>
     params.cache.get({ accountId: params.accountId, chatId: params.chatId, messageId });
-  const maxDepth = params.maxDepth ?? TELEGRAM_REPLY_CHAIN_MAX_DEPTH;
+  const maxDepth = TELEGRAM_REPLY_CHAIN_MAX_DEPTH;
   const visited = new Set<string>();
   const chain: TelegramCachedMessageNode[] = [];
   let current: TelegramCachedMessageNode | null = await get(String(replyMessage.message_id));

@@ -3,6 +3,30 @@ import { vi } from "vitest";
 import type { ChannelMessageActionContext } from "../runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
+const results = vi.hoisted(() => ({
+  poll: {
+    eventId: "evt-poll-vote",
+    roomId: "!room:example",
+    pollId: "$poll",
+    answerIds: ["a1", "a2"],
+    labels: ["Pizza", "Sushi"],
+    maxSelections: 2,
+  },
+  profile: {
+    accountId: "ops",
+    displayName: "Ops Bot",
+    avatarUrl: "mxc://example/avatar",
+    profile: {
+      displayNameUpdated: true,
+      avatarUpdated: true,
+      resolvedAvatarUrl: "mxc://example/avatar",
+      uploadedAvatarSource: null,
+      convertedAvatarFromHttp: false,
+    },
+    configPath: "channels.matrix.accounts.ops",
+  },
+}));
+
 const mocks = vi.hoisted(() => ({
   voteMatrixPoll: vi.fn(),
   reactMatrixMessage: vi.fn(),
@@ -29,12 +53,12 @@ vi.mock("./matrix/read-policy.js", () => ({
   withAuthorizedMatrixReadTarget: mocks.withAuthorizedMatrixReadTarget,
 }));
 
-vi.mock("./matrix/actions/messages.js", () => ({
+vi.mock("./matrix/actions/messages.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./matrix/actions/messages.js")>()),
   deleteMatrixMessage: mocks.deleteMatrixMessage,
   editMatrixMessage: mocks.editMatrixMessage,
   readMatrixMessage: mocks.readMatrixMessage,
   readMatrixMessages: mocks.readMatrixMessages,
-  sendMatrixMessage: mocks.sendMatrixMessage,
 }));
 vi.mock("./matrix/actions/room.js", () => ({
   getMatrixMemberInfo: mocks.getMatrixMemberInfo,
@@ -55,9 +79,11 @@ vi.mock("./matrix/actions/verification.js", () => ({
   listMatrixVerifications: mocks.listMatrixVerifications,
 }));
 
-vi.mock("./matrix/send.js", () => {
+vi.mock("./matrix/send.js", async (importOriginal) => {
   return {
+    ...(await importOriginal<typeof import("./matrix/send.js")>()),
     reactMatrixMessage: mocks.reactMatrixMessage,
+    sendMessageMatrix: mocks.sendMatrixMessage,
   };
 });
 
@@ -67,6 +93,8 @@ vi.mock("./profile-update.js", () => ({
 
 // Load the adapter only after its lower-operation and read-policy mocks are registered.
 const { matrixMessageActions } = await import("./actions.js");
+
+export const matrixActionResults = results;
 
 export function getMatrixActionMocks() {
   return mocks;

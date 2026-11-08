@@ -1,12 +1,12 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { DurableQuestionDraft } from "../../../lib/chat/composer-draft-store.runtime.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import {
   createAsyncQuestionPanelProps,
   createAsyncQuestionPresentation,
-  renderAsyncQuestionSummary,
 } from "./chat-async-question.ts";
 import { getTranscriptState, resetThreadPresentation } from "./chat-thread-interactions.ts";
 
@@ -452,10 +452,14 @@ it.each(["Undo", "Answer"])(
     expect(restoring.pending).toHaveLength(0);
     expect(onReopen).not.toHaveBeenCalled();
     const summary = document.createElement("div");
-    render(renderAsyncQuestionSummary(question, restoring), summary);
+    const view = mountSolid(
+      AsyncQuestionSummary,
+      { questions: question, presentation: restoring },
+      summary,
+    );
     expect(summary.textContent).toContain("Restoring answer");
     expect(summary.querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
-    render(null, summary);
+    view.dispose();
 
     // Establish that the reopening transaction has reached its held write before
     // mounting a second reader; this is the delayed commit boundary under test.
@@ -584,22 +588,23 @@ it.each(["mounted", "reloaded"] as const)(
     const delivered = createAsyncQuestionPresentation(recoveredState, deliveryProps);
     expect(delivered.pending).toEqual([]);
     const summary = document.createElement("div");
-    render(renderAsyncQuestionSummary(multiQuestion, delivered), summary);
-    expect(summary.textContent).toContain(queued.text);
-    const revisedText = queued.text.replace("Include this example:", "Updated in the outbox:");
-    render(
-      renderAsyncQuestionSummary(
-        multiQuestion,
-        createAsyncQuestionPresentation(recoveredState, {
-          ...deliveryProps,
-          queue: [{ ...queued, text: revisedText }],
-        }),
-      ),
+    const view = mountSolid(
+      AsyncQuestionSummary,
+      { questions: multiQuestion, presentation: delivered },
       summary,
     );
+    expect(summary.textContent).toContain(queued.text);
+    const revisedText = queued.text.replace("Include this example:", "Updated in the outbox:");
+    view.update({
+      questions: multiQuestion,
+      presentation: createAsyncQuestionPresentation(recoveredState, {
+        ...deliveryProps,
+        queue: [{ ...queued, text: revisedText }],
+      }),
+    });
     expect(summary.textContent).toContain(revisedText);
     expect(summary.textContent).not.toContain("Include this example:");
-    render(null, summary);
+    view.dispose();
     delivered.discard(queued);
     const reopened = createAsyncQuestionPresentation(recoveredState, activeProps);
     expect(reopened.pending.map((entry) => entry.itemId)).toEqual([multiQuestion.itemId]);

@@ -1,13 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import {
-  captureSqliteSchemaContracts,
-  type PreparedSqliteSchemaContract,
-} from "../infra/sqlite-schema-contract.js";
-import { readSqliteWriterAppVersion } from "../infra/sqlite-schema-header.js";
+import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { readSqliteUserVersion, readSqliteWriterAppVersion } from "../infra/sqlite-user-version.js";
 import { readRetainedAgentDeletionsFromDatabase } from "./agent-deletion-journal.read.js";
 import type {
   AgentDeletionJournalDisposition,
@@ -16,6 +13,10 @@ import type {
 import { readAgentDatabasePreflightTargets } from "./openclaw-agent-db-registry.read.js";
 import { describeDeferredStateSchemaPublication } from "./openclaw-database-preflight.messages.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
+import {
+  getStateRuntimeSchemaAdmission,
+  getStateSchemaVersionAdmission,
+} from "./openclaw-state-db-admission.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
@@ -27,7 +28,7 @@ import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-versio
 import { inspectOpenClawStateOwnershipFromDatabase } from "./openclaw-state-ownership.js";
 import { inspectCurrentStateStartupSchema } from "./openclaw-state-schema-inspection.js";
 import { readStateSchemaPublicationBlocker } from "./openclaw-state-schema-publication.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-scope.js";
 
 export type StateSchemaInspectionInput = {
   pathname: string;
@@ -36,23 +37,19 @@ export type StateSchemaInspectionInput = {
   verifyCurrentSchemaShape?: boolean;
   scope?: "state";
   purpose: AgentDeletionJournalPurpose;
-  schemaContracts?: PreparedSqliteSchemaContract[];
 };
 
 export type StateSchemaInspection = {
   schemas: OpenClawDatabaseSchemaPreflight;
-  schemaContracts?: PreparedSqliteSchemaContract[];
   registeredDatabases?: { agentId: string; path: string }[];
   deletionJournal?: AgentDeletionJournalDisposition;
   inspectionErrors: unknown[];
+  startupMetrics?: {
+    stateIntegrityCheckCount: number;
+    stateIntegrityMs: number;
+    stateSealCount: number;
+  };
 };
-
-const canonicalStateInspectionSchemas = [OPENCLAW_STATE_SCHEMA_SQL];
-
-/** Only trusted canonical definitions enter the expected-contract cache, never observed schemas. */
-export function captureStateSchemaInspectionContracts(): PreparedSqliteSchemaContract[] {
-  return captureSqliteSchemaContracts(canonicalStateInspectionSchemas);
-}
 
 /** Boot/Doctor and restart readers inspect the same captured bytes under their existing owner. */
 export function inspectStateDatabaseSchema(
@@ -63,7 +60,25 @@ export function inspectStateDatabaseSchema(
   const schemas: OpenClawDatabaseSchemaPreflight = { incompatible: [], indeterminate: [] };
   const inspection: StateSchemaInspection = { schemas, inspectionErrors: [] };
   try {
-    const stateVersion = readSqliteUserVersion(database);
+    let cleanClose = false;
+    if (input.purpose === "runtime" && readSqliteDatabaseCleanClose(pathname)) {
+      // Cold readers open before the seal loads; adopt its catalog before consuming its proof.
+      admitSqliteSchema(database);
+      cleanClose = getStateRuntimeSchemaAdmission(database)?.startupReady === true;
+    }
+    const metrics = input.requireStartupMigrationReadiness
+      ? (inspection.startupMetrics = {
+          stateIntegrityCheckCount: 0,
+          stateIntegrityMs: 0,
+          stateSealCount: Number(cleanClose),
+        })
+      : undefined;
+    const admittedVersion =
+      input.purpose === "maintenance" && input.verifyCurrentSchemaShape
+        ? undefined
+        : (getStateSchemaVersionAdmission(database)?.userVersion ??
+          getAdmittedSqliteSchemaFacts(database)?.userVersion);
+    const stateVersion = admittedVersion ?? readSqliteUserVersion(database);
     const contentVersion =
       stateVersion > supportedVersion
         ? stateVersion
@@ -102,8 +117,29 @@ export function inspectStateDatabaseSchema(
         ),
       ];
     }
-    if (input.requireStartupMigrationReadiness && contentVersion <= OPENCLAW_STATE_SCHEMA_VERSION) {
-      assertSqliteIntegrity(database, pathname);
+    if (
+      !cleanClose &&
+      input.requireStartupMigrationReadiness &&
+      contentVersion <= OPENCLAW_STATE_SCHEMA_VERSION
+    ) {
+      const integrityStartedAt = performance.now();
+      if (metrics) {
+        metrics.stateIntegrityCheckCount++;
+      }
+      assertSqliteIntegrity(
+        database,
+        pathname,
+        contentVersion < supportedVersion
+          ? resolveSchemaMigrationIntegrityCheck({
+              kind: "state",
+              foundVersion: contentVersion,
+              supportedVersion,
+            })
+          : undefined,
+      );
+      if (metrics) {
+        metrics.stateIntegrityMs = performance.now() - integrityStartedAt;
+      }
       assertCanonicalStateSchemaShape(database, pathname);
       // Readiness must reject malformed ownership even when startup has no pending writes.
       inspectOpenClawStateOwnershipFromDatabase(database, pathname);
@@ -122,6 +158,7 @@ export function inspectStateDatabaseSchema(
         openClawStateMigrationAssertions.get(migrationVersion)?.(database, { pathname });
       }
     } else if (
+      !cleanClose &&
       input.verifyCurrentSchemaShape &&
       migrationVersion === OPENCLAW_STATE_SCHEMA_VERSION
     ) {

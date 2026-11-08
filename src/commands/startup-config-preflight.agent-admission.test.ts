@@ -21,14 +21,18 @@ import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-su
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
 afterEach(async () => {
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  await closeStateDatabaseForTest();
+  await closeDatabases();
   await flushLogger();
   setLoggerOverride(null);
   resetLogger();
   vi.unstubAllEnvs();
 });
+
+async function closeDatabases() {
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  await closeStateDatabaseForTest();
+}
 
 it("reports failed preparation without retaining pending agents as startup migration warnings", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
@@ -45,17 +49,11 @@ it("reports failed preparation without retaining pending agents as startup migra
     vi.stubEnv("OPENCLAW_LOG_LEVEL", "warn");
     setLoggerOverride({ level: "warn", file: logPath, consoleLevel: "silent" });
     const paths = ["main", "worker"].map((agentId) => openOpenClawAgentDatabase({ agentId }).path);
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await closeStateDatabaseForTest();
+    await closeDatabases();
     for (const pathname of paths) {
-      const db = new DatabaseSync(pathname);
-      try {
-        // A missing canonical index requests preparation without waiting for a timeout.
-        db.exec("DROP INDEX idx_agent_session_nodes_active");
-      } finally {
-        db.close();
-      }
+      using db = new DatabaseSync(pathname);
+      // Request preparation without waiting for a timeout.
+      db.exec("DROP INDEX idx_agent_session_nodes_active");
     }
 
     await withAgentDatabaseStartupAdmission(async (admission) => {
@@ -65,11 +63,9 @@ it("reports failed preparation without retaining pending agents as startup migra
       try {
         const ready = await runStartupConfigPreflight({ gateway: true, observe: false });
         expect(ready.snapshot.valid).toBe(true);
-        for (const agentId of ["main", "worker"]) {
-          expect(readAgentDatabaseAdmissionRefusal(agentId)?.code).toBe(
-            "agent-database-inspection-pending",
-          );
-        }
+        expect(["main", "worker"].map((id) => readAgentDatabaseAdmissionRefusal(id)?.code)).toEqual(
+          ["agent-database-inspection-pending", "agent-database-inspection-pending"],
+        );
         expect.soft(readStartupMigrationWarning()).toBeUndefined();
         expect.soft(readStartupMigrationWarning(false)).toBeUndefined();
         await flushLogger();

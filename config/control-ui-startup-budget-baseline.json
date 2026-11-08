@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 374285,
-  "reason": "Restored the original startup budget after the Solid shell and overlay primitives landed; main measured 342,363 B gzip at the restore.",
-  "updatedAt": "2026-10-12"
+  "startupJsGzipBytes": 90908,
+  "reason": "PR #194142 (L293): Details first-frame prewarm loader in startup; lead byte exception",
+  "updatedAt": "2026-11-07"
 }

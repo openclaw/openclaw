@@ -1,21 +1,24 @@
-import { createMemo, createSignal, Show } from "solid-js";
+import { coerceErrorMessage } from "@openclaw/normalization-core";
+import { action, createMemo, createOptimistic, createSignal, Errored, Show } from "solid-js";
 import type { NodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatPermissionsEnglish } from "../../../i18n/locales/en-chat-permissions.ts";
 import { projectNativeDeviceSettings } from "../../../lib/reactive/application-native.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
-function ChatPermissionCard(props: {
+registerEnglishCatalog(registerChatPermissionsEnglish);
+
+export function ChatPermissionCard(props: {
   request: NodePermissionRequest;
   onRetry?: (message: string) => void;
 }) {
   const native = useOptionalApplication()?.nativeDeviceSettings;
   const projection = native ? projectNativeDeviceSettings(native) : null;
-  const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal("");
-  const names = () =>
-    props.request.capabilities
+  const [busy, setBusy] = createOptimistic(false);
+  const [operation, setOperation] = createSignal<{ promise: Promise<undefined> }>();
+  const names = (capabilities = props.request.capabilities) =>
+    capabilities
       .map((id) => {
         const key = `chat.permissions.capabilities.${id}`;
         const label = t(key);
@@ -43,121 +46,130 @@ function ChatPermissionCard(props: {
       return entry?.status !== "granted" || Boolean(entry.state);
     });
   });
+  // Native cannot commit an enabled Location mode while macOS denies access.
+  const disabled = createMemo(() =>
+    remaining().filter(
+      (id) =>
+        id === "computerControl" ||
+        id === "canvas" ||
+        id === "cameraEnabled" ||
+        (id === "location" &&
+          projection?.read()?.permissions.location?.mode === "off" &&
+          projection?.read()?.permissions.entries.find((entry) => entry.id === id)?.status !==
+            "denied"),
+    ),
+  );
   const complete = () => Boolean(local()) && remaining().length === 0;
-  const state = () => {
+  const permissionAction = createMemo(() => {
     const snapshot = projection?.read();
     if (local()) {
-      if (
-        remaining().includes("computerControl") ||
-        remaining().includes("canvas") ||
-        remaining().includes("cameraEnabled") ||
-        (remaining().includes("location") && snapshot?.permissions.location?.mode === "off")
-      ) {
-        return "disabled-in-openclaw";
+      if (disabled().length > 0) {
+        return { state: "disabled-in-openclaw" as const, capabilities: disabled() };
       }
-      const entries =
-        snapshot?.permissions.entries.filter((entry) => remaining().includes(entry.id)) ?? [];
       for (const candidateState of [
         "stale-grant",
         "restart-required",
         "denied",
         "not-determined",
       ] as const) {
-        if (
-          entries.some(
-            (entry) =>
-              entry.state === candidateState ||
-              (candidateState === "denied" && entry.status === "denied") ||
-              (candidateState === "not-determined" && entry.status === "notDetermined"),
-          )
-        ) {
-          return candidateState;
+        const capabilities = remaining().filter((id) => {
+          const entry = snapshot?.permissions.entries.find((candidate) => candidate.id === id);
+          return (
+            entry?.state === candidateState ||
+            (candidateState === "denied" && entry?.status === "denied") ||
+            (candidateState === "not-determined" && entry?.status === "notDetermined")
+          );
+        });
+        if (capabilities.length > 0) {
+          return { state: candidateState, capabilities };
         }
       }
     }
-    return props.request.state;
-  };
-  const grant = async () => {
-    if (!local() || busy()) {
+    return { state: props.request.state, capabilities: remaining() };
+  });
+  const following = () =>
+    permissionAction().state === "disabled-in-openclaw"
+      ? remaining().filter((id) => !disabled().includes(id))
+      : [];
+  const grant = action(function* (): Generator<Promise<void>, undefined, unknown> {
+    const resolvePermission = local();
+    if (!resolvePermission || busy()) {
       return;
     }
     setBusy(true);
-    setError("");
-    try {
-      await native?.resolvePermission?.({
-        ...props.request,
-        capabilities: remaining(),
-        state: state(),
-      });
-      native?.refresh();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    yield resolvePermission({
+      ...props.request,
+      ...permissionAction(),
+    });
+  });
   return (
-    <section
-      class="chat-permission-card"
-      aria-label={t("chat.permissions.title", { permissions: names() })}
-    >
-      <div class="chat-permission-card__heading">
-        <Icon name="shieldCheck" />
-        <strong>{t("chat.permissions.title", { permissions: names() })}</strong>
-      </div>
-      <p>
-        {t("chat.permissions.neededOn", { node: props.request.nodeName ?? props.request.nodeId })}
-      </p>
-      <Show when={local()} fallback={<p>{t("chat.permissions.openApp")}</p>}>
-        <p>{t(complete() ? "chat.permissions.ready" : `chat.permissions.states.${state()}`)}</p>
-        <Show
-          when={complete()}
-          fallback={
+    <openclaw-chat-permission-card>
+      <section
+        class="chat-permission-card"
+        aria-label={t("chat.permissions.title", { permissions: names() })}
+      >
+        <div class="chat-permission-card__heading">
+          <Icon name="shieldCheck" />
+          <strong>{t("chat.permissions.title", { permissions: names() })}</strong>
+        </div>
+        <p>
+          {t("chat.permissions.neededOn", { node: props.request.nodeName ?? props.request.nodeId })}
+        </p>
+        <Show when={local()} fallback={<p>{t("chat.permissions.openApp")}</p>}>
+          <p>
+            {t(
+              complete()
+                ? "chat.permissions.ready"
+                : `chat.permissions.states.${permissionAction().state}`,
+            )}
+          </p>
+          <Show when={following().length > 0}>
+            <p>{t("chat.permissions.following", { permissions: names(following()) })}</p>
+          </Show>
+          <Show
+            when={complete()}
+            fallback={
+              <button
+                class="btn primary"
+                type="button"
+                disabled={busy()}
+                onClick={() => {
+                  const pending = grant();
+                  // The card can unmount before its outcome boundary observes the rejection.
+                  void pending.catch(() => {});
+                  setOperation({ promise: pending });
+                }}
+              >
+                {t(`chat.permissions.actions.${permissionAction().state}`, {
+                  permissions: names(permissionAction().capabilities),
+                })}
+              </button>
+            }
+          >
             <button
               class="btn primary"
               type="button"
-              disabled={busy()}
-              onClick={() => void grant()}
+              disabled={!props.onRetry}
+              onClick={() =>
+                props.onRetry?.(t("chat.permissions.retryMessage", { permissions: names() }))
+              }
             >
-              {t(
-                state() === "restart-required"
-                  ? "chat.permissions.relaunch"
-                  : "chat.permissions.grant",
-                { permissions: names() },
-              )}
+              {t("chat.permissions.tryAgain")}
             </button>
-          }
-        >
-          <button
-            class="btn primary"
-            type="button"
-            disabled={!props.onRetry}
-            onClick={() =>
-              props.onRetry?.(t("chat.permissions.retryMessage", { permissions: names() }))
-            }
-          >
-            {t("chat.permissions.tryAgain")}
-          </button>
+          </Show>
         </Show>
-      </Show>
-      <Show when={error()}>
-        <p role="alert">{error()}</p>
-      </Show>
-    </section>
+        <Show when={!busy() && operation()} keyed>
+          {({ promise }) => {
+            // Only failure renders; successful native actions have no content.
+            const outcome = createMemo(() => promise, { loadingValue: undefined });
+            return (
+              <Errored fallback={(error) => <p role="alert">{coerceErrorMessage(error())}</p>}>
+                {outcome()}
+              </Errored>
+            );
+          }}
+        </Show>
+      </section>
+    </openclaw-chat-permission-card>
   );
 }
-
-defineSolidBridge<{ request: NodePermissionRequest | null; onRetry?: (message: string) => void }>(
-  "openclaw-chat-permission-card",
-  (props) => (
-    <Show when={props.request}>
-      {(request) => <ChatPermissionCard request={request()} onRetry={props.onRetry} />}
-    </Show>
-  ),
-  {
-    properties: {
-      request: { default: null, attribute: false },
-      onRetry: { default: undefined, attribute: false },
-    },
-  },
-);

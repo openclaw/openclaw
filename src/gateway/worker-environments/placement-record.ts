@@ -1,4 +1,5 @@
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import type { WorkerSessionPlacementState } from "./placement-state.js";
 import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 
@@ -333,6 +334,14 @@ type ValidatedPlacementRecordShape = {
 export function assertRecordShape(
   record: PlacementRecordShape,
 ): asserts record is ValidatedPlacementRecordShape {
+  // The explicit marker encodes node-owned folder state in the existing durable
+  // workspace field; it is never a transferable snapshot or a content hash.
+  if (
+    record.workspaceBaseManifestRef === DEVICE_FOLDER_MANIFEST_REF &&
+    record.executionMode !== "worker-turn"
+  ) {
+    throw new Error("Device-folder placements require OpenClaw worker execution");
+  }
   const terminal = record.state === "reclaimed" || record.state === "failed";
   if (terminal) {
     normalizeNonNegativeInteger(record.terminalAtMs, "terminal timestamp");

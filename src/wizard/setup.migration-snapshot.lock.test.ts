@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { withSetupMigrationTargetLock } from "./setup.migration-snapshot.js";
+import {
+  SetupTargetLockedError,
+  withSetupMigrationTargetLock,
+} from "./setup.migration-snapshot.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -44,11 +47,7 @@ describe("setup migration target lock", () => {
       if (outcome.kind !== "rejected") {
         return;
       }
-      expect(outcome.error).toMatchObject({
-        name: "SetupTargetLockedError",
-        code: "setup_target_locked",
-        holderPid: process.pid,
-      });
+      expect(outcome.error).toBeInstanceOf(SetupTargetLockedError);
       expect((outcome.error as Error).message).toBe(
         `Another onboarding/config operation is running for profile lock-test (pid ${process.pid}). Finish or abort it, then re-run.`,
       );

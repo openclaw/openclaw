@@ -202,18 +202,39 @@ export async function readCiRunJobs(options, run) {
   return runJobs(client(options), run);
 }
 
-/** Attribution is advisory; the stricter gate exemption below keeps its own admission rules. */
-export function createMainFailureClassifier(options) {
+/** One report shares observations; attribution and gate admission still decide independently. */
+export function createMainCiEvidence(options) {
   const api = client(options);
+  let runs;
+  const jobs = new Map();
+  return {
+    api,
+    runs() {
+      runs ??= latestMainRuns(api, options.repository);
+      return runs;
+    },
+    jobs(run) {
+      const key = `${run.id}:${run.run_attempt}`;
+      if (!jobs.has(key)) {
+        jobs.set(key, runJobs(api, run));
+      }
+      return jobs.get(key);
+    },
+  };
+}
+
+/** Attribution is advisory; the stricter gate exemption below keeps its own admission rules. */
+export function createMainFailureClassifier(options, mainEvidence = createMainCiEvidence(options)) {
+  const { api } = mainEvidence;
   let evidence;
   const baseline = async () => {
     let run;
     try {
-      [run] = await latestMainRuns(api, options.repository);
+      [run] = await mainEvidence.runs();
       if (!run) {
         return { reason: "No completed scheduled main CI run" };
       }
-      return { run, jobs: await runJobs(api, run) };
+      return { run, jobs: await mainEvidence.jobs(run) };
     } catch {
       return { run, reason: "Main CI evidence unavailable" };
     }
@@ -319,11 +340,11 @@ export function createMainFailureClassifier(options) {
   };
 }
 
-async function readMainFailures(api, run) {
-  const jobs = await runJobs(api, run);
+async function readMainFailures(mainEvidence, run) {
+  const jobs = await mainEvidence.jobs(run);
   const signatures = [];
   for (const job of jobs) {
-    signatures.push(...(await jobFailures(api, job, false)));
+    signatures.push(...(await jobFailures(mainEvidence.api, job, false)));
   }
   return signatures;
 }
@@ -461,11 +482,11 @@ async function untouched(api, ref, files, signatures) {
   return true;
 }
 
-export function createKnownMainRed(options) {
-  const api = client(options);
+export function createKnownMainRed(options, mainEvidence = createMainCiEvidence(options)) {
+  const { api } = mainEvidence;
   let evidence;
   const baseline = async () => {
-    const [run] = await latestMainRuns(api, options.repository);
+    const [run] = await mainEvidence.runs();
     if (!run || run.conclusion === "success") {
       return null;
     }
@@ -502,7 +523,7 @@ export function createKnownMainRed(options) {
         ...since.files.flatMap((file) => [file.filename, file.previous_filename].filter(Boolean)),
       );
     }
-    const failures = await readMainFailures(api, run);
+    const failures = await readMainFailures(mainEvidence, run);
     return {
       run,
       files,

@@ -8,11 +8,12 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import {
-  ChatComposerPersistence,
   loadChatComposerState,
   markChatComposerEdit,
   persistChatComposerState,
-} from "./composer-persistence.ts";
+} from "./composer-draft-storage.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
+import { reduceChatSessionProjection } from "./history-merge.ts";
 import { handleChatDraftChange } from "./input-history.ts";
 
 beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
@@ -47,6 +48,44 @@ function createRewindHost(
 }
 
 describe("rewind composer ownership", () => {
+  it("keeps the committed prefix visible while rewind history reloads, without retaining its removed tail", async () => {
+    const history = createDeferred<ChatHistoryResult>();
+    const started = createDeferred();
+    const state = createRewindHost(Promise.resolve({ editorText: "edit me" }), undefined, () => {
+      started.resolve();
+      return history.promise;
+    });
+    const prefix = {
+      role: "assistant",
+      content: "Earlier reply",
+      __openclaw: { id: "before", seq: 1 },
+    };
+    const selected = { role: "user", content: "edit me", __openclaw: { id: "selected", seq: 2 } };
+    const removed = {
+      role: "assistant",
+      content: "Old answer",
+      __openclaw: { id: "removed", seq: 3 },
+    };
+    state.chatMessages = [prefix, selected, removed];
+    reduceChatSessionProjection(state, {
+      type: "sendPending",
+      runId: "pending-send",
+      message: {
+        role: "user",
+        content: "Pending old send",
+        __openclaw: { idempotencyKey: "pending-send" },
+      },
+    });
+    const pending = rewindChatHistory(state, "selected", new ChatAttachmentReadLifecycle(() => {}));
+    await started.promise;
+    expect(state.chatMessages).toEqual([prefix]);
+    expect(state.chatMessages[0]).toBe(prefix);
+    history.resolve({ messages: [prefix] });
+    await pending;
+    expect(state.chatMessages).toEqual([prefix]);
+    expect(state.chatMessage).toBe("edit me");
+  });
+
   it.each(["accepted", "newer draft"] as const)(
     "retires pending attachment reads only for an accepted replacement: %s",
     async (outcome) => {

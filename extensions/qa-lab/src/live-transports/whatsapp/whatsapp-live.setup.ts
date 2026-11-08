@@ -78,7 +78,6 @@ function assertSafeArchiveEntries(entries: string[]) {
 
 export async function unpackWhatsAppAuthArchive(params: {
   archiveBase64: string;
-  clearSignalSessions?: boolean;
   label: string;
   parentDir: string;
 }): Promise<string> {
@@ -93,9 +92,7 @@ export async function unpackWhatsAppAuthArchive(params: {
     timeoutMs: WHATSAPP_QA_AUTH_ARCHIVE_TIMEOUT_MS,
   });
   await fs.rm(archivePath, { force: true });
-  if (params.clearSignalSessions === true) {
-    await clearWhatsAppAuthSignalSessions(authDir);
-  }
+  await clearWhatsAppAuthSignalSessions(authDir);
   return authDir;
 }
 

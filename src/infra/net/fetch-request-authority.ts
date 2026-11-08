@@ -1,14 +1,17 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { AsyncContext } from "../../shared/async-context.js";
 
-type RequestAuthority = { assertCurrent: () => void; beforeRequest: () => void };
+type RequestAuthority = { assertCurrent: () => void; beforeRequest?: () => void };
 
 // Host runtime and plugin SDK chunks must retain the same request-owned fence.
-const requestAuthority = resolveGlobalSingleton(
+const requestAuthority = new AsyncContext<RequestAuthority>(
   Symbol.for("openclaw.guardedFetchRequestAuthority"),
-  () => new AsyncLocalStorage<RequestAuthority>(),
 );
+
+/** Egress-only checks require managed fetch; lifetime assertions may also guard native transports. */
+export function hasGuardedFetchBeforeRequest(): boolean {
+  return requestAuthority.getStore()?.beforeRequest !== undefined;
+}
 
 /** Capture before transport preparation so redirects retain the original caller. */
 export function captureGuardedFetchRequestAuthority(): (() => void) | undefined {
@@ -16,7 +19,7 @@ export function captureGuardedFetchRequestAuthority(): (() => void) | undefined 
   return authority
     ? () => {
         authority.assertCurrent();
-        authority.beforeRequest();
+        authority.beforeRequest?.();
       }
     : undefined;
 }
@@ -29,6 +32,62 @@ function invokeSynchronousGuard(guard: (() => void) | undefined): void {
   }
 }
 
+/**
+ * Add a synchronous egress check to guarded requests started by run, including
+ * requests a returned stream sends later. It narrows inherited authority only.
+ */
+export function withGuardedFetchBeforeRequest<T>(
+  beforeRequest: (() => void) | undefined,
+  run: () => T,
+): T {
+  if (!beforeRequest) {
+    return run();
+  }
+  const inherited = requestAuthority.getStore();
+  return requestAuthority.run(
+    {
+      assertCurrent: () => inherited?.assertCurrent(),
+      beforeRequest: () => {
+        inherited?.beforeRequest?.();
+        invokeSynchronousGuard(beforeRequest);
+      },
+    },
+    run,
+  );
+}
+
+// Retained guards must not share the async producer's lexical frame.
+function createRequestAuthority(source: {
+  assertCurrent: (() => void) | undefined;
+  beforeRequest: (() => void) | undefined;
+  inherited: RequestAuthority | undefined;
+}) {
+  let active = true;
+  const assertAuthority = () => {
+    source.inherited?.assertCurrent();
+    if (!active) {
+      throw new Error("Guarded request authority is no longer active.");
+    }
+    invokeSynchronousGuard(source.assertCurrent);
+  };
+  return {
+    assertCurrent: assertAuthority,
+    beforeRequest:
+      source.beforeRequest || source.inherited?.beforeRequest
+        ? () => {
+            source.inherited?.beforeRequest?.();
+            invokeSynchronousGuard(source.beforeRequest);
+          }
+        : undefined,
+    close() {
+      active = false;
+      source.inherited = undefined;
+      source.assertCurrent = undefined;
+      source.beforeRequest = undefined;
+    },
+  };
+}
+
 /** Carry a host-owned assertion through provider preparation without granting new authority. */
 export async function withGuardedFetchRequestAuthority<T>(
   assertCurrent: (() => void) | undefined,
@@ -39,27 +98,11 @@ export async function withGuardedFetchRequestAuthority<T>(
   if (!assertCurrent && !beforeRequest && !inherited) {
     return await run(undefined);
   }
-  let active = true;
-  const assertAuthority = () => {
-    inherited?.assertCurrent();
-    if (!active) {
-      throw new Error("Guarded request authority is no longer active.");
-    }
-    invokeSynchronousGuard(assertCurrent);
-  };
+  const authority = createRequestAuthority({ assertCurrent, beforeRequest, inherited });
   try {
-    assertAuthority();
-    return await requestAuthority.run(
-      {
-        assertCurrent: assertAuthority,
-        beforeRequest: () => {
-          inherited?.beforeRequest();
-          invokeSynchronousGuard(beforeRequest);
-        },
-      },
-      () => run(assertAuthority),
-    );
+    authority.assertCurrent();
+    return await requestAuthority.run(authority, () => run(authority.assertCurrent));
   } finally {
-    active = false;
+    authority.close();
   }
 }

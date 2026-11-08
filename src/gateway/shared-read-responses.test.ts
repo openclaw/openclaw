@@ -5,6 +5,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createCoreGatewayMethodDescriptors } from "./methods/core-method-policy.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
@@ -18,6 +19,7 @@ import type {
   GatewayRequestHandler,
   RespondFn,
 } from "./server-methods/types.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 
@@ -33,7 +35,7 @@ function createReadHarness(
     getRuntimeConfig: () => config,
     getCommittedRuntimeConfig: () => config,
     broadcast,
-    logGateway: { warn: vi.fn() },
+    logGateway: createSubsystemLogger("test/shared-read-responses"),
     workerPlacementRunnerAvailabilityReader: {
       read: () => undefined,
       version: () => runnerRevision,
@@ -60,24 +62,11 @@ function createReadHarness(
     request(id: string, params: Record<string, unknown> = {}, profileId = "alice") {
       const client: GatewayClient = {
         connId: `connection-${id}`,
-        authenticatedUserProfile: {
-          profileId,
-          displayName: profileId,
-          hasAvatar: false,
-          updatedAt: 0,
-        },
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          role: "operator",
-          scopes: ["operator.read"],
-          client: {
-            id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-            version: "test",
-            platform: "test",
-          },
-        },
+        authenticatedUserProfile: gatewayProfile(profileId, profileId, 0),
+        connect: gatewayConnect(["operator.read"], {
+          id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        }),
       };
       const frames: string[] = [];
       const respond = vi.fn<RespondFn>((ok, payload, error) => {

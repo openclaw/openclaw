@@ -1,19 +1,26 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-operation-settlement.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 import { publishUserGitHubConnectionCommit } from "./user-github-connection-events.js";
 import {
+  afterUserPreferenceOperationSettled,
+  beginUserPreferenceMutation,
+  waitForUserPreferenceReadPermits,
+} from "./user-preferences-publication.js";
+import { normalizeProfileEmail } from "./user-profile-email.kernel.js";
+import {
   emitUserProfilesChanged,
   fenceUserProfileMutationAuthority,
   publishUserProfileAliasChange,
 } from "./user-profile-events.js";
 import {
-  readResidentUserProfileRevision,
+  readResidentGatewayOwnerProfile,
+  readResidentUserProfileForEmail,
   retainUserProfileMutationPublication,
 } from "./user-profile-list.js";
 import {
@@ -26,10 +33,9 @@ import {
   UserProfileNotFoundError,
   UserProfileOwnerError,
 } from "./user-profiles-schema.js";
-import type { ProfileDisplayRow, UserProfile } from "./user-profiles.types.js";
+import { classifyTailscaleLogin } from "./user-profiles-tailscale-login.js";
+import type { UserProfile } from "./user-profiles.types.js";
 import type { UserProfileWriteOperations } from "./user-profiles.worker.js";
-
-const ensuredOwners = new WeakMap<ProfileDisplayRow, UserProfile>();
 
 type ProfileWriteOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
   assertCurrent?: () => void;
@@ -56,15 +62,27 @@ async function write<Key extends keyof UserProfileWriteOperations>(
 ): Promise<UserProfileWriteOperations[Key]["output"]> {
   const context = captureOpenClawStateWorkerContext(options);
   const assertCurrent = options.assertCurrent;
-  const captured = structuredClone(input);
   let publicationSettled: Promise<void> | undefined;
+  let retained: RetainedWorkerTransactionAdmission | undefined;
+  // These identity operations can merge profiles and move or discard personal shortcuts.
+  const movesPreferences =
+    type === "userProfiles.merge" ||
+    type === "userProfiles.linkEmail" ||
+    type === "userProfiles.syncGitHub";
+  const finishPreferences = movesPreferences
+    ? beginUserPreferenceMutation(context.admission)
+    : undefined;
   try {
+    if (movesPreferences) {
+      await waitForUserPreferenceReadPermits(context.admission);
+    }
     return await runOpenClawStateWorkerOperation(
       context,
-      (scope) => scope.execute({ type, input: captured }),
+      (scope) => scope.execute({ type, input }),
       {
         assertCurrent,
         createAdmission: (operation) => {
+          retained = operation;
           const pending = new Map<
             number,
             {
@@ -185,7 +203,15 @@ async function write<Key extends keyof UserProfileWriteOperations>(
     );
   } finally {
     // Caller revocation cannot discard a committed mutation or its catalog publication.
-    await publicationSettled;
+    try {
+      await publicationSettled;
+    } finally {
+      if (retained && finishPreferences) {
+        afterUserPreferenceOperationSettled(retained, finishPreferences);
+      } else {
+        finishPreferences?.();
+      }
+    }
   }
 }
 
@@ -249,15 +275,61 @@ export async function ensureCanonicalUserProfileForEmail(
   options: ProfileWriteOptions & { expectedGitHubAccountId?: number } = {},
 ) {
   const { expectedGitHubAccountId, ...writeOptions } = options;
+  const normalized = normalizeProfileEmail(email);
+  // OIDC conflict checks still belong to the canonical identity writer.
+  if (expectedGitHubAccountId === undefined) {
+    const profile = readResidentUserProfileForEmail(normalized, resolveDatabasePath(options));
+    if (profile) {
+      options.assertCurrent?.();
+      return profile;
+    }
+  }
   return unwrap(
-    await write("userProfiles.ensureEmail", { email, expectedGitHubAccountId }, writeOptions),
+    await write(
+      "userProfiles.ensureEmail",
+      { email: normalized, expectedGitHubAccountId },
+      writeOptions,
+    ),
+  );
+}
+export async function ensureCanonicalEnterpriseGitHubProfile(
+  principal: string,
+  name: string,
+  options: ProfileWriteOptions,
+  verifiedMetadata: { login: string; email?: string },
+) {
+  return unwrap(
+    await write(
+      "userProfiles.ensureEnterpriseGitHub",
+      { principal, name, verifiedMetadata },
+      options,
+    ),
   );
 }
 export async function ensureCanonicalUserProfileForTailscaleIdentity(
   identity: UserProfileWriteOperations["userProfiles.ensureTailscale"]["input"],
   options: ProfileWriteOptions = {},
 ) {
+  const login = classifyTailscaleLogin(identity.login);
+  if (login.kind === "email") {
+    const profile = readResidentUserProfileForEmail(
+      normalizeProfileEmail(login.email),
+      resolveDatabasePath(options),
+    );
+    if (profile && (profile.displayName?.trim() || !identity.name?.trim())) {
+      options.assertCurrent?.();
+      return profile;
+    }
+  }
   return unwrap(await write("userProfiles.ensureTailscale", identity, options));
+}
+
+/** Ensures an exact OCID profile without email aliases or implicit profile merging. */
+export async function ensureCanonicalUserProfileForOpenClawIdIdentity(
+  input: UserProfileWriteOperations["userProfiles.ensureOpenClawId"]["input"],
+  options: ProfileWriteOptions = {},
+): Promise<UserProfile> {
+  return unwrap(await write("userProfiles.ensureOpenClawId", input, options));
 }
 export async function syncCanonicalGitHubIdentity(
   input: UserProfileWriteOperations["userProfiles.syncGitHub"]["input"],
@@ -266,23 +338,19 @@ export async function syncCanonicalGitHubIdentity(
   return unwrap(await write("userProfiles.syncGitHub", input, options));
 }
 export async function ensureCanonicalGatewayOwnerProfile(
-  displayName: string | null,
+  displayName: string | null | (() => Promise<string | null>),
   options: ProfileWriteOptions = {},
-) {
-  const revision = readResidentUserProfileRevision(
-    GATEWAY_OWNER_PROFILE_ID,
-    resolveDatabasePath(options),
-  );
-  const canReuse = revision && (revision.display_name?.trim() || !displayName?.trim());
-  const cached = canReuse ? ensuredOwners.get(revision) : undefined;
-  if (cached) {
+): Promise<UserProfile> {
+  const owner = readResidentGatewayOwnerProfile(resolveDatabasePath(options));
+  if (
+    owner &&
+    (owner.displayName?.trim() || (typeof displayName !== "function" && !displayName?.trim()))
+  ) {
     options.assertCurrent?.();
-    return { ...cached };
+    return owner;
   }
-  const profile = unwrap(await write("userProfiles.ensureOwner", { displayName }, options));
-  // Receipts replace the catalog row on writes; results tied to an old row become unreachable.
-  if (canReuse) {
-    ensuredOwners.set(revision, profile);
+  if (typeof displayName === "function") {
+    return ensureCanonicalGatewayOwnerProfile(await displayName(), options);
   }
-  return { ...profile };
+  return unwrap(await write("userProfiles.ensureOwner", { displayName }, options));
 }

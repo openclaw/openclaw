@@ -4,23 +4,19 @@ import type {
   SessionActorReceipt,
   SessionActorReducer,
 } from "../../config/sessions/session-actor-contract.js";
-import { SessionActorReadInvalidatedError } from "../../config/sessions/session-actor-read-error.js";
 import { reduceSessionActorEntry } from "../../config/sessions/session-actor-reducers.js";
 import {
   runSessionActorCommand,
   withSessionActor,
 } from "../../config/sessions/session-actor-scope.js";
-import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
 import { logVerbose } from "../../globals.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import { withNativeIncognitoTurnCompletion } from "./agent-runner-completion.native.js";
-import type {
-  AgentTurnCompletion,
-  AgentTurnRestartClaimCleanup,
-} from "./agent-runner-completion.types.js";
-import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
-import { retainReplyOperationUntilComplete } from "./reply-run-registry.state.js";
+import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
+import type { AgentTurnCompletion } from "./agent-runner-completion.types.js";
 
 /** One retained terminal owner, including no-send and exceptional completion. */
 export async function withAgentTurnCompletion<T>(
@@ -31,7 +27,7 @@ export async function withAgentTurnCompletion<T>(
     entry?: SessionEntry;
     writer?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "activeWriterRunId">;
     operation: ReplyOperation;
-    prepareRestartClaimCleanup?: (entry: SessionEntry) => AgentTurnRestartClaimCleanup | undefined;
+    activitySummaryCompletion?: SessionActivitySummaryCompletion;
     publish(entry: SessionEntry): void;
   },
   consume: (completion: AgentTurnCompletion | undefined) => Promise<T>,
@@ -48,26 +44,11 @@ export async function withAgentTurnCompletion<T>(
   };
   const operationKey = operation.key;
   const assertCurrent = () => {
-    if (operation.key !== operationKey || replyRunRegistry.get(operationKey) !== operation) {
+    if (operation.key !== operationKey || !isCurrentSessionControllerOperation(operation)) {
       throw new Error("Terminal accounting lost its reply operation");
     }
   };
   assertCurrent();
-  retainReplyOperationUntilComplete(operation);
-  const native = await withNativeIncognitoTurnCompletion(
-    {
-      agentId: params.agentId,
-      storePath,
-      sessionKey,
-      writer,
-      assertCurrent,
-      publish: (published) => params.publish(published),
-    },
-    consume,
-  );
-  if (native) {
-    return native.value;
-  }
   const result = await withSessionActor(
     { agentId: params.agentId, storePath, sessionKey },
     { assertCurrent, assertReadable: assertCurrent },
@@ -86,22 +67,11 @@ export async function withAgentTurnCompletion<T>(
           }
         },
       };
-      const readCurrent = async () => {
-        try {
-          return actor.snapshot(authority) ?? (await actor.read(authority));
-        } catch (error) {
-          if (!(error instanceof SessionActorReadInvalidatedError)) {
-            throw error;
-          }
-          // Only repeat the read: the completed model/tool work and accepted writes stay settled.
-          return actor.snapshot(authority) ?? actor.read(authority);
-        }
-      };
-      let snapshot = await readCurrent();
+      let snapshot = actor.snapshot(authority) ?? (await actor.read(authority));
       const prepared: Parameters<AgentTurnCompletion["patch"]>[0][] = [];
       let finished = false;
       const project = () => {
-        let next = structuredClone(snapshot.entry!);
+        let next = snapshot.entry!;
         const reducers: SessionActorReducer[] = [];
         for (const preparation of prepared) {
           const reducer = typeof preparation === "function" ? preparation(next) : preparation;
@@ -113,7 +83,7 @@ export async function withAgentTurnCompletion<T>(
         return { entry: next, reducers };
       };
       const refresh = async () => {
-        snapshot = await readCurrent();
+        snapshot = actor.snapshot(authority) ?? (await actor.read(authority));
         return project().entry;
       };
       const completion: AgentTurnCompletion = {
@@ -139,37 +109,37 @@ export async function withAgentTurnCompletion<T>(
           }
           finished = true;
           await refresh();
-          let restartClaimCleanup = params.prepareRestartClaimCleanup?.(snapshot.entry!);
           let { reducers } = project();
-          if (reducers.length === 0 && !pendingFinalDelivery && !restartClaimCleanup) {
+          const activitySummary = params.activitySummaryCompletion?.take();
+          if (reducers.length === 0 && !pendingFinalDelivery && !activitySummary) {
             return snapshot.entry!;
           }
           const committed: { receipt?: SessionActorReceipt } = {};
           const outcome = await runSessionActorCommand(actor, authority, async (current) => {
-            snapshot = current ?? (await readCurrent());
+            snapshot = current ?? actor.snapshot(authority) ?? (await actor.read(authority));
             ({ reducers } = project());
-            restartClaimCleanup = params.prepareRestartClaimCleanup?.(snapshot.entry!);
             return actor.completeTurn(
               {
                 commandId: randomUUID(),
                 phaseId: `complete:${operationKey}`,
-                expected: snapshot.version,
+                expected: actor.target.database.kind === "memory" ? undefined : snapshot.version,
                 reducers,
+                activitySummary,
                 bookkeeping: {
                   sessionId: expected.sessionId,
                   lifecycleRevision: expected.lifecycleRevision ?? null,
                   writerRunId: expected.writerRunId,
-                  expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
-                  ...(pendingFinalDelivery ? { lifecycle: { updatedAt: Date.now() } } : {}),
+                  expectedState: buildSessionTranscriptTurnExpectedState(snapshot.entry!),
                 },
                 pendingFinalDelivery,
-                restartClaimCleanup: restartClaimCleanup?.operation,
               },
               authority,
               {
                 committed: (receipt) => {
                   committed.receipt = receipt.receipt;
-                  restartClaimCleanup?.committed();
+                  if (activitySummary && receipt.receipt.postimage.entry) {
+                    params.activitySummaryCompletion?.committed(receipt.receipt.postimage.entry);
+                  }
                 },
               },
             );
@@ -189,9 +159,10 @@ export async function withAgentTurnCompletion<T>(
             return snapshot.entry!;
           }
           if (outcome.kind !== "committed") {
-            throw new SqliteWorkerError(
+            throw wrapSqliteWorkerError(
               outcome.error.message,
               outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
+              outcome.error,
             );
           }
           if (outcome.failure) {

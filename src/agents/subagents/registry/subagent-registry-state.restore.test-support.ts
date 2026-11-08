@@ -73,7 +73,6 @@ export function registerSubagentRestoreCacheCases(params: {
           options?.onChunk?.(
             [...snapshot.values()].map((restored) => ({
               entry: restored,
-              version: "fixture-version",
               createdAt: restored.createdAt,
             })),
           );
