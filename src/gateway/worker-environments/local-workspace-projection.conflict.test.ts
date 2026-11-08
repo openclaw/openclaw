@@ -1,11 +1,11 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
-import { deleteRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { deleteRegistryWorktree, insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -102,6 +102,7 @@ beforeEach(async () => {
       lastActiveAt: 0,
     },
   };
+  await insertRegistryWorktree(process.env, owner.worktree);
 });
 
 afterEach(async () => {
@@ -390,4 +391,84 @@ it("preserves live guest symlink divergence across retries (Revision 3 Finding 4
   const stat = await fs.lstat(path.join(projection, "source.txt"));
   expect(stat.isSymbolicLink()).toBe(true);
   expect(await fs.readlink(path.join(projection, "source.txt"))).toBe("target2.txt");
+});
+
+it("accepts an explicitly reviewed newer guest version (Revision 5 Finding 2)", async () => {
+  const projection = await prepare();
+  await writeText(projection, "source.txt", "guest v1\n");
+  await writeText(canonical, "source.txt", "canonical v1\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+
+  // Guest writes newer v2 while conflict is pending
+  await writeText(projection, "source.txt", "guest v2 newer\n");
+  const guestV2Sha = createHash("sha256").update("guest v2 newer\n").digest("hex");
+
+  // Administrator reviews guest v2 and saves combined version to canonical
+  await writeText(canonical, "source.txt", "merged canonical and guest v2\n");
+  await acknowledgeLocalWorkspaceConflict({
+    cwd: canonical,
+    worktreeId: owner.worktree.id,
+    path: "source.txt",
+    reviewedGuestVersion: { sha256: guestV2Sha, mode: 0o644 },
+  });
+
+  // Settle must accept the reviewed guest v2 and synchronize merged content into projection
+  await settleProjection();
+  expect((await readProjection())?.pending_ref).toBeNull();
+  await expectText(projection, "source.txt", "merged canonical and guest v2\n");
+});
+
+it("rejects unreviewed newer guest version written after administrator review", async () => {
+  const projection = await prepare();
+  await writeText(projection, "source.txt", "guest v1\n");
+  await writeText(canonical, "source.txt", "canonical v1\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+
+  // Administrator reviewed v2
+  const guestV2Sha = createHash("sha256").update("guest v2 reviewed\n").digest("hex");
+  await writeText(canonical, "source.txt", "merged canonical and guest v2\n");
+  await acknowledgeLocalWorkspaceConflict({
+    cwd: canonical,
+    worktreeId: owner.worktree.id,
+    path: "source.txt",
+    reviewedGuestVersion: { sha256: guestV2Sha, mode: 0o644 },
+  });
+
+  // Guest wrote v3 after review before settlement
+  await writeText(projection, "source.txt", "guest v3 unreviewed\n");
+
+  // Settle must reject synchronization and preserve live guest v3
+  await expect(settleProjection()).rejects.toThrow("conflict");
+  await expectText(projection, "source.txt", "guest v3 unreviewed\n");
+});
+
+it("preserves guest file mode changes without byte changes as conflict divergence (Revision 5 Finding 3)", async () => {
+  const projection = await prepare();
+  await writeText(projection, "source.txt", "guest text\n");
+  await writeText(canonical, "source.txt", "canonical text\n");
+  await fs.chmod(path.join(projection, "source.txt"), 0o755);
+  await expect(synchronize()).rejects.toThrow("conflict");
+
+  const row = await readProjection();
+  expect(row?.checkpoint_json).toBeTruthy();
+  const checkpoint = JSON.parse(row!.checkpoint_json!);
+  expect(checkpoint.conflicts?.["source.txt"]?.mode).toBe(0o755);
+
+  const statBefore = await fs.lstat(path.join(projection, "source.txt"));
+  expect(statBefore.mode & 0o777).toBe(0o755);
+});
+
+it("refuses acknowledgment after worktree reassignment (Security Finding)", async () => {
+  const projection = await prepare();
+  await writeText(projection, "source.txt", "guest v1\n");
+  await writeText(canonical, "source.txt", "canonical v1\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+
+  await expect(
+    acknowledgeLocalWorkspaceConflict({
+      cwd: canonical,
+      worktreeId: "reassigned-different-worktree-id",
+      path: "source.txt",
+    }),
+  ).rejects.toThrow(/Local sandbox workspace owner changed/);
 });

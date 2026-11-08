@@ -21,7 +21,7 @@ import {
 } from "./local-workspace-checkpoint.js";
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
 import {
-  commitProjectionReconciliation,
+  commitLocalWorkspaceReconciliation,
   type LocalWorkspaceCheckpointRecord,
 } from "./local-workspace-conflict-resolution.js";
 import {
@@ -396,12 +396,12 @@ export function projectionOperations(
         ) {
           throw new Error("Local workspace result no longer matches its accepted baseline");
         }
+        const baseRef = checkpoint?.baseManifestRef;
+        const curRef = checkpoint?.currentManifestRef;
         if (
           checkpoint &&
-          ((checkpoint.baseManifestRef !== undefined &&
-            snapshot.baseManifestRef !== checkpoint.baseManifestRef) ||
-            (checkpoint.currentManifestRef !== undefined &&
-              snapshot.currentManifestRef !== checkpoint.currentManifestRef))
+          ((baseRef && snapshot.baseManifestRef !== baseRef) ||
+            (curRef && snapshot.currentManifestRef !== curRef))
         ) {
           throw new Error("Local workspace checkpoint payload changed");
         }
@@ -418,20 +418,17 @@ export function projectionOperations(
           resolvedPaths: checkpoint?.resolvedPaths && new Set(checkpoint.resolvedPaths),
           journal: {
             load: async () => undefined,
-            begin: async (journal) => {
-              await update({
+            begin: async (journal) =>
+              update({
                 journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
                 journal_pack: journal.basePack,
-              });
-            },
-            abort: async () => {
-              await update({ journal_json: null, journal_pack: null });
-            },
+              }),
+            abort: async () => update({ journal_json: null, journal_pack: null }),
             commit: async () => {
               if (!conflictPaths) {
                 throw new Error("Local workspace acceptance is missing");
               }
-              await commitProjectionReconciliation({
+              await commitLocalWorkspaceReconciliation({
                 conflictPaths,
                 resolvedCanonicalPaths,
                 resolvedManifest,
@@ -440,13 +437,13 @@ export function projectionOperations(
                 snapshot,
                 refresh,
                 target,
-                owner,
-                current,
-                selected,
                 assertCurrent,
                 update,
                 replaceBaseline,
                 baselineDocument,
+                worktreePath: owner.worktree.path,
+                projectionPath: current().projection_path,
+                baselineRef: selected.baseline_ref,
               });
             },
           },

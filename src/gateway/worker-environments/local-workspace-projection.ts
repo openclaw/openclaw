@@ -318,6 +318,7 @@ async function settleLocalWorkspace<T>(
                 workerAuthority: state.workerAuthority,
               }
             : {
+                projectionPath: current.projection_path,
                 assertCurrent: store.assertCurrent,
                 workerAuthority: store.workerAuthority,
               }),

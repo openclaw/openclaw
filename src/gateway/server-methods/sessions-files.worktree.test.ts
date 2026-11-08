@@ -408,4 +408,54 @@ describe("sessions.files for managed-worktree sessions", () => {
       expect(checkpoint.acknowledgedPaths).toContain("preview.html");
     });
   });
+
+  it("saves a reconciled version when expectedHash matches the inspected guest draft in projection", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const entry = await seedWorktreeSession(state.workspaceDir);
+      const { withLocalWorkspaceStore } =
+        await import("../worker-environments/local-workspace-store.js");
+      const { localWorkspaceProjectionFixture, readLocalWorkspaceProjection } =
+        await import("../worker-environments/local-workspace-store.test-support.js");
+      const projectionDir = path.join(state.workspaceDir, "projection");
+      fs.mkdirSync(projectionDir, { recursive: true });
+      const guestDraft = "<h1>guest draft content</h1>\n";
+      const guestHash = createHash("sha256").update(guestDraft).digest("hex");
+      fs.writeFileSync(file(projectionDir), guestDraft);
+
+      await withLocalWorkspaceStore({ worktreeId: entry.worktree.id }, async (store) => {
+        await store.create({
+          ...localWorkspaceProjectionFixture(entry.worktree.id, state.workspaceDir),
+          projection_path: projectionDir,
+          pending_ref: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          pending_target: "canonical",
+          checkpoint_json: JSON.stringify({
+            conflicts: { "preview.html": { sha256: guestHash, mode: 0o644 } },
+          }),
+        });
+      });
+      const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
+      const source = {
+        workspaceId: entry.worktree.id,
+        root: entry.spawnedCwd,
+        fileRoot: entry.spawnedCwd,
+      };
+      const result = await invoke("sessions.files.set", {
+        sessionKey: key,
+        path: "preview.html",
+        content: "merged human and guest contribution\n",
+        expectedHash: guestHash,
+        expectedSource: source,
+      });
+      expect(result).toMatchObject([{ ok: true }]);
+      expect(readPreview(entry.spawnedCwd)).toBe("merged human and guest contribution\n");
+
+      const row = await readLocalWorkspaceProjection(entry.worktree.id);
+      expect(row?.checkpoint_json).toBeTruthy();
+      const checkpoint = JSON.parse(row!.checkpoint_json!);
+      expect(checkpoint.acknowledgedPaths).toContain("preview.html");
+      expect(checkpoint.acknowledgedGuestVersions?.["preview.html"]).toMatchObject({
+        sha256: guestHash,
+      });
+    });
+  });
 });

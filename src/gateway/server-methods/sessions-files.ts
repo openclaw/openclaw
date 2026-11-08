@@ -1,4 +1,4 @@
-import { resolve as resolvePath } from "node:path";
+import path, { resolve as resolvePath } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
@@ -483,10 +483,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
           throw new Error("Start this cloud session before editing its repository files.");
         }
         const worktreeId = loaded.entry.worktree?.id;
+        let acknowledgedInCustody = false;
         const writeLocalFile = async () => {
-          const write = (assertCurrent = authorize) =>
+          let reviewedGuestVersion: { sha256?: string; mode?: number } | undefined;
+          const write = (assertCurrent = authorize, targetExpectedHash = params.expectedHash) =>
             setSessionWorkspaceFile({
               ...params,
+              expectedHash: targetExpectedHash,
               root: loaded.root,
               fileRoot: loaded.fileRoot,
               assertCurrent,
@@ -496,14 +499,37 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
           }
           const { withSettledLocalWorkspacePath } =
             await import("../worker-environments/local-workspace-projection.js");
+          const { resolveReconciledExpectedHash, acknowledgeLocalWorkspaceConflict } =
+            await import("../worker-environments/local-workspace-conflict-acknowledgement.js");
           return await withSettledLocalWorkspacePath(
-            { cwd: loaded.root, assertCurrent: authorize },
+            { cwd: loaded.root, assertCurrent: authorize, allowConflict: true },
             async (custody) => {
-              const update = await write(() => {
+              const currentAuth = () => {
                 authorize();
                 custody?.assertCurrent();
-              });
+              };
+              const { effectiveExpectedHash, reviewedGuestVersion } =
+                await resolveReconciledExpectedHash({
+                  cwd: loaded.root,
+                  worktreeId,
+                  path: params.path,
+                  expectedHash: params.expectedHash,
+                  projectionPath: custody?.projectionPath,
+                  conflicts: custody?.conflicts,
+                  assertCurrent: currentAuth,
+                });
+              const update = await write(currentAuth, effectiveExpectedHash);
               if (update.status === "updated") {
+                if (update.file.workspacePath) {
+                  await acknowledgeLocalWorkspaceConflict({
+                    cwd: loaded.root,
+                    worktreeId,
+                    path: update.file.workspacePath,
+                    reviewedGuestVersion,
+                    assertCurrent: currentAuth,
+                  });
+                  acknowledgedInCustody = true;
+                }
                 await custody?.synchronizeProjection?.();
               }
               return update;
@@ -543,7 +569,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        if (!repository && loaded.root && update.file.workspacePath) {
+        if (!repository && !acknowledgedInCustody && loaded.root && update.file.workspacePath) {
           const { acknowledgeLocalWorkspaceConflict } =
             await import("../worker-environments/local-workspace-conflict-acknowledgement.js");
           await acknowledgeLocalWorkspaceConflict({
