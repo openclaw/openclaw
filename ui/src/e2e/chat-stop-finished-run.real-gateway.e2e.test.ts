@@ -58,6 +58,7 @@ type Frame = {
   event?: string;
   seq?: number;
   payload?: EventPayload;
+  error?: { code?: string };
 };
 let artifactDir: string;
 let instance: OpenClawTestInstance;
@@ -267,6 +268,29 @@ suite.define(() => {
                   "openclaw:control-ui:community-invite",
                   JSON.stringify({ dismissedAtMs: 1770000000000 }),
                 );
+                for (const kind of ["pointerdown", "click"]) {
+                  document.addEventListener(
+                    kind,
+                    (event) => {
+                      if (
+                        event
+                          .composedPath()
+                          .some(
+                            (target) =>
+                              target instanceof HTMLButtonElement &&
+                              target.classList.contains("chat-send-btn--send"),
+                          )
+                      ) {
+                        const key =
+                          kind === "click" ? "diagnosticSendClicks" : "diagnosticSendPointers";
+                        document.documentElement.dataset[key] = String(
+                          Number(document.documentElement.dataset[key] ?? 0) + 1,
+                        );
+                      }
+                    },
+                    true,
+                  );
+                }
               });
               page.on("pageerror", () => {
                 proof.browserFailed = true;
@@ -363,6 +387,10 @@ suite.define(() => {
                         chatRunId: string | null;
                         chatSending: boolean;
                         chatLoading: boolean;
+                        chatMessage: string;
+                        chatError?: string | null;
+                        lastError?: string | null;
+                        currentSessionId?: string | null;
                       };
                     }
                   ).state;
@@ -371,6 +399,14 @@ suite.define(() => {
                     runId: state.chatRunId,
                     sending: state.chatSending,
                     loading: state.chatLoading,
+                    draftLength: state.chatMessage.length,
+                    hasChatError: Boolean(state.chatError),
+                    hasLastError: Boolean(state.lastError),
+                    hasSessionId: Boolean(state.currentSessionId),
+                    sendClicks: Number(document.documentElement.dataset.diagnosticSendClicks ?? 0),
+                    sendPointers: Number(
+                      document.documentElement.dataset.diagnosticSendPointers ?? 0,
+                    ),
                   };
                 });
               try {
@@ -580,6 +616,29 @@ suite.define(() => {
                 proof.abortRequests = sent.filter((frame) => frame.method === "chat.abort").length;
                 proof.pendingBrowserRequests = pending.size;
                 proof.providerRequests = provider.requests();
+                const sends = sent.filter((frame) => frame.method === "chat.send");
+                proof.sendRequests = sends.length;
+                proof.sendResponses = JSON.stringify(
+                  sends.map((request) => {
+                    const response = received.find((frame) => frame.id === request.id);
+                    return {
+                      received: Boolean(response),
+                      ok: response?.ok,
+                      status: response?.payload?.status,
+                      errorCode: response?.error?.code,
+                    };
+                  }),
+                );
+                proof.pendingChatRequests = [...pending.values()].filter((frame) =>
+                  ["chat.send", "chat.startup", "chat.history", "sessions.list"].includes(
+                    frame.method ?? "",
+                  ),
+                ).length;
+                try {
+                  proof.finalBrowserState = JSON.stringify(await browserState());
+                } catch {
+                  proof.finalBrowserStateUnavailable = true;
+                }
               }
             },
           );
