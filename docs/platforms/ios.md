@@ -112,6 +112,11 @@ Gateway protocol; the native authentication path does not persist it in page sto
 
 The **This iPhone** or **This iPad** page contains appearance, notification
 delivery, camera access, keep-awake behavior, and optional Health summaries.
+QR scanning requests camera permission on first use. If access was denied, the
+scanner offers **Open Settings**; allow **Camera** for OpenClaw, then return to
+the scanner. Screen Time or device-management restrictions must be changed by
+the person who manages those restrictions.
+
 Its **Permissions** page shows notification, camera, microphone, speech, location,
 contacts, calendars, reminders, and photo access. Permission requests use native
 iOS prompts; Precise Location shows the system's current state and links to iOS
