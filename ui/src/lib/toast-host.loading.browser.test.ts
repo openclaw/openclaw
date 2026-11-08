@@ -25,7 +25,6 @@ it("keeps the offline failure message and recovery controls visible", async () =
   const retry = [...card.querySelectorAll("button")].find(
     (button) => button.textContent === "Retry",
   )!;
-  expect(card.textContent).toContain("Couldn’t load this panel.");
   expect(card.textContent).toContain("Saved");
   showToast({
     severity: "warning",

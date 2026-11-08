@@ -1,5 +1,5 @@
-import { createMemo, Errored, For, lazy, Loading, Show } from "solid-js";
-import { redactToolDetail } from "./browser-redact.ts";
+import { Errored, lazy, Loading, Show } from "solid-js";
+import { formatUiExternalText } from "./format-error.ts";
 import { t } from "./reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
 import { toastOwnerFor, type ToastProperties, type ToastMethods } from "./toast.ts";
@@ -38,42 +38,22 @@ if (typeof customElements !== "undefined") {
                       role="alert"
                     >
                       <div class="app-toast__content">
-                        <div class="app-toast__body">
-                          <span class="app-toast__message">{t("lazyView.errorTitle")}</span>
-                          <For each={props.toasts} keyed={(entry) => entry.id}>
-                            {(entry) => {
-                              const content = createMemo(() => entry().options.message);
-                              const message = createMemo(() => {
-                                const value = content();
-                                if (typeof value === "string") {
-                                  return redactToolDetail(value.trim());
-                                }
-                                const copy = value.cloneNode(true);
-                                return copy instanceof DocumentFragment
-                                  ? Array.from(copy.childNodes)
-                                  : copy;
-                              });
-                              return (
-                                <Show when={entry().active}>
-                                  <div>
-                                    <span class="app-toast__message">{message()}</span>
-                                    <Show when={entry().options.description}>
-                                      {(description) => (
-                                        <>
-                                          {" "}
-                                          <span class="app-toast__description">
-                                            {redactToolDetail(description().trim())}
-                                          </span>
-                                        </>
-                                      )}
-                                    </Show>
-                                  </div>
-                                </Show>
-                              );
-                            }}
-                          </For>
+                        <div class="app-toast__body app-toast__message">
+                          {formatUiExternalText(
+                            props.toasts
+                              .flatMap(({ active, options: { message, description } }) =>
+                                active
+                                  ? [
+                                      typeof message === "string" ? message : message.textContent,
+                                      description,
+                                    ]
+                                  : [],
+                              )
+                              .join("\n"),
+                            t("lazyView.errorTitle"),
+                          )}
                         </div>
-                        <button class="app-toast__action" type="button" onClick={() => reset()}>
+                        <button class="app-toast__action" type="button" onClick={reset}>
                           {t("common.retry")}
                         </button>
                       </div>

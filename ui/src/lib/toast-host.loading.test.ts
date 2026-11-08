@@ -21,7 +21,8 @@ it("retains a fragment notice through failed import and retry", async () => {
   document.body.append(host);
   const dismissed = vi.fn();
   const message = document.createDocumentFragment();
-  message.append("Synthetic saved notice");
+  message.append(document.createElement("strong"));
+  message.firstChild!.textContent = "Synthetic saved notice";
   showToast({
     severity: "success",
     message,
@@ -30,9 +31,9 @@ it("retains a fragment notice through failed import and retry", async () => {
   });
 
   await waitForSolid(() => expect(getByRole(host, "button", { name: "Retry" })).toBeTruthy());
-  expect(getByRole(host, "alert").textContent).toContain("Couldn’t load this panel.");
   expect(getByRole(host, "alert").textContent).toContain("Synthetic saved notice");
   expect(getByRole(host, "button", { name: "Dismiss" })).toBeTruthy();
+  expect(host.querySelector("strong")).toBeNull();
   host
     .querySelector(".app-toast-lane")!
     .dispatchEvent(new Event("pointerenter", { bubbles: true }));
@@ -42,7 +43,7 @@ it("retains a fragment notice through failed import and retry", async () => {
   vi.doUnmock("./toast-view.tsx");
   getByRole(host, "button", { name: "Retry" }).click();
   await waitForSolid(() => expect(host.querySelector('[role="alert"]')).toBeNull());
-  expect(host.textContent).toContain("Synthetic saved notice");
+  expect(host.querySelector("strong")?.textContent).toBe("Synthetic saved notice");
   getByRole(host, "button", { name: "Dismiss" }).click();
   await waitForSolid(() => expect(dismissed).toHaveBeenCalledExactlyOnceWith("dismiss"));
   expect(host.toasts).toEqual([]);
