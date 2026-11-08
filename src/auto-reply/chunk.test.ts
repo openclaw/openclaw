@@ -229,6 +229,7 @@ describe("chunkByNewline", () => {
     ["\n😀\n\n", 2.9, ["😀"]],
     ["  x \n\n", 5, ["  x \n"], { trimLines: false }],
     ["x\n\n", 0, ["x\n\n"]],
+    ["Line one\nLine two", Number.NaN, ["Line one\nLine two"]],
     ["  indented line  \nNext", 1000, ["  indented line  ", "Next"], { trimLines: false }],
   ])("chunks lines in %j at %i", (text, limit, expected, options) => {
     expect(chunkByNewline(text, limit, options)).toEqual(expected);
@@ -270,9 +271,11 @@ describe("chunkMarkdownTextWithMode", () => {
   });
 
   it.each(["length", "newline"] as const)(
-    "keeps astral text with a fractional limit in %s mode",
+    "handles fractional and NaN limits in %s mode",
     (mode) => {
       expect(chunkMarkdownTextWithMode("😀", 1.5, mode)).toEqual(["😀"]);
+      const text = "A fenced reply\n\n```js\nconst x = 1;\n```\n\nWith trailing prose";
+      expect(chunkMarkdownTextWithMode(text, Number.NaN, mode)).toEqual([text]);
     },
   );
 });
