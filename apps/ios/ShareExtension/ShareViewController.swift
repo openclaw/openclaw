@@ -41,10 +41,16 @@ final class ShareViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        self.preferredContentSize = CGSize(width: UIScreen.main.bounds.width, height: 420)
         self.composeView.onSend = { [weak self] in self?.handleSendTap() }
         self.composeView.onCancel = { [weak self] in
             self?.extensionContext?.completeRequest(returningItems: nil)
+        }
+    }
+
+    override func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
+        if let screen = self.view.window?.windowScene?.screen {
+            self.preferredContentSize = CGSize(width: screen.bounds.width, height: 420)
         }
     }
 
@@ -149,19 +155,7 @@ final class ShareViewController: UIViewController {
             credentials: GatewayNodeSessionCredentials(
                 token: config.token,
                 password: config.password),
-            connectOptions: GatewayConnectOptions(
-                role: "node",
-                scopes: [],
-                caps: [],
-                commands: [],
-                permissions: [:],
-                clientId: "openclaw-ios",
-                clientMode: "node",
-                clientDisplayName: "OpenClaw Share",
-                deviceIdentityProfile: .shareExtension,
-                includeDeviceIdentity: true,
-                allowStoredDeviceAuth: config.gatewayStableID != nil,
-                deviceAuthGatewayID: config.gatewayStableID),
+            connectOptions: ShareGatewayRelaySettings.connectOptions(gatewayStableID: config.gatewayStableID),
             sessionBox: config.webSocketSessionBox(),
             extraHeadersProvider: { try ShareGatewayRelaySettings.currentCustomHeaders(for: config) },
             onConnected: {},
@@ -209,7 +203,8 @@ final class ShareViewController: UIViewController {
         let json = String(bytes: data, encoding: .utf8)!
         let eventData = try JSONEncoder().encode(NodeEventParams(event: "agent.request", payloadjson: json))
         let nodeEventParams = String(bytes: eventData, encoding: .utf8)!
-        _ = try await gateway.request(method: "node.event", paramsJSON: nodeEventParams, timeoutSeconds: 25)
+        let result = try await gateway.request(method: "node.event", paramsJSON: nodeEventParams, timeoutSeconds: 25)
+        try ShareSendAdmissionError.requireAccepted(result)
     }
 
     private static func gatewayError(_ code: Int, message: String) -> NSError {

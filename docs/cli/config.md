@@ -670,6 +670,9 @@ Unrelated edits leave provider catalogs unchanged. Catalog writes and changes to
 
 `openclaw config set` and other OpenClaw-owned config writers validate the full post-change config before committing it to disk. If the new payload fails schema validation or looks like a destructive clobber, the active config is left alone and the rejected payload is saved beside it as `openclaw.json.rejected.*`.
 
+Normal writes refuse malformed UTF-8 in the root config or an included source
+before staging backups, preserving the original source and recovery bytes.
+
 If staging a config save fails, the existing root or include backup ring is left
 untouched. OpenClaw prepares backup contents without blocking unrelated Gateway
 requests. If a copy fallback removes the file before a conflict, OpenClaw restores

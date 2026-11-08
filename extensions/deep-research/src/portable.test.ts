@@ -32,10 +32,11 @@ function fixture() {
 }
 
 describe("portable research", () => {
-  it("returns a direct-completion report whose citations resolve to fetched passages", async () => {
+  it("returns a report whose citations resolve to fetched passages without inventing a runtime", async () => {
     const { io } = fixture();
     const result = await runPortableResearch({ question: "How long is the river?" }, io);
     expect(result.status).toBe("completed");
+    expect(result.route.runtime).toBe("unobserved");
     expect(result.report).toContain("The river is 12 km long. [S1]");
     expect(result.sources).toMatchObject([
       {
@@ -45,6 +46,20 @@ describe("portable research", () => {
         extraction: "web-fetch-text-v1",
       },
     ]);
+    const observations = vi.mocked(io.progress).mock.calls.map(([, observation]) => observation);
+    expect(observations.map((observation) => observation?.phase)).toEqual([
+      "planning",
+      "gathering",
+      "assessing",
+      "auditing",
+    ]);
+    expect(observations[0]?.sources).toEqual([]);
+    expect(observations[2]?.sources[0]).toMatchObject({
+      id: "S1",
+      text: "The measured river length is 12 km.",
+    });
+    expect(observations[2]?.counts).toEqual({ modelCalls: 1, searches: 1, fetches: 1, sources: 1 });
+    expect(result.reportCitations).toHaveLength(1);
     expect(result.usage).toEqual({
       modelCalls: 3,
       searches: 1,
@@ -52,6 +67,35 @@ describe("portable research", () => {
       reportedTokens: 60,
       tokensComplete: true,
     });
+  });
+
+  it("discloses changed runtime ownership across replayed and fresh model receipts", async () => {
+    const { io } = fixture();
+    const complete = io.complete;
+    let first = true;
+    io.complete = async (...args) => {
+      const result = await complete(...args);
+      const direct = first;
+      first = false;
+      return {
+        ...result,
+        route: {
+          model: "openai/gpt-5.4",
+          runtime: direct ? "direct-provider" : "isolated-agent-runtime",
+          owner: direct ? { kind: "provider", id: "openai" } : { kind: "harness", id: "codex" },
+        },
+      };
+    };
+    const result = await runPortableResearch({ question: "River length" }, io);
+    expect(result.status).toBe("partial");
+    expect(result.route).toMatchObject({
+      runtime: "isolated-agent-runtime",
+      owner: { id: "codex" },
+    });
+    expect(result.gaps).toContain(
+      "Model execution changed between research steps; route shows the last observed execution.",
+    );
+    expect(complete).toHaveBeenCalledTimes(3);
   });
 
   it("excludes invented quotations and copied sources instead of publishing false support", async () => {
@@ -178,6 +222,56 @@ describe("portable research", () => {
     expect((await runPortableResearch({ question: "River length" }, io)).status).toBe("partial");
     expect(io.complete).toHaveBeenCalledTimes(1);
     expect(io.search).not.toHaveBeenCalled();
+  });
+  it("keeps verified findings when a model reply lists more items than the schema allows", async () => {
+    const { io, evidence, verdict } = fixture();
+    const extra = (prefix: string, count: number) =>
+      Array.from({ length: count }, (_, index) => `${prefix} ${index}`);
+    const responses = [
+      { questions: extra("river question", 6) },
+      {
+        findings: [{ statement: "The river is 12 km long.", evidence: [evidence] }],
+        gaps: [],
+        queries: extra("follow-up", 6),
+      },
+      { verdicts: [verdict], unanswered: extra("open question", 10) },
+    ];
+    io.complete = vi.fn(async () => ({ text: JSON.stringify(responses.shift()) }));
+    const result = await runPortableResearch(
+      { question: "How long is the river?", budget: { modelCalls: 3 } },
+      io,
+    );
+    expect(result.findings).toMatchObject([{ statement: "The river is 12 km long." }]);
+    expect(result.gaps).not.toContain(
+      "Research response did not satisfy the evidence contract; no repair call was made.",
+    );
+    expect(vi.mocked(io.search).mock.calls.length).toBeLessThanOrEqual(4);
+    expect(result.gaps.filter((gap) => gap.startsWith("open question"))).toHaveLength(8);
+  });
+  it("rejects an audit that repeats a verdict instead of trimming away its contradiction", async () => {
+    const { io, evidence } = fixture();
+    const supported = { index: 0, verdict: "supported", reason: "Direct evidence" };
+    const responses = [
+      { questions: ["river length"] },
+      {
+        findings: [{ statement: "The river is 12 km long.", evidence: [evidence] }],
+        gaps: [],
+        queries: [],
+      },
+      {
+        verdicts: [
+          ...Array.from({ length: 12 }, (_, index) => ({ ...supported, index })),
+          { index: 0, verdict: "contradicted", reason: "Later measurement" },
+        ],
+        unanswered: [],
+      },
+    ];
+    io.complete = vi.fn(async () => ({ text: JSON.stringify(responses.shift()) }));
+    const result = await runPortableResearch({ question: "How long is the river?" }, io);
+    expect(result.findings).toEqual([]);
+    expect(result.gaps).toContain(
+      "Research response did not satisfy the evidence contract; no repair call was made.",
+    );
   });
   it.each(["unsupported", "contradicted"])(
     "reaudits retained findings on later rounds without erasing them on an %s sample",

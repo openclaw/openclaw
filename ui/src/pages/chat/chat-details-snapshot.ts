@@ -12,36 +12,61 @@ export type DetailsSubagents = NonNullable<ChatDetailsSnapshot["subagents"]>;
 export type DetailsSubagent = DetailsSubagents["rows"][number];
 export type DetailsAutomation = NonNullable<ChatDetailsSnapshot["automations"]>["rows"][number];
 export type DetailsSnapshotPatch = Partial<Omit<ChatDetailsSnapshot, "locale">>;
+export const DETAILS_SUBAGENT_ACTIVITY_PREVIEW_ROWS = 3;
 
 export function isDetailsSubagentWorking(row: Pick<DetailsSubagent, "status">) {
   return row.status === "running" || row.status === "waiting";
 }
 
 export function projectDetailsSubagents(rows: readonly DetailsSubagent[], mobile = false) {
+  const collection = rows.filter((row) => row.listed !== false);
+  const ordinary = rows.filter((row) => row.listed === false);
+  const counts: DetailsSubagents["counts"] = [];
+  for (const row of rows) {
+    const listed = row.listed === false ? false : undefined;
+    const status = isDetailsSubagentWorking(row)
+      ? "running"
+      : listed !== false && row.status !== "queued"
+        ? "done"
+        : row.status;
+    const count = counts.find((entry) => entry.status === status && entry.listed === listed);
+    if (count) {
+      count.count += 1;
+    } else {
+      counts.push({ status, count: 1, listed });
+    }
+  }
   return {
     total: rows.length,
     rows: [
-      ...rows.filter(isDetailsSubagentWorking),
-      ...rows.filter((row) => !isDetailsSubagentWorking(row)),
+      ...collection.filter(isDetailsSubagentWorking),
+      ...collection.filter((row) => !isDetailsSubagentWorking(row)),
     ]
-      .slice(0, rows.length > (mobile ? 3 : 5) ? 4 : 5)
-      .map(({ key, label, status }) => ({ key, label, status })),
-    // At most two statuses: Working beside the avatars, then Queued or Done. Waiting parents
-    // count as working; failed and stopped runs count as done because agents retry around them.
-    counts: (["running", "queued", "done"] as const)
-      .map((status) => ({
+      .slice(0, collection.length > (mobile ? 3 : 5) ? 4 : 5)
+      .map(({ key, label, status, session }): DetailsSubagent => ({
+        key,
+        label,
         status,
-        count: rows.filter(
-          (row) =>
-            (isDetailsSubagentWorking(row)
-              ? "running"
-              : row.status === "queued"
-                ? "queued"
-                : "done") === status,
-        ).length,
+        session: session && { startedAt: session.startedAt, endedAt: session.endedAt },
       }))
-      .filter((entry) => entry.count > 0)
-      .slice(0, 2),
+      .concat(
+        ordinary
+          .slice(0, DETAILS_SUBAGENT_ACTIVITY_PREVIEW_ROWS)
+          .map(({ key, label, status, activity, progress, session }) => ({
+            key,
+            label,
+            status,
+            listed: false,
+            activity,
+            progress,
+            session: session && { startedAt: session.startedAt, endedAt: session.endedAt },
+          })),
+      ),
+    // Ordinary totals cannot be recovered from their capped preview rows.
+    counts: counts.toSorted((a, b) => {
+      const order = ["running", "queued", "done", "failed", "stopped"];
+      return order.indexOf(a.status) - order.indexOf(b.status);
+    }),
   };
 }
 

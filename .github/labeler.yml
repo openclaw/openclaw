@@ -1,3 +1,7 @@
+"plugin: openclaw-id-access":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openclaw-id-access/**"
 "plugin: azure-speech":
   - changed-files:
       - any-glob-to-any-file:
@@ -606,6 +610,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/crabbox/**"
+"extensions: deep-research":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deep-research/**"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:

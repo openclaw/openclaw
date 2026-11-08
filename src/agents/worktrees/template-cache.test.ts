@@ -113,6 +113,11 @@ it.each(["cold", "idle"])("shares %s preparation and reader custody", async (sta
   assert(rebuilt, "Invalid idle templates must be rebuilt");
   expect(rebuilt.id).not.toBe(left.id);
   expect(await source(rebuilt)).toBe("source");
+  // Replacement must not wait for filesystem retirement; GC owns the old generation.
+  expect(await source(left)).toBe("changed");
+  await collect();
+  expect(await list()).toMatchObject([{ id: rebuilt.id }]);
+  expect(await source(rebuilt)).toBe("source");
   await rebuilt.release();
   await collect();
   expect(await list()).toEqual([]);
@@ -153,7 +158,7 @@ it.each([false, true])("settles refresh before publication (fail=%s)", async (fa
   }
   expect(await source(reused!)).toBe(fail ? "source" : "updated");
   await refreshed?.release();
-  expect((await list())[0]).toMatchObject({
+  expect(await templateRegistry.readTemplateAsync(env, params.cacheKey)).toMatchObject({
     status: "ready",
     contentKey: next.contentKey,
     sourceCommit: next.sourceCommit,

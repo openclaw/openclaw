@@ -4,6 +4,7 @@ import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveNewSessionShortcut } from "../../lib/keyboard-shortcut-contract.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -79,14 +80,14 @@ export function ContextNewSessionAction(props: {
   showTooltip?: boolean;
   icon?: IconName;
 }) {
+  const gateway = createMemo(() => projectGateway(props.context.gateway));
   const agentId = () =>
     props.agentId ??
     normalizeAgentId(
-      props.context.agentSelection.state.selectedId ??
-        props.context.gateway.snapshot.assistantAgentId,
+      props.context.agentSelection.state.selectedId ?? gateway().read().snapshot.assistantAgentId,
     );
   const readAccess = () =>
-    readSessionMethodAccess(props.context.gateway.snapshot, {
+    readSessionMethodAccess(gateway().read().snapshot, {
       method: "sessions.create",
       params: {},
       sessionScope: true,

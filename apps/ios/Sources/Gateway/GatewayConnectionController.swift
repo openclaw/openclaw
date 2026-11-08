@@ -1388,7 +1388,7 @@ extension GatewayConnectionController {
                 fingerprintSha256: fp,
                 isManual: pendingConnect.isManual,
                 attemptGeneration: pendingConnect.suppressionLease.generation)
-            self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
+            self.appModel?.awaitGatewayTrustDecision()
             return .accepted
         case let .failure(failure):
             let problem = self.tlsProbeFailureProblem(failure, host: host, port: port)

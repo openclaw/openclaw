@@ -319,10 +319,10 @@ final class NodeAppModel {
     private let camera: any CameraServicing
     private(set) var preferredCameraFacing: OpenClawCameraFacing
     private let screenRecorder: any ScreenRecordingServicing
-    private var watchGatewayConnectionStatus: OpenClawWatchAppStatusCode?
+    private(set) var gatewayConnectionProgress: GatewayConnectionProgress?
     var gatewayStatusText: String = "Offline" {
         didSet {
-            self.watchGatewayConnectionStatus = nil
+            self.gatewayConnectionProgress = nil
         }
     }
 
@@ -479,6 +479,9 @@ final class NodeAppModel {
     @ObservationIgnored private var operatorTalkHydrationGeneration: UInt64?
     @ObservationIgnored private var credentialHandoffFailureGeneration: UInt64?
     @ObservationIgnored private(set) var gatewayConnectGeneration: UInt64 = 0
+    /// Socket, foreground and wake reconnects keep their attempt's generation, so they must not
+    /// override an "Auto-connect on launch" choice the user made after the attempt connected.
+    @ObservationIgnored private var autoConnectEnabledGeneration: UInt64?
     private var forceOperatorTalkPermissionUpgradeRequest = false
     @ObservationIgnored private var talkPermissionUpgradeTask: Task<Void, Never>?
     @ObservationIgnored private var talkPermissionUpgradeReconnectTask: Task<Void, Never>?
@@ -3703,6 +3706,7 @@ extension NodeAppModel {
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
         self.gatewayStatusText = statusText
+        self.gatewayConnectionProgress = .verifyingTLS
     }
 
     func failGatewayPreconnectVerification(
@@ -4117,6 +4121,8 @@ extension NodeAppModel {
         else { return }
         guard let route = await self.operatorGateway.currentRoute() else { return }
         let scopes = await self.operatorGateway.currentOperatorScopes(ifCurrentRoute: route)
+        // Control UI pages build their URL when they appear after connect; admit the mount first.
+        await self.refreshControlUiBasePath(stableID: stableID, routeGeneration: routeGeneration)
         guard await self.operatorGateway.currentRoute() == route,
               !self.isLocalGatewayFixtureEnabled,
               self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
@@ -4178,6 +4184,20 @@ extension NodeAppModel {
         await self.startVoiceWakeSync(shouldContinue: shouldContinue)
         guard shouldContinue() else { return }
         self.startGatewayHealthMonitor()
+        guard let config = self.activeGatewayConnectConfig,
+              config.ingressAuthorization == nil
+        else { return }
+        do {
+            try await ShareGatewayRelaySettings.prepareDeviceAuth(
+                operatorGateway: self.operatorGateway,
+                url: config.url,
+                gatewayStableID: config.nodeOptions.deviceAuthGatewayID ?? stableID,
+                sessionBox: config.webSocketSessionBox())
+        } catch {
+            guard shouldContinue() else { return }
+            ShareGatewayRelaySettings.saveLastEvent(
+                "Sharing setup incomplete: open OpenClaw to reconnect, then try sharing again.")
+        }
     }
 
     private func admitTalkAfterSessionHydration() {
@@ -4216,7 +4236,10 @@ extension NodeAppModel {
         _ = GatewaySettingsStore.markGatewayConnected(
             stableID: stableID,
             atMs: Int(Date().timeIntervalSince1970 * 1000))
-        UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
+        if self.autoConnectEnabledGeneration != self.gatewayConnectGeneration {
+            self.autoConnectEnabledGeneration = self.gatewayConnectGeneration
+            UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
+        }
         LiveActivityManager.shared.handleReconnect()
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
         let requiresForegroundSignIn = self.activeGatewayConnectConfig?.ingressAuthorization != nil
@@ -4946,6 +4969,17 @@ extension NodeAppModel {
               await self.operatorGateway.currentRoute(ifGatewayID: stableID) == route
         else { return }
         self.isDesktopObserveAvailable = supported
+    }
+
+    private func refreshControlUiBasePath(stableID: String, routeGeneration: UInt64) async {
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
+              let route = await self.operatorGateway.currentRoute(ifGatewayID: stableID)
+        else { return }
+        let basePath = await self.operatorGateway.currentControlUiBasePath(ifCurrentRoute: route)
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
+              await self.operatorGateway.currentRoute(ifGatewayID: stableID) == route
+        else { return }
+        self.activeGatewayConnectConfig?.controlUiBasePath = basePath
     }
 }
 
@@ -6111,8 +6145,13 @@ extension NodeAppModel {
         if let problem = self.lastGatewayProblem {
             return Self.makeWatchGatewayProblemStatus(problem)
         }
-        if let watchGatewayConnectionStatus {
-            return OpenClawWatchAppStatus(code: watchGatewayConnectionStatus)
+        switch self.gatewayConnectionProgress {
+        case .connecting, .verifyingTLS:
+            return OpenClawWatchAppStatus(code: .gatewayConnecting)
+        case .reconnecting:
+            return OpenClawWatchAppStatus(code: .gatewayReconnecting)
+        case .awaitingTrust, nil:
+            break
         }
         let statusText = self.gatewayStatusText == "Connected"
             ? self.operatorStatusText
@@ -6125,9 +6164,12 @@ extension NodeAppModel {
 
     func setGatewayConnectionProgress(reconnecting: Bool) {
         self.gatewayStatusText = reconnecting ? "Reconnecting…" : "Connecting…"
-        self.watchGatewayConnectionStatus = reconnecting
-            ? .gatewayReconnecting
-            : .gatewayConnecting
+        self.gatewayConnectionProgress = reconnecting ? .reconnecting : .connecting
+    }
+
+    func awaitGatewayTrustDecision() {
+        self.gatewayStatusText = "Verify gateway TLS fingerprint"
+        self.gatewayConnectionProgress = .awaitingTrust
     }
 
     private static func makeWatchGatewayProblemStatus(

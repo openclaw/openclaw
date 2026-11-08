@@ -1,13 +1,14 @@
 import type { JSX } from "@solidjs/web";
 import { Errored, For, Loading, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import "../../styles/templates-catalog.css";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { PluginDetailLoadingHero } from "../plugins/detail-loading-hero.tsx";
 import { TemplatePreviewView } from "./template-preview-view.tsx";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
@@ -33,12 +34,12 @@ function CatalogRead(props: TemplatesCatalogViewProps & { children: JSX.Element 
       {() => (
         <Errored
           fallback={(error) => (
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               {formatUiError(error(), t("templatesCatalog.unavailable"))}
               <button class="btn btn--sm" onClick={() => props.onRetryCatalog()}>
                 {t("templatesCatalog.retry")}
               </button>
-            </div>
+            </InlineAlert>
           )}
         >
           <Loading fallback={<CatalogLoading />}>{props.children}</Loading>

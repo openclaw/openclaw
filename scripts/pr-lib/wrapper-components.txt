@@ -275,6 +275,7 @@ scripts/lib/watch-pr-ci-run.mts
 scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
 scripts/pr-crabbox-gate-publisher.mjs
+scripts/pr-lib/dependency-hold-release.mjs
 scripts/run-vitest.mts
 scripts/stage-openclaw-bun.sh
 scripts/test-projects.test-support.mts
@@ -670,6 +671,7 @@ src/config/io.write-values.ts
 src/config/issue-format.ts
 src/config/json5-comments.ts
 src/config/legacy-codex-provider.ts
+src/config/legacy-workboard-database.ts
 src/config/legacy.default-agent-owner-state.ts
 src/config/legacy.default-agent-owner.ts
 src/config/legacy.default-agent-roles.ts
@@ -884,6 +886,7 @@ src/config/zod-schema.ts
 src/cron/automation-result.ts
 src/cron/completion-status.ts
 src/cron/execution-error-constants.ts
+src/cron/expression.ts
 src/cron/run-diagnostics-normalize.ts
 src/cron/run-history-detail.ts
 src/cron/scratch-contract.ts
@@ -1169,6 +1172,7 @@ src/infra/package-update-publication-tree.ts
 src/infra/package-update-recovery-contract.ts
 src/infra/package-update-refusal.ts
 src/infra/path-case.ts
+src/infra/path-containment.ts
 src/infra/path-existence.ts
 src/infra/path-guards.ts
 src/infra/plain-object.ts
@@ -1294,6 +1298,7 @@ src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
 src/infra/sqlite-snapshot-reclamation.ts
 src/infra/sqlite-snapshot-retirement.ts
+src/infra/sqlite-snapshot-reuse.ts
 src/infra/sqlite-snapshot-single-flight.ts
 src/infra/sqlite-temp-generation-schema.ts
 src/infra/sqlite-snapshot-source.ts
@@ -1442,6 +1447,7 @@ src/infra/update-runtime-staging.ts
 src/infra/update-snapshot-capacity-schema.ts
 src/infra/update-state-inspection-protocol.ts
 src/infra/update-step-identity.ts
+src/infra/utf8-input.ts
 src/infra/warning-filter.ts
 src/infra/windows-appcontainer-spawn.ts
 src/infra/windows-encoding.ts
@@ -1834,6 +1840,7 @@ src/process/child-memory.ts
 src/process/child-process-tree.ts
 src/process/child-process.ts
 src/process/command-error.ts
+src/process/command-reservation-census.ts
 src/process/darwin-process-inspection.ts
 src/process/exec-output.ts
 src/process/exec-result.ts
@@ -1852,6 +1859,7 @@ src/process/process-deadline.ts
 src/process/scoped-child-reaper.ts
 src/process/spawn-broker/child-completion.ts
 src/process/spawn-broker/child-diagnostics.ts
+src/process/spawn-broker/admission.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/commands.ts
@@ -1957,6 +1965,7 @@ src/shared/freebsd-process-identity-native.ts
 src/shared/freebsd-process-identity.ts
 src/shared/gateway-edge-auth-headers.ts
 src/shared/gateway-tailscale-auth-policy.ts
+src/shared/environment-key.ts
 src/shared/global-singleton.ts
 src/shared/http-error-response.ts
 src/shared/immutable-data.ts
@@ -2084,6 +2093,7 @@ src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
+src/state/openclaw-agent-active-event-facts-schema.ts
 src/state/openclaw-agent-memory-path-migration.ts
 src/state/openclaw-agent-memory-revision-migration.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts
@@ -2376,6 +2386,7 @@ src/config/sessions/session-accessor.sqlite-transcript-metadata-read.ts
 src/config/sessions/session-cold-storage-read.ts
 src/config/sessions/session-entry-read-errors.ts
 src/config/sessions/session-transcript-append-postimage.ts
+src/config/sessions/session-transcript-active-facts.ts
 src/config/sessions/session-transcript-fts.ts
 src/config/sessions/session-transcript-index-postgres.ts
 src/config/sessions/session-transcript-index.ts
