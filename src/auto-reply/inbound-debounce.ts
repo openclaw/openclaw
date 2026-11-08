@@ -3,6 +3,7 @@ import {
   resolveNonNegativeIntegerOption,
   resolveOptionalIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -189,7 +190,14 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   const runFlush = async (items: T[]) => {
     let flush: InboundDebounceFlush;
     try {
-      flush = params.onFlush(items, createInboundDebounceFlush);
+      const result = params.onFlush(items, createInboundDebounceFlush);
+      // Released plugins return PromiseLike<void>; both phases await their completion.
+      if (isPromiseLike<void>(result)) {
+        const completion = Promise.resolve(result);
+        flush = { admission: completion, completion };
+      } else {
+        flush = result;
+      }
     } catch (err) {
       reportFlushError(err, items);
       return;

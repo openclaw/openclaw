@@ -53,6 +53,87 @@ describe("createInboundDebouncer", () => {
     return { debouncer, started, finished, entered, release };
   }
 
+  it.each([false, true])(
+    "orders and drains released plugin callbacks (thenable: %s)",
+    async (thenable) => {
+      const started: string[] = [];
+      const gate = createDeferred();
+      const options: InboundDebounceCreateParams<Message> = {
+        debounceMs: 0,
+        serializeImmediate: true,
+        buildKey: (item) => item.key,
+        onFlush: () => flushOnCompletion(() => {}),
+      };
+      // Model a precompiled plugin without changing today's public callback signature.
+      Reflect.set(options, "onFlush", (items: Message[]) => {
+        const id = items[0]?.id ?? "";
+        started.push(id);
+        const completion = id === "first" ? gate.promise : Promise.resolve();
+        // oxlint-disable-next-line unicorn/no-thenable -- Exercise the released structural PromiseLike callback.
+        return thenable ? { then: completion.then.bind(completion) } : completion;
+      });
+      const debouncer = createInboundDebouncer(options);
+      const outcomes = Promise.allSettled([
+        debouncer.enqueue({ key: "a", id: "first" }),
+        debouncer.enqueue({ key: "a", id: "second" }),
+      ]);
+      const onDrained = vi.fn();
+      const drain = debouncer.drain().then(onDrained);
+      let beforeRelease;
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        beforeRelease = { started: [...started], drained: onDrained.mock.calls.length };
+      } finally {
+        gate.resolve();
+        await Promise.all([outcomes, drain]);
+      }
+      expect(beforeRelease).toEqual({ started: ["first"], drained: 0 });
+      expect(await outcomes).toEqual([
+        { status: "fulfilled", value: undefined },
+        { status: "fulfilled", value: undefined },
+      ]);
+      expect(started).toEqual(["first", "second"]);
+      expect(onDrained).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "reports released callback rejection once and releases its key (thenable: %s)",
+    async (thenable) => {
+      const failure = new Error("legacy flush failed");
+      const onError = vi.fn();
+      const started: string[] = [];
+      const options: InboundDebounceCreateParams<Message> = {
+        debounceMs: 0,
+        serializeImmediate: true,
+        buildKey: (item) => item.key,
+        onFlush: () => flushOnCompletion(() => {}),
+        onError,
+      };
+      Reflect.set(options, "onFlush", (items: Message[]) => {
+        const id = items[0]?.id ?? "";
+        started.push(id);
+        const completion = id === "first" ? Promise.reject(failure) : Promise.resolve();
+        // The old host never observes this rejection; keep the red proof bounded.
+        void completion.catch(() => {});
+        // oxlint-disable-next-line unicorn/no-thenable -- Exercise the released structural PromiseLike callback.
+        return thenable ? { then: completion.then.bind(completion) } : completion;
+      });
+      const debouncer = createInboundDebouncer(options);
+      const outcomes = await Promise.allSettled([
+        debouncer.enqueue({ key: "a", id: "first" }),
+        debouncer.enqueue({ key: "a", id: "second" }),
+      ]);
+      await debouncer.drain();
+      expect(outcomes).toEqual([
+        { status: "fulfilled", value: undefined },
+        { status: "fulfilled", value: undefined },
+      ]);
+      expect(onError).toHaveBeenCalledExactlyOnceWith(failure, [{ key: "a", id: "first" }]);
+      expect(started).toEqual(["first", "second"]);
+    },
+  );
+
   it("seals bounded batches without blocking collection behind an active flush", async () => {
     const firstGate = createDeferred();
     const calls: number[][] = [];
