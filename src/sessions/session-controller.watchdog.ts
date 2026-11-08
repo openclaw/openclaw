@@ -184,8 +184,9 @@ export function createSessionControllerWatchdog(params: {
     ) {
       runtimeOwnedThroughAt = Math.max(runtimeOwnedThroughAt ?? at, at);
     }
-    const liveWaits = currentWaits.map((wait) => ({
+    const liveWaits = currentWaits.map<SessionWatchdogSnapshot["waits"][number]>((wait) => ({
       kind: wait.kind,
+      admission: wait.admission,
       // Mechanical traffic/retry rearming never moves the logical semantic horizon.
       deadlineAtMs:
         wait.kind === "backend"

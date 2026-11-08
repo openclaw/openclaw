@@ -217,7 +217,12 @@ suite.define(() => {
     });
     const settled = { ...history.sessionInfo, sessionKey, reason: "agent.input.steering" };
     await gateway.emitGatewayEvent("sessions.changed", settled);
-    await user.getByText("Waiting for upload; cannot interrupt safely.", { exact: true }).waitFor();
+    await user
+      .getByRole("status", {
+        name: "Steering — sends when the current step finishes.",
+        exact: true,
+      })
+      .waitFor();
     await expectCount(link, 0);
     await gateway.setMethodResponse("chat.history", history);
     await gateway.emitGatewayEvent("sessions.changed", settled);

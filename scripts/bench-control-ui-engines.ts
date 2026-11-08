@@ -652,12 +652,13 @@ try {
       ({ id }) =>
         id !== "cold-boot" &&
         id !== "warm-boot" &&
+        id !== "page-model-providers-refresh" &&
         !id.startsWith("rapid-") &&
         !/^page-.+-(?:visit|revisit)$/u.test(id),
     )
   ) {
     throw new Error(
-      "Nonlocal --network-profiles require cold-boot, warm-boot, rapid-* or page-<route>-visit/revisit steps",
+      "Nonlocal --network-profiles require cold-boot, warm-boot, rapid-*, page-<route>-visit/revisit or page-model-providers-refresh steps",
     );
   }
   planned =
