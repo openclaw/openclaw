@@ -1,8 +1,20 @@
 /** Test bootstrap shim for Telegram runtime-secret surface coverage. */
 import { vi } from "vitest";
-import { collectRuntimeConfigAssignments as telegramAssignments } from "../../extensions/telegram/secret-contract-api.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
+import type { loadChannelSecretContractApi } from "./channel-contract-api.js";
 
-// This fixture always needs Telegram, even when a Gateway test disables discovery.
+// Load the fixed fixture through the test runner, independent of ambient discovery.
+const moduleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "telegram",
+  artifactBasename: "secret-contract-api.js",
+});
+const telegramSecrets: NonNullable<ReturnType<typeof loadChannelSecretContractApi>> =
+  await import(moduleId);
+if (!telegramSecrets.collectRuntimeConfigAssignments) {
+  throw new Error("Missing Telegram secret contract api");
+}
+const telegramAssignments = telegramSecrets.collectRuntimeConfigAssignments;
 
 // Use the real bundled Telegram secret contract while avoiding plugin bootstrap.
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
